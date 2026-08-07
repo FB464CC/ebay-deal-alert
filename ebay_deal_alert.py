@@ -161,7 +161,14 @@ def search_ebay(token, saved_search):
         # ("...Movie Tie-In... Noonday Press") since it loosely token-matches
         # "press" and "tie" anywhere on the site, not just in clothing.
         "category_ids": "260012",
-        "filter": "conditions:{USED|UNSPECIFIED}",  # pre-owned, adjust as needed
+        # US-domestic sellers only. Real listing found live: a UK Barbour
+        # jacket priced $33.57 that the search summary reported as $0
+        # shipping - the actual per-item shipping API showed $25.77
+        # shipping + $5.05 import charges via eBay's Global Shipping
+        # Program, none of which the lightweight search endpoint surfaces.
+        # Filtering at the source avoids the whole class of "looks cheap,
+        # isn't" international listing rather than trying to estimate it.
+        "filter": "conditions:{USED|UNSPECIFIED},itemLocationCountry:US",
         "sort": "newlyListed",
         "limit": "50",
     }
