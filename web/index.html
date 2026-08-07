@@ -299,6 +299,14 @@
       margin-bottom: 6px;
     }
 
+    .activity-badges {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
     .activity-title {
       font-weight: 700;
       min-width: 0;
@@ -334,6 +342,27 @@
       color: #8a4b05;
     }
 
+    .badge.rating-steal,
+    .badge.rating-great-deal {
+      background: #c9f2da;
+      color: #0f5f3b;
+    }
+
+    .badge.rating-good-deal {
+      background: #d8f3ef;
+      color: #11655d;
+    }
+
+    .badge.rating-fair {
+      background: #f7e7c2;
+      color: #76520b;
+    }
+
+    .badge.rating-marginal {
+      background: #e7ebf0;
+      color: #5b6572;
+    }
+
     @media (prefers-color-scheme: dark) {
       .badge.review {
         background: #173b2a;
@@ -348,6 +377,27 @@
       .badge.warning {
         background: #47320f;
         color: var(--warning);
+      }
+
+      .badge.rating-steal,
+      .badge.rating-great-deal {
+        background: #173b2a;
+        color: var(--success);
+      }
+
+      .badge.rating-good-deal {
+        background: #153b38;
+        color: #76d8ca;
+      }
+
+      .badge.rating-fair {
+        background: #47360f;
+        color: #e2bc61;
+      }
+
+      .badge.rating-marginal {
+        background: #303a45;
+        color: #c4cdd6;
       }
     }
 
@@ -662,19 +712,48 @@
       if (!items.length) {
         return '<div class="empty">No activity logged yet.</div>';
       }
+      const ratingClasses = {
+        "Steal": "rating-steal",
+        "Great Deal": "rating-great-deal",
+        "Good Deal": "rating-good-deal",
+        "Fair": "rating-fair",
+        "Marginal": "rating-marginal"
+      };
+      const formatEstimate = (value) => {
+        const amount = Number(value);
+        return Number.isFinite(amount) ? `$${Math.round(amount)}` : "";
+      };
       return `
         <div class="activity-list">
           ${items.map((item) => {
             const badgeClass = item.ai_flagged ? "warning" : String(item.verdict || "").toLowerCase();
+            const ratingClass = ratingClasses[item.deal_rating] || "rating-marginal";
+            const discountText = item.discount_pct == null ? "" : ` -${Math.round(Number(item.discount_pct))}%`;
+            const ratingText = item.deal_rating ? `${item.deal_rating}${Number.isFinite(Number(item.discount_pct)) ? discountText : ""}` : "";
+            const confidenceTitle = item.price_confidence ? ` title="Confidence: ${escapeHtml(item.price_confidence)}"` : "";
+            const retailEstimate = formatEstimate(item.estimated_retail_price);
+            const resaleEstimate = formatEstimate(item.estimated_resale_value);
+            const estimateParts = [];
+            if (retailEstimate) {
+              estimateParts.push(`retail ${retailEstimate}`);
+            }
+            if (resaleEstimate) {
+              estimateParts.push(`resale ${resaleEstimate}`);
+            }
+            const estimateLine = estimateParts.length ? `Est. ${estimateParts.join(" -> ")}` : "";
             return `
               <div class="activity-item">
                 <div class="activity-head">
-                  <span class="badge ${escapeHtml(badgeClass)}">${escapeHtml(item.ai_flagged ? "AI" : item.verdict || "ITEM")}</span>
+                  <div class="activity-badges">
+                    <span class="badge ${escapeHtml(badgeClass)}">${escapeHtml(item.ai_flagged ? "AI" : item.verdict || "ITEM")}</span>
+                    ${ratingText ? `<span class="badge ${escapeHtml(ratingClass)}"${confidenceTitle}>${escapeHtml(ratingText)}</span>` : ""}
+                  </div>
                   <span class="activity-meta">${escapeHtml(formatTime(item.timestamp))}</span>
                 </div>
                 <div class="activity-title">${escapeHtml(item.title || "Untitled listing")}</div>
                 <div class="activity-meta">${item.price == null ? "" : `$${escapeHtml(item.price)}`}</div>
                 <div class="activity-reason">${escapeHtml(item.reason || "")}</div>
+                ${estimateLine ? `<div class="activity-meta">${escapeHtml(estimateLine)}</div>` : ""}
               </div>
             `;
           }).join("")}

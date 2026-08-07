@@ -344,7 +344,14 @@ def check_photos_with_gemini(listing):
         "flipping business. Report strict JSON only, with no markdown fences, using "
         "this exact shape: {\"damage_found\": bool, \"damage_desc\": string, "
         "\"weird_logo_found\": bool, \"logo_desc\": string, \"looks_good\": bool, "
-        "\"summary\": string}. damage_found means visible holes, stains, moth "
+        "\"summary\": string, \"estimated_retail_price\": number|null, "
+        "\"estimated_resale_value\": number|null, \"price_confidence\": string}. "
+        "estimated_retail_price is the item's approximate original retail/MSRP "
+        "price when new in USD, or null if you cannot reasonably estimate it. "
+        "estimated_resale_value is the item's typical resale/secondhand market "
+        "value in similar used condition right now in USD, or null if you cannot "
+        "reasonably estimate it. price_confidence must be one of \"high\", "
+        "\"medium\", or \"low\". damage_found means visible holes, stains, moth "
         "damage, heavy pilling, tears, or other undisclosed damage beyond normal "
         "light wear. weird_logo_found means prominent corporate, tournament, "
         "country-club, bank, or resort branding/embroidery visible in the photos. "
@@ -390,6 +397,39 @@ def notify_bot_down(message):
         logger.exception("Failed to send bot-down notification")
 
 
+def compute_deal_rating(price, estimated_resale_value):
+    if not price or not estimated_resale_value:
+        return None, None
+    try:
+        price = float(price)
+        estimated_resale_value = float(estimated_resale_value)
+    except (TypeError, ValueError):
+        return None, None
+    if not price or not estimated_resale_value:
+        return None, None
+
+    discount_pct = (estimated_resale_value - price) / estimated_resale_value
+    discount_pct = max(min(discount_pct, 1.0), -1.0)
+    if discount_pct >= 0.70:
+        rating_label = "Steal"
+    elif discount_pct >= 0.50:
+        rating_label = "Great Deal"
+    elif discount_pct >= 0.30:
+        rating_label = "Good Deal"
+    elif discount_pct >= 0.10:
+        rating_label = "Fair"
+    else:
+        rating_label = "Marginal"
+    return rating_label, round(discount_pct * 100)
+
+
+def _format_estimated_usd(value):
+    try:
+        return str(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def append_alert_log(result):
     listing = result["listing"]
     price = result.get("price")
@@ -404,6 +444,16 @@ def append_alert_log(result):
         "verdict": result.get("verdict"),
         "reason": result.get("reason") or "; ".join(result.get("flags", [])),
     }
+    for key in (
+        "estimated_retail_price",
+        "estimated_resale_value",
+        "deal_rating",
+        "discount_pct",
+        "price_confidence",
+    ):
+        value = result.get(key)
+        if value is not None:
+            record[key] = value
 
     lines = []
     if ALERTS_LOG_PATH.exists():
@@ -430,6 +480,24 @@ def send_alert(result):
     image_url = (listing.get("image") or {}).get("imageUrl")
 
     message = f"${price} - {title}\nFlags: {flags}"
+    deal_rating = result.get("deal_rating")
+    if deal_rating:
+        value_parts = []
+        estimated_retail_price = result.get("estimated_retail_price")
+        estimated_resale_value = result.get("estimated_resale_value")
+        discount_pct = result.get("discount_pct")
+        formatted_retail_price = _format_estimated_usd(estimated_retail_price)
+        formatted_resale_value = _format_estimated_usd(estimated_resale_value)
+        if formatted_retail_price is not None:
+            value_parts.append(f"est. retail ${formatted_retail_price}")
+        if formatted_resale_value is not None:
+            value_parts.append(f"resale ${formatted_resale_value}")
+        deal_line = f"\n{deal_rating}"
+        if value_parts:
+            deal_line += " - " + " / ".join(value_parts)
+        if discount_pct is not None:
+            deal_line += f" ({discount_pct}% under resale)"
+        message += deal_line
     alert_title = f"[{result['verdict']}] Deal alert"
 
     tags = ["moneybag"] if result.get("brand_tier") == "grab_on_sight" else ["eyes"]
@@ -577,6 +645,20 @@ def run():
                     result.setdefault("flags", []).append(
                         "AI photo check: " + ai_result.get("summary", "looks good")
                     )
+                if ai_result is not None and (
+                    ai_result.get("estimated_retail_price")
+                    or ai_result.get("estimated_resale_value")
+                ):
+                    result["estimated_retail_price"] = ai_result.get("estimated_retail_price")
+                    result["estimated_resale_value"] = ai_result.get("estimated_resale_value")
+                    result["price_confidence"] = ai_result.get("price_confidence")
+                    rating_label, discount_pct = compute_deal_rating(
+                        price,
+                        result.get("estimated_resale_value"),
+                    )
+                    if rating_label is not None:
+                        result["deal_rating"] = rating_label
+                        result["discount_pct"] = discount_pct
 
                 append_alert_log(result)
                 try:
