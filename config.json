@@ -171,19 +171,9 @@
       "max_price": 30
     },
     {
-      "query": "barbour bedale wax jacket",
+      "query": "barbour jacket",
       "size": ["L", "XL"],
-      "max_price": 70
-    },
-    {
-      "query": "barbour beaufort wax jacket",
-      "size": ["L", "XL"],
-      "max_price": 70
-    },
-    {
-      "query": "barbour quilted jacket",
-      "size": ["L", "XL"],
-      "max_price": 60
+      "max_price": 65
     },
     {
       "query": "drake's tie",
