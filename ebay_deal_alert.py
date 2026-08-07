@@ -296,10 +296,13 @@ def check_photos_with_gemini(listing):
     if not gemini_api_key:
         logger.warning("Skipping Gemini photo check: GEMINI_API_KEY is not configured")
         return None
-    # gemini-2.5-flash's free tier is only 10 RPM / 250 RPD - at 72 runs/day
-    # (20-min cron) even a modest per-run cap blows the daily quota.
-    # flash-lite gives 15 RPM / 1000 RPD, enough headroom at GEMINI_CALL_LIMIT.
-    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    # Use Google's rolling "-latest" alias instead of a pinned model name -
+    # gemini-2.0-flash and gemini-2.5-flash/-flash-lite all 404 for this key
+    # ("no longer available to new users"), confirmed live against the
+    # actual API. The -latest alias always resolves to Google's current
+    # lightweight flash-tier model, which also sidesteps this whole class
+    # of bug going forward (no more silent breakage on model retirement).
+    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 
     image_parts = []
     for image_url in _collect_listing_image_urls(listing):
