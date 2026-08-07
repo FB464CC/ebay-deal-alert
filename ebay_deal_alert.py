@@ -13,55 +13,41 @@ Setup needed before this runs:
 """
 
 import os
+import base64
 import json
 import logging
+import mimetypes
+import re
 import sqlite3
 import sys
 import time
 import requests
 from datetime import datetime, timezone
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # CONFIG — saved searches ported from CareerOS project instructions
 # ---------------------------------------------------------------------------
 
-SAVED_SEARCHES = [
-    {"query": "peter millar merino sweater", "size": ["L", "XL"], "max_price": 25},
-    {"query": "peter millar quarter zip merino", "size": ["L", "XL"], "max_price": 25},
-    {"query": "tom james merino", "size": None, "max_price": 30},
-    {"query": "johnstons elgin cashmere", "size": None, "max_price": 40},
-    {"query": "alan paine merino lambswool", "size": ["L"], "max_price": 25},
-    {"query": "pringle scotland merino cashmere", "size": ["L"], "max_price": 25},
-    {"query": "hickey freeman blazer", "size": ["40"], "max_price": 40},
-    {"query": "brooks brothers gold label blazer", "size": ["40"], "max_price": 30},
-    {"query": "canali blazer", "size": ["40"], "max_price": 50},
-    {"query": "hart schaffner marx blazer", "size": ["40"], "max_price": 25},
-    {"query": "allen edmonds", "size": ["13"], "max_price": 50},
-    {"query": "alden shoes", "size": ["13"], "max_price": 80},
-    {"query": "peter millar summer comfort polo", "size": ["L"], "max_price": 20},
-]
+CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
 
-# Brand tier lookup
-GRAB_ON_SIGHT_BRANDS = [
-    "tom james", "alan paine", "johnstons of elgin", "hickey freeman",
-    "canali", "brioni", "isaia", "pringle of scotland", "hart schaffner marx",
-]
-STANDARD_BRANDS = ["peter millar", "brooks brothers", "ralph lauren", "allen edmonds", "alden"]
-PASS_BRANDS = ["travismathew", "carnoustie"]
 
-CORPORATE_LOGO_KEYWORDS = [
-    "tournament", "championship", "club", "resort", "hotel", "bank", "capital",
-    "financial", "wealth", "partners", "group", "associates", "invitational",
-    "foundation", "corporate", "insurance", "open", "classic",
-]
+def load_config():
+    with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+        return json.load(config_file)
 
-CONDITION_HARD_FAIL_KEYWORDS = ["moth", "moth hole", "moth holes"]
-CONDITION_FLAG_KEYWORDS = ["hole", "stain", "pilling", "repair", "tear"]
 
-FABRIC_GOOD_KEYWORDS = ["merino", "cashmere", "wool", "silk", "shell cordovan"]
-FABRIC_POLY_KEYWORD = "poly"
-
-PIT_TO_PIT_CAP_INCHES = 23.5
+_CONFIG = load_config()
+SAVED_SEARCHES = _CONFIG["SAVED_SEARCHES"]
+GRAB_ON_SIGHT_BRANDS = _CONFIG["GRAB_ON_SIGHT_BRANDS"]
+STANDARD_BRANDS = _CONFIG["STANDARD_BRANDS"]
+PASS_BRANDS = _CONFIG["PASS_BRANDS"]
+CORPORATE_LOGO_KEYWORDS = _CONFIG["CORPORATE_LOGO_KEYWORDS"]
+CONDITION_HARD_FAIL_KEYWORDS = _CONFIG["CONDITION_HARD_FAIL_KEYWORDS"]
+CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
+FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
+FABRIC_POLY_KEYWORD = _CONFIG["FABRIC_POLY_KEYWORD"]
+PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 
@@ -215,6 +201,101 @@ def score_listing(listing, gap_report):
 
 
 # ---------------------------------------------------------------------------
+# GEMINI PHOTO CHECK
+# ---------------------------------------------------------------------------
+
+def _collect_listing_image_urls(listing):
+    urls = []
+    primary_url = listing.get("image", {}).get("imageUrl")
+    if primary_url:
+        urls.append(primary_url)
+    for image in listing.get("additionalImages", []):
+        image_url = image.get("imageUrl")
+        if image_url:
+            urls.append(image_url)
+    return urls[:4]
+
+
+def _detect_image_mime_type(resp, image_url):
+    content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
+    if content_type.startswith("image/"):
+        return content_type
+    guessed_type, _ = mimetypes.guess_type(image_url)
+    if guessed_type and guessed_type.startswith("image/"):
+        return guessed_type
+    return "image/jpeg"
+
+
+def _strip_json_code_fence(text):
+    cleaned = text.strip()
+    match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", cleaned, re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return cleaned
+
+
+def check_photos_with_gemini(listing):
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_api_key:
+        logger.warning("Skipping Gemini photo check: GEMINI_API_KEY is not configured")
+        return None
+
+    image_parts = []
+    for image_url in _collect_listing_image_urls(listing):
+        try:
+            image_resp = requests.get(image_url, timeout=10)
+            image_resp.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            logger.warning("Skipping failed image download for Gemini check: %s", exc)
+            continue
+
+        image_parts.append({
+            "inline_data": {
+                "mime_type": _detect_image_mime_type(image_resp, image_url),
+                "data": base64.b64encode(image_resp.content).decode("ascii"),
+            }
+        })
+
+    if not image_parts:
+        logger.warning("Skipping Gemini photo check: no listing images could be downloaded")
+        return None
+
+    prompt = (
+        "Inspect these secondhand clothing or footwear listing photos for a menswear "
+        "flipping business. Report strict JSON only, with no markdown fences, using "
+        "this exact shape: {\"damage_found\": bool, \"damage_desc\": string, "
+        "\"weird_logo_found\": bool, \"logo_desc\": string, \"looks_good\": bool, "
+        "\"summary\": string}. damage_found means visible holes, stains, moth "
+        "damage, heavy pilling, tears, or other undisclosed damage beyond normal "
+        "light wear. weird_logo_found means prominent corporate, tournament, "
+        "country-club, bank, or resort branding/embroidery visible in the photos. "
+        "looks_good should be true only when no damage or unwanted logo is visible."
+    )
+    payload = {
+        "contents": [{
+            "parts": [{"text": prompt}] + image_parts,
+        }],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+        },
+    }
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.0-flash:generateContent?key={gemini_api_key}"
+    )
+
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+        resp.raise_for_status()
+        parts = resp.json()["candidates"][0]["content"]["parts"]
+        text = "".join(part.get("text", "") for part in parts)
+        return json.loads(_strip_json_code_fence(text))
+    except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
+        logger.warning("Gemini photo check failed; proceeding without AI result: %s", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # ALERT DISPATCH
 # ---------------------------------------------------------------------------
 
@@ -298,6 +379,24 @@ def run():
                 result.get("reason") or "; ".join(result.get("flags", [])),
             )
             if result["verdict"] in ("REVIEW",):
+                ai_result = check_photos_with_gemini(listing)
+                if ai_result is not None and (
+                    ai_result.get("damage_found") is True
+                    or ai_result.get("weird_logo_found") is True
+                ):
+                    result["verdict"] = "PASS"
+                    result["reason"] = "AI photo check found damage or unwanted logo"
+                    logger.info(
+                        "Downgrading %s to PASS based on AI photo check: %s",
+                        item_id,
+                        ai_result.get("summary", "no summary provided"),
+                    )
+                    continue
+                if ai_result is not None and ai_result.get("looks_good"):
+                    result.setdefault("flags", []).append(
+                        "AI photo check: " + ai_result.get("summary", "looks good")
+                    )
+
                 try:
                     send_alert(result)
                     logger.info("Sent alert for %s", item_id)
