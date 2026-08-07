@@ -46,6 +46,7 @@ CORPORATE_LOGO_KEYWORDS = _CONFIG["CORPORATE_LOGO_KEYWORDS"]
 CONDITION_HARD_FAIL_KEYWORDS = _CONFIG["CONDITION_HARD_FAIL_KEYWORDS"]
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
 FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
+GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
 FABRIC_POLY_KEYWORD = _CONFIG["FABRIC_POLY_KEYWORD"]
 PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 
@@ -144,8 +145,16 @@ def search_ebay(token, saved_search):
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     }
+    query = saved_search["query"]
+    # eBay's search syntax supports "-term" exclusions same as the website's
+    # search bar. Filters out women's/juniors' listings at the source,
+    # cheaper than letting them through and rejecting downstream. Backstopped
+    # by a title check in score_listing() in case a listing slips through
+    # (eBay's exclusion matching isn't guaranteed to be exhaustive).
+    if GENDER_EXCLUDE_KEYWORDS:
+        query += " " + " ".join(f"-{kw}" for kw in GENDER_EXCLUDE_KEYWORDS)
     params = {
-        "q": saved_search["query"],
+        "q": query,
         "filter": "conditions:{USED|UNSPECIFIED}",  # pre-owned, adjust as needed
         "sort": "newlyListed",
         "limit": "50",
@@ -209,6 +218,12 @@ def score_listing(listing, gap_report):
     price = float(0 if price_value is None else price_value)
     flags = []
     verdict = "REVIEW"  # default: don't auto-decide, surface it
+
+    # 0. Gender - hard disqualifier, checked before anything else. Backstop
+    # for search_ebay()'s query-level exclusion, in case a listing slips
+    # through eBay's own "-term" matching.
+    if any(kw in title for kw in GENDER_EXCLUDE_KEYWORDS):
+        return {"verdict": "PASS", "reason": "excluded gender keyword in title", "listing": listing}
 
     # 1. Brand
     brand_tier = None
