@@ -88,6 +88,76 @@
         "L"
       ],
       "max_price": 20
+    },
+    {
+      "query": "loro piana cashmere sweater",
+      "size": ["L", "XL"],
+      "max_price": 90
+    },
+    {
+      "query": "brunello cucinelli sweater",
+      "size": ["L", "XL"],
+      "max_price": 90
+    },
+    {
+      "query": "kiton",
+      "size": null,
+      "max_price": 120
+    },
+    {
+      "query": "cesare attolini",
+      "size": null,
+      "max_price": 120
+    },
+    {
+      "query": "belvest",
+      "size": null,
+      "max_price": 70
+    },
+    {
+      "query": "william lockie cashmere",
+      "size": ["L"],
+      "max_price": 50
+    },
+    {
+      "query": "ballantyne cashmere",
+      "size": ["L"],
+      "max_price": 50
+    },
+    {
+      "query": "edward green shoes",
+      "size": ["13"],
+      "max_price": 180
+    },
+    {
+      "query": "john lobb shoes",
+      "size": ["13"],
+      "max_price": 180
+    },
+    {
+      "query": "crockett jones shoes",
+      "size": ["13"],
+      "max_price": 120
+    },
+    {
+      "query": "church's shoes",
+      "size": ["13"],
+      "max_price": 90
+    },
+    {
+      "query": "santoni shoes",
+      "size": ["13"],
+      "max_price": 100
+    },
+    {
+      "query": "turnbull asser shirt",
+      "size": ["L"],
+      "max_price": 50
+    },
+    {
+      "query": "charvet",
+      "size": null,
+      "max_price": 60
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -99,7 +169,21 @@
     "brioni",
     "isaia",
     "pringle of scotland",
-    "hart schaffner marx"
+    "hart schaffner marx",
+    "loro piana",
+    "brunello cucinelli",
+    "kiton",
+    "cesare attolini",
+    "belvest",
+    "william lockie",
+    "ballantyne",
+    "edward green",
+    "john lobb",
+    "crockett",
+    "church",
+    "santoni",
+    "turnbull",
+    "charvet"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
