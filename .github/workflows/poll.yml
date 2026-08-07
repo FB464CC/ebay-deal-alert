@@ -1,0 +1,49 @@
+name: Poll eBay Deals
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run eBay deal alert
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          WARDROBE_OS_URL: ${{ secrets.WARDROBE_OS_URL }}
+          WARDROBE_OS_SECRET: ${{ secrets.WARDROBE_OS_SECRET }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python ebay_deal_alert.py
+
+      - name: Commit seen item updates
+        run: |
+          if [ -n "$(git status --porcelain seen_items.db)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add seen_items.db
+            git commit -m "chore: update seen items [skip ci]"
+            git push
+          else
+            echo "seen_items.db unchanged"
+          fi
