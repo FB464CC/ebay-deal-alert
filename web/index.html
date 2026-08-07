@@ -751,7 +751,7 @@
                   <span class="activity-meta">${escapeHtml(formatTime(item.timestamp))}</span>
                 </div>
                 <div class="activity-title">${escapeHtml(item.title || "Untitled listing")}</div>
-                <div class="activity-meta">${item.price == null ? "" : `$${escapeHtml(item.price)}`}</div>
+                <div class="activity-meta">${item.item_price != null && item.shipping_cost != null ? escapeHtml(`$${item.item_price} + $${item.shipping_cost} shipping = $${item.price} total`) : (item.price == null ? "" : `$${escapeHtml(item.price)}`)}</div>
                 <div class="activity-reason">${escapeHtml(item.reason || "")}</div>
                 ${estimateLine ? `<div class="activity-meta">${escapeHtml(estimateLine)}</div>` : ""}
               </div>
