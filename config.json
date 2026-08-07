@@ -2,193 +2,484 @@
   "SAVED_SEARCHES": [
     {
       "query": "peter millar merino sweater",
-      "size": ["M", "L", "XL"],
-      "max_price": 25
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 25,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "peter millar quarter zip merino",
-      "size": ["M", "L", "XL"],
-      "max_price": 25
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 25,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "tom james merino",
-      "size": ["M", "L", "XL"],
-      "max_price": 30
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 30,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "johnstons elgin cashmere",
-      "size": ["M", "L", "XL"],
-      "max_price": 40
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "alan paine merino lambswool",
-      "size": ["M", "L", "XL"],
-      "max_price": 25
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 25,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "pringle scotland merino cashmere",
-      "size": ["M", "L", "XL"],
-      "max_price": 25
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 25,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "hickey freeman blazer",
-      "size": ["42"],
-      "max_price": 40
+      "size": [
+        "42"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "brooks brothers gold label blazer",
-      "size": ["42"],
-      "max_price": 30
+      "size": [
+        "42"
+      ],
+      "max_price": 30,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "canali blazer",
-      "size": ["42"],
-      "max_price": 50
+      "size": [
+        "42"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "hart schaffner marx blazer",
-      "size": ["42"],
-      "max_price": 25
+      "size": [
+        "42"
+      ],
+      "max_price": 25,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "allen edmonds",
-      "size": ["13"],
-      "max_price": 50
+      "size": [
+        "13"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "alden shoes",
-      "size": ["13"],
-      "max_price": 80
+      "size": [
+        "13"
+      ],
+      "max_price": 80,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "peter millar summer comfort polo",
-      "size": ["M", "L"],
-      "max_price": 20
+      "size": [
+        "M",
+        "L"
+      ],
+      "max_price": 20,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "loro piana cashmere sweater",
-      "size": ["M", "L", "XL"],
-      "max_price": 90
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "brunello cucinelli sweater",
-      "size": ["M", "L", "XL"],
-      "max_price": 90
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "kiton sport coat",
-      "size": ["42"],
-      "max_price": 120
+      "size": [
+        "42"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "cesare attolini blazer",
-      "size": ["42"],
-      "max_price": 120
+      "size": [
+        "42"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "belvest blazer",
-      "size": ["42"],
-      "max_price": 70
+      "size": [
+        "42"
+      ],
+      "max_price": 70,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "william lockie cashmere",
-      "size": ["M", "L", "XL"],
-      "max_price": 50
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "ballantyne cashmere",
-      "size": ["M", "L", "XL"],
-      "max_price": 50
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "edward green shoes",
-      "size": ["13"],
-      "max_price": 180
+      "size": [
+        "13"
+      ],
+      "max_price": 180,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "john lobb shoes",
-      "size": ["13"],
-      "max_price": 180
+      "size": [
+        "13"
+      ],
+      "max_price": 180,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "crockett jones shoes",
-      "size": ["13"],
-      "max_price": 120
+      "size": [
+        "13"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "church's shoes",
-      "size": ["13"],
-      "max_price": 90
+      "size": [
+        "13"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "santoni shoes",
-      "size": ["13"],
-      "max_price": 100
+      "size": [
+        "13"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "turnbull asser shirt",
-      "size": ["M", "L", "XL"],
-      "max_price": 50
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "charvet shirt",
-      "size": ["M", "L", "XL"],
-      "max_price": 60
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "ferragamo loafers",
-      "size": ["13"],
-      "max_price": 100
+      "size": [
+        "13"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "ferragamo belt",
-      "size": ["36", "38"],
-      "max_price": 60
+      "size": [
+        "36",
+        "38"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "gucci loafers",
-      "size": ["13"],
-      "max_price": 150
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "gucci belt",
-      "size": ["36", "38"],
-      "max_price": 80
+      "size": [
+        "36",
+        "38"
+      ],
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "bottega veneta belt",
-      "size": ["36", "38"],
-      "max_price": 80
+      "size": [
+        "36",
+        "38"
+      ],
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "anderson's belt",
-      "size": ["36", "38"],
-      "max_price": 60
+      "size": [
+        "36",
+        "38"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "peter millar crown crafted polo",
-      "size": ["M"],
-      "max_price": 30
+      "size": [
+        "M"
+      ],
+      "max_price": 30,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "barbour jacket",
-      "size": ["L", "XL"],
-      "max_price": 65
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 65,
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "drake's tie",
       "size": null,
-      "max_price": 25
+      "max_price": 25,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "j press tie",
       "size": null,
-      "max_price": 20
+      "max_price": 20,
+      "enabled": true,
+      "profile": "fast"
     },
     {
       "query": "rancourt loafers",
-      "size": ["13"],
-      "max_price": 70
+      "size": [
+        "13"
+      ],
+      "max_price": 70,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "hickey freeman suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "canali suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 70,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "hart schaffner marx suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "brooks brothers gold label suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 45,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "kiton suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "cesare attolini suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "belvest suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "brioni sport coat",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "isaia sport coat",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "ralph lauren purple label",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "robert talbott tie",
+      "size": null,
+      "max_price": 20,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "e marinella tie",
+      "size": null,
+      "max_price": 20,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "brooks brothers makers tie",
+      "size": null,
+      "max_price": 15,
+      "enabled": true,
+      "profile": "fast"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [

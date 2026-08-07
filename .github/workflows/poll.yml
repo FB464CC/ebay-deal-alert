@@ -2,7 +2,12 @@ name: Poll eBay Deals
 
 on:
   schedule:
-    - cron: '*/20 * * * *'
+    # Offset from :00/:20/:40 deliberately - GitHub's scheduler gets
+    # congested at round minute-boundaries (every cron job on the platform
+    # targets them too) and silently delays runs. Confirmed against this
+    # repo's actual run history: */20 was landing ~63 min apart on average,
+    # not 20 - a real latency bug for a "catch it first" flipping tool.
+    - cron: '7,27,47 * * * *'
   workflow_dispatch:
 
 concurrency:
