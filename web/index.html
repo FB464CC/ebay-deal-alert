@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>eBay Deal Alert Settings</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #17202a;
+      --muted: #5f6b7a;
+      --line: #d7dde5;
+      --primary: #176b87;
+      --primary-dark: #0e5066;
+      --danger: #b42318;
+      --success: #16794c;
+      --focus: #f2b84b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.45;
+    }
+
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      padding: 18px 16px 14px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    h1 {
+      font-size: 1.35rem;
+      margin: 0 0 4px;
+    }
+
+    .subhead {
+      color: var(--muted);
+      font-size: 0.94rem;
+      margin: 0;
+    }
+
+    main {
+      margin: 0 auto;
+      max-width: 780px;
+      padding: 14px 12px 100px;
+    }
+
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin: 0 0 14px;
+      padding: 14px;
+    }
+
+    h2 {
+      font-size: 1.02rem;
+      margin: 0 0 12px;
+    }
+
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 0.86rem;
+      font-weight: 650;
+      margin-bottom: 6px;
+    }
+
+    input,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      background: #fff;
+      min-height: 46px;
+      padding: 10px 11px;
+    }
+
+    textarea {
+      min-height: 132px;
+      resize: vertical;
+    }
+
+    input:focus,
+    textarea:focus,
+    button:focus {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    .row {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr;
+      margin-bottom: 12px;
+    }
+
+    .search-row {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfd;
+    }
+
+    .search-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 10px;
+    }
+
+    button {
+      align-items: center;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      font-weight: 700;
+      justify-content: center;
+      min-height: 48px;
+      padding: 10px 15px;
+    }
+
+    .primary {
+      background: var(--primary);
+      color: #fff;
+      width: 100%;
+    }
+
+    .primary:active {
+      background: var(--primary-dark);
+    }
+
+    .secondary {
+      background: #e8edf2;
+      color: var(--text);
+    }
+
+    .danger {
+      background: #f8d7d2;
+      color: var(--danger);
+    }
+
+    .footer-save {
+      background: rgba(246, 247, 249, 0.94);
+      border-top: 1px solid var(--line);
+      bottom: 0;
+      left: 0;
+      padding: 12px;
+      position: fixed;
+      right: 0;
+      z-index: 3;
+    }
+
+    .footer-save-inner {
+      margin: 0 auto;
+      max-width: 780px;
+    }
+
+    .status {
+      border-radius: 8px;
+      display: none;
+      margin: 0 0 14px;
+      padding: 12px;
+    }
+
+    .status.success {
+      background: #daf3e7;
+      color: var(--success);
+      display: block;
+    }
+
+    .status.error {
+      background: #fde2df;
+      color: var(--danger);
+      display: block;
+    }
+
+    .loading {
+      color: var(--muted);
+      padding: 20px 4px;
+    }
+
+    @media (min-width: 680px) {
+      main {
+        padding-left: 18px;
+        padding-right: 18px;
+      }
+
+      .row.two {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .search-grid {
+        grid-template-columns: 2fr 1.2fr 0.9fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Deal Alert Settings</h1>
+    <p class="subhead">Edit saved searches, brand tiers, filters, and sizing limits.</p>
+  </header>
+
+  <main>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <div id="app" class="loading">Loading settings...</div>
+  </main>
+
+  <div class="footer-save">
+    <div class="footer-save-inner">
+      <button id="saveButton" class="primary" type="button" disabled>Save Changes</button>
+    </div>
+  </div>
+
+  <script>
+    const PASSWORD_KEY = "ebay-deal-alert.settingsPassword";
+    const app = document.getElementById("app");
+    const statusBox = document.getElementById("status");
+    const saveButton = document.getElementById("saveButton");
+    let config = null;
+
+    const textListFields = [
+      ["GRAB_ON_SIGHT_BRANDS", "Grab-on-sight Brands"],
+      ["STANDARD_BRANDS", "Standard Brands"],
+      ["PASS_BRANDS", "Pass Brands"],
+      ["CORPORATE_LOGO_KEYWORDS", "Corporate Logo Keywords"],
+      ["CONDITION_HARD_FAIL_KEYWORDS", "Condition Hard-Fail Keywords"],
+      ["CONDITION_FLAG_KEYWORDS", "Condition Flag Keywords"],
+      ["FABRIC_GOOD_KEYWORDS", "Fabric Good Keywords"]
+    ];
+
+    function getPassword() {
+      let password = localStorage.getItem(PASSWORD_KEY);
+      while (!password) {
+        password = window.prompt("Settings password");
+        if (password === null) {
+          throw new Error("Password required");
+        }
+        password = password.trim();
+      }
+      localStorage.setItem(PASSWORD_KEY, password);
+      return password;
+    }
+
+    function showStatus(message, type) {
+      statusBox.textContent = message;
+      statusBox.className = `status ${type}`;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function clearStatus() {
+      statusBox.textContent = "";
+      statusBox.className = "status";
+    }
+
+    async function apiFetch(options = {}) {
+      const password = getPassword();
+      const headers = {
+        "x-settings-password": password,
+        ...(options.headers || {})
+      };
+      const response = await fetch("/api/config", { ...options, headers });
+      if (response.status === 401) {
+        localStorage.removeItem(PASSWORD_KEY);
+        showStatus("Wrong password. Please try again.", "error");
+        return apiFetch(options);
+      }
+      return response;
+    }
+
+    function linesToArray(value) {
+      return value
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+    }
+
+    function arrayToLines(value) {
+      return Array.isArray(value) ? value.join("\n") : "";
+    }
+
+    function sizeToText(size) {
+      return Array.isArray(size) ? size.join(", ") : "";
+    }
+
+    function textToSize(value) {
+      const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
+      return parts.length ? parts : null;
+    }
+
+    function fieldId(key) {
+      return `field-${key}`;
+    }
+
+    function render() {
+      const searchRows = config.SAVED_SEARCHES.map((search, index) => `
+        <div class="search-row" data-search-index="${index}">
+          <div class="search-grid">
+            <div>
+              <label for="search-query-${index}">Query</label>
+              <input id="search-query-${index}" data-field="query" value="${escapeHtml(search.query || "")}" autocomplete="off">
+            </div>
+            <div>
+              <label for="search-size-${index}">Size</label>
+              <input id="search-size-${index}" data-field="size" value="${escapeHtml(sizeToText(search.size))}" placeholder="L, XL" autocomplete="off">
+            </div>
+            <div>
+              <label for="search-price-${index}">Max price</label>
+              <input id="search-price-${index}" data-field="max_price" type="number" min="0" step="0.01" value="${Number(search.max_price || 0)}">
+            </div>
+          </div>
+          <div class="button-row">
+            <button class="danger delete-search" type="button">Delete</button>
+          </div>
+        </div>
+      `).join("");
+
+      const listSections = textListFields.map(([key, label]) => `
+        <div class="row">
+          <div>
+            <label for="${fieldId(key)}">${label}</label>
+            <textarea id="${fieldId(key)}" data-config-key="${key}" spellcheck="false">${escapeHtml(arrayToLines(config[key]))}</textarea>
+          </div>
+        </div>
+      `).join("");
+
+      app.className = "";
+      app.innerHTML = `
+        <section>
+          <h2>Saved Searches</h2>
+          <div id="searches">${searchRows}</div>
+          <button id="addSearch" class="secondary" type="button">Add search</button>
+        </section>
+
+        <section>
+          <h2>Brand Tiers</h2>
+          ${listSections}
+        </section>
+
+        <section>
+          <h2>Fabric and Fit</h2>
+          <div class="row two">
+            <div>
+              <label for="fabricPoly">Fabric Poly Keyword</label>
+              <input id="fabricPoly" value="${escapeHtml(config.FABRIC_POLY_KEYWORD || "")}" autocomplete="off">
+            </div>
+            <div>
+              <label for="pitCap">Pit-to-pit cap inches</label>
+              <input id="pitCap" type="number" min="0" step="0.1" value="${Number(config.PIT_TO_PIT_CAP_INCHES || 0)}">
+            </div>
+          </div>
+        </section>
+      `;
+
+      document.getElementById("addSearch").addEventListener("click", () => {
+        config.SAVED_SEARCHES.push({ query: "", size: null, max_price: 0 });
+        render();
+      });
+
+      document.querySelectorAll(".delete-search").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          const row = event.target.closest("[data-search-index]");
+          config.SAVED_SEARCHES.splice(Number(row.dataset.searchIndex), 1);
+          render();
+        });
+      });
+
+      saveButton.disabled = false;
+    }
+
+    function collectConfig() {
+      const nextConfig = { ...config };
+      nextConfig.SAVED_SEARCHES = Array.from(document.querySelectorAll("[data-search-index]")).map((row) => ({
+        query: row.querySelector('[data-field="query"]').value.trim(),
+        size: textToSize(row.querySelector('[data-field="size"]').value),
+        max_price: Number(row.querySelector('[data-field="max_price"]').value || 0)
+      }));
+
+      for (const [key] of textListFields) {
+        nextConfig[key] = linesToArray(document.getElementById(fieldId(key)).value);
+      }
+
+      nextConfig.FABRIC_POLY_KEYWORD = document.getElementById("fabricPoly").value.trim();
+      nextConfig.PIT_TO_PIT_CAP_INCHES = Number(document.getElementById("pitCap").value || 0);
+      return nextConfig;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    async function loadConfig() {
+      try {
+        clearStatus();
+        const response = await apiFetch();
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: "Failed to load config" }));
+          throw new Error(error.error || "Failed to load config");
+        }
+        config = await response.json();
+        if (!Array.isArray(config.SAVED_SEARCHES)) {
+          config.SAVED_SEARCHES = [];
+        }
+        render();
+      } catch (error) {
+        app.className = "loading";
+        app.textContent = error.message;
+        showStatus(error.message, "error");
+      }
+    }
+
+    saveButton.addEventListener("click", async () => {
+      try {
+        clearStatus();
+        saveButton.disabled = true;
+        config = collectConfig();
+        const response = await apiFetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(config)
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: "Failed to save config" }));
+          throw new Error(error.error || error.message || "Failed to save config");
+        }
+        showStatus("Settings saved.", "success");
+      } catch (error) {
+        showStatus(error.message, "error");
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>
