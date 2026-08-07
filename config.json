@@ -346,20 +346,6 @@
       "profile": "slow"
     },
     {
-      "query": "drake's tie",
-      "size": null,
-      "max_price": 25,
-      "enabled": true,
-      "profile": "fast"
-    },
-    {
-      "query": "j press tie",
-      "size": null,
-      "max_price": 20,
-      "enabled": true,
-      "profile": "fast"
-    },
-    {
       "query": "rancourt loafers",
       "size": [
         "13"
@@ -461,23 +447,16 @@
       "profile": "fast"
     },
     {
-      "query": "robert talbott tie",
+      "query": "drake's tie",
       "size": null,
-      "max_price": 20,
+      "max_price": 8,
       "enabled": true,
       "profile": "fast"
     },
     {
-      "query": "e marinella tie",
+      "query": "charvet tie",
       "size": null,
-      "max_price": 20,
-      "enabled": true,
-      "profile": "fast"
-    },
-    {
-      "query": "brooks brothers makers tie",
-      "size": null,
-      "max_price": 15,
+      "max_price": 10,
       "enabled": true,
       "profile": "fast"
     }
