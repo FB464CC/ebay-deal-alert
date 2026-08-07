@@ -505,6 +505,7 @@ def run():
                 for size_token in size_tokens
             ):
                 logger.info("Skipping %s because title does not match size filter", item_id)
+                mark_seen(conn, item_id)
                 continue
 
             price_value = (listing.get("price") or {}).get("value", 999999)
