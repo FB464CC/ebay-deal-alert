@@ -169,6 +169,36 @@
       "query": "peter millar crown crafted polo",
       "size": ["M"],
       "max_price": 30
+    },
+    {
+      "query": "barbour bedale wax jacket",
+      "size": ["L", "XL"],
+      "max_price": 70
+    },
+    {
+      "query": "barbour beaufort wax jacket",
+      "size": ["L", "XL"],
+      "max_price": 70
+    },
+    {
+      "query": "barbour quilted jacket",
+      "size": ["L", "XL"],
+      "max_price": 60
+    },
+    {
+      "query": "drake's tie",
+      "size": null,
+      "max_price": 25
+    },
+    {
+      "query": "j press tie",
+      "size": null,
+      "max_price": 20
+    },
+    {
+      "query": "rancourt loafers",
+      "size": ["13"],
+      "max_price": 70
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -198,18 +228,26 @@
     "ferragamo",
     "gucci",
     "bottega veneta",
-    "anderson"
+    "anderson",
+    "drake"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
     "brooks brothers",
     "ralph lauren",
     "allen edmonds",
-    "alden"
+    "alden",
+    "barbour",
+    "j press",
+    "rancourt"
   ],
   "PASS_BRANDS": [
     "travismathew",
-    "carnoustie"
+    "carnoustie",
+    "vineyard vines",
+    "southern tide",
+    "johnston",
+    "cole haan"
   ],
   "CORPORATE_LOGO_KEYWORDS": [
     "tournament",
