@@ -17,6 +17,7 @@ import json
 import logging
 import sqlite3
 import sys
+import time
 import requests
 from datetime import datetime, timezone
 
@@ -226,12 +227,24 @@ def send_alert(result):
 
     message = f"${price} — {title}\n{url}\nFlags: {flags}"
 
-    resp = requests.post(
-        f"https://ntfy.sh/{NTFY_TOPIC}",
-        data=message.encode("utf-8"),
-        headers={"Title": f"[{result['verdict']}] Deal alert"},
-    )
-    resp.raise_for_status()
+    # ntfy.sh's public instance rate-limits by IP, and GitHub-hosted runners
+    # share IPs with heavy traffic — 429s happen often enough in practice to
+    # need a retry, not just a raise. 3 attempts, short backoff.
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"https://ntfy.sh/{NTFY_TOPIC}",
+                data=message.encode("utf-8"),
+                headers={"Title": f"[{result['verdict']}] Deal alert"},
+            )
+            resp.raise_for_status()
+            return
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(2 ** attempt)  # 1s, 2s
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
