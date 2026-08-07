@@ -459,6 +459,48 @@
       "max_price": 10,
       "enabled": true,
       "profile": "fast"
+    },
+    {
+      "query": "ferragamo cardholder",
+      "size": null,
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "ferragamo wallet",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "gucci cardholder",
+      "size": null,
+      "max_price": 70,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "gucci wallet",
+      "size": null,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "bottega veneta cardholder",
+      "size": null,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "bottega veneta wallet",
+      "size": null,
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
