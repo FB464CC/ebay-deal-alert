@@ -389,8 +389,6 @@ def append_alert_log(result):
         "verdict": result.get("verdict"),
         "reason": result.get("reason") or "; ".join(result.get("flags", [])),
     }
-    if result.get("ai_flagged"):
-        record["ai_flagged"] = True
 
     lines = []
     if ALERTS_LOG_PATH.exists():
@@ -418,16 +416,8 @@ def send_alert(result):
 
     message = f"${price} - {title}\nFlags: {flags}"
     alert_title = f"[{result['verdict']}] Deal alert"
-    if result.get("ai_flagged"):
-        alert_title = f"[AI-FLAGGED] {alert_title}"
 
-    tags = []
-    if result.get("ai_flagged"):
-        tags.append("warning")
-    elif result.get("brand_tier") == "grab_on_sight":
-        tags.append("moneybag")
-    else:
-        tags.append("eyes")
+    tags = ["moneybag"] if result.get("brand_tier") == "grab_on_sight" else ["eyes"]
 
     headers = {
         "Title": alert_title,
@@ -549,16 +539,25 @@ def run():
                     ai_result.get("damage_found") is True
                     or ai_result.get("weird_logo_found") is True
                 ):
-                    result["ai_flagged"] = True
-                    result.setdefault("flags", []).append(
-                        "AI photo check flagged damage or unwanted logo: "
+                    # Hard disqualifier, same tier as the text-based corporate
+                    # logo keyword match and moth/hole hard-fail - not a
+                    # borderline call. Suppress rather than flag-and-send:
+                    # confirmed via user feedback that visually-detected
+                    # damage/logos (the whole reason this check exists) were
+                    # still reaching alerts when only flagged, not suppressed.
+                    result["verdict"] = "PASS"
+                    result["reason"] = (
+                        "AI photo check found damage or unwanted logo: "
                         + ai_result.get("summary", "manual review needed")
                     )
                     logger.info(
-                        "Flagging %s for AI photo review: %s",
+                        "Suppressing %s based on AI photo check: %s",
                         item_id,
                         ai_result.get("summary", "no summary provided"),
                     )
+                    append_alert_log(result)
+                    mark_seen(conn, item_id)
+                    continue
                 if ai_result is not None and ai_result.get("looks_good"):
                     result.setdefault("flags", []).append(
                         "AI photo check: " + ai_result.get("summary", "looks good")
