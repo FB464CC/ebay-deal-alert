@@ -501,6 +501,37 @@
       "max_price": 90,
       "enabled": true,
       "profile": "fast"
+    },
+    {
+      "query": "tissot watch",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "260324"
+    },
+    {
+      "query": "hamilton watch",
+      "size": null,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "260324"
+    },
+    {
+      "query": "shinola watch",
+      "size": null,
+      "max_price": 90,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "260324"
+    },
+    {
+      "query": "tumi briefcase",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
