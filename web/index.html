@@ -126,6 +126,7 @@
 
     input:focus,
     textarea:focus,
+    select:focus,
     button:focus {
       outline: 3px solid var(--focus);
       outline-offset: 2px;
@@ -139,7 +140,7 @@
     .tabs {
       display: grid;
       gap: 8px;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       margin-bottom: 14px;
     }
 
@@ -173,14 +174,57 @@
       margin-bottom: 10px;
     }
 
+    .search-row.disabled {
+      opacity: 0.62;
+    }
+
     .search-grid {
       display: grid;
       gap: 10px;
       grid-template-columns: 1fr;
     }
 
+    .search-row-head,
+    .filters {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .search-toggle {
+      align-items: center;
+      color: var(--text);
+      display: inline-flex;
+      font-size: 0.95rem;
+      gap: 8px;
+      margin: 0;
+      min-height: 44px;
+    }
+
+    .search-toggle input {
+      min-height: 24px;
+      width: 24px;
+    }
+
+    .filter-field {
+      flex: 1 1 170px;
+    }
+
+    select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      background: var(--input);
+      min-height: 46px;
+      padding: 10px 11px;
+    }
+
     .button-row {
       display: flex;
+      flex-wrap: wrap;
       gap: 10px;
       justify-content: flex-end;
       margin-top: 10px;
@@ -258,6 +302,17 @@
       display: block;
     }
 
+    .run-status {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-top: 8px;
+    }
+
+    .run-status.bad {
+      color: var(--danger);
+      font-weight: 750;
+    }
+
     @media (prefers-color-scheme: dark) {
       .secondary {
         background: #293746;
@@ -314,9 +369,59 @@
     }
 
     .activity-meta,
-    .activity-reason {
+    .activity-reason,
+    .ledger-line,
+    .context-line {
       color: var(--muted);
       font-size: 0.9rem;
+    }
+
+    .ledger-line {
+      margin-top: 6px;
+    }
+
+    .activity-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .activity-actions button,
+    .small-button {
+      min-height: 40px;
+      padding: 8px 11px;
+    }
+
+    .stats-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr;
+    }
+
+    .stat-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 12px;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 750;
+    }
+
+    .stat-value {
+      font-size: 1.25rem;
+      font-weight: 800;
+      margin-top: 2px;
+    }
+
+    .stat-detail {
+      color: var(--muted);
+      font-size: 0.86rem;
+      margin-top: 4px;
     }
 
     .badge {
@@ -414,6 +519,10 @@
       .search-grid {
         grid-template-columns: 2fr 1.2fr 0.9fr;
       }
+
+      .stats-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
     }
   </style>
 </head>
@@ -421,11 +530,13 @@
   <header>
     <h1>Deal Alert Settings</h1>
     <p class="subhead">Edit saved searches, brand tiers, filters, and sizing limits.</p>
+    <div id="runStatus" class="run-status">Last run: loading...</div>
   </header>
 
   <main>
     <div class="tabs" role="tablist">
       <button id="settingsTab" class="tab active" type="button">Settings</button>
+      <button id="statsTab" class="tab" type="button">Stats</button>
       <button id="activityTab" class="tab" type="button">Recent Activity</button>
     </div>
     <div id="status" class="status" role="status" aria-live="polite"></div>
@@ -445,11 +556,17 @@
     const saveButton = document.getElementById("saveButton");
     const footerSave = document.getElementById("footerSave");
     const settingsTab = document.getElementById("settingsTab");
+    const statsTab = document.getElementById("statsTab");
     const activityTab = document.getElementById("activityTab");
+    const runStatus = document.getElementById("runStatus");
     let config = null;
     let loadedSnapshot = "";
     let activeTab = "settings";
+    let historyItems = null;
+    let ledgerItems = null;
+    let activityFilters = { query: "all", rating: "all", title: "" };
 
+    const ratings = ["Steal", "Great Deal", "Good Deal", "Fair", "Marginal"];
     const textListFields = [
       ["GRAB_ON_SIGHT_BRANDS", "Grab-on-sight Brands"],
       ["STANDARD_BRANDS", "Standard Brands"],
@@ -545,6 +662,16 @@
         .replaceAll("'", "&#039;");
     }
 
+    function numberValue(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    }
+
+    function money(value) {
+      const number = numberValue(value);
+      return number == null ? "$0" : number.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+    }
+
     function updateListCounts() {
       for (const [key, label] of textListFields) {
         const textarea = document.getElementById(fieldId(key));
@@ -571,7 +698,9 @@
       nextConfig.SAVED_SEARCHES = Array.from(document.querySelectorAll("[data-search-index]")).map((row) => ({
         query: row.querySelector('[data-field="query"]').value.trim(),
         size: textToSize(row.querySelector('[data-field="size"]').value),
-        max_price: Number(row.querySelector('[data-field="max_price"]').value)
+        max_price: Number(row.querySelector('[data-field="max_price"]').value),
+        enabled: row.querySelector('[data-field="enabled"]').checked,
+        profile: row.dataset.profile || "fast"
       }));
 
       for (const [key] of textListFields) {
@@ -581,6 +710,15 @@
       nextConfig.FABRIC_POLY_KEYWORD = document.getElementById("fabricPoly").value.trim();
       nextConfig.PIT_TO_PIT_CAP_INCHES = Number(document.getElementById("pitCap").value || 0);
       return nextConfig;
+    }
+
+    function setActiveTab(tabName) {
+      activeTab = tabName;
+      settingsTab.classList.toggle("active", tabName === "settings");
+      statsTab.classList.toggle("active", tabName === "stats");
+      activityTab.classList.toggle("active", tabName === "activity");
+      footerSave.style.display = tabName === "settings" ? "" : "none";
+      saveButton.disabled = tabName !== "settings";
     }
 
     function updateDirtyState() {
@@ -598,36 +736,47 @@
           updateListCounts();
           updateDirtyState();
         });
+        field.addEventListener("change", () => {
+          updateDirtyState();
+        });
       });
     }
 
     function renderSettings() {
-      activeTab = "settings";
-      settingsTab.classList.add("active");
-      activityTab.classList.remove("active");
-      footerSave.style.display = "";
+      setActiveTab("settings");
 
-      const searchRows = config.SAVED_SEARCHES.map((search, index) => `
-        <div class="search-row" data-search-index="${index}">
-          <div class="search-grid">
-            <div>
-              <label for="search-query-${index}">Query</label>
-              <input id="search-query-${index}" data-field="query" value="${escapeHtml(search.query || "")}" autocomplete="off">
+      const searchRows = config.SAVED_SEARCHES.map((search, index) => {
+        const enabled = search.enabled !== false;
+        const profile = typeof search.profile === "string" && search.profile ? search.profile : "fast";
+        return `
+          <div class="search-row ${enabled ? "" : "disabled"}" data-search-index="${index}" data-profile="${escapeHtml(profile)}">
+            <div class="search-row-head">
+              <label class="search-toggle" for="search-enabled-${index}">
+                <input id="search-enabled-${index}" data-field="enabled" type="checkbox" ${enabled ? "checked" : ""}>
+                ${enabled ? "Active" : "Paused"}
+              </label>
+              <span class="badge pass">${escapeHtml(profile)}</span>
             </div>
-            <div>
-              <label for="search-size-${index}">Size</label>
-              <input id="search-size-${index}" data-field="size" value="${escapeHtml(sizeToText(search.size))}" placeholder="Any size (leave blank)" autocomplete="off">
+            <div class="search-grid">
+              <div>
+                <label for="search-query-${index}">Query</label>
+                <input id="search-query-${index}" data-field="query" value="${escapeHtml(search.query || "")}" autocomplete="off">
+              </div>
+              <div>
+                <label for="search-size-${index}">Size</label>
+                <input id="search-size-${index}" data-field="size" value="${escapeHtml(sizeToText(search.size))}" placeholder="Any size (leave blank)" autocomplete="off">
+              </div>
+              <div>
+                <label for="search-price-${index}">Max price</label>
+                <input id="search-price-${index}" data-field="max_price" type="number" min="0" step="0.01" value="${search.max_price === "" ? "" : Number(search.max_price || 0)}">
+              </div>
             </div>
-            <div>
-              <label for="search-price-${index}">Max price</label>
-              <input id="search-price-${index}" data-field="max_price" type="number" min="0" step="0.01" value="${search.max_price === "" ? "" : Number(search.max_price || 0)}">
+            <div class="button-row">
+              <button class="danger delete-search" type="button">Delete</button>
             </div>
           </div>
-          <div class="button-row">
-            <button class="danger delete-search" type="button">Delete</button>
-          </div>
-        </div>
-      `).join("");
+        `;
+      }).join("");
 
       const listSections = textListFields.map(([key, label]) => `
         <div class="row">
@@ -668,9 +817,17 @@
 
       document.getElementById("addSearch").addEventListener("click", () => {
         config = collectConfig();
-        config.SAVED_SEARCHES.push({ query: "", size: null, max_price: "" });
+        config.SAVED_SEARCHES.push({ query: "", size: null, max_price: "", enabled: true, profile: "fast" });
         renderSettings();
         updateDirtyState();
+      });
+
+      document.querySelectorAll('[data-field="enabled"]').forEach((checkbox) => {
+        checkbox.addEventListener("change", () => {
+          const label = checkbox.closest(".search-toggle");
+          label.lastChild.textContent = checkbox.checked ? "Active" : "Paused";
+          checkbox.closest(".search-row").classList.toggle("disabled", !checkbox.checked);
+        });
       });
 
       document.querySelectorAll(".delete-search").forEach((button) => {
@@ -691,6 +848,9 @@
     }
 
     function formatTime(timestamp) {
+      if (!timestamp) {
+        return "";
+      }
       const date = new Date(timestamp);
       if (Number.isNaN(date.getTime())) {
         return "";
@@ -708,9 +868,144 @@
       return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     }
 
+    async function loadData() {
+      if (historyItems && ledgerItems) {
+        return;
+      }
+      const [historyResponse, ledgerResponse] = await Promise.all([
+        historyItems ? Promise.resolve(null) : apiFetch("/api/history"),
+        ledgerItems ? Promise.resolve(null) : apiFetch("/api/ledger")
+      ]);
+      if (historyResponse && !historyResponse.ok) {
+        const error = await historyResponse.json().catch(() => ({ error: "Failed to load activity" }));
+        throw new Error(error.error || "Failed to load activity");
+      }
+      if (ledgerResponse && !ledgerResponse.ok) {
+        const error = await ledgerResponse.json().catch(() => ({ error: "Failed to load ledger" }));
+        throw new Error(error.error || "Failed to load ledger");
+      }
+      if (historyResponse) {
+        historyItems = await historyResponse.json();
+      }
+      if (ledgerResponse) {
+        ledgerItems = await ledgerResponse.json();
+      }
+    }
+
+    function ledgerMap() {
+      return new Map((ledgerItems || []).map((entry) => [String(entry.item_id), entry]));
+    }
+
+    function filterHistory(items) {
+      const titleNeedle = activityFilters.title.trim().toLowerCase();
+      return items.filter((item) => {
+        if (activityFilters.query !== "all" && (item.query || "") !== activityFilters.query) {
+          return false;
+        }
+        if (activityFilters.rating !== "all") {
+          const value = activityFilters.rating === "PASS" ? item.verdict : item.deal_rating;
+          if (String(value || "").toUpperCase() !== activityFilters.rating.toUpperCase()) {
+            return false;
+          }
+        }
+        return !titleNeedle || String(item.title || "").toLowerCase().includes(titleNeedle);
+      });
+    }
+
+    function renderStatsSection(items, ledger, compact = false) {
+      const now = Date.now();
+      const windows = [
+        ["7 days", 7],
+        ["30 days", 30]
+      ];
+      const historyStats = windows.map(([label, days]) => {
+        const start = now - days * 86400000;
+        const windowItems = items.filter((item) => {
+          const time = new Date(item.timestamp).getTime();
+          return Number.isFinite(time) && time >= start;
+        });
+        const discounts = windowItems.map((item) => numberValue(item.discount_pct)).filter((value) => value != null);
+        const byRating = ratings.map((rating) => `${rating}: ${windowItems.filter((item) => item.deal_rating === rating).length}`).join(" | ");
+        return {
+          label,
+          count: windowItems.length,
+          averageDiscount: discounts.length ? discounts.reduce((sum, value) => sum + value, 0) / discounts.length : null,
+          byRating
+        };
+      });
+      const monthStart = now - 30 * 86400000;
+      const potentialMargin = items.reduce((sum, item) => {
+        const time = new Date(item.timestamp).getTime();
+        if (!Number.isFinite(time) || time < monthStart || !["Steal", "Great Deal"].includes(item.deal_rating)) {
+          return sum;
+        }
+        const resale = numberValue(item.estimated_resale_value);
+        const price = numberValue(item.price);
+        return resale == null || price == null ? sum : sum + resale - price;
+      }, 0);
+      const grossSales = ledger.reduce((sum, entry) => sum + (numberValue(entry.sold_price) || 0), 0);
+      const costBasis = ledger.reduce((sum, entry) => sum + (numberValue(entry.bought_price) || 0), 0);
+      const openInventory = ledger.filter((entry) => numberValue(entry.bought_price) != null && numberValue(entry.sold_price) == null).length;
+      const netProfit = grossSales - costBasis;
+      const content = `
+        <div class="stats-grid">
+          ${historyStats.map((stat) => `
+            <div class="stat-box">
+              <div class="stat-label">Alerts, last ${escapeHtml(stat.label)}</div>
+              <div class="stat-value">${stat.count}</div>
+              <div class="stat-detail">Avg discount: ${stat.averageDiscount == null ? "n/a" : `${Math.round(stat.averageDiscount)}%`}</div>
+              <div class="stat-detail">${escapeHtml(stat.byRating)}</div>
+            </div>
+          `).join("")}
+          <div class="stat-box">
+            <div class="stat-label">Potential margin if all Steals/Great Deals this month were bought</div>
+            <div class="stat-value">${money(potentialMargin)}</div>
+            <div class="stat-detail">Rough estimate, not a guarantee.</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Ledger net profit</div>
+            <div class="stat-value">${money(netProfit)}</div>
+            <div class="stat-detail">Gross sales ${money(grossSales)} | cost basis ${money(costBasis)}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Open inventory</div>
+            <div class="stat-value">${openInventory}</div>
+            <div class="stat-detail">Bought but not yet sold.</div>
+          </div>
+        </div>
+        ${compact ? "" : '<div class="button-row"><button id="exportLedger" class="secondary small-button" type="button">Export Ledger</button></div>'}
+      `;
+      return compact ? content : `<section><h2>Stats</h2>${content}</section>`;
+    }
+
+    function renderActivityFilters(items) {
+      const queries = Array.from(new Set(items.map((item) => item.query).filter(Boolean))).sort();
+      const queryOptions = queries.map((query) => `<option value="${escapeHtml(query)}" ${activityFilters.query === query ? "selected" : ""}>${escapeHtml(query)}</option>`).join("");
+      const ratingOptions = ["all", ...ratings, "PASS"].map((rating) => `<option value="${escapeHtml(rating)}" ${activityFilters.rating === rating ? "selected" : ""}>${escapeHtml(rating === "all" ? "All ratings" : rating)}</option>`).join("");
+      return `
+        <div class="filters">
+          <div class="filter-field">
+            <label for="queryFilter">Search</label>
+            <select id="queryFilter">
+              <option value="all">All searches</option>
+              ${queryOptions}
+            </select>
+          </div>
+          <div class="filter-field">
+            <label for="ratingFilter">Rating</label>
+            <select id="ratingFilter">${ratingOptions}</select>
+          </div>
+          <div class="filter-field">
+            <label for="titleFilter">Title contains</label>
+            <input id="titleFilter" value="${escapeHtml(activityFilters.title)}" autocomplete="off">
+          </div>
+        </div>
+      `;
+    }
+
     function renderHistoryItems(items) {
       if (!items.length) {
-        return '<div class="empty">No activity logged yet.</div>';
+        return '<div class="empty">No activity matches these filters.</div>';
       }
       const ratingClasses = {
         "Steal": "rating-steal",
@@ -719,6 +1014,7 @@
         "Fair": "rating-fair",
         "Marginal": "rating-marginal"
       };
+      const map = ledgerMap();
       const formatEstimate = (value) => {
         const amount = Number(value);
         return Number.isFinite(amount) ? `$${Math.round(amount)}` : "";
@@ -734,6 +1030,11 @@
             const retailEstimate = formatEstimate(item.estimated_retail_price);
             const resaleEstimate = formatEstimate(item.estimated_resale_value);
             const estimateParts = [];
+            const count = numberValue(item.similar_listings_count ?? item.search_total_listings);
+            const ledgerEntry = item.item_id == null ? null : map.get(String(item.item_id));
+            const profit = ledgerEntry && numberValue(ledgerEntry.sold_price) != null && numberValue(ledgerEntry.bought_price) != null
+              ? numberValue(ledgerEntry.sold_price) - numberValue(ledgerEntry.bought_price)
+              : null;
             if (retailEstimate) {
               estimateParts.push(`retail ${retailEstimate}`);
             }
@@ -741,12 +1042,19 @@
               estimateParts.push(`resale ${resaleEstimate}`);
             }
             const estimateLine = estimateParts.length ? `Est. ${estimateParts.join(" -> ")}` : "";
+            const contextLine = count == null ? "" : `${count} similar listings currently active`;
+            const ledgerLine = ledgerEntry ? [
+              numberValue(ledgerEntry.bought_price) == null ? "" : `Bought ${money(ledgerEntry.bought_price)}`,
+              numberValue(ledgerEntry.sold_price) == null ? "" : `Sold ${money(ledgerEntry.sold_price)}${profit == null ? "" : ` (${profit >= 0 ? "+" : ""}${money(profit)})`}`
+            ].filter(Boolean).join(" | ") : "";
             return `
               <div class="activity-item">
                 <div class="activity-head">
                   <div class="activity-badges">
                     <span class="badge ${escapeHtml(badgeClass)}">${escapeHtml(item.ai_flagged ? "AI" : item.verdict || "ITEM")}</span>
                     ${ratingText ? `<span class="badge ${escapeHtml(ratingClass)}"${confidenceTitle}>${escapeHtml(ratingText)}</span>` : ""}
+                    ${item.liquidity ? `<span class="badge pass">${escapeHtml(item.liquidity)}</span>` : ""}
+                    ${item.query ? `<span class="badge pass">${escapeHtml(item.query)}</span>` : ""}
                   </div>
                   <span class="activity-meta">${escapeHtml(formatTime(item.timestamp))}</span>
                 </div>
@@ -754,6 +1062,14 @@
                 <div class="activity-meta">${item.item_price != null && item.shipping_cost != null ? escapeHtml(`$${item.item_price} + $${item.shipping_cost} shipping = $${item.price} total`) : (item.price == null ? "" : `$${escapeHtml(item.price)}`)}</div>
                 <div class="activity-reason">${escapeHtml(item.reason || "")}</div>
                 ${estimateLine ? `<div class="activity-meta">${escapeHtml(estimateLine)}</div>` : ""}
+                ${contextLine ? `<div class="context-line">${escapeHtml(contextLine)}</div>` : ""}
+                ${ledgerLine ? `<div class="ledger-line">${escapeHtml(ledgerLine)}</div>` : ""}
+                ${item.item_id ? `
+                  <div class="activity-actions">
+                    <button class="secondary small-button ledger-bought" type="button" data-item-id="${escapeHtml(item.item_id)}">Mark Bought</button>
+                    <button class="secondary small-button ledger-sold" type="button" data-item-id="${escapeHtml(item.item_id)}">Mark Sold</button>
+                  </div>
+                ` : ""}
               </div>
             `;
           }).join("")}
@@ -761,28 +1077,192 @@
       `;
     }
 
+    function attachActivityListeners() {
+      document.getElementById("queryFilter")?.addEventListener("change", (event) => {
+        activityFilters.query = event.target.value;
+        renderActivity();
+      });
+      document.getElementById("ratingFilter")?.addEventListener("change", (event) => {
+        activityFilters.rating = event.target.value;
+        renderActivity();
+      });
+      document.getElementById("titleFilter")?.addEventListener("input", (event) => {
+        activityFilters.title = event.target.value;
+        renderActivity(true);
+      });
+      document.querySelectorAll(".ledger-bought").forEach((button) => {
+        button.addEventListener("click", () => markBought(button.dataset.itemId));
+      });
+      document.querySelectorAll(".ledger-sold").forEach((button) => {
+        button.addEventListener("click", () => markSold(button.dataset.itemId));
+      });
+    }
+
+    function findHistoryItem(itemId) {
+      return (historyItems || []).find((item) => String(item.item_id) === String(itemId)) || {};
+    }
+
+    function todayIsoDate() {
+      return new Date().toISOString().slice(0, 10);
+    }
+
+    async function saveLedgerEntry(entry) {
+      const response = await apiFetch("/api/ledger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(entry)
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: "Failed to save ledger entry" }));
+        throw new Error(error.error || "Failed to save ledger entry");
+      }
+      ledgerItems = await response.json();
+      renderActivity();
+    }
+
+    async function markBought(itemId) {
+      const item = findHistoryItem(itemId);
+      const existing = ledgerMap().get(String(itemId)) || {};
+      const paid = window.prompt("Actual price paid", existing.bought_price ?? item.price ?? "");
+      if (paid === null) {
+        return;
+      }
+      const boughtPrice = Number(paid);
+      if (!Number.isFinite(boughtPrice)) {
+        showStatus("Bought price must be a number.", "error");
+        return;
+      }
+      const date = window.prompt("Bought date", existing.bought_date || todayIsoDate());
+      if (date === null) {
+        return;
+      }
+      try {
+        clearStatus();
+        await saveLedgerEntry({
+          ...existing,
+          item_id: String(itemId),
+          title: existing.title || item.title || "",
+          bought_price: boughtPrice,
+          bought_date: date || null
+        });
+        showStatus("Ledger updated.", "success");
+      } catch (error) {
+        showStatus(error.message, "error");
+      }
+    }
+
+    async function markSold(itemId) {
+      const item = findHistoryItem(itemId);
+      const existing = ledgerMap().get(String(itemId)) || {};
+      const sold = window.prompt("Sold price", existing.sold_price ?? "");
+      if (sold === null) {
+        return;
+      }
+      const soldPrice = Number(sold);
+      if (!Number.isFinite(soldPrice)) {
+        showStatus("Sold price must be a number.", "error");
+        return;
+      }
+      const platform = window.prompt("Sold platform", existing.sold_platform || "");
+      if (platform === null) {
+        return;
+      }
+      const date = window.prompt("Sold date", existing.sold_date || todayIsoDate());
+      if (date === null) {
+        return;
+      }
+      try {
+        clearStatus();
+        await saveLedgerEntry({
+          ...existing,
+          item_id: String(itemId),
+          title: existing.title || item.title || "",
+          sold_price: soldPrice,
+          sold_platform: platform || null,
+          sold_date: date || null
+        });
+        showStatus("Ledger updated.", "success");
+      } catch (error) {
+        showStatus(error.message, "error");
+      }
+    }
+
+    function renderActivity(focusTitle = false) {
+      setActiveTab("activity");
+      const filtered = filterHistory(historyItems || []);
+      app.className = "";
+      app.innerHTML = `
+        <section><h2>Stats</h2>${renderStatsSection(historyItems || [], ledgerItems || [], true)}</section>
+        <section>
+          <h2>Recent Activity</h2>
+          ${renderActivityFilters(historyItems || [])}
+          ${renderHistoryItems(filtered)}
+        </section>
+      `;
+      attachActivityListeners();
+      if (focusTitle) {
+        const titleFilter = document.getElementById("titleFilter");
+        titleFilter?.focus();
+        titleFilter?.setSelectionRange(titleFilter.value.length, titleFilter.value.length);
+      }
+    }
+
     async function loadHistory() {
-      activeTab = "activity";
-      activityTab.classList.add("active");
-      settingsTab.classList.remove("active");
-      footerSave.style.display = "none";
-      saveButton.disabled = true;
+      setActiveTab("activity");
       app.className = "loading";
       app.textContent = "Loading activity...";
       try {
         clearStatus();
-        const response = await apiFetch("/api/history");
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({ error: "Failed to load activity" }));
-          throw new Error(error.error || "Failed to load activity");
-        }
-        const items = await response.json();
-        app.className = "";
-        app.innerHTML = `<section><h2>Recent Activity</h2>${renderHistoryItems(items)}</section>`;
+        await loadData();
+        renderActivity();
       } catch (error) {
         app.className = "loading";
         app.textContent = error.message;
         showStatus(error.message, "error");
+      }
+    }
+
+    function exportLedger() {
+      const jsonl = (ledgerItems || []).map((entry) => JSON.stringify(entry)).join("\n") + ((ledgerItems || []).length ? "\n" : "");
+      const blob = new Blob([jsonl], { type: "application/x-ndjson" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "ledger.jsonl";
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function loadStats() {
+      setActiveTab("stats");
+      app.className = "loading";
+      app.textContent = "Loading stats...";
+      try {
+        clearStatus();
+        await loadData();
+        app.className = "";
+        app.innerHTML = renderStatsSection(historyItems || [], ledgerItems || []);
+        document.getElementById("exportLedger")?.addEventListener("click", exportLedger);
+      } catch (error) {
+        app.className = "loading";
+        app.textContent = error.message;
+        showStatus(error.message, "error");
+      }
+    }
+
+    async function loadRunStatus() {
+      try {
+        const response = await apiFetch("/api/status");
+        if (!response.ok) {
+          throw new Error("unavailable");
+        }
+        const latest = await response.json();
+        const result = latest.conclusion || latest.status || "unknown";
+        runStatus.textContent = `Last run: ${formatTime(latest.updated_at || latest.created_at)} (${result})`;
+        runStatus.classList.toggle("bad", latest.conclusion && latest.conclusion !== "success");
+      } catch (error) {
+        runStatus.textContent = "Last run: unavailable";
+        runStatus.classList.add("bad");
       }
     }
 
@@ -848,8 +1328,10 @@
       }
     });
 
+    statsTab.addEventListener("click", loadStats);
     activityTab.addEventListener("click", loadHistory);
 
+    loadRunStatus();
     loadConfig();
   </script>
 </body>

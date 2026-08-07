@@ -80,6 +80,12 @@ const validateConfig = (body) => {
     if (typeof search.query !== "string") {
       return `SAVED_SEARCHES[${index}].query must be a string`;
     }
+    if ("enabled" in search && typeof search.enabled !== "boolean") {
+      return `SAVED_SEARCHES[${index}].enabled must be a boolean`;
+    }
+    if ("profile" in search && typeof search.profile !== "string") {
+      return `SAVED_SEARCHES[${index}].profile must be a string`;
+    }
   }
 
   const arrayFields = [
