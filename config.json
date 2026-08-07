@@ -164,6 +164,11 @@
       "query": "anderson's belt",
       "size": ["36", "38"],
       "max_price": 60
+    },
+    {
+      "query": "peter millar crown crafted polo",
+      "size": ["M"],
+      "max_price": 30
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [

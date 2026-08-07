@@ -212,10 +212,26 @@ def fetch_gap_report():
 # for manual review rather than guessing)
 # ---------------------------------------------------------------------------
 
-def score_listing(listing, gap_report):
+def get_shipping_cost(listing):
+    """First shipping option's cost, or 0.0 if free/unavailable. eBay Browse
+    API item summaries include shippingOptions[].shippingCost.value when
+    known - a $7 item with $10 shipping is a $17 item, not a $7 one."""
+    shipping_options = listing.get("shippingOptions") or []
+    if not shipping_options:
+        return 0.0
+    cost_value = (shipping_options[0].get("shippingCost") or {}).get("value")
+    try:
+        return float(cost_value) if cost_value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def score_listing(listing, gap_report, shipping_cost=0.0):
     title = listing.get("title", "").lower()
     price_value = (listing.get("price") or {}).get("value", 0)
-    price = float(0 if price_value is None else price_value)
+    # Total landed cost (item + shipping), not just item price - a $7 shirt
+    # with $10 shipping is a $17 item, not a $7 one.
+    price = float(0 if price_value is None else price_value) + shipping_cost
     flags = []
     verdict = "REVIEW"  # default: don't auto-decide, surface it
 
@@ -353,9 +369,18 @@ def check_photos_with_gemini(listing):
         "reasonably estimate it. price_confidence must be one of \"high\", "
         "\"medium\", or \"low\". damage_found means visible holes, stains, moth "
         "damage, heavy pilling, tears, or other undisclosed damage beyond normal "
-        "light wear. weird_logo_found means prominent corporate, tournament, "
-        "country-club, bank, or resort branding/embroidery visible in the photos. "
-        "looks_good should be true only when no damage or unwanted logo is visible."
+        "light wear. Examine every photo closely, including sleeves, chest, and "
+        "collar, specifically for any embroidered or printed logo, text, or "
+        "emblem that is NOT the garment's own designer/brand mark (e.g. a golf "
+        "course, resort, country club, company, bank, tournament, or event name "
+        "or crest) - set weird_logo_found true for ANY such third-party marking, "
+        "no matter how small or subtle, not just large/prominent ones. Do NOT "
+        "flag the garment's own designer logo (e.g. Peter Millar's crown/quill, "
+        "Ralph Lauren's polo player) - that is normal branding, not a defect. "
+        "If you are unsure whether a marking is the designer's own logo or a "
+        "third-party one, err toward flagging it as weird_logo_found and explain "
+        "the ambiguity in logo_desc. looks_good should be true only when no "
+        "damage and no unwanted (non-designer) logo is visible."
     )
     payload = {
         "contents": [{
@@ -445,6 +470,8 @@ def append_alert_log(result):
         "reason": result.get("reason") or "; ".join(result.get("flags", [])),
     }
     for key in (
+        "item_price",
+        "shipping_cost",
         "estimated_retail_price",
         "estimated_resale_value",
         "deal_rating",
@@ -474,12 +501,18 @@ def append_alert_log(result):
 def send_alert(result):
     listing = result["listing"]
     title = listing.get("title", "")
-    price = result.get("price")
+    price = result.get("price")  # total landed cost: item + shipping
+    item_price = result.get("item_price")
+    shipping_cost = result.get("shipping_cost")
     url = listing.get("itemWebUrl", "")
     flags = "; ".join(result.get("flags", []))
     image_url = (listing.get("image") or {}).get("imageUrl")
 
-    message = f"${price} - {title}\nFlags: {flags}"
+    if item_price is not None and shipping_cost is not None:
+        price_line = f"${item_price:g} + ${shipping_cost:g} shipping = ${price:g} total"
+    else:
+        price_line = f"${price}"
+    message = f"{price_line} - {title}\nFlags: {flags}"
     deal_rating = result.get("deal_rating")
     if deal_rating:
         value_parts = []
@@ -582,18 +615,24 @@ def run():
                 continue
 
             price_value = (listing.get("price") or {}).get("value", 999999)
-            price = float(999999 if price_value is None else price_value)
-            if price > saved_search["max_price"]:
+            item_price = float(999999 if price_value is None else price_value)
+            shipping_cost = get_shipping_cost(listing)
+            total_price = item_price + shipping_cost
+            if total_price > saved_search["max_price"]:
                 logger.info(
-                    "Skipping %s over max price: $%s > $%s",
+                    "Skipping %s over max price: $%s (item $%s + shipping $%s) > $%s",
                     item_id,
-                    price,
+                    total_price,
+                    item_price,
+                    shipping_cost,
                     saved_search["max_price"],
                 )
                 mark_seen(conn, item_id)
                 continue
 
-            result = score_listing(listing, gap_report)
+            result = score_listing(listing, gap_report, shipping_cost=shipping_cost)
+            result["item_price"] = item_price
+            result["shipping_cost"] = shipping_cost
             logger.info(
                 "Scored %s as %s: %s",
                 item_id,
@@ -653,7 +692,7 @@ def run():
                     result["estimated_resale_value"] = ai_result.get("estimated_resale_value")
                     result["price_confidence"] = ai_result.get("price_confidence")
                     rating_label, discount_pct = compute_deal_rating(
-                        price,
+                        result.get("price"),  # total landed cost: item + shipping
                         result.get("estimated_resale_value"),
                     )
                     if rating_label is not None:
