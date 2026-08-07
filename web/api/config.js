@@ -14,8 +14,12 @@ const contentsUrl = () => {
 
 const sendJson = (res, status, body) => {
   res.statusCode = status;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(body));
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  // Explicit UTF-8 Buffer, not a raw string - Vercel's Node runtime has a
+  // known history of mis-encoding non-ASCII response strings (bytes get
+  // read back as Latin-1), which mangles anything with an em-dash, curly
+  // quote, etc.
+  res.end(Buffer.from(JSON.stringify(body), "utf-8"));
 };
 
 const readBody = async (req) => {
