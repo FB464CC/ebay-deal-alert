@@ -2,126 +2,102 @@
   "SAVED_SEARCHES": [
     {
       "query": "peter millar merino sweater",
-      "size": [
-        "L",
-        "XL"
-      ],
+      "size": ["M", "L", "XL"],
       "max_price": 25
     },
     {
       "query": "peter millar quarter zip merino",
-      "size": [
-        "L",
-        "XL"
-      ],
+      "size": ["M", "L", "XL"],
       "max_price": 25
     },
     {
       "query": "tom james merino",
-      "size": null,
+      "size": ["M", "L", "XL"],
       "max_price": 30
     },
     {
       "query": "johnstons elgin cashmere",
-      "size": null,
+      "size": ["M", "L", "XL"],
       "max_price": 40
     },
     {
       "query": "alan paine merino lambswool",
-      "size": [
-        "L"
-      ],
+      "size": ["M", "L", "XL"],
       "max_price": 25
     },
     {
       "query": "pringle scotland merino cashmere",
-      "size": [
-        "L"
-      ],
+      "size": ["M", "L", "XL"],
       "max_price": 25
     },
     {
       "query": "hickey freeman blazer",
-      "size": [
-        "40"
-      ],
+      "size": ["42"],
       "max_price": 40
     },
     {
       "query": "brooks brothers gold label blazer",
-      "size": [
-        "40"
-      ],
+      "size": ["42"],
       "max_price": 30
     },
     {
       "query": "canali blazer",
-      "size": [
-        "40"
-      ],
+      "size": ["42"],
       "max_price": 50
     },
     {
       "query": "hart schaffner marx blazer",
-      "size": [
-        "40"
-      ],
+      "size": ["42"],
       "max_price": 25
     },
     {
       "query": "allen edmonds",
-      "size": [
-        "13"
-      ],
+      "size": ["13"],
       "max_price": 50
     },
     {
       "query": "alden shoes",
-      "size": [
-        "13"
-      ],
+      "size": ["13"],
       "max_price": 80
     },
     {
       "query": "peter millar summer comfort polo",
-      "size": [
-        "L"
-      ],
+      "size": ["M", "L"],
       "max_price": 20
     },
     {
       "query": "loro piana cashmere sweater",
-      "size": ["L", "XL"],
+      "size": ["M", "L", "XL"],
       "max_price": 90
     },
     {
       "query": "brunello cucinelli sweater",
-      "size": ["L", "XL"],
+      "size": ["M", "L", "XL"],
       "max_price": 90
     },
     {
       "query": "kiton sport coat",
-      "size": ["40"],
+      "size": ["42"],
       "max_price": 120
     },
     {
       "query": "cesare attolini blazer",
-      "size": ["40"],
+      "size": ["42"],
       "max_price": 120
     },
     {
       "query": "belvest blazer",
-      "size": ["40"],
+      "size": ["42"],
       "max_price": 70
     },
     {
       "query": "william lockie cashmere",
-      "size": ["L"],
+      "size": ["M", "L", "XL"],
       "max_price": 50
     },
     {
       "query": "ballantyne cashmere",
-      "size": ["L"],
+      "size": ["M", "L", "XL"],
       "max_price": 50
     },
     {
@@ -151,12 +127,42 @@
     },
     {
       "query": "turnbull asser shirt",
-      "size": ["L"],
+      "size": ["M", "L", "XL"],
       "max_price": 50
     },
     {
       "query": "charvet shirt",
-      "size": ["L"],
+      "size": ["M", "L", "XL"],
+      "max_price": 60
+    },
+    {
+      "query": "ferragamo loafers",
+      "size": ["13"],
+      "max_price": 100
+    },
+    {
+      "query": "ferragamo belt",
+      "size": ["36", "38"],
+      "max_price": 60
+    },
+    {
+      "query": "gucci loafers",
+      "size": ["13"],
+      "max_price": 150
+    },
+    {
+      "query": "gucci belt",
+      "size": ["36", "38"],
+      "max_price": 80
+    },
+    {
+      "query": "bottega veneta belt",
+      "size": ["36", "38"],
+      "max_price": 80
+    },
+    {
+      "query": "anderson's belt",
+      "size": ["36", "38"],
       "max_price": 60
     }
   ],
@@ -183,7 +189,11 @@
     "church",
     "santoni",
     "turnbull",
-    "charvet"
+    "charvet",
+    "ferragamo",
+    "gucci",
+    "bottega veneta",
+    "anderson"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
@@ -234,6 +244,15 @@
     "wool",
     "silk",
     "shell cordovan"
+  ],
+  "GENDER_EXCLUDE_KEYWORDS": [
+    "women",
+    "women's",
+    "womens",
+    "ladies",
+    "misses",
+    "juniors",
+    "girls"
   ],
   "FABRIC_POLY_KEYWORD": "poly",
   "PIT_TO_PIT_CAP_INCHES": 23.5

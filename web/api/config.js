@@ -89,7 +89,8 @@ const validateConfig = (body) => {
     "CORPORATE_LOGO_KEYWORDS",
     "CONDITION_HARD_FAIL_KEYWORDS",
     "CONDITION_FLAG_KEYWORDS",
-    "FABRIC_GOOD_KEYWORDS"
+    "FABRIC_GOOD_KEYWORDS",
+    "GENDER_EXCLUDE_KEYWORDS"
   ];
   for (const field of arrayFields) {
     const error = validateArrayField(body, field);
