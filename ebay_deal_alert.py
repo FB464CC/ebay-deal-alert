@@ -52,6 +52,9 @@ PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 
 DB_PATH = "seen_items.db"
+TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
+ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
+GEMINI_CALL_LIMIT = 6
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,7 +68,7 @@ logger = logging.getLogger(__name__)
 # EBAY AUTH + SEARCH
 # ---------------------------------------------------------------------------
 
-def get_ebay_token():
+def _get_ebay_token_uncached():
     """Client credentials OAuth flow — app-level token, no user login needed."""
     client_id = os.environ["EBAY_CLIENT_ID"]
     client_secret = os.environ["EBAY_CLIENT_SECRET"]
@@ -80,6 +83,59 @@ def get_ebay_token():
     )
     resp.raise_for_status()
     return resp.json()["access_token"]
+
+
+def _read_cached_ebay_token():
+    if not TOKEN_CACHE_PATH.exists():
+        return None
+    try:
+        with TOKEN_CACHE_PATH.open("r", encoding="utf-8") as cache_file:
+            cached = json.load(cache_file)
+        if cached.get("access_token") and float(cached.get("expires_at", 0)) > time.time():
+            logger.info("Using cached eBay OAuth token")
+            return cached["access_token"]
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring invalid eBay token cache: %s", exc)
+    return None
+
+
+def _write_cached_ebay_token(access_token, expires_in):
+    expires_at = time.time() + int(expires_in) - 300
+    with TOKEN_CACHE_PATH.open("w", encoding="utf-8") as cache_file:
+        json.dump({"access_token": access_token, "expires_at": expires_at}, cache_file)
+        cache_file.write("\n")
+
+
+def get_ebay_token():
+    """Client credentials OAuth flow for an app-level token."""
+    cached_token = _read_cached_ebay_token()
+    if cached_token:
+        return cached_token
+
+    client_id = os.environ["EBAY_CLIENT_ID"]
+    client_secret = os.environ["EBAY_CLIENT_SECRET"]
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                "https://api.ebay.com/identity/v1/oauth2/token",
+                auth=(client_id, client_secret),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": "https://api.ebay.com/oauth/api_scope",
+                },
+            )
+            resp.raise_for_status()
+            token_body = resp.json()
+            access_token = token_body["access_token"]
+            _write_cached_ebay_token(access_token, token_body.get("expires_in", 7200))
+            return access_token
+        except (requests.exceptions.RequestException, KeyError, ValueError) as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    raise last_exc
 
 
 def search_ebay(token, saved_search):
@@ -149,7 +205,8 @@ def fetch_gap_report():
 
 def score_listing(listing, gap_report):
     title = listing.get("title", "").lower()
-    price = float(listing.get("price", {}).get("value", 0))
+    price_value = (listing.get("price") or {}).get("value", 0)
+    price = float(0 if price_value is None else price_value)
     flags = []
     verdict = "REVIEW"  # default: don't auto-decide, surface it
 
@@ -206,7 +263,7 @@ def score_listing(listing, gap_report):
 
 def _collect_listing_image_urls(listing):
     urls = []
-    primary_url = listing.get("image", {}).get("imageUrl")
+    primary_url = (listing.get("image") or {}).get("imageUrl")
     if primary_url:
         urls.append(primary_url)
     for image in listing.get("additionalImages", []):
@@ -239,6 +296,10 @@ def check_photos_with_gemini(listing):
     if not gemini_api_key:
         logger.warning("Skipping Gemini photo check: GEMINI_API_KEY is not configured")
         return None
+    # gemini-2.5-flash's free tier is only 10 RPM / 250 RPD - at 72 runs/day
+    # (20-min cron) even a modest per-run cap blows the daily quota.
+    # flash-lite gives 15 RPM / 1000 RPD, enough headroom at GEMINI_CALL_LIMIT.
+    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
     image_parts = []
     for image_url in _collect_listing_image_urls(listing):
@@ -281,7 +342,7 @@ def check_photos_with_gemini(listing):
     }
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={gemini_api_key}"
+        f"{gemini_model}:generateContent?key={gemini_api_key}"
     )
 
     try:
@@ -299,32 +360,96 @@ def check_photos_with_gemini(listing):
 # ALERT DISPATCH
 # ---------------------------------------------------------------------------
 
+def notify_bot_down(message):
+    try:
+        resp = requests.post(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=message.encode("utf-8"),
+            headers={"Title": "[ALERT-BOT DOWN]"},
+        )
+        resp.raise_for_status()
+    except requests.exceptions.RequestException:
+        logger.exception("Failed to send bot-down notification")
+
+
+def append_alert_log(result):
+    listing = result["listing"]
+    price = result.get("price")
+    if price is None:
+        price_value = (listing.get("price") or {}).get("value", 0)
+        price = float(0 if price_value is None else price_value)
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "item_id": listing.get("itemId"),
+        "title": listing.get("title", ""),
+        "price": price,
+        "verdict": result.get("verdict"),
+        "reason": result.get("reason") or "; ".join(result.get("flags", [])),
+    }
+    if result.get("ai_flagged"):
+        record["ai_flagged"] = True
+
+    lines = []
+    if ALERTS_LOG_PATH.exists():
+        try:
+            with ALERTS_LOG_PATH.open("r", encoding="utf-8") as log_file:
+                lines = [line.rstrip("\n") for line in log_file if line.strip()]
+        except OSError as exc:
+            logger.warning("Failed to read alerts log; rewriting with current record: %s", exc)
+            lines = []
+
+    lines.append(json.dumps(record, separators=(",", ":")))
+    lines = lines[-200:]
+    with ALERTS_LOG_PATH.open("w", encoding="utf-8") as log_file:
+        for line in lines:
+            log_file.write(line + "\n")
+
+
 def send_alert(result):
     listing = result["listing"]
     title = listing.get("title", "")
     price = result.get("price")
     url = listing.get("itemWebUrl", "")
     flags = "; ".join(result.get("flags", []))
+    image_url = (listing.get("image") or {}).get("imageUrl")
 
-    message = f"${price} — {title}\n{url}\nFlags: {flags}"
+    message = f"${price} - {title}\nFlags: {flags}"
+    alert_title = f"[{result['verdict']}] Deal alert"
+    if result.get("ai_flagged"):
+        alert_title = f"[AI-FLAGGED] {alert_title}"
 
-    # ntfy.sh's public instance rate-limits by IP, and GitHub-hosted runners
-    # share IPs with heavy traffic — 429s happen often enough in practice to
-    # need a retry, not just a raise. 3 attempts, short backoff.
+    tags = []
+    if result.get("ai_flagged"):
+        tags.append("warning")
+    elif result.get("brand_tier") == "grab_on_sight":
+        tags.append("moneybag")
+    else:
+        tags.append("eyes")
+
+    headers = {
+        "Title": alert_title,
+        "Click": url,
+        "Tags": ",".join(tags),
+    }
+    if image_url:
+        headers["Attach"] = image_url
+    if result.get("brand_tier") == "grab_on_sight":
+        headers["Priority"] = "5"
+
     last_exc = None
     for attempt in range(3):
         try:
             resp = requests.post(
                 f"https://ntfy.sh/{NTFY_TOPIC}",
                 data=message.encode("utf-8"),
-                headers={"Title": f"[{result['verdict']}] Deal alert"},
+                headers=headers,
             )
             resp.raise_for_status()
             return
         except requests.exceptions.RequestException as exc:
             last_exc = exc
             if attempt < 2:
-                time.sleep(2 ** attempt)  # 1s, 2s
+                time.sleep(2 ** attempt)
     raise last_exc
 
 
@@ -335,13 +460,23 @@ def send_alert(result):
 def run():
     logger.info("Starting eBay deal alert run")
     conn = init_db()
-    token = get_ebay_token()
+    try:
+        token = get_ebay_token()
+    except Exception as exc:
+        logger.exception("Failed to get eBay OAuth token")
+        notify_bot_down(f"eBay deal alert could not get an OAuth token: {exc}")
+        conn.close()
+        return
+
     try:
         gap_report = fetch_gap_report()
         logger.info("Fetched Wardrobe OS gap report")
     except Exception:
         logger.exception("Failed to fetch Wardrobe OS gap report; proceeding without gap data")
         gap_report = None
+
+    gemini_calls = 0
+    gemini_budget_logged = False
 
     for saved_search in SAVED_SEARCHES:
         logger.info("Polling saved search: %s", saved_search["query"])
@@ -359,9 +494,18 @@ def run():
                 continue
             if not is_new(conn, item_id):
                 continue
-            mark_seen(conn, item_id)
 
-            price = float(listing.get("price", {}).get("value", 999999))
+            size_tokens = saved_search.get("size")
+            title = listing.get("title", "")
+            if size_tokens and not any(
+                re.search(rf"\b{re.escape(size_token)}\b", title, re.IGNORECASE)
+                for size_token in size_tokens
+            ):
+                logger.info("Skipping %s because title does not match size filter", item_id)
+                continue
+
+            price_value = (listing.get("price") or {}).get("value", 999999)
+            price = float(999999 if price_value is None else price_value)
             if price > saved_search["max_price"]:
                 logger.info(
                     "Skipping %s over max price: $%s > $%s",
@@ -369,6 +513,7 @@ def run():
                     price,
                     saved_search["max_price"],
                 )
+                mark_seen(conn, item_id)
                 continue
 
             result = score_listing(listing, gap_report)
@@ -378,28 +523,48 @@ def run():
                 result["verdict"],
                 result.get("reason") or "; ".join(result.get("flags", [])),
             )
+            if result["verdict"] == "PASS":
+                append_alert_log(result)
+                mark_seen(conn, item_id)
+                continue
+
             if result["verdict"] in ("REVIEW",):
-                ai_result = check_photos_with_gemini(listing)
+                ai_result = None
+                if gemini_calls < GEMINI_CALL_LIMIT:
+                    if gemini_calls > 0:
+                        time.sleep(5)
+                    gemini_calls += 1
+                    ai_result = check_photos_with_gemini(listing)
+                elif not gemini_budget_logged:
+                    logger.info(
+                        "Gemini call budget exhausted for this run, skipping AI check for remaining listings"
+                    )
+                    gemini_budget_logged = True
+
                 if ai_result is not None and (
                     ai_result.get("damage_found") is True
                     or ai_result.get("weird_logo_found") is True
                 ):
-                    result["verdict"] = "PASS"
-                    result["reason"] = "AI photo check found damage or unwanted logo"
+                    result["ai_flagged"] = True
+                    result.setdefault("flags", []).append(
+                        "AI photo check flagged damage or unwanted logo: "
+                        + ai_result.get("summary", "manual review needed")
+                    )
                     logger.info(
-                        "Downgrading %s to PASS based on AI photo check: %s",
+                        "Flagging %s for AI photo review: %s",
                         item_id,
                         ai_result.get("summary", "no summary provided"),
                     )
-                    continue
                 if ai_result is not None and ai_result.get("looks_good"):
                     result.setdefault("flags", []).append(
                         "AI photo check: " + ai_result.get("summary", "looks good")
                     )
 
+                append_alert_log(result)
                 try:
                     send_alert(result)
                     logger.info("Sent alert for %s", item_id)
+                    mark_seen(conn, item_id)
                 except Exception:
                     logger.exception("Failed to send alert for %s", item_id)
             # PASS results are not sent — logged only if you add logging here
