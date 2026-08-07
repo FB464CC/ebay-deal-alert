@@ -62,3 +62,17 @@ jobs:
           else
             echo "poll state files unchanged"
           fi
+
+      # Independent failure-detection layer: pings healthchecks.io on
+      # success, and separately on any earlier step failing. If neither
+      # ping arrives within the check's grace window, healthchecks.io
+      # alerts on its own - catches total bot death (expired keys, GitHub
+      # account issues, runner outage) that the bot's own self-reporting
+      # can't, since that fails when the whole process can't run at all.
+      - name: Ping healthchecks.io (success)
+        if: success()
+        run: curl -fsS -m 10 --retry 5 "${{ secrets.HEALTHCHECKS_PING_URL }}"
+
+      - name: Ping healthchecks.io (failure)
+        if: failure()
+        run: curl -fsS -m 10 --retry 5 "${{ secrets.HEALTHCHECKS_PING_URL }}/fail"
