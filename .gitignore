@@ -1,3 +1,6 @@
 __pycache__/
 .env
 *.pyc
+!seen_items.db
+!ebay_token_cache.json
+!alerts_log.jsonl

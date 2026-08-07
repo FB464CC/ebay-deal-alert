@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 const githubHeaders = () => ({
   Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
   Accept: "application/vnd.github+json",
@@ -39,6 +41,68 @@ const requireEnv = () => {
   return null;
 };
 
+const passwordMatches = (provided) => {
+  const expected = process.env.SETTINGS_PASSWORD;
+  if (typeof provided !== "string" || typeof expected !== "string") {
+    return false;
+  }
+  const providedBuffer = Buffer.from(provided);
+  const expectedBuffer = Buffer.from(expected);
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+};
+
+const validateArrayField = (body, field) => {
+  if (!Array.isArray(body[field])) {
+    return `${field} must be an array`;
+  }
+  return null;
+};
+
+const validateConfig = (body) => {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return "Config body must be a JSON object";
+  }
+
+  if (!Array.isArray(body.SAVED_SEARCHES) || body.SAVED_SEARCHES.length === 0) {
+    return "SAVED_SEARCHES must be a non-empty array";
+  }
+  for (const [index, search] of body.SAVED_SEARCHES.entries()) {
+    if (!search || typeof search !== "object" || Array.isArray(search)) {
+      return `SAVED_SEARCHES[${index}] must be an object`;
+    }
+    if (typeof search.query !== "string") {
+      return `SAVED_SEARCHES[${index}].query must be a string`;
+    }
+  }
+
+  const arrayFields = [
+    "GRAB_ON_SIGHT_BRANDS",
+    "STANDARD_BRANDS",
+    "PASS_BRANDS",
+    "CORPORATE_LOGO_KEYWORDS",
+    "CONDITION_HARD_FAIL_KEYWORDS",
+    "CONDITION_FLAG_KEYWORDS",
+    "FABRIC_GOOD_KEYWORDS"
+  ];
+  for (const field of arrayFields) {
+    const error = validateArrayField(body, field);
+    if (error) {
+      return error;
+    }
+  }
+
+  if (typeof body.FABRIC_POLY_KEYWORD !== "string") {
+    return "FABRIC_POLY_KEYWORD must be a string";
+  }
+  if (typeof body.PIT_TO_PIT_CAP_INCHES !== "number" || Number.isNaN(body.PIT_TO_PIT_CAP_INCHES)) {
+    return "PIT_TO_PIT_CAP_INCHES must be a number";
+  }
+  return null;
+};
+
 const fetchCurrentFile = async () => {
   const response = await fetch(contentsUrl(), {
     method: "GET",
@@ -56,13 +120,13 @@ const fetchCurrentFile = async () => {
 };
 
 module.exports = async (req, res) => {
+  if (!passwordMatches(req.headers["x-settings-password"])) {
+    return sendJson(res, 401, { error: "Unauthorized" });
+  }
+
   const envError = requireEnv();
   if (envError) {
     return sendJson(res, 500, { error: envError });
-  }
-
-  if (req.headers["x-settings-password"] !== process.env.SETTINGS_PASSWORD) {
-    return sendJson(res, 401, { error: "Unauthorized" });
   }
 
   if (req.method === "GET") {
@@ -78,6 +142,11 @@ module.exports = async (req, res) => {
   if (req.method === "POST") {
     try {
       const nextConfig = await readBody(req);
+      const validationError = validateConfig(nextConfig);
+      if (validationError) {
+        return sendJson(res, 400, { error: validationError });
+      }
+
       const currentFile = await fetchCurrentFile();
       const response = await fetch(contentsUrl(), {
         method: "PUT",

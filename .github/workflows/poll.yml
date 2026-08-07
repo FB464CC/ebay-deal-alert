@@ -2,8 +2,12 @@ name: Poll eBay Deals
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/20 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: poll-ebay-deals
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -23,6 +27,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -34,16 +39,21 @@ jobs:
           WARDROBE_OS_URL: ${{ secrets.WARDROBE_OS_URL }}
           WARDROBE_OS_SECRET: ${{ secrets.WARDROBE_OS_SECRET }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python ebay_deal_alert.py
 
       - name: Commit seen item updates
         run: |
-          if [ -n "$(git status --porcelain seen_items.db)" ]; then
+          if [ -n "$(git status --porcelain seen_items.db ebay_token_cache.json alerts_log.jsonl)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add seen_items.db
+            for file in seen_items.db ebay_token_cache.json alerts_log.jsonl; do
+              if [ -e "$file" ]; then
+                git add "$file"
+              fi
+            done
             git commit -m "chore: update seen items [skip ci]"
-            git push
+            git pull --rebase origin main && git push
           else
-            echo "seen_items.db unchanged"
+            echo "poll state files unchanged"
           fi

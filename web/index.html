@@ -6,17 +6,40 @@
   <title>eBay Deal Alert Settings</title>
   <style>
     :root {
-      color-scheme: light;
+      color-scheme: light dark;
       --bg: #f6f7f9;
       --panel: #ffffff;
+      --panel-soft: #fbfcfd;
+      --input: #ffffff;
       --text: #17202a;
       --muted: #5f6b7a;
       --line: #d7dde5;
       --primary: #176b87;
       --primary-dark: #0e5066;
       --danger: #b42318;
+      --warning: #b45309;
       --success: #16794c;
       --focus: #f2b84b;
+      --footer: rgba(246, 247, 249, 0.94);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111820;
+        --panel: #18222d;
+        --panel-soft: #202c38;
+        --input: #101820;
+        --text: #eef4f8;
+        --muted: #a6b3bf;
+        --line: #344352;
+        --primary: #4aa3bd;
+        --primary-dark: #2f8199;
+        --danger: #ff8f82;
+        --warning: #f7bf68;
+        --success: #62d39c;
+        --focus: #d99421;
+        --footer: rgba(17, 24, 32, 0.94);
+      }
     }
 
     * {
@@ -91,7 +114,7 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       color: var(--text);
-      background: #fff;
+      background: var(--input);
       min-height: 46px;
       padding: 10px 11px;
     }
@@ -108,6 +131,29 @@
       outline-offset: 2px;
     }
 
+    input.invalid {
+      border-color: var(--danger);
+      box-shadow: 0 0 0 1px var(--danger);
+    }
+
+    .tabs {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr 1fr;
+      margin-bottom: 14px;
+    }
+
+    .tab {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      color: var(--text);
+    }
+
+    .tab.active {
+      background: var(--primary);
+      color: #fff;
+    }
+
     .row {
       display: grid;
       gap: 10px;
@@ -115,11 +161,16 @@
       margin-bottom: 12px;
     }
 
-    .search-row {
+    .search-row,
+    .activity-item {
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 12px;
-      background: #fbfcfd;
+      background: var(--panel-soft);
+    }
+
+    .search-row {
+      margin-bottom: 10px;
     }
 
     .search-grid {
@@ -147,6 +198,11 @@
       padding: 10px 15px;
     }
 
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
     .primary {
       background: var(--primary);
       color: #fff;
@@ -159,16 +215,16 @@
 
     .secondary {
       background: #e8edf2;
-      color: var(--text);
+      color: #17202a;
     }
 
     .danger {
       background: #f8d7d2;
-      color: var(--danger);
+      color: #8f1d14;
     }
 
     .footer-save {
-      background: rgba(246, 247, 249, 0.94);
+      background: var(--footer);
       border-top: 1px solid var(--line);
       bottom: 0;
       left: 0;
@@ -192,19 +248,107 @@
 
     .status.success {
       background: #daf3e7;
-      color: var(--success);
+      color: #0f5f3b;
       display: block;
     }
 
     .status.error {
       background: #fde2df;
-      color: var(--danger);
+      color: #8f1d14;
       display: block;
     }
 
-    .loading {
+    @media (prefers-color-scheme: dark) {
+      .secondary {
+        background: #293746;
+        color: var(--text);
+      }
+
+      .danger {
+        background: #49201d;
+        color: var(--danger);
+      }
+
+      .status.success {
+        background: #163a2a;
+        color: var(--success);
+      }
+
+      .status.error {
+        background: #431f1d;
+        color: var(--danger);
+      }
+    }
+
+    .loading,
+    .empty {
       color: var(--muted);
       padding: 20px 4px;
+    }
+
+    .activity-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .activity-head {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .activity-title {
+      font-weight: 700;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .activity-meta,
+    .activity-reason {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .badge {
+      border-radius: 999px;
+      flex: 0 0 auto;
+      font-size: 0.75rem;
+      font-weight: 800;
+      padding: 4px 8px;
+    }
+
+    .badge.review {
+      background: #dff5e9;
+      color: #11633e;
+    }
+
+    .badge.pass {
+      background: #e7ebf0;
+      color: #495566;
+    }
+
+    .badge.warning {
+      background: #fdecc8;
+      color: #8a4b05;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .badge.review {
+        background: #173b2a;
+        color: var(--success);
+      }
+
+      .badge.pass {
+        background: #303a45;
+        color: #c4cdd6;
+      }
+
+      .badge.warning {
+        background: #47320f;
+        color: var(--warning);
+      }
     }
 
     @media (min-width: 680px) {
@@ -230,11 +374,15 @@
   </header>
 
   <main>
+    <div class="tabs" role="tablist">
+      <button id="settingsTab" class="tab active" type="button">Settings</button>
+      <button id="activityTab" class="tab" type="button">Recent Activity</button>
+    </div>
     <div id="status" class="status" role="status" aria-live="polite"></div>
     <div id="app" class="loading">Loading settings...</div>
   </main>
 
-  <div class="footer-save">
+  <div id="footerSave" class="footer-save">
     <div class="footer-save-inner">
       <button id="saveButton" class="primary" type="button" disabled>Save Changes</button>
     </div>
@@ -245,7 +393,12 @@
     const app = document.getElementById("app");
     const statusBox = document.getElementById("status");
     const saveButton = document.getElementById("saveButton");
+    const footerSave = document.getElementById("footerSave");
+    const settingsTab = document.getElementById("settingsTab");
+    const activityTab = document.getElementById("activityTab");
     let config = null;
+    let loadedSnapshot = "";
+    let activeTab = "settings";
 
     const textListFields = [
       ["GRAB_ON_SIGHT_BRANDS", "Grab-on-sight Brands"],
@@ -281,17 +434,17 @@
       statusBox.className = "status";
     }
 
-    async function apiFetch(options = {}) {
+    async function apiFetch(path, options = {}) {
       const password = getPassword();
       const headers = {
         "x-settings-password": password,
         ...(options.headers || {})
       };
-      const response = await fetch("/api/config", { ...options, headers });
+      const response = await fetch(path, { ...options, headers });
       if (response.status === 401) {
         localStorage.removeItem(PASSWORD_KEY);
         showStatus("Wrong password. Please try again.", "error");
-        return apiFetch(options);
+        return apiFetch(path, options);
       }
       return response;
     }
@@ -320,7 +473,89 @@
       return `field-${key}`;
     }
 
-    function render() {
+    function stableStringify(value) {
+      return JSON.stringify(value);
+    }
+
+    function countLines(value) {
+      return linesToArray(value).length;
+    }
+
+    function labelWithCount(label, values) {
+      return `${label} (${Array.isArray(values) ? values.filter(Boolean).length : 0})`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function updateListCounts() {
+      for (const [key, label] of textListFields) {
+        const textarea = document.getElementById(fieldId(key));
+        const labelEl = document.querySelector(`[data-count-label="${key}"]`);
+        if (textarea && labelEl) {
+          labelEl.textContent = `${label} (${countLines(textarea.value)})`;
+        }
+      }
+    }
+
+    function markBlankMaxPrices() {
+      document.querySelectorAll('[data-field="max_price"]').forEach((input) => {
+        input.classList.toggle("invalid", input.value.trim() === "");
+      });
+    }
+
+    function hasBlankMaxPrice() {
+      return Array.from(document.querySelectorAll('[data-field="max_price"]'))
+        .some((input) => input.value.trim() === "");
+    }
+
+    function collectConfig() {
+      const nextConfig = { ...config };
+      nextConfig.SAVED_SEARCHES = Array.from(document.querySelectorAll("[data-search-index]")).map((row) => ({
+        query: row.querySelector('[data-field="query"]').value.trim(),
+        size: textToSize(row.querySelector('[data-field="size"]').value),
+        max_price: Number(row.querySelector('[data-field="max_price"]').value)
+      }));
+
+      for (const [key] of textListFields) {
+        nextConfig[key] = linesToArray(document.getElementById(fieldId(key)).value);
+      }
+
+      nextConfig.FABRIC_POLY_KEYWORD = document.getElementById("fabricPoly").value.trim();
+      nextConfig.PIT_TO_PIT_CAP_INCHES = Number(document.getElementById("pitCap").value || 0);
+      return nextConfig;
+    }
+
+    function updateDirtyState() {
+      if (!config || activeTab !== "settings") {
+        saveButton.disabled = true;
+        return;
+      }
+      markBlankMaxPrices();
+      saveButton.disabled = stableStringify(collectConfig()) === loadedSnapshot;
+    }
+
+    function attachDirtyListeners() {
+      app.querySelectorAll("input, textarea").forEach((field) => {
+        field.addEventListener("input", () => {
+          updateListCounts();
+          updateDirtyState();
+        });
+      });
+    }
+
+    function renderSettings() {
+      activeTab = "settings";
+      settingsTab.classList.add("active");
+      activityTab.classList.remove("active");
+      footerSave.style.display = "";
+
       const searchRows = config.SAVED_SEARCHES.map((search, index) => `
         <div class="search-row" data-search-index="${index}">
           <div class="search-grid">
@@ -334,7 +569,7 @@
             </div>
             <div>
               <label for="search-price-${index}">Max price</label>
-              <input id="search-price-${index}" data-field="max_price" type="number" min="0" step="0.01" value="${Number(search.max_price || 0)}">
+              <input id="search-price-${index}" data-field="max_price" type="number" min="0" step="0.01" value="${search.max_price === "" ? "" : Number(search.max_price || 0)}">
             </div>
           </div>
           <div class="button-row">
@@ -346,7 +581,7 @@
       const listSections = textListFields.map(([key, label]) => `
         <div class="row">
           <div>
-            <label for="${fieldId(key)}">${label}</label>
+            <label for="${fieldId(key)}" data-count-label="${key}">${labelWithCount(label, config[key])}</label>
             <textarea id="${fieldId(key)}" data-config-key="${key}" spellcheck="false">${escapeHtml(arrayToLines(config[key]))}</textarea>
           </div>
         </div>
@@ -381,51 +616,100 @@
       `;
 
       document.getElementById("addSearch").addEventListener("click", () => {
-        config.SAVED_SEARCHES.push({ query: "", size: null, max_price: 0 });
-        render();
+        config = collectConfig();
+        config.SAVED_SEARCHES.push({ query: "", size: null, max_price: "" });
+        renderSettings();
+        updateDirtyState();
       });
 
       document.querySelectorAll(".delete-search").forEach((button) => {
         button.addEventListener("click", (event) => {
+          if (!window.confirm("Delete this saved search?")) {
+            return;
+          }
           const row = event.target.closest("[data-search-index]");
+          config = collectConfig();
           config.SAVED_SEARCHES.splice(Number(row.dataset.searchIndex), 1);
-          render();
+          renderSettings();
+          updateDirtyState();
         });
       });
 
-      saveButton.disabled = false;
+      attachDirtyListeners();
+      updateDirtyState();
     }
 
-    function collectConfig() {
-      const nextConfig = { ...config };
-      nextConfig.SAVED_SEARCHES = Array.from(document.querySelectorAll("[data-search-index]")).map((row) => ({
-        query: row.querySelector('[data-field="query"]').value.trim(),
-        size: textToSize(row.querySelector('[data-field="size"]').value),
-        max_price: Number(row.querySelector('[data-field="max_price"]').value || 0)
-      }));
-
-      for (const [key] of textListFields) {
-        nextConfig[key] = linesToArray(document.getElementById(fieldId(key)).value);
+    function formatTime(timestamp) {
+      const date = new Date(timestamp);
+      if (Number.isNaN(date.getTime())) {
+        return "";
       }
-
-      nextConfig.FABRIC_POLY_KEYWORD = document.getElementById("fabricPoly").value.trim();
-      nextConfig.PIT_TO_PIT_CAP_INCHES = Number(document.getElementById("pitCap").value || 0);
-      return nextConfig;
+      const diffSeconds = Math.floor((Date.now() - date.getTime()) / 1000);
+      if (diffSeconds < 60) {
+        return "just now";
+      }
+      if (diffSeconds < 3600) {
+        return `${Math.floor(diffSeconds / 60)}m ago`;
+      }
+      if (diffSeconds < 86400) {
+        return `${Math.floor(diffSeconds / 3600)}h ago`;
+      }
+      return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     }
 
-    function escapeHtml(value) {
-      return String(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
+    function renderHistoryItems(items) {
+      if (!items.length) {
+        return '<div class="empty">No activity logged yet.</div>';
+      }
+      return `
+        <div class="activity-list">
+          ${items.map((item) => {
+            const badgeClass = item.ai_flagged ? "warning" : String(item.verdict || "").toLowerCase();
+            return `
+              <div class="activity-item">
+                <div class="activity-head">
+                  <span class="badge ${escapeHtml(badgeClass)}">${escapeHtml(item.ai_flagged ? "AI" : item.verdict || "ITEM")}</span>
+                  <span class="activity-meta">${escapeHtml(formatTime(item.timestamp))}</span>
+                </div>
+                <div class="activity-title">${escapeHtml(item.title || "Untitled listing")}</div>
+                <div class="activity-meta">${item.price == null ? "" : `$${escapeHtml(item.price)}`}</div>
+                <div class="activity-reason">${escapeHtml(item.reason || "")}</div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    async function loadHistory() {
+      activeTab = "activity";
+      activityTab.classList.add("active");
+      settingsTab.classList.remove("active");
+      footerSave.style.display = "none";
+      saveButton.disabled = true;
+      app.className = "loading";
+      app.textContent = "Loading activity...";
+      try {
+        clearStatus();
+        const response = await apiFetch("/api/history");
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: "Failed to load activity" }));
+          throw new Error(error.error || "Failed to load activity");
+        }
+        const items = await response.json();
+        app.className = "";
+        app.innerHTML = `<section><h2>Recent Activity</h2>${renderHistoryItems(items)}</section>`;
+      } catch (error) {
+        app.className = "loading";
+        app.textContent = error.message;
+        showStatus(error.message, "error");
+      }
     }
 
     async function loadConfig() {
       try {
         clearStatus();
-        const response = await apiFetch();
+        const response = await apiFetch("/api/config");
         if (!response.ok) {
           const error = await response.json().catch(() => ({ error: "Failed to load config" }));
           throw new Error(error.error || "Failed to load config");
@@ -434,7 +718,8 @@
         if (!Array.isArray(config.SAVED_SEARCHES)) {
           config.SAVED_SEARCHES = [];
         }
-        render();
+        loadedSnapshot = stableStringify(config);
+        renderSettings();
       } catch (error) {
         app.className = "loading";
         app.textContent = error.message;
@@ -445,24 +730,45 @@
     saveButton.addEventListener("click", async () => {
       try {
         clearStatus();
+        markBlankMaxPrices();
+        if (hasBlankMaxPrice()) {
+          showStatus("Max price can't be blank - enter a value or remove the search", "error");
+          return;
+        }
+        const nextConfig = collectConfig();
+        if (stableStringify(nextConfig) === loadedSnapshot) {
+          updateDirtyState();
+          return;
+        }
         saveButton.disabled = true;
-        config = collectConfig();
-        const response = await apiFetch({
+        const response = await apiFetch("/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(config)
+          body: JSON.stringify(nextConfig)
         });
         if (!response.ok) {
           const error = await response.json().catch(() => ({ error: "Failed to save config" }));
           throw new Error(error.error || error.message || "Failed to save config");
         }
+        config = nextConfig;
+        loadedSnapshot = stableStringify(config);
         showStatus("Settings saved.", "success");
+        updateDirtyState();
       } catch (error) {
         showStatus(error.message, "error");
-      } finally {
-        saveButton.disabled = false;
+        updateDirtyState();
       }
     });
+
+    settingsTab.addEventListener("click", () => {
+      if (config) {
+        renderSettings();
+      } else {
+        loadConfig();
+      }
+    });
+
+    activityTab.addEventListener("click", loadHistory);
 
     loadConfig();
   </script>
