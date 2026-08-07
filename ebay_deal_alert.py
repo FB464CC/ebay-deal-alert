@@ -59,6 +59,13 @@ DB_PATH = "seen_items.db"
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
 GEMINI_CALL_LIMIT = 6
+# eBay's "Watches, Parts & Accessories" category - a separate top-level
+# tree from Men's Clothing (260012), used for the deliberately narrow
+# watch searches. Counterfeiting is common and hard to catch even for a
+# knowledgeable human; the six-check scoring/AI vision framework here has
+# no watch-authentication capability, so every watch-category alert gets
+# an unconditional (not AI-gated) verify-authenticity warning.
+WATCH_CATEGORY_ID = "260324"
 CATEGORY_OFF_SEASON_BUY_MONTHS = {
     "knitwear": [5, 6, 7, 8],
     "outerwear": [5, 6, 7, 8],
@@ -179,11 +186,15 @@ def search_ebay(token, saved_search):
     params = {
         "q": query,
         # eBay category 260012 = "Men" under "Clothing, Shoes & Accessories"
-        # (11450). Without this, search is unscoped across all of eBay -
-        # confirmed live: "j press tie" matched a J.G. Ballard paperback
-        # ("...Movie Tie-In... Noonday Press") since it loosely token-matches
-        # "press" and "tie" anywhere on the site, not just in clothing.
-        "category_ids": "260012",
+        # (11450) by default. Without a category restriction, search is
+        # unscoped across all of eBay - confirmed live: "j press tie"
+        # matched a J.G. Ballard paperback ("...Movie Tie-In... Noonday
+        # Press") since it loosely token-matches "press" and "tie" anywhere
+        # on the site, not just in clothing. A per-search "category_id"
+        # override exists for categories outside Men's Clothing entirely
+        # (e.g. watches live under 260324 "Watches, Parts & Accessories",
+        # a completely separate top-level category tree from clothing).
+        "category_ids": saved_search.get("category_id", "260012"),
         # US-domestic sellers only. Real listing found live: a UK Barbour
         # jacket priced $33.57 that the search summary reported as $0
         # shipping - the actual per-item shipping API showed $25.77
@@ -219,7 +230,7 @@ def count_similar_listings(token, saved_search):
         query += " " + " ".join(f"-{kw}" for kw in GENDER_EXCLUDE_KEYWORDS)
     params = {
         "q": query,
-        "category_ids": "260012",
+        "category_ids": saved_search.get("category_id", "260012"),
         "filter": "conditions:{USED|UNSPECIFIED},itemLocationCountry:US",
         "limit": "1",
     }
@@ -675,6 +686,7 @@ def append_alert_log(result):
         "liquidity",
         "search_total_listings",
         "similar_listings_count",
+        "category_id",
     ):
         value = result.get(key)
         if value is not None:
@@ -713,6 +725,15 @@ def send_alert(result):
     else:
         price_line = f"${price}{profile_note}"
     message = f"{price_line} - {title}\nFlags: {flags}"
+    if result.get("category_id") == WATCH_CATEGORY_ID:
+        # Unconditional - never gated on the AI's judgment, since it has no
+        # real ability to authenticate a watch. Always shown, not a flag
+        # the model can suppress or skip.
+        message += (
+            "\n⚠️ Watch listing: verify authenticity yourself before "
+            "buying (movement, serial number, box/papers) - this bot cannot "
+            "detect counterfeits."
+        )
     deal_rating = result.get("deal_rating")
     if deal_rating:
         value_parts = []
@@ -950,6 +971,7 @@ def run():
             result["shipping_cost"] = shipping_cost
             result["profile"] = saved_search.get("profile", "slow")
             result["search_query"] = saved_search["query"]
+            result["category_id"] = saved_search.get("category_id", "260012")
             if search_total_listings is not None:
                 result["search_total_listings"] = search_total_listings
             add_off_season_flag(result, category, current_month)

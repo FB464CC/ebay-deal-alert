@@ -86,6 +86,9 @@ const validateConfig = (body) => {
     if ("profile" in search && typeof search.profile !== "string") {
       return `SAVED_SEARCHES[${index}].profile must be a string`;
     }
+    if ("category_id" in search && typeof search.category_id !== "string") {
+      return `SAVED_SEARCHES[${index}].category_id must be a string`;
+    }
   }
 
   const arrayFields = [
