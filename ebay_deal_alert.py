@@ -155,6 +155,12 @@ def search_ebay(token, saved_search):
         query += " " + " ".join(f"-{kw}" for kw in GENDER_EXCLUDE_KEYWORDS)
     params = {
         "q": query,
+        # eBay category 260012 = "Men" under "Clothing, Shoes & Accessories"
+        # (11450). Without this, search is unscoped across all of eBay -
+        # confirmed live: "j press tie" matched a J.G. Ballard paperback
+        # ("...Movie Tie-In... Noonday Press") since it loosely token-matches
+        # "press" and "tie" anywhere on the site, not just in clothing.
+        "category_ids": "260012",
         "filter": "conditions:{USED|UNSPECIFIED}",  # pre-owned, adjust as needed
         "sort": "newlyListed",
         "limit": "50",
