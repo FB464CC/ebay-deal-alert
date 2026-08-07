@@ -100,18 +100,18 @@
       "max_price": 90
     },
     {
-      "query": "kiton",
-      "size": null,
+      "query": "kiton sport coat",
+      "size": ["40"],
       "max_price": 120
     },
     {
-      "query": "cesare attolini",
-      "size": null,
+      "query": "cesare attolini blazer",
+      "size": ["40"],
       "max_price": 120
     },
     {
-      "query": "belvest",
-      "size": null,
+      "query": "belvest blazer",
+      "size": ["40"],
       "max_price": 70
     },
     {
@@ -155,8 +155,8 @@
       "max_price": 50
     },
     {
-      "query": "charvet",
-      "size": null,
+      "query": "charvet shirt",
+      "size": ["L"],
       "max_price": 60
     }
   ],
