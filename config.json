@@ -280,8 +280,8 @@
     {
       "query": "ferragamo belt",
       "size": [
-        "36",
-        "38"
+        "34",
+        "36"
       ],
       "max_price": 60,
       "enabled": true,
@@ -299,8 +299,8 @@
     {
       "query": "gucci belt",
       "size": [
-        "36",
-        "38"
+        "34",
+        "36"
       ],
       "max_price": 80,
       "enabled": true,
@@ -309,8 +309,8 @@
     {
       "query": "bottega veneta belt",
       "size": [
-        "36",
-        "38"
+        "34",
+        "36"
       ],
       "max_price": 80,
       "enabled": true,
@@ -319,8 +319,8 @@
     {
       "query": "anderson's belt",
       "size": [
-        "36",
-        "38"
+        "34",
+        "36"
       ],
       "max_price": 60,
       "enabled": true,
