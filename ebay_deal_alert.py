@@ -715,9 +715,14 @@ def append_alert_log(result):
 
     lines.append(json.dumps(record, separators=(",", ":")))
     lines = lines[-1500:]
-    with ALERTS_LOG_PATH.open("w", encoding="utf-8") as log_file:
-        for line in lines:
-            log_file.write(line + "\n")
+    try:
+        with ALERTS_LOG_PATH.open("w", encoding="utf-8") as log_file:
+            for line in lines:
+                log_file.write(line + "\n")
+    except OSError as exc:
+        # Don't let a disk error here abort the whole run() batch - logging
+        # is best-effort, the alert itself already went out.
+        logger.warning("Failed to write alerts log: %s", exc)
 
 
 def send_alert(result):
