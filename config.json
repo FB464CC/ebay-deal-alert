@@ -410,7 +410,8 @@
       ],
       "max_price": 45,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "kiton suit",
