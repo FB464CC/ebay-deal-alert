@@ -26,7 +26,6 @@ import requests
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote_plus
 
 # ---------------------------------------------------------------------------
 # CONFIG — saved searches ported from CareerOS project instructions
@@ -176,13 +175,16 @@ def search_ebay(token, saved_search):
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     }
     query = saved_search["query"]
-    # eBay's search syntax supports "-term" exclusions same as the website's
-    # search bar. Filters out women's/juniors' listings at the source,
-    # cheaper than letting them through and rejecting downstream. Backstopped
-    # by a title check in score_listing() in case a listing slips through
-    # (eBay's exclusion matching isn't guaranteed to be exhaustive).
-    if GENDER_EXCLUDE_KEYWORDS:
-        query += " " + " ".join(f"-{kw}" for kw in GENDER_EXCLUDE_KEYWORDS)
+    # NOTE: deliberately NOT appending "-women -womens ..." to the query here.
+    # Confirmed live: eBay's "-term" exclusion matches full listing text
+    # (title+description+aspects), not just the title - it was silently
+    # collapsing real inventory by 90%+ on every search (e.g. gucci
+    # cardholder: 172 -> 9 total) by excluding genuine men's/unisex
+    # listings whose description happened to mention "women" anywhere
+    # (unisex cross-sell copy, store policy boilerplate, etc). The
+    # title-only gender check in score_listing() is the real, correct
+    # filter - it only rejects listings whose TITLE says women's/ladies'/
+    # juniors', which is what actually indicates a wrong-gender listing.
     params = {
         "q": query,
         # eBay category 260012 = "Men" under "Clothing, Shoes & Accessories"
@@ -226,8 +228,8 @@ def count_similar_listings(token, saved_search):
     size_tokens = saved_search.get("size") or []
     if size_tokens:
         query += " " + " ".join(size_tokens)
-    if GENDER_EXCLUDE_KEYWORDS:
-        query += " " + " ".join(f"-{kw}" for kw in GENDER_EXCLUDE_KEYWORDS)
+    # See search_ebay() - deliberately not appending gender exclusion terms
+    # here either, same full-text over-match problem.
     params = {
         "q": query,
         "category_ids": saved_search.get("category_id", "260012"),
@@ -722,57 +724,35 @@ def send_alert(result):
     item_price = result.get("item_price")
     shipping_cost = result.get("shipping_cost")
     url = listing.get("itemWebUrl", "")
-    flags = "; ".join(result.get("flags", []))
     image_url = (listing.get("image") or {}).get("imageUrl")
     profile = result.get("profile", "slow")
     profile_note = " [fast-flip]" if profile == "fast" else " [slow-flip]"
 
+    # Kept short deliberately - ntfy truncates long messages on the lock
+    # screen. Tap-through already works via headers["Click"] = url, so
+    # flags/market-context/sold-comps-link don't need to live in the body
+    # (they're still in the alerts_log.jsonl record for the mobile app).
     if item_price is not None and shipping_cost is not None:
-        price_line = f"${item_price:g} + ${shipping_cost:g} shipping = ${price:g} total{profile_note}"
+        price_line = f"${item_price:g} + ${shipping_cost:g} = ${price:g}{profile_note}"
     else:
         price_line = f"${price}{profile_note}"
-    message = f"{price_line} - {title}\nFlags: {flags}"
+    message = f"{price_line} - {title}"
+
+    deal_rating = result.get("deal_rating")
+    if deal_rating:
+        message += f"\n{deal_rating}"
+        discount_pct = result.get("discount_pct")
+        if discount_pct is not None:
+            message += f" ({discount_pct}% under resale)"
+
     if result.get("category_id") == WATCH_CATEGORY_ID:
         # Unconditional - never gated on the AI's judgment, since it has no
         # real ability to authenticate a watch. Always shown, not a flag
         # the model can suppress or skip.
         message += (
-            "\n⚠️ Watch listing: verify authenticity yourself before "
-            "buying (movement, serial number, box/papers) - this bot cannot "
-            "detect counterfeits."
+            "\n⚠️ Watch: verify authenticity yourself (movement, serial, "
+            "box/papers) - bot cannot detect counterfeits."
         )
-    deal_rating = result.get("deal_rating")
-    if deal_rating:
-        value_parts = []
-        estimated_retail_price = result.get("estimated_retail_price")
-        estimated_resale_value = result.get("estimated_resale_value")
-        discount_pct = result.get("discount_pct")
-        formatted_retail_price = _format_estimated_usd(estimated_retail_price)
-        formatted_resale_value = _format_estimated_usd(estimated_resale_value)
-        if formatted_retail_price is not None:
-            value_parts.append(f"est. retail ${formatted_retail_price}")
-        if formatted_resale_value is not None:
-            value_parts.append(f"resale ${formatted_resale_value}")
-        deal_line = f"\n{deal_rating}"
-        if value_parts:
-            deal_line += " - " + " / ".join(value_parts)
-        if discount_pct is not None:
-            deal_line += f" ({discount_pct}% under resale)"
-        message += deal_line
-    if result.get("liquidity") == "slow":
-        message += "\nNote: AI flags this as a slower-moving size/style"
-    market_count = result.get("similar_listings_count")
-    if market_count is None:
-        market_count = result.get("search_total_listings")
-    if market_count is not None:
-        message += f"\nMarket context: {market_count} similar active listings"
-    # As of mid-2026 eBay may redirect signed-out visitors to login for this
-    # completed/sold filter; that's expected when opening from a logged-in browser.
-    sold_comps_url = (
-        "https://www.ebay.com/sch/i.html?_nkw="
-        f"{quote_plus(title)}&LH_Sold=1&LH_Complete=1&_sop=13"
-    )
-    message += f"\nReal sold comps: {sold_comps_url}"
     alert_title = f"[{result['verdict']}] Deal alert"
 
     tags = ["moneybag"] if result.get("brand_tier") == "grab_on_sight" else ["eyes"]
