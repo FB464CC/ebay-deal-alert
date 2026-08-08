@@ -570,10 +570,17 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
         "no matter how small or subtle, not just large/prominent ones. Do NOT "
         "flag the garment's own designer logo (e.g. Peter Millar's crown/quill, "
         "Ralph Lauren's polo player) - that is normal branding, not a defect. "
-        "If you are unsure whether a marking is the designer's own logo or a "
-        "third-party one, err toward flagging it as weird_logo_found and explain "
-        "the ambiguity in logo_desc. looks_good should be true only when no "
-        "damage and no unwanted (non-designer) logo is visible."
+        "Also do NOT flag university or college sports team logos/crests "
+        "(e.g. South Carolina Gamecocks, or any other school's mascot/name) - "
+        "those are intentional collegiate fan apparel the buyer wants, not "
+        "unwanted corporate branding. Only flag logos indicating a company, "
+        "corporate event, golf tournament, country club, bank, or resort - "
+        "not a sports team or university. "
+        "If you are unsure whether a marking is the designer's own logo, a "
+        "university/college team logo, or unwanted corporate branding, err "
+        "toward flagging it as weird_logo_found and explain the ambiguity in "
+        "logo_desc. looks_good should be true only when no damage and no "
+        "unwanted (non-designer, non-collegiate) logo is visible."
     )
 
     try:

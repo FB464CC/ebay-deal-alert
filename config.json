@@ -42,7 +42,8 @@
       ],
       "max_price": 40,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "11484"
     },
     {
       "query": "alan paine merino lambswool",
@@ -523,6 +524,27 @@
       "query": "berluti cardholder",
       "size": null,
       "max_price": 100,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "peter millar south carolina gamecocks polo",
+      "size": [
+        "M",
+        "L"
+      ],
+      "max_price": 25,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "peter millar south carolina gamecocks quarter zip",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 30,
       "enabled": true,
       "profile": "fast"
     }
