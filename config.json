@@ -468,23 +468,9 @@
       "profile": "fast"
     },
     {
-      "query": "ferragamo wallet",
-      "size": null,
-      "max_price": 60,
-      "enabled": true,
-      "profile": "fast"
-    },
-    {
       "query": "gucci cardholder",
       "size": null,
       "max_price": 70,
-      "enabled": true,
-      "profile": "fast"
-    },
-    {
-      "query": "gucci wallet",
-      "size": null,
-      "max_price": 80,
       "enabled": true,
       "profile": "fast"
     },
@@ -496,19 +482,12 @@
       "profile": "fast"
     },
     {
-      "query": "bottega veneta wallet",
-      "size": null,
-      "max_price": 90,
-      "enabled": true,
-      "profile": "fast"
-    },
-    {
       "query": "tissot watch",
       "size": null,
       "max_price": 60,
       "enabled": true,
       "profile": "slow",
-      "category_id": "260324"
+      "category_id": "31387"
     },
     {
       "query": "hamilton watch",
@@ -516,7 +495,7 @@
       "max_price": 80,
       "enabled": true,
       "profile": "slow",
-      "category_id": "260324"
+      "category_id": "31387"
     },
     {
       "query": "shinola watch",
@@ -524,12 +503,26 @@
       "max_price": 90,
       "enabled": true,
       "profile": "slow",
-      "category_id": "260324"
+      "category_id": "31387"
     },
     {
       "query": "tumi briefcase",
       "size": null,
       "max_price": 60,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "loro piana cardholder",
+      "size": null,
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "berluti cardholder",
+      "size": null,
+      "max_price": 100,
       "enabled": true,
       "profile": "fast"
     }
@@ -562,7 +555,8 @@
     "gucci",
     "bottega veneta",
     "anderson",
-    "drake"
+    "drake",
+    "berluti"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
