@@ -58,13 +58,16 @@ DB_PATH = "seen_items.db"
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
 GEMINI_CALL_LIMIT = 6
-# eBay's "Watches, Parts & Accessories" category - a separate top-level
-# tree from Men's Clothing (260012), used for the deliberately narrow
-# watch searches. Counterfeiting is common and hard to catch even for a
-# knowledgeable human; the six-check scoring/AI vision framework here has
-# no watch-authentication capability, so every watch-category alert gets
-# an unconditional (not AI-gated) verify-authenticity warning.
-WATCH_CATEGORY_ID = "260324"
+# eBay's "Wristwatches" leaf category (under the "Watches, Parts &
+# Accessories" tree, 260324) - a separate top-level tree from Men's Clothing
+# (260012), used for the deliberately narrow watch searches. Counterfeiting
+# is common and hard to catch even for a knowledgeable human; the six-check
+# scoring/AI vision framework here has no watch-authentication capability,
+# so every watch-category alert gets an unconditional (not AI-gated)
+# verify-authenticity warning. Must match the category_id actually set on
+# watch searches in config.json (31387, not the 260324 parent - that parent
+# leaks parts/manuals/accessories, see config.json watch entries).
+WATCH_CATEGORY_ID = "31387"
 CATEGORY_OFF_SEASON_BUY_MONTHS = {
     "knitwear": [5, 6, 7, 8],
     "outerwear": [5, 6, 7, 8],
