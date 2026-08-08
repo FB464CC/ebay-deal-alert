@@ -62,6 +62,11 @@ MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
 # double. Anything not fetched inside the budget is skipped this run and picked
 # up by the next one (the search list rotates so the same tail is never starved).
 MARKETPLACE_FETCH_BUDGET_SECONDS = float(_CONFIG.get("MARKETPLACE_FETCH_BUDGET_SECONDS", 30))
+# Hard ceiling on notifications per run. Turning on a new marketplace makes
+# every one of its listings unseen at once, so without this the first run
+# fires hundreds of pushes in a row. Listings past the cap are deliberately
+# NOT marked seen, so the next run picks them up instead of losing them.
+MAX_ALERTS_PER_RUN = int(_CONFIG.get("MAX_ALERTS_PER_RUN", 8))
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 
@@ -955,6 +960,7 @@ def run():
         gap_report = None
 
     gemini_calls = 0
+    alerts_sent = 0
     gemini_budget_logged = False
     seller_username_presence_logged = False
     current_utc = datetime.now(timezone.utc)
@@ -1139,6 +1145,15 @@ def run():
                     send_alert(result)
                     logger.info("Sent alert for %s", item_id)
                     mark_seen(conn, item_id)
+                    alerts_sent += 1
+                    if alerts_sent >= MAX_ALERTS_PER_RUN:
+                        logger.info(
+                            "Hit per-run alert cap (%s); stopping this run. Remaining "
+                            "listings stay unseen and will be picked up next run.",
+                            MAX_ALERTS_PER_RUN,
+                        )
+                        conn.close()
+                        return
                 except Exception:
                     logger.exception("Failed to send alert for %s", item_id)
             # PASS results are not sent — logged only if you add logging here

@@ -669,11 +669,7 @@
   ],
   "FABRIC_POLY_KEYWORD": "poly",
   "PIT_TO_PIT_CAP_INCHES": 23.5,
-  "MARKETPLACES_ENABLED": [
-    "grailed",
-    "poshmark",
-    "shopgoodwill",
-    "vinted"
-  ],
-  "MARKETPLACE_FETCH_BUDGET_SECONDS": 30
+  "MARKETPLACES_ENABLED": [],
+  "MARKETPLACE_FETCH_BUDGET_SECONDS": 30,
+  "MAX_ALERTS_PER_RUN": 8
 }
