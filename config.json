@@ -471,22 +471,6 @@
       "profile": "fast"
     },
     {
-      "query": "drake's tie",
-      "size": null,
-      "max_price": 28,
-      "enabled": true,
-      "profile": "fast",
-      "category_id": "15662"
-    },
-    {
-      "query": "charvet tie",
-      "size": null,
-      "max_price": 45,
-      "enabled": true,
-      "profile": "fast",
-      "category_id": "15662"
-    },
-    {
       "query": "ferragamo cardholder",
       "size": null,
       "max_price": 50,
@@ -611,7 +595,6 @@
     "gucci",
     "bottega veneta",
     "anderson",
-    "drake",
     "berluti"
   ],
   "STANDARD_BRANDS": [
