@@ -668,5 +668,12 @@
     "girls"
   ],
   "FABRIC_POLY_KEYWORD": "poly",
-  "PIT_TO_PIT_CAP_INCHES": 23.5
+  "PIT_TO_PIT_CAP_INCHES": 23.5,
+  "MARKETPLACES_ENABLED": [
+    "grailed",
+    "poshmark",
+    "shopgoodwill",
+    "vinted"
+  ],
+  "MARKETPLACE_FETCH_BUDGET_SECONDS": 30
 }

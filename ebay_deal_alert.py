@@ -31,6 +31,10 @@ from pathlib import Path
 # CONFIG — saved searches ported from CareerOS project instructions
 # ---------------------------------------------------------------------------
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import platforms as marketplaces
+
 CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
 
 
@@ -51,6 +55,13 @@ FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
 GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
 FABRIC_POLY_KEYWORD = _CONFIG["FABRIC_POLY_KEYWORD"]
 PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
+# Non-eBay marketplaces to poll. eBay is always polled and is not listed here.
+MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
+# Hard wall-clock cap on the parallel marketplace fetch. GitHub bills private
+# repo Actions minutes ROUNDED UP per job, so a run that creeps past 60s costs
+# double. Anything not fetched inside the budget is skipped this run and picked
+# up by the next one (the search list rotates so the same tail is never starved).
+MARKETPLACE_FETCH_BUDGET_SECONDS = float(_CONFIG.get("MARKETPLACE_FETCH_BUDGET_SECONDS", 30))
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 
@@ -744,7 +755,12 @@ def send_alert(result):
         price_line = f"${item_price:g} + ${shipping_cost:g} = ${price:g}{profile_note}"
     else:
         price_line = f"${price}{profile_note}"
-    message = f"{price_line} - {title}"
+    source = (listing.get("platform") or "ebay").upper()
+    message = f"[{source}] {price_line} - {title}"
+    if listing.get("platform") == "shopgoodwill":
+        # currentPrice on a live auction is a floor that climbs until close,
+        # not a purchase price - do not read it as the eBay-style fixed price.
+        message += "\n(auction - price climbs until close)"
 
     deal_rating = result.get("deal_rating")
     if deal_rating:
@@ -873,6 +889,53 @@ def send_weekly_digest():
 # MAIN
 # ---------------------------------------------------------------------------
 
+def _fetch_marketplace(saved_search, platform_name, deadline):
+    """One (search, marketplace) fetch. Never raises - a dead marketplace must
+    not be able to abort the run for the others."""
+    if time.monotonic() >= deadline:
+        return platform_name, saved_search["query"], []
+    try:
+        listings, _total = marketplaces.ADAPTERS[platform_name](saved_search)
+        return platform_name, saved_search["query"], listings
+    except Exception:
+        logger.exception("%s search failed for query: %s", platform_name, saved_search["query"])
+        return platform_name, saved_search["query"], []
+
+
+def prefetch_marketplaces(now):
+    """Fetch every enabled non-eBay marketplace for every enabled saved search,
+    in parallel, inside a fixed wall-clock budget. Returns {query: [listings]}."""
+    active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.ADAPTERS]
+    if not active:
+        return {}
+    searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
+    if not searches:
+        return {}
+    # Rotate the starting point each run so that when the budget truncates the
+    # tail, it is a different tail every time and every search gets covered.
+    offset = ((now.hour * 60 + now.minute) // 20) % len(searches)
+    searches = searches[offset:] + searches[:offset]
+
+    tasks = [
+        (s, p)
+        for s in searches
+        for p in s.get("platforms", active)
+        if p in marketplaces.ADAPTERS
+    ]
+    deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
+    found = {}
+    counts = {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_fetch_marketplace, s, p, deadline) for s, p in tasks]
+        for future in as_completed(futures):
+            platform_name, query, listings = future.result()
+            if listings:
+                found.setdefault(query, []).extend(listings)
+                counts[platform_name] = counts.get(platform_name, 0) + len(listings)
+    logger.info("Marketplace prefetch: %s", counts or "nothing returned")
+    return found
+
+
 def run():
     logger.info("Starting eBay deal alert run")
     conn = init_db()
@@ -898,6 +961,8 @@ def run():
     current_month = current_utc.month
     current_month_name = current_utc.strftime("%B")
 
+    marketplace_listings = prefetch_marketplaces(current_utc)
+
     for saved_search in SAVED_SEARCHES:
         if not saved_search.get("enabled", True):
             continue
@@ -907,7 +972,11 @@ def run():
             listings, search_total_listings = search_ebay(token, saved_search)
         except Exception:
             logger.exception("eBay search failed for query: %s", saved_search["query"])
-            continue
+            listings, search_total_listings = [], None
+        # Non-eBay marketplaces were fetched in parallel up front; they are
+        # already normalized into eBay item shape so they flow through the
+        # identical scoring/AI/alert path below.
+        listings = list(listings) + marketplace_listings.get(saved_search["query"], [])
 
         logger.info("Found %s listings for query: %s", len(listings), saved_search["query"])
         for listing in listings:
@@ -941,8 +1010,12 @@ def run():
 
             size_tokens = saved_search.get("size")
             title = listing.get("title", "")
+            # eBay states size in the title; Grailed/Poshmark/Vinted carry it in
+            # a structured `size` field the title often omits entirely. Matching
+            # title-only would silently discard every marketplace listing.
+            size_haystack = f"{title} {listing.get('size') or ''}"
             if size_tokens and not any(
-                re.search(rf"\b{re.escape(size_token)}\b", title, re.IGNORECASE)
+                re.search(rf"\b{re.escape(size_token)}\b", size_haystack, re.IGNORECASE)
                 for size_token in size_tokens
             ):
                 logger.info("Skipping %s because title does not match size filter", item_id)
