@@ -152,13 +152,29 @@ module.exports = async (req, res) => {
         return sendJson(res, 400, { error: validationError });
       }
 
+      const LEDGER_FIELDS = [
+        "item_id", "title", "bought_price", "bought_date",
+        "sold_price", "sold_date", "sold_platform"
+      ];
+      const sanitizeEntry = (raw) => {
+        const clean = {};
+        for (const field of LEDGER_FIELDS) {
+          if (field in raw) {
+            clean[field] = raw[field];
+          }
+        }
+        clean.item_id = raw.item_id.trim();
+        return clean;
+      };
+      const cleanEntry = sanitizeEntry(entry);
+
       const currentFile = await fetchCurrentFile();
       const ledger = parseLedger(currentFile);
-      const index = ledger.findIndex((line) => String(line.item_id) === entry.item_id);
+      const index = ledger.findIndex((line) => String(line.item_id) === cleanEntry.item_id);
       if (index >= 0) {
-        ledger[index] = { ...ledger[index], ...entry, item_id: entry.item_id.trim() };
+        ledger[index] = { ...ledger[index], ...cleanEntry };
       } else {
-        ledger.push({ ...entry, item_id: entry.item_id.trim() });
+        ledger.push(cleanEntry);
       }
 
       const body = {

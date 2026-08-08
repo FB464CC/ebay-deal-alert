@@ -74,16 +74,18 @@
       ],
       "max_price": 40,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
-      "query": "brooks brothers gold label blazer",
+      "query": "brooks brothers golden fleece blazer",
       "size": [
         "42"
       ],
       "max_price": 30,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "canali blazer",
@@ -92,7 +94,8 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "hart schaffner marx blazer",
@@ -101,7 +104,8 @@
       ],
       "max_price": 25,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "allen edmonds",
@@ -110,7 +114,8 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "53120"
     },
     {
       "query": "alden shoes",
@@ -119,7 +124,8 @@
       ],
       "max_price": 80,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "peter millar summer comfort polo",
@@ -160,7 +166,8 @@
       ],
       "max_price": 120,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "cesare attolini blazer",
@@ -169,7 +176,8 @@
       ],
       "max_price": 120,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "belvest blazer",
@@ -178,7 +186,8 @@
       ],
       "max_price": 70,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "william lockie cashmere",
@@ -209,7 +218,8 @@
       ],
       "max_price": 180,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "john lobb shoes",
@@ -218,7 +228,8 @@
       ],
       "max_price": 180,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "crockett jones shoes",
@@ -227,7 +238,8 @@
       ],
       "max_price": 120,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "church's shoes",
@@ -236,7 +248,8 @@
       ],
       "max_price": 90,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "santoni shoes",
@@ -245,7 +258,8 @@
       ],
       "max_price": 100,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "turnbull asser shirt",
@@ -256,7 +270,8 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "185100"
     },
     {
       "query": "charvet shirt",
@@ -267,7 +282,8 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "185100"
     },
     {
       "query": "ferragamo loafers",
@@ -286,7 +302,8 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "2993"
     },
     {
       "query": "gucci loafers",
@@ -305,7 +322,8 @@
       ],
       "max_price": 80,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "2993"
     },
     {
       "query": "bottega veneta belt",
@@ -315,17 +333,19 @@
       ],
       "max_price": 80,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "2993"
     },
     {
-      "query": "anderson's belt",
+      "query": "anderson's belt -sheppard -little -jw -ord -navajo -parkett",
       "size": [
         "34",
         "36"
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "2993"
     },
     {
       "query": "peter millar crown crafted polo",
@@ -344,7 +364,8 @@
       ],
       "max_price": 65,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "57988"
     },
     {
       "query": "rancourt loafers",
@@ -383,7 +404,7 @@
       "profile": "slow"
     },
     {
-      "query": "brooks brothers gold label suit",
+      "query": "brooks brothers golden fleece suit",
       "size": [
         "42"
       ],
@@ -425,7 +446,8 @@
       ],
       "max_price": 150,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "isaia sport coat",
@@ -434,7 +456,8 @@
       ],
       "max_price": 150,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "ralph lauren purple label",
@@ -450,16 +473,18 @@
     {
       "query": "drake's tie",
       "size": null,
-      "max_price": 8,
+      "max_price": 28,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "15662"
     },
     {
       "query": "charvet tie",
       "size": null,
-      "max_price": 10,
+      "max_price": 45,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "category_id": "15662"
     },
     {
       "query": "ferragamo cardholder",
@@ -547,6 +572,15 @@
       "max_price": 30,
       "enabled": true,
       "profile": "fast"
+    },
+    {
+      "query": "j press blazer",
+      "size": [
+        "42"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "slow"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -621,7 +655,10 @@
   "CONDITION_HARD_FAIL_KEYWORDS": [
     "moth",
     "moth hole",
-    "moth holes"
+    "moth holes",
+    "case only",
+    "for parts",
+    "for repair"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",

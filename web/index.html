@@ -695,13 +695,22 @@
 
     function collectConfig() {
       const nextConfig = { ...config };
-      nextConfig.SAVED_SEARCHES = Array.from(document.querySelectorAll("[data-search-index]")).map((row) => ({
-        query: row.querySelector('[data-field="query"]').value.trim(),
-        size: textToSize(row.querySelector('[data-field="size"]').value),
-        max_price: Number(row.querySelector('[data-field="max_price"]').value),
-        enabled: row.querySelector('[data-field="enabled"]').checked,
-        profile: row.dataset.profile || "fast"
-      }));
+      // Spread the ORIGINAL search object first so unedited/unmodeled
+      // fields (category_id, or any future field the UI doesn't have an
+      // input for) survive a save instead of silently vanishing - this
+      // was a real data-loss bug: category_id fixes applied directly to
+      // config.json were getting wiped the next time anyone hit Save here.
+      nextConfig.SAVED_SEARCHES = Array.from(document.querySelectorAll("[data-search-index]")).map((row) => {
+        const original = (config.SAVED_SEARCHES || [])[Number(row.dataset.searchIndex)] || {};
+        return {
+          ...original,
+          query: row.querySelector('[data-field="query"]').value.trim(),
+          size: textToSize(row.querySelector('[data-field="size"]').value),
+          max_price: Number(row.querySelector('[data-field="max_price"]').value),
+          enabled: row.querySelector('[data-field="enabled"]').checked,
+          profile: row.dataset.profile || "fast"
+        };
+      });
 
       for (const [key] of textListFields) {
         nextConfig[key] = linesToArray(document.getElementById(fieldId(key)).value);
