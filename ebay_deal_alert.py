@@ -18,9 +18,11 @@ import hashlib
 import json
 import logging
 import mimetypes
+import queue
 import re
 import sqlite3
 import sys
+import threading
 import time
 import requests
 from collections import Counter
@@ -30,8 +32,6 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # CONFIG — saved searches ported from CareerOS project instructions
 # ---------------------------------------------------------------------------
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import platforms as marketplaces
 
@@ -67,6 +67,10 @@ MARKETPLACE_FETCH_BUDGET_SECONDS = float(_CONFIG.get("MARKETPLACE_FETCH_BUDGET_S
 # fires hundreds of pushes in a row. Listings past the cap are deliberately
 # NOT marked seen, so the next run picks them up instead of losing them.
 MAX_ALERTS_PER_RUN = int(_CONFIG.get("MAX_ALERTS_PER_RUN", 8))
+# Slack added on top of MARKETPLACE_FETCH_BUDGET_SECONDS when waiting on
+# already-in-flight requests to wrap up - must be >= marketplaces.HTTP_TIMEOUT
+# or a genuinely-in-progress (not hung) request gets discarded for nothing.
+HTTP_TIMEOUT_MARGIN = 10
 
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 
@@ -129,6 +133,7 @@ def _get_ebay_token_uncached():
             "grant_type": "client_credentials",
             "scope": "https://api.ebay.com/oauth/api_scope",
         },
+        timeout=15,
     )
     resp.raise_for_status()
     return resp.json()["access_token"]
@@ -174,6 +179,7 @@ def get_ebay_token():
                     "grant_type": "client_credentials",
                     "scope": "https://api.ebay.com/oauth/api_scope",
                 },
+                timeout=15,
             )
             resp.raise_for_status()
             token_body = resp.json()
@@ -231,6 +237,7 @@ def search_ebay(token, saved_search):
         "https://api.ebay.com/buy/browse/v1/item_summary/search",
         headers=headers,
         params=params,
+        timeout=15,
     )
     resp.raise_for_status()
     body = resp.json()
@@ -259,6 +266,7 @@ def count_similar_listings(token, saved_search):
         "https://api.ebay.com/buy/browse/v1/item_summary/search",
         headers=headers,
         params=params,
+        timeout=15,
     )
     resp.raise_for_status()
     return resp.json().get("total")
@@ -339,6 +347,7 @@ def fetch_gap_report():
     resp = requests.get(
         wardrobe_os_url,
         params={"action": "gap_report", "secret": wardrobe_os_secret},
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()
@@ -647,6 +656,7 @@ def notify_bot_down(message):
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=message.encode("utf-8"),
             headers={"Title": "[ALERT-BOT DOWN]"},
+            timeout=10,
         )
         resp.raise_for_status()
     except requests.exceptions.RequestException:
@@ -804,6 +814,7 @@ def send_alert(result):
                 f"https://ntfy.sh/{NTFY_TOPIC}",
                 data=message.encode("utf-8"),
                 headers=headers,
+                timeout=10,
             )
             resp.raise_for_status()
             return
@@ -880,6 +891,7 @@ def send_weekly_digest():
                 f"https://ntfy.sh/{NTFY_TOPIC}",
                 data=message.encode("utf-8"),
                 headers={"Title": "[Weekly Digest]", "Tags": "bar_chart"},
+                timeout=10,
             )
             resp.raise_for_status()
             return
@@ -930,13 +942,48 @@ def prefetch_marketplaces(now):
     deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
     found = {}
     counts = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(_fetch_marketplace, s, p, deadline) for s, p in tasks]
-        for future in as_completed(futures):
-            platform_name, query, listings = future.result()
+    results_lock = threading.Lock()
+
+    # NOTE: deliberately plain threading.Thread(daemon=True), not
+    # concurrent.futures.ThreadPoolExecutor. Proved live: ThreadPoolExecutor
+    # registers an atexit hook (concurrent.futures.thread._python_exit) that
+    # BLOCKS INTERPRETER SHUTDOWN until every worker thread finishes, no
+    # matter what shutdown(wait=...) is called with mid-script - one hung
+    # request meant the whole GitHub Actions job sat for its full timeout,
+    # not the ~30s budget, well past the point prefetch_marketplaces()
+    # itself had already returned. Measured: a single 20s-hung task made the
+    # PROCESS take 20.3s to exit even though this function returned at 12s.
+    # Daemon threads have no such hook - the process exits without waiting
+    # for them, so a genuinely stuck request is simply abandoned.
+    work_queue = queue.Queue()
+    for task in tasks:
+        work_queue.put(task)
+
+    def worker():
+        while True:
+            try:
+                saved_search, platform_name = work_queue.get_nowait()
+            except queue.Empty:
+                return
+            _platform, query, listings = _fetch_marketplace(saved_search, platform_name, deadline)
             if listings:
-                found.setdefault(query, []).extend(listings)
-                counts[platform_name] = counts.get(platform_name, 0) + len(listings)
+                with results_lock:
+                    found.setdefault(query, []).extend(listings)
+                    counts[_platform] = counts.get(_platform, 0) + len(listings)
+            work_queue.task_done()
+
+    workers = [threading.Thread(target=worker, daemon=True) for _ in range(8)]
+    for w in workers:
+        w.start()
+    # Bounded by the shared deadline, not remaining*worker_count - each join
+    # re-derives its timeout from the same absolute wall-clock deadline, so
+    # total time spent here is capped at budget + margin regardless of how
+    # many workers are still outstanding.
+    hard_stop = deadline + HTTP_TIMEOUT_MARGIN
+    for w in workers:
+        w.join(timeout=max(0.0, hard_stop - time.monotonic()))
+    if any(w.is_alive() for w in workers):
+        logger.warning("Marketplace prefetch hit its hard deadline; using partial results")
     logger.info("Marketplace prefetch: %s", counts or "nothing returned")
     return found
 
