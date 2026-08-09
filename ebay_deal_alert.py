@@ -537,6 +537,39 @@ def add_off_season_flag(result, category, current_month):
     )
 
 
+SUIT_TWO_PIECE_SIGNALS = re.compile(
+    r"\b(2\s*-?\s*piece|two\s*-?\s*piece|2\s*pc\b|suit\s*set|jacket\s*(?:&|and)\s*(?:pants?|trousers?)|"
+    r"coat\s*(?:&|and)\s*(?:pants?|trousers?)|\bw/\s*pants?\b|\bwith\s*pants?\b|\bpants?\b|\btrousers?\b)",
+    re.IGNORECASE,
+)
+SUIT_JACKET_ONLY_SIGNALS = re.compile(
+    r"\b(sport\s*coat|sportcoat|blazer|suit\s*jacket)\b", re.IGNORECASE
+)
+
+
+def is_jacket_only_suit_listing(title, query):
+    """Explicit user report: searches for a full 2-piece suit (e.g. "isaia
+    suit") kept surfacing jacket-only/blazer-only listings - "ISAIA...Suit
+    Jacket, 42" and "Ermenegildo Zegna...Blazer" both alerted from suit
+    queries even though neither includes pants. Only owning 15+ standalone
+    jackets already and explicitly not wanting more of those - a suit
+    search needs to actually mean two pieces.
+
+    Only applies to queries that are actually suit searches (not the
+    separate, deliberate "X blazer" searches, which should keep matching
+    jacket-only listings same as always). A title mentioning pants/
+    trousers/"2 piece" etc. always passes regardless of also saying
+    "blazer" (sellers commonly describe a suit jacket as a "blazer" even
+    on a genuine 2-piece listing, e.g. "Blazer Suit Jacket Pants 2-Button").
+    Only rejected when a jacket-only word appears with no pants signal at
+    all."""
+    if " suit" not in f" {query.lower()}":
+        return False
+    if SUIT_TWO_PIECE_SIGNALS.search(title):
+        return False
+    return bool(SUIT_JACKET_ONLY_SIGNALS.search(title))
+
+
 def is_relevant_marketplace_listing(listing, query):
     """eBay listings arrive already scoped by category_id + query; Grailed/
     Poshmark/Vinted/ShopGoodwill do plain word-relevance text search with no
@@ -1439,6 +1472,14 @@ def run():
                     item_price,
                     shipping_cost,
                     saved_search["max_price"],
+                )
+                mark_seen(conn, item_id)
+                continue
+
+            if is_jacket_only_suit_listing(title, saved_search["query"]):
+                logger.info(
+                    "Skipping %s: suit search matched a jacket/blazer-only listing (no pants)",
+                    item_id,
                 )
                 mark_seen(conn, item_id)
                 continue
