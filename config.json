@@ -321,7 +321,7 @@
         "36"
       ],
       "max_price": 80,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "2993"
     },
