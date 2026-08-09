@@ -939,7 +939,12 @@
     "watch case only",
     "service booklet",
     "warranty card",
-    "booklet only"
+    "booklet only",
+    "travel case",
+    "watch roll",
+    "watch pouch",
+    "watch organizer",
+    "storage case"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",
