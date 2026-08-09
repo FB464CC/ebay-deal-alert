@@ -60,6 +60,16 @@ PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 # looking for. Only the leftover tokens (almost always the brand name) count
 # as a real match - see is_relevant_marketplace_listing().
 MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", []))
+# Hard cap on how many of the enabled searches get an actual eBay API call
+# per run. Confirmed live: ALL 74 enabled searches hit eBay's Browse API
+# every single run (now every 5 min, reliably, for the first time tonight)
+# - that's 74*288 = ~21,300 calls/day, which started 429-ing eBay outright
+# (100% of searches failed with HTTP 429 in one observed run). At 15/run
+# the daily total drops to ~4,300 (a sustainable ~5x cut) and, using the
+# same rotation trick as prefetch_marketplaces(), every search still gets
+# a real eBay check roughly every 25 minutes - reliably, unlike the old
+# flaky ~55min-average native cron this whole cadence replaced.
+EBAY_SEARCHES_PER_RUN_LIMIT = int(_CONFIG.get("EBAY_SEARCHES_PER_RUN_LIMIT", 15))
 # How many leading characters of a (lowercased) title count for
 # grab_on_sight/standard brand-tier matching - see score_listing(). 60 chars
 # comfortably covers a multi-word brand name plus a common seller prefix
@@ -254,12 +264,21 @@ def search_ebay(token, saved_search):
         "sort": "newlyListed",
         "limit": "50",
     }
-    resp = requests.get(
-        "https://api.ebay.com/buy/browse/v1/item_summary/search",
-        headers=headers,
-        params=params,
-        timeout=15,
-    )
+    # One short retry on a 429 - EBAY_SEARCHES_PER_RUN_LIMIT already cut call
+    # volume ~5x to stay under eBay's rate limit in normal operation, but a
+    # single retry costs little and can save an otherwise-lost search if a
+    # transient burst still trips it.
+    for attempt in range(2):
+        resp = requests.get(
+            "https://api.ebay.com/buy/browse/v1/item_summary/search",
+            headers=headers,
+            params=params,
+            timeout=15,
+        )
+        if resp.status_code == 429 and attempt == 0:
+            time.sleep(2)
+            continue
+        break
     resp.raise_for_status()
     body = resp.json()
     return body.get("itemSummaries", []), body.get("total")
@@ -1199,6 +1218,23 @@ def run():
         offset = ((current_utc.hour * 60 + current_utc.minute) // 5) % len(enabled_searches)
         enabled_searches = enabled_searches[offset:] + enabled_searches[:offset]
 
+    # Only this run's rotating BATCH actually calls eBay's API - see
+    # EBAY_SEARCHES_PER_RUN_LIMIT. Deliberately a distinct non-overlapping
+    # slice per run, not a 1-position sliding window over the (already
+    # rotated-by-1) enabled_searches list above - tested that version
+    # before shipping and caught it live: a by-1 rotation means consecutive
+    # 5-min runs share 14 of 15 searches, so 6 runs (30 min) only covered
+    # 20 of 74 searches instead of the intended full pass roughly every
+    # ~25 min. Batches use the STABLE (non-rotated) search order so the
+    # batch boundaries themselves don't drift.
+    stable_searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
+    num_ebay_batches = max(1, -(-len(stable_searches) // EBAY_SEARCHES_PER_RUN_LIMIT))  # ceil div
+    batch_index = ((current_utc.hour * 60 + current_utc.minute) // 5) % num_ebay_batches
+    batch_start = batch_index * EBAY_SEARCHES_PER_RUN_LIMIT
+    ebay_this_run = {
+        s["query"] for s in stable_searches[batch_start:batch_start + EBAY_SEARCHES_PER_RUN_LIMIT]
+    }
+
     # PASS 1 - COLLECT: run every free (no-API-cost) filter exactly as
     # before, but instead of spending Gemini calls inline in iteration
     # order, park REVIEW-verdict candidates for the prioritize/spend passes
@@ -1207,11 +1243,15 @@ def run():
     review_candidates = []
     for saved_search in enabled_searches:
         category = classify_search_category(saved_search["query"])
-        logger.info("Polling saved search: %s", saved_search["query"])
-        try:
-            listings, search_total_listings = search_ebay(token, saved_search)
-        except Exception:
-            logger.exception("eBay search failed for query: %s", saved_search["query"])
+        if saved_search["query"] in ebay_this_run:
+            logger.info("Polling saved search (eBay + marketplaces): %s", saved_search["query"])
+            try:
+                listings, search_total_listings = search_ebay(token, saved_search)
+            except Exception:
+                logger.exception("eBay search failed for query: %s", saved_search["query"])
+                listings, search_total_listings = [], None
+        else:
+            logger.debug("Skipping eBay call this run (rotation): %s", saved_search["query"])
             listings, search_total_listings = [], None
         # Non-eBay marketplaces were fetched in parallel up front; they are
         # already normalized into eBay item shape so they flow through the
