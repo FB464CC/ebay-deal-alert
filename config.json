@@ -589,7 +589,7 @@
       "category_id": "3001"
     },
     {
-      "query": "corneliani blazer",
+      "query": "corneliani",
       "size": [
         "42"
       ],
@@ -599,7 +599,7 @@
       "category_id": "3001"
     },
     {
-      "query": "borrelli shirt",
+      "query": "borrelli shirt -\"long island\" -barstool -hoodie -champion",
       "size": [
         "M",
         "L",
@@ -611,7 +611,7 @@
       "category_id": "185100"
     },
     {
-      "query": "southwick blazer",
+      "query": "southwick",
       "size": [
         "42"
       ],
@@ -621,7 +621,7 @@
       "category_id": "3001"
     },
     {
-      "query": "oxxford suit",
+      "query": "oxxford",
       "size": [
         "42"
       ],
@@ -631,7 +631,7 @@
       "category_id": "3001"
     },
     {
-      "query": "corbin suit",
+      "query": "corbin",
       "size": [
         "42"
       ],
@@ -733,6 +733,17 @@
       "query": "bills khakis trousers",
       "size": null,
       "max_price": 30,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "zegna quarter zip",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 90,
       "enabled": true,
       "profile": "fast"
     }
@@ -840,7 +851,9 @@
     "stacy adams",
     "eddie bauer",
     "abercrombie",
-    "cremieux"
+    "cremieux",
+    "zegna sport",
+    "z zegna"
   ],
   "CORPORATE_LOGO_KEYWORDS": [
     "tournament",
@@ -878,7 +891,10 @@
     "box only",
     "presentation box",
     "display case",
-    "watch case only"
+    "watch case only",
+    "service booklet",
+    "warranty card",
+    "booklet only"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",

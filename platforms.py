@@ -337,6 +337,33 @@ def search_poshmark(saved_search):
 # menswear; auction format means prices start low. Public POST search API.
 # ---------------------------------------------------------------------------
 
+# Only surface an auction once it's this close to ending - per explicit user
+# instruction, currentPrice on a live auction isn't a real number until the
+# bidding is basically over.
+SHOPGOODWILL_CLOSING_SOON_MINUTES = 60
+# Flat assumed shipping+handling - per explicit user instruction, the API's
+# own shippingPrice/handlingPrice fields don't reflect real cost. Midpoint
+# of the $12-15 range given.
+SHOPGOODWILL_ASSUMED_SHIPPING = 13.50
+
+
+def _parse_shopgoodwill_remaining(remaining_str):
+    """Parse ShopGoodwill's human-readable "2d 19h" / "45m" countdown into
+    total minutes. Returns None if unparseable - callers should treat that
+    as "unknown, don't trust it" rather than assuming it's safe."""
+    if not remaining_str:
+        return None
+    days_match = re.search(r"(\d+)\s*d", remaining_str)
+    hours_match = re.search(r"(\d+)\s*h", remaining_str)
+    minutes_match = re.search(r"(\d+)\s*m", remaining_str)
+    if not (days_match or hours_match or minutes_match):
+        return None
+    days = int(days_match.group(1)) if days_match else 0
+    hours = int(hours_match.group(1)) if hours_match else 0
+    minutes = int(minutes_match.group(1)) if minutes_match else 0
+    return days * 24 * 60 + hours * 60 + minutes
+
+
 @adapter("shopgoodwill")
 def search_shopgoodwill(saved_search):
     payload = {
@@ -374,10 +401,20 @@ def search_shopgoodwill(saved_search):
         return [], None
     results = (body.get("searchResults") or {}).get("items") or []
     listings = []
+    skipped_too_early = 0
     for item in results:
         item_id = item.get("itemId")
-        # currentPrice is the LIVE auction price and climbs until close - it
-        # is a floor, not a purchase price. Alerts are treated accordingly.
+        # currentPrice is a LIVE AUCTION BID, not a buyable price - it climbs
+        # until close, so alerting on it early is alerting on a number that
+        # won't hold. Live user report: got an alert for a ShopGoodwill item
+        # that was still bidding, nowhere near a price they could actually
+        # buy at. Only surface items close enough to closing that the
+        # current bid is close to being the FINAL price - same logic a
+        # human sniper uses (watch it, don't bid until the last hour).
+        remaining_minutes = _parse_shopgoodwill_remaining(item.get("remainingTime"))
+        if remaining_minutes is None or remaining_minutes > SHOPGOODWILL_CLOSING_SOON_MINUTES:
+            skipped_too_early += 1
+            continue
         listings.append(
             make_listing(
                 "shopgoodwill",
@@ -386,9 +423,19 @@ def search_shopgoodwill(saved_search):
                 item.get("currentPrice"),
                 f"https://shopgoodwill.com/item/{item_id}",
                 image_url=item.get("imageURL") or item.get("imageUrlString"),
-                shipping=item.get("shippingPrice") or 0.0,
+                # ShopGoodwill's own shippingPrice/handlingPrice fields are
+                # frequently $0 or near-$0 placeholders that don't reflect
+                # real cost - confirmed unreliable by direct user
+                # instruction. Always assume a flat real-world estimate
+                # instead of trusting what the API reports.
+                shipping=SHOPGOODWILL_ASSUMED_SHIPPING,
                 seller=item.get("sellerName") or item.get("sellerId"),
             )
+        )
+    if skipped_too_early:
+        logger.info(
+            "shopgoodwill: skipped %s auction(s) more than %s min from closing",
+            skipped_too_early, SHOPGOODWILL_CLOSING_SOON_MINUTES,
         )
     return [x for x in listings if x], (body.get("searchResults") or {}).get("itemCount")
 
