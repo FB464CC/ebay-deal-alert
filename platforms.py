@@ -42,7 +42,11 @@ HTTP_TIMEOUT = 8
 _MIN_INTERVAL = {
     "grailed": 0.35,
     "depop": 0.35,
-    "vinted": 0.60,
+    # Tightened from 0.60 - matches Grailed's pace, which has run all
+    # session with zero blocks/403s at that rate, so it's a proven-safe
+    # floor rather than a guess. User specifically wants Vinted covered
+    # harder (systematically underpriced/uninformed sellers observed).
+    "vinted": 0.35,
     "poshmark": 0.60,
     "mercari": 0.60,
     "vestiaire": 0.50,
@@ -216,13 +220,41 @@ GRAILED_SEARCH_KEY = "c89dbaddf15fe70e1941a109bf7c2a3d"
 GRAILED_INDEX = "Listing_by_date_added_production"
 
 
+GRAILED_SOLD_INDEX = "Listing_sold_by_high_price_production"
+
+
+def fetch_grailed_sold_comps(query):
+    """Real recent sold prices for this query, straight from Grailed's own
+    sold-comps index - confirmed live to return genuine historical sale
+    prices (sold_price field), not an estimate. Returns (median, count) or
+    (None, 0) if fewer than 3 comps exist (too few to trust a median on).
+    One extra call per search, same pacing/cost as the main search call."""
+    body = get_json(
+        "grailed",
+        f"https://mnrwefss2q-dsn.algolia.net/1/indexes/{GRAILED_SOLD_INDEX}",
+        params={"query": query, "hitsPerPage": 10},
+        headers={
+            "X-Algolia-Application-Id": GRAILED_APP_ID,
+            "X-Algolia-API-Key": GRAILED_SEARCH_KEY,
+        },
+    )
+    if not body:
+        return None, 0
+    prices = [h.get("sold_price") for h in body.get("hits", []) if h.get("sold_price")]
+    if len(prices) < 3:
+        return None, len(prices)
+    prices.sort()
+    return prices[len(prices) // 2], len(prices)
+
+
 @adapter("grailed")
 def search_grailed(saved_search):
+    query = saved_search["query"]
     body = get_json(
         "grailed",
         f"https://mnrwefss2q-dsn.algolia.net/1/indexes/{GRAILED_INDEX}",
         params={
-            "query": saved_search["query"],
+            "query": query,
             "hitsPerPage": 30,
             # Europe+Asia outnumber US ~2:1 on Grailed; without this the feed
             # is mostly items that ship internationally with import charges.
@@ -235,6 +267,7 @@ def search_grailed(saved_search):
     )
     if not body:
         return [], None
+    sold_median, sold_count = fetch_grailed_sold_comps(query)
     listings = []
     for hit in body.get("hits", []):
         object_id = hit.get("objectID")
@@ -244,18 +277,28 @@ def search_grailed(saved_search):
             # plenty for vision. Matters because every byte is downloaded
             # inside the job's 60-second billing window.
             cover += ("&" if "?" in cover else "?") + "w=800&fit=clip"
-        listings.append(
-            make_listing(
-                "grailed",
-                object_id,
-                hit.get("title"),
-                hit.get("price"),
-                f"https://www.grailed.com/listings/{object_id}",
-                image_url=cover,
-                size=hit.get("size"),
-                seller=(hit.get("user") or {}).get("username"),
-            )
+        user = hit.get("user") or {}
+        listing = make_listing(
+            "grailed",
+            object_id,
+            hit.get("title"),
+            hit.get("price"),
+            f"https://www.grailed.com/listings/{object_id}",
+            image_url=cover,
+            size=hit.get("size"),
+            seller=user.get("username"),
         )
+        if listing:
+            # Real sold-comp data and seller trust signals, both sitting in
+            # fields Grailed already returns - just never extracted before.
+            if sold_median is not None:
+                listing["sold_comp_median"] = sold_median
+                listing["sold_comp_count"] = sold_count
+            seller_score = user.get("seller_score") or {}
+            listing["seller_trusted"] = bool(user.get("trusted_seller"))
+            listing["seller_rating"] = seller_score.get("rating_average")
+            listing["seller_total_sales"] = user.get("total_bought_and_sold")
+        listings.append(listing)
     return [x for x in listings if x], body.get("nbHits")
 
 
@@ -477,7 +520,12 @@ def search_vinted(saved_search):
         params={
             "search_text": saved_search["query"],
             "order": "newest_first",
-            "per_page": 20,
+            # Confirmed live: Vinted's real cap is 96 (100 gets silently
+            # clamped down to 96) - same single API call either way, ~5x
+            # more coverage per search for free. User observation: Vinted
+            # sellers are systematically underinformed/underpriced compared
+            # to the other platforms, worth hounding harder specifically here.
+            "per_page": 96,
             "page": 1,
         },
         session=session,
