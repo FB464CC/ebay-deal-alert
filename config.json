@@ -497,7 +497,7 @@
       "size": null,
       "max_price": 60,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "31387"
     },
     {
@@ -505,7 +505,7 @@
       "size": null,
       "max_price": 80,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "31387"
     },
     {
@@ -513,7 +513,7 @@
       "size": null,
       "max_price": 90,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "31387"
     },
     {
@@ -664,17 +664,17 @@
     {
       "query": "rolex watch",
       "size": null,
-      "max_price": 400,
+      "max_price": 250,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "31387"
     },
     {
       "query": "omega watch",
       "size": null,
-      "max_price": 300,
+      "max_price": 250,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "31387"
     },
     {
@@ -726,7 +726,7 @@
       "size": null,
       "max_price": 150,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "31387"
     },
     {
@@ -746,6 +746,46 @@
       "max_price": 90,
       "enabled": true,
       "profile": "fast"
+    },
+    {
+      "query": "tudor watch",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "universal geneve watch",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "heuer watch -tag",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "zenith watch -tv -remote -vcr -electronics -brooch",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "iwc watch",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -786,7 +826,12 @@
     "cheaney",
     "drakes london",
     "rolex",
-    "omega"
+    "omega",
+    "tudor",
+    "universal geneve",
+    "heuer",
+    "zenith",
+    "iwc"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
