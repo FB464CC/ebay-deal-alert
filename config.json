@@ -649,7 +649,12 @@
     "right only",
     "left shoe only",
     "right shoe only",
-    "single shoe"
+    "single shoe",
+    "watch box",
+    "box only",
+    "presentation box",
+    "display case",
+    "watch case only"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",
