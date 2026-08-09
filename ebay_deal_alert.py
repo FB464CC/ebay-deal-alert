@@ -64,12 +64,21 @@ MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", [])
 # per run. Confirmed live: ALL 74 enabled searches hit eBay's Browse API
 # every single run (now every 5 min, reliably, for the first time tonight)
 # - that's 74*288 = ~21,300 calls/day, which started 429-ing eBay outright
-# (100% of searches failed with HTTP 429 in one observed run). At 15/run
-# the daily total drops to ~4,300 (a sustainable ~5x cut) and, using the
-# same rotation trick as prefetch_marketplaces(), every search still gets
-# a real eBay check roughly every 25 minutes - reliably, unlike the old
-# flaky ~55min-average native cron this whole cadence replaced.
-EBAY_SEARCHES_PER_RUN_LIMIT = int(_CONFIG.get("EBAY_SEARCHES_PER_RUN_LIMIT", 15))
+# (100% of searches failed with HTTP 429 in one observed run). eBay's own
+# docs (developer.ebay.com) confirm the Browse API's default limit is a
+# hard 5,000 calls/day. count_similar_listings() hits the SAME quota (up to
+# GEMINI_CALL_LIMIT calls/run on top of the search rotation), so 12/run
+# gives real margin: 12*288=3,456 search calls/day + a realistic ~540/day
+# from similar-count (matches actual observed REVIEW-candidate volume) =
+# ~4,000/day, comfortably under 5,000 - 15/run only left ~140 calls of
+# margin in the realistic case and blew past the limit entirely in the
+# worst case (every run maxing both budgets). Every search still gets a
+# real eBay check roughly every 30 minutes via the same rotation trick as
+# prefetch_marketplaces() - reliably, unlike the old flaky ~55min-average
+# native cron this whole cadence replaced. A free, legitimate path to a
+# higher limit exists (eBay's "Application Growth Check") if this ever
+# needs to be less conservative - requires the account owner to submit it.
+EBAY_SEARCHES_PER_RUN_LIMIT = int(_CONFIG.get("EBAY_SEARCHES_PER_RUN_LIMIT", 12))
 # How many leading characters of a (lowercased) title count for
 # grab_on_sight/standard brand-tier matching - see score_listing(). 60 chars
 # comfortably covers a multi-word brand name plus a common seller prefix
@@ -1319,7 +1328,8 @@ def run():
     num_ebay_batches = max(1, -(-len(stable_searches) // EBAY_SEARCHES_PER_RUN_LIMIT))  # ceil div
     batch_index = ((current_utc.hour * 60 + current_utc.minute) // 5) % num_ebay_batches
     batch_start = batch_index * EBAY_SEARCHES_PER_RUN_LIMIT
-    if ebay_circuit_breaker_allows_calls(token):
+    ebay_circuit_closed = ebay_circuit_breaker_allows_calls(token)
+    if ebay_circuit_closed:
         ebay_this_run = {
             s["query"] for s in stable_searches[batch_start:batch_start + EBAY_SEARCHES_PER_RUN_LIMIT]
         }
@@ -1553,7 +1563,17 @@ def run():
                 result["discount_pct"] = discount_pct
 
         try:
-            similar_count = count_similar_listings(token, saved_search)
+            # Also gated by the circuit breaker - this hits the SAME Browse
+            # API quota as search_ebay(). Was unconditional until now, which
+            # meant it kept wastefully firing (and risking extending) an
+            # active 429 cooldown even while the search rotation above
+            # correctly backed off. Also counted for real in the daily
+            # budget math: at GEMINI_CALL_LIMIT calls/run this can add up to
+            # ~2,300 more calls/day on top of the search rotation, which is
+            # why EBAY_SEARCHES_PER_RUN_LIMIT has real margin built in below
+            # the confirmed 5,000/day hard limit rather than sitting right
+            # at the edge of it.
+            similar_count = count_similar_listings(token, saved_search) if ebay_circuit_closed else None
             if similar_count is not None:
                 result["similar_listings_count"] = similar_count
         except Exception:
