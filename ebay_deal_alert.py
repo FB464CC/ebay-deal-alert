@@ -395,6 +395,8 @@ def get_shipping_cost(listing):
 
 def classify_search_category(query):
     query = query.lower()
+    if "watch" in query:
+        return "watches"
     if any(kw in query for kw in ("sweater", "cashmere", "merino", "quarter zip")):
         return "knitwear"
     if any(kw in query for kw in ("jacket", "coat")):
@@ -431,16 +433,39 @@ def is_relevant_marketplace_listing(listing, query):
     surface; this catches the whole class by requiring the title contain at
     least one word from the query that isn't a generic category/material
     term (see MARKETPLACE_QUERY_STOPWORDS) - in practice, the brand name.
-    eBay listings (platform unset) are never subject to this check."""
+    eBay listings (platform unset) are never subject to this check.
+
+    Also enforces "-excluded term" syntax in the query (e.g. the Anderson's
+    belt / Borrelli shirt searches use `-sheppard`, `-"long island"`).
+    That syntax was written assuming it worked everywhere, but it only
+    actually did anything for eBay - search_ebay() passes the raw query
+    string straight to eBay's own query engine, which understands `-term`
+    natively. This function was tokenizing "-long"/"-island" as ordinary
+    words and treating them as MORE acceptable matches, the opposite of
+    exclusion - confirmed live: a "Borrelli's Long Island" restaurant/bar
+    hoodie (nothing to do with the Borrelli fashion house) still passed
+    under `borrelli shirt -"long island" -barstool -hoodie`. Now parsed and
+    enforced as real exclusions for marketplace listings too."""
     if not listing.get("platform"):
         return True
-    query_tokens = [t for t in re.findall(r"[a-z0-9']+", query.lower()) if t not in MARKETPLACE_QUERY_STOPWORDS]
+    query_lower = query.lower()
+    excluded_phrases = re.findall(r'-"([^"]+)"', query_lower)
+    query_lower_no_phrases = re.sub(r'-"[^"]+"', " ", query_lower)
+    excluded_words = re.findall(r"-([a-z0-9']+)", query_lower_no_phrases)
+    positive_query = re.sub(r"-([a-z0-9']+)", " ", query_lower_no_phrases)
+
+    title = listing.get("title", "").lower()
+    if any(phrase in title for phrase in excluded_phrases):
+        return False
+    if any(re.search(rf"\b{re.escape(w)}\b", title) for w in excluded_words):
+        return False
+
+    query_tokens = [t for t in re.findall(r"[a-z0-9']+", positive_query) if t not in MARKETPLACE_QUERY_STOPWORDS]
     if not query_tokens:
         # Nothing meaningful left after stripping stopwords (a query made
         # entirely of category/material words) - nothing to check against,
         # don't false-reject.
         return True
-    title = listing.get("title", "").lower()
     return any(token in title for token in query_tokens)
 
 
@@ -798,6 +823,26 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "knitwear bar: non-positive discount_pct"
         if price_confidence == "low":
             return "knitwear bar: AI price estimate confidence too low to trust"
+        return None
+
+    if category == "watches":
+        # No blind-trust path for watches specifically, even on a
+        # grab_on_sight brand. Live evidence: "Genuine Rolex Factory
+        # Service Booklet" and an oddly-worded "Rolex Bucherer...Spoon
+        # Lion" listing both alerted purely on the word "rolex" matching
+        # grab_on_sight with zero AI verification that the listing was
+        # even an actual watch, let alone a genuine one. Counterfeiting
+        # risk (already flagged via the mandatory watch disclaimer) and
+        # accessory/paperwork-only listings both mean a real AI look at
+        # the photos is required before trusting a watch listing at all.
+        if deal_rating is None:
+            return "watches bar: no AI price/authenticity check ran - never blind-trust a watch listing"
+        if deal_rating not in ("Steal", "Great Deal"):
+            return f"watches bar: deal_rating '{deal_rating}' below steal bar"
+        if discount_pct is None or discount_pct <= 0:
+            return "watches bar: non-positive discount_pct"
+        if price_confidence == "low":
+            return "watches bar: AI price estimate confidence too low to trust"
         return None
 
     if deal_rating is not None:
