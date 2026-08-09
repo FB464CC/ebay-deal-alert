@@ -566,6 +566,175 @@
       "max_price": 40,
       "enabled": true,
       "profile": "slow"
+    },
+    {
+      "query": "zegna sweater",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "zegna sport coat",
+      "size": [
+        "42"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "3001"
+    },
+    {
+      "query": "corneliani blazer",
+      "size": [
+        "42"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "3001"
+    },
+    {
+      "query": "borrelli shirt",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "185100"
+    },
+    {
+      "query": "southwick blazer",
+      "size": [
+        "42"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "3001"
+    },
+    {
+      "query": "oxxford suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 80,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "3001"
+    },
+    {
+      "query": "corbin suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "3001"
+    },
+    {
+      "query": "cheaney shoes",
+      "size": [
+        "13"
+      ],
+      "max_price": 130,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120"
+    },
+    {
+      "query": "drakes london sweater",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "rolex watch",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "omega watch",
+      "size": null,
+      "max_price": 300,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "gitman shirt",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "185100"
+    },
+    {
+      "query": "trafalgar belt",
+      "size": [
+        "34",
+        "36"
+      ],
+      "max_price": 40,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "2993"
+    },
+    {
+      "query": "alfred sargent shoes",
+      "size": [
+        "13"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120"
+    },
+    {
+      "query": "cordings jacket",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "57988"
+    },
+    {
+      "query": "longines watch",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "bills khakis trousers",
+      "size": null,
+      "max_price": 30,
+      "enabled": true,
+      "profile": "fast"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
