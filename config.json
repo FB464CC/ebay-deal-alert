@@ -977,6 +977,6 @@
     "watch",
     "wristwatch"
   ],
-  "GEMINI_CALL_LIMIT": 3,
+  "GEMINI_CALL_LIMIT": 8,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2
 }
