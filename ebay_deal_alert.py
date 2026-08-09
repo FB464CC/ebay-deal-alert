@@ -61,24 +61,19 @@ PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 # as a real match - see is_relevant_marketplace_listing().
 MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", []))
 # Hard cap on how many of the enabled searches get an actual eBay API call
-# per run. Confirmed live: ALL 74 enabled searches hit eBay's Browse API
-# every single run (now every 5 min, reliably, for the first time tonight)
-# - that's 74*288 = ~21,300 calls/day, which started 429-ing eBay outright
-# (100% of searches failed with HTTP 429 in one observed run). eBay's own
-# docs (developer.ebay.com) confirm the Browse API's default limit is a
-# hard 5,000 calls/day. count_similar_listings() hits the SAME quota (up to
-# GEMINI_CALL_LIMIT calls/run on top of the search rotation), so 12/run
-# gives real margin: 12*288=3,456 search calls/day + a realistic ~540/day
-# from similar-count (matches actual observed REVIEW-candidate volume) =
-# ~4,000/day, comfortably under 5,000 - 15/run only left ~140 calls of
-# margin in the realistic case and blew past the limit entirely in the
-# worst case (every run maxing both budgets). Every search still gets a
-# real eBay check roughly every 30 minutes via the same rotation trick as
-# prefetch_marketplaces() - reliably, unlike the old flaky ~55min-average
-# native cron this whole cadence replaced. A free, legitimate path to a
-# higher limit exists (eBay's "Application Growth Check") if this ever
+# per run, split across two priority lanes (see the fast/slow split at the
+# ebay_this_run computation in run()). Total (fast+slow) is 12, same daily
+# budget as before - this reallocates it by priority, not increases it.
+# eBay's own docs (developer.ebay.com) confirm the Browse API's default
+# limit is a hard 5,000 calls/day; count_similar_listings() hits the SAME
+# quota (up to GEMINI_CALL_LIMIT calls/run on top of the search rotation),
+# so 12/run total gives real margin: ~3,456 search calls/day + a realistic
+# ~540/day from similar-count (matches actual observed REVIEW-candidate
+# volume) = ~4,000/day, comfortably under 5,000. A free, legitimate path to
+# a higher limit exists (eBay's "Application Growth Check") if this ever
 # needs to be less conservative - requires the account owner to submit it.
-EBAY_SEARCHES_PER_RUN_LIMIT = int(_CONFIG.get("EBAY_SEARCHES_PER_RUN_LIMIT", 12))
+EBAY_FAST_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_FAST_SEARCHES_PER_RUN", 8))
+EBAY_SLOW_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_SLOW_SEARCHES_PER_RUN", 4))
 # How many leading characters of a (lowercased) title count for
 # grab_on_sight/standard brand-tier matching - see score_listing(). 60 chars
 # comfortably covers a multi-word brand name plus a common seller prefix
@@ -282,7 +277,7 @@ def search_ebay(token, saved_search):
         "sort": "newlyListed",
         "limit": "50",
     }
-    # One short retry on a 429 - EBAY_SEARCHES_PER_RUN_LIMIT already cut call
+    # One short retry on a 429 - EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN already cut call
     # volume ~5x to stay under eBay's rate limit in normal operation, but a
     # single retry costs little and can save an otherwise-lost search if a
     # transient burst still trips it.
@@ -299,7 +294,7 @@ def search_ebay(token, saved_search):
         break
     if resp.status_code == 429:
         # Surface whatever rate-limit diagnostics eBay actually sends -
-        # confirmed live that EBAY_SEARCHES_PER_RUN_LIMIT's ~5x volume cut
+        # confirmed live that EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN's ~5x volume cut
         # alone didn't clear an active 429 lockout, meaning this is more
         # likely a daily quota already exhausted by the high-volume period
         # before that fix landed, not just a short burst limit - a rate
@@ -1316,7 +1311,7 @@ def run():
         enabled_searches = enabled_searches[offset:] + enabled_searches[:offset]
 
     # Only this run's rotating BATCH actually calls eBay's API - see
-    # EBAY_SEARCHES_PER_RUN_LIMIT. Deliberately a distinct non-overlapping
+    # EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN. Deliberately a distinct non-overlapping
     # slice per run, not a 1-position sliding window over the (already
     # rotated-by-1) enabled_searches list above - tested that version
     # before shipping and caught it live: a by-1 rotation means consecutive
@@ -1324,15 +1319,33 @@ def run():
     # 20 of 74 searches instead of the intended full pass roughly every
     # ~25 min. Batches use the STABLE (non-rotated) search order so the
     # batch boundaries themselves don't drift.
-    stable_searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
-    num_ebay_batches = max(1, -(-len(stable_searches) // EBAY_SEARCHES_PER_RUN_LIMIT))  # ceil div
-    batch_index = ((current_utc.hour * 60 + current_utc.minute) // 5) % num_ebay_batches
-    batch_start = batch_index * EBAY_SEARCHES_PER_RUN_LIMIT
+    def _ebay_batch(searches, per_run_limit):
+        """Pick this run's non-overlapping batch from a stable-ordered list,
+        cycling through all of them over multiple runs."""
+        if not searches:
+            return set()
+        num_batches = max(1, -(-len(searches) // per_run_limit))  # ceil div
+        batch_index = ((current_utc.hour * 60 + current_utc.minute) // 5) % num_batches
+        batch_start = batch_index * per_run_limit
+        return {s["query"] for s in searches[batch_start:batch_start + per_run_limit]}
+
     ebay_circuit_closed = ebay_circuit_breaker_allows_calls(token)
     if ebay_circuit_closed:
-        ebay_this_run = {
-            s["query"] for s in stable_searches[batch_start:batch_start + EBAY_SEARCHES_PER_RUN_LIMIT]
-        }
+        # Two independent rotation lanes, not one pool - "fast" profile
+        # searches (the ones that actually matter more) get a bigger slice
+        # of the budget and cycle back to eBay roughly every 25 min; "slow"
+        # ones get the rest, cycling roughly every 55 min. Same total daily
+        # call budget as a single pool (EBAY_FAST_SEARCHES_PER_RUN +
+        # EBAY_SLOW_SEARCHES_PER_RUN == EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN) - this
+        # is a priority reallocation of the existing safe budget, not an
+        # increase to it.
+        stable_searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
+        fast_searches = [s for s in stable_searches if s.get("profile") == "fast"]
+        slow_searches = [s for s in stable_searches if s.get("profile") != "fast"]
+        ebay_this_run = (
+            _ebay_batch(fast_searches, EBAY_FAST_SEARCHES_PER_RUN)
+            | _ebay_batch(slow_searches, EBAY_SLOW_SEARCHES_PER_RUN)
+        )
     else:
         # Circuit open - marketplace results (Grailed/Poshmark/Vinted/
         # ShopGoodwill) still get merged in for every search below
@@ -1570,7 +1583,7 @@ def run():
             # correctly backed off. Also counted for real in the daily
             # budget math: at GEMINI_CALL_LIMIT calls/run this can add up to
             # ~2,300 more calls/day on top of the search rotation, which is
-            # why EBAY_SEARCHES_PER_RUN_LIMIT has real margin built in below
+            # why EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN has real margin built in below
             # the confirmed 5,000/day hard limit rather than sitting right
             # at the edge of it.
             similar_count = count_similar_listings(token, saved_search) if ebay_circuit_closed else None
