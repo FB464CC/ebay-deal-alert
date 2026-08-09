@@ -81,11 +81,14 @@ EBAY_SLOW_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_SLOW_SEARCHES_PER_RUN", 4))
 BRAND_TITLE_WINDOW_CHARS = int(_CONFIG.get("BRAND_TITLE_WINDOW_CHARS", 60))
 # Non-eBay marketplaces to poll. eBay is always polled and is not listed here.
 MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
-# Hard wall-clock cap on the parallel marketplace fetch. GitHub bills private
-# repo Actions minutes ROUNDED UP per job, so a run that creeps past 60s costs
-# double. Anything not fetched inside the budget is skipped this run and picked
-# up by the next one (the search list rotates so the same tail is never starved).
-MARKETPLACE_FETCH_BUDGET_SECONDS = float(_CONFIG.get("MARKETPLACE_FETCH_BUDGET_SECONDS", 30))
+# Hard wall-clock cap on the parallel marketplace fetch. Was 30s back when
+# the repo was private and GitHub billed Actions minutes rounded up per job -
+# the repo is public now (unlimited free Actions minutes), and per_page went
+# 20->96 on Vinted, so raised to give the full 81-search x 4-platform sweep
+# real room to complete each run instead of racing a tight private-repo-era
+# budget. Anything still not fetched inside the budget is skipped this run
+# and picked up next time (the search list rotates so no tail starves twice).
+MARKETPLACE_FETCH_BUDGET_SECONDS = float(_CONFIG.get("MARKETPLACE_FETCH_BUDGET_SECONDS", 90))
 # Hard ceiling on notifications per run. Turning on a new marketplace makes
 # every one of its listings unseen at once, so without this the first run
 # fires hundreds of pushes in a row. Listings past the cap are deliberately
@@ -1574,6 +1577,37 @@ def run():
             if rating_label is not None:
                 result["deal_rating"] = rating_label
                 result["discount_pct"] = discount_pct
+
+        if (
+            result.get("deal_rating") is None
+            and category != "watches"
+            and listing.get("sold_comp_median") is not None
+        ):
+            # Grailed sold-comps fallback - real recent sold prices for this
+            # exact query (confirmed live, genuine sold_price data, not an
+            # estimate), used when no AI photo check ran or it didn't
+            # produce a price estimate. Excluded from "watches" on purpose:
+            # that gate exists for authentication/damage risk a price
+            # median can't address, so it must never substitute for the AI
+            # photo check there - see is_blocked_by_steal_quality_gate().
+            result["estimated_resale_value"] = listing["sold_comp_median"]
+            result["price_confidence"] = "medium"
+            result.setdefault("flags", []).append(
+                f"Grailed sold comps: median ${listing['sold_comp_median']} "
+                f"across {listing.get('sold_comp_count')} recent sales"
+            )
+            rating_label, discount_pct = compute_deal_rating(
+                result.get("price"), result.get("estimated_resale_value")
+            )
+            if rating_label is not None:
+                result["deal_rating"] = rating_label
+                result["discount_pct"] = discount_pct
+
+        if listing.get("seller_trusted") or (listing.get("seller_rating") or 0) >= 4.8:
+            result.setdefault("flags", []).append(
+                f"Grailed trusted seller (rating {listing.get('seller_rating')}, "
+                f"{listing.get('seller_total_sales')} sales)"
+            )
 
         try:
             # Also gated by the circuit breaker - this hits the SAME Browse
