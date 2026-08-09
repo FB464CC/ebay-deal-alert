@@ -493,7 +493,7 @@
       "profile": "fast"
     },
     {
-      "query": "tissot watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 60,
       "enabled": true,
@@ -501,7 +501,7 @@
       "category_id": "31387"
     },
     {
-      "query": "hamilton watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 80,
       "enabled": true,
@@ -509,7 +509,7 @@
       "category_id": "31387"
     },
     {
-      "query": "shinola watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 90,
       "enabled": true,
@@ -662,7 +662,7 @@
       "profile": "fast"
     },
     {
-      "query": "rolex watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "rolex watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -670,7 +670,7 @@
       "category_id": "31387"
     },
     {
-      "query": "omega watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -722,7 +722,7 @@
       "category_id": "57988"
     },
     {
-      "query": "longines watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 150,
       "enabled": true,
@@ -748,7 +748,7 @@
       "profile": "fast"
     },
     {
-      "query": "tudor watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -756,7 +756,7 @@
       "category_id": "31387"
     },
     {
-      "query": "universal geneve watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "universal geneve watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -764,7 +764,7 @@
       "category_id": "31387"
     },
     {
-      "query": "heuer watch -tag -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -772,7 +772,7 @@
       "category_id": "31387"
     },
     {
-      "query": "zenith watch -tv -remote -vcr -electronics -brooch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -780,7 +780,7 @@
       "category_id": "31387"
     },
     {
-      "query": "iwc watch -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "iwc watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -944,7 +944,8 @@
     "watch roll",
     "watch pouch",
     "watch organizer",
-    "storage case"
+    "storage case",
+    "radio"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",
