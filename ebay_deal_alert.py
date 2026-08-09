@@ -279,6 +279,19 @@ def search_ebay(token, saved_search):
             time.sleep(2)
             continue
         break
+    if resp.status_code == 429:
+        # Surface whatever rate-limit diagnostics eBay actually sends -
+        # confirmed live that EBAY_SEARCHES_PER_RUN_LIMIT's ~5x volume cut
+        # alone didn't clear an active 429 lockout, meaning this is more
+        # likely a daily quota already exhausted by the high-volume period
+        # before that fix landed, not just a short burst limit - a rate
+        # limit headers dump is needed to tell the difference and know
+        # when it actually clears.
+        rate_headers = {
+            k: v for k, v in resp.headers.items()
+            if "rate" in k.lower() or "retry" in k.lower() or "limit" in k.lower()
+        }
+        logger.warning("eBay 429 rate-limit headers for %r: %s | body: %s", query, rate_headers, resp.text[:300])
     resp.raise_for_status()
     body = resp.json()
     return body.get("itemSummaries", []), body.get("total")
