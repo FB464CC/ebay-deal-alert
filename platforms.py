@@ -291,7 +291,29 @@ def search_poshmark(saved_search):
         if not post_id or not title:
             continue
         price = (post.get("price_amount") or {}).get("val", post.get("price"))
-        picture = (post.get("covershot") or {}).get("url") or (post.get("covershot") or {}).get("url_small")
+        # Field name bug, confirmed live: the real key is "cover_shot"
+        # (underscore) - "covershot" doesn't exist on the actual response,
+        # so image_url has been None for EVERY Poshmark listing until now.
+        # check_photos_with_gemini() returns None outright with zero
+        # images (never a hallucinated fake result), but it means the AI
+        # damage/logo/price check has never actually run on a single
+        # Poshmark listing - a real, structural blind spot, not just a
+        # missing-extra-angle gap. Also picking up "pictures", a full
+        # gallery array sitting right there in the same response
+        # (confirmed live: 6 real photos on a sample item) that was never
+        # read at all.
+        cover = post.get("cover_shot") or {}
+        picture = cover.get("url") or cover.get("url_small") or post.get("picture_url")
+        # Confirmed live: entries are dicts with a "url" key, not plain
+        # strings - an isinstance(p, str) filter here silently drops every
+        # single one, which is exactly what shipped first and was caught
+        # by testing the actual return value instead of trusting the diff.
+        all_pictures = post.get("pictures") or []
+        extra_images = [
+            (p.get("url") if isinstance(p, dict) else p)
+            for p in all_pictures
+        ]
+        extra_images = [u for u in extra_images if u and u != picture]
         size = (post.get("inventory") or {}).get("size_obj", {}).get("display")
         listings.append(
             make_listing(
@@ -302,6 +324,7 @@ def search_poshmark(saved_search):
                 # No url field exists; Poshmark's own anchors are slug-id.
                 f"https://poshmark.com/listing/{_slugify(title)}-{post_id}",
                 image_url=picture,
+                extra_images=extra_images,
                 size=size or post.get("size"),
                 seller=(post.get("creator_id") or post.get("creator_username")),
             )
@@ -416,6 +439,13 @@ def search_vinted(saved_search):
         return [], None
     listings = []
     for item in body.get("items", []):
+        # The search response carries a full "photos" gallery array, not
+        # just the single cover "photo" - confirmed live (4 real photos on
+        # a sample item). Missed entirely until now: the AI damage check
+        # was only ever seeing one angle per Vinted listing, which is
+        # exactly how a real hole/damage on a different angle got past it.
+        all_photos = item.get("photos") or []
+        extra_images = [p.get("url") for p in all_photos if not p.get("is_main") and p.get("url")]
         listings.append(
             make_listing(
                 "vinted",
@@ -424,6 +454,7 @@ def search_vinted(saved_search):
                 (item.get("price") or {}).get("amount"),
                 item.get("url"),
                 image_url=(item.get("photo") or {}).get("url"),
+                extra_images=extra_images,
                 size=item.get("size_title"),
                 seller=(item.get("user") or {}).get("login"),
             )
