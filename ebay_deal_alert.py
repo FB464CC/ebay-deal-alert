@@ -97,6 +97,15 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 DB_PATH = "seen_items.db"
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
+EBAY_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("ebay_rate_limit_state.json")
+# Confirmed live: an eBay 429 lockout persisted for 5+ hours straight
+# through continuous every-5-min hammering (up to 15 calls/run) with no
+# sign of clearing on its own. Rather than keep wastefully hitting a dead
+# endpoint every run, back off exponentially and only probe periodically -
+# self-heals automatically the moment eBay actually responds again,
+# without needing to keep manually checking.
+EBAY_BACKOFF_INITIAL_MINUTES = 30
+EBAY_BACKOFF_MAX_MINUTES = 120
 # Resized from a hardcoded 6 for the 5-min poll cadence (288 runs/day, up
 # from the old ~55min-real/day). At 6/run that's ~1,728 Gemini calls/day -
 # comfortably over a Flash-Lite free-tier's ~1,000 RPD budget, meaning most
@@ -295,6 +304,72 @@ def search_ebay(token, saved_search):
     resp.raise_for_status()
     body = resp.json()
     return body.get("itemSummaries", []), body.get("total")
+
+
+def _read_ebay_rate_limit_state():
+    if not EBAY_RATE_LIMIT_STATE_PATH.exists():
+        return {}
+    try:
+        with EBAY_RATE_LIMIT_STATE_PATH.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring invalid eBay rate-limit state: %s", exc)
+        return {}
+
+
+def _write_ebay_rate_limit_state(state):
+    try:
+        with EBAY_RATE_LIMIT_STATE_PATH.open("w", encoding="utf-8") as f:
+            json.dump(state, f)
+            f.write("\n")
+    except OSError as exc:
+        logger.warning("Failed to write eBay rate-limit state: %s", exc)
+
+
+def ebay_circuit_breaker_allows_calls(token):
+    """Returns True if eBay calls should be attempted this run, False if
+    still in a backoff cooldown from a prior 429. See EBAY_RATE_LIMIT_STATE_PATH
+    module comment for why this exists. Manages its own persisted state as a
+    side effect - clears it on a successful probe, extends it (exponential
+    backoff, capped) on another 429."""
+    state = _read_ebay_rate_limit_state()
+    now_ts = time.time()
+    blocked_until_ts = state.get("blocked_until_ts", 0)
+
+    if now_ts < blocked_until_ts:
+        remaining_min = round((blocked_until_ts - now_ts) / 60)
+        logger.info(
+            "eBay circuit breaker: cooldown active for ~%s more min (streak %s), skipping eBay this run",
+            remaining_min, state.get("consecutive_429_streak", 0),
+        )
+        return False
+
+    # Cooldown expired (or this is the first run ever) - probe with a single
+    # lightweight call before committing to the full per-run search rotation.
+    try:
+        search_ebay(token, {"query": "test", "max_price": 999999})
+        if state.get("consecutive_429_streak"):
+            logger.info("eBay circuit breaker: probe succeeded, resuming normal eBay calls")
+        _write_ebay_rate_limit_state({"blocked_until_ts": 0, "consecutive_429_streak": 0})
+        return True
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            streak = state.get("consecutive_429_streak", 0) + 1
+            backoff_minutes = min(EBAY_BACKOFF_INITIAL_MINUTES * (2 ** (streak - 1)), EBAY_BACKOFF_MAX_MINUTES)
+            _write_ebay_rate_limit_state({
+                "blocked_until_ts": now_ts + backoff_minutes * 60,
+                "consecutive_429_streak": streak,
+            })
+            logger.warning(
+                "eBay circuit breaker: probe still 429 (streak %s), backing off %s min",
+                streak, backoff_minutes,
+            )
+            return False
+        # Some other HTTP error (auth, server error, etc.) isn't a rate-limit
+        # signal - don't touch the cooldown state, let normal per-search
+        # exception handling in run() deal with it as it always has.
+        logger.warning("eBay circuit breaker probe hit a non-429 HTTP error: %s", exc)
+        return True
 
 
 def count_similar_listings(token, saved_search):
@@ -1244,9 +1319,15 @@ def run():
     num_ebay_batches = max(1, -(-len(stable_searches) // EBAY_SEARCHES_PER_RUN_LIMIT))  # ceil div
     batch_index = ((current_utc.hour * 60 + current_utc.minute) // 5) % num_ebay_batches
     batch_start = batch_index * EBAY_SEARCHES_PER_RUN_LIMIT
-    ebay_this_run = {
-        s["query"] for s in stable_searches[batch_start:batch_start + EBAY_SEARCHES_PER_RUN_LIMIT]
-    }
+    if ebay_circuit_breaker_allows_calls(token):
+        ebay_this_run = {
+            s["query"] for s in stable_searches[batch_start:batch_start + EBAY_SEARCHES_PER_RUN_LIMIT]
+        }
+    else:
+        # Circuit open - marketplace results (Grailed/Poshmark/Vinted/
+        # ShopGoodwill) still get merged in for every search below
+        # regardless, so this run isn't a total loss, just eBay-blind.
+        ebay_this_run = set()
 
     # PASS 1 - COLLECT: run every free (no-API-cost) filter exactly as
     # before, but instead of spending Gemini calls inline in iteration
