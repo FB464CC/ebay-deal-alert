@@ -60,6 +60,11 @@ PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 # looking for. Only the leftover tokens (almost always the brand name) count
 # as a real match - see is_relevant_marketplace_listing().
 MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", []))
+# How many leading characters of a (lowercased) title count for
+# grab_on_sight/standard brand-tier matching - see score_listing(). 60 chars
+# comfortably covers a multi-word brand name plus a common seller prefix
+# like "Vintage NWT Men's ".
+BRAND_TITLE_WINDOW_CHARS = int(_CONFIG.get("BRAND_TITLE_WINDOW_CHARS", 60))
 # Non-eBay marketplaces to poll. eBay is always polled and is not listed here.
 MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
 # Hard wall-clock cap on the parallel marketplace fetch. GitHub bills private
@@ -458,9 +463,21 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     brand_tier = None
     if any(b in title for b in PASS_BRANDS):
         return {"verdict": "PASS", "reason": "brand on pass list", "listing": listing}
-    if any(b in title for b in GRAB_ON_SIGHT_BRANDS):
+    # Only count a grab_on_sight/standard match if it appears near the START
+    # of the title. Every real listing title observed this session, across
+    # every platform (eBay/Grailed/Poshmark/Vinted/ShopGoodwill), puts the
+    # actual maker/brand first - a match later in the title is far more
+    # likely to be a fabric/material credit ("...Loro Piana Wool...") or an
+    # incidental comparison, not the actual brand. Confirmed live: a
+    # Cremieux (mall-tier, PASS-listed) sport coat matched grab_on_sight
+    # purely off a "Loro Piana Wool" fabric credit mid-title and alerted
+    # with the wrong tier despite the maker being exactly what PASS_BRANDS
+    # exists to reject. PASS_BRANDS intentionally stays whole-title above -
+    # a bad-brand mention anywhere is still a legitimate reason to reject.
+    title_prefix = title[:BRAND_TITLE_WINDOW_CHARS]
+    if any(b in title_prefix for b in GRAB_ON_SIGHT_BRANDS):
         brand_tier = "grab_on_sight"
-    elif any(b in title for b in STANDARD_BRANDS):
+    elif any(b in title_prefix for b in STANDARD_BRANDS):
         brand_tier = "standard"
     if any(kw in title for kw in CORPORATE_LOGO_KEYWORDS):
         return {"verdict": "PASS", "reason": "corporate logo keyword match", "listing": listing}
