@@ -753,7 +753,7 @@ def compute_deal_rating(price, estimated_resale_value):
     return rating_label, round(discount_pct * 100)
 
 
-def is_blocked_by_steal_quality_gate(result):
+def is_blocked_by_steal_quality_gate(result, category=None):
     """Returns a reason string if this REVIEW-verdict listing should NOT
     alert, or None if it clears the bar. REVIEW is score_listing()'s default
     verdict - "nothing hard-failed it" - not positive evidence of a good
@@ -771,11 +771,34 @@ def is_blocked_by_steal_quality_gate(result):
     grab_on_sight brand costs more than eating one unconfirmed alert on an
     already-vetted brand; missing noise on an unrecognized brand costs
     nothing.
+
+    KNITWEAR gets a strictly higher bar than every other category, per
+    explicit instruction: cross-referenced the actual Wardrobe OS inventory
+    (Google Sheet) live - 34 of 182 logged items are sweaters/quarter-zips,
+    heavily Peter Millar (standard-tier, not grab_on_sight) plus Ralph
+    Lauren and TravisMathew. Already owning a lot of a category is a
+    reason to raise the bar for it specifically, not lower it - "I don't
+    need them just to get them." Sweaters/cashmere/merino/quarter-zips now
+    require grab_on_sight-tier brand AND a real AI-confirmed Steal rating
+    specifically (not Great Deal, and no no-AI-data blind-trust path even
+    for a grab_on_sight brand) - grail-or-better, full stop.
     """
     deal_rating = result.get("deal_rating")
     discount_pct = result.get("discount_pct")
     price_confidence = result.get("price_confidence")
     liquidity = result.get("liquidity")
+    brand_tier = result.get("brand_tier")
+
+    if category == "knitwear":
+        if brand_tier != "grab_on_sight":
+            return "knitwear bar: brand not grab_on_sight-tier (already own plenty of standard-tier sweaters)"
+        if deal_rating != "Steal":
+            return f"knitwear bar: deal_rating '{deal_rating}' below Steal - only grail-or-better on sweaters"
+        if discount_pct is None or discount_pct <= 0:
+            return "knitwear bar: non-positive discount_pct"
+        if price_confidence == "low":
+            return "knitwear bar: AI price estimate confidence too low to trust"
+        return None
 
     if deal_rating is not None:
         # AI price check ran and produced a usable estimate - trust it,
@@ -793,7 +816,7 @@ def is_blocked_by_steal_quality_gate(result):
     # No AI price signal at all (Gemini budget exhausted / image download
     # failed / model abstained). Only the curated grab_on_sight brand list
     # is trusted blind - everything else needs actual price evidence.
-    if result.get("brand_tier") != "grab_on_sight":
+    if brand_tier != "grab_on_sight":
         return "no AI price estimate and brand not grab_on_sight-tier"
     return None
 
@@ -1351,7 +1374,7 @@ def run():
         # alerting as long as they cleared the six-check REVIEW bar - e.g.
         # "Bowen & Wright v-neck sweater" at -28% discount. This blocks
         # that class of alert entirely rather than just flagging it.
-        gate_reason = is_blocked_by_steal_quality_gate(result)
+        gate_reason = is_blocked_by_steal_quality_gate(result, category=category)
         if gate_reason:
             result["verdict"] = "PASS"
             result["reason"] = f"blocked by steal-quality gate: {gate_reason}"
