@@ -381,36 +381,39 @@
       "size": [
         "42"
       ],
-      "max_price": 60,
+      "max_price": 180,
       "enabled": true,
-      "profile": "slow"
+      "profile": "fast",
+      "category_id": "3001"
     },
     {
       "query": "canali suit",
       "size": [
         "42"
       ],
-      "max_price": 70,
+      "max_price": 180,
       "enabled": true,
-      "profile": "slow"
+      "profile": "fast",
+      "category_id": "3001"
     },
     {
       "query": "hart schaffner marx suit",
       "size": [
         "42"
       ],
-      "max_price": 40,
+      "max_price": 180,
       "enabled": true,
-      "profile": "slow"
+      "profile": "fast",
+      "category_id": "3001"
     },
     {
       "query": "brooks brothers golden fleece suit",
       "size": [
         "42"
       ],
-      "max_price": 45,
+      "max_price": 180,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "3001"
     },
     {
@@ -418,27 +421,30 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 300,
       "enabled": true,
-      "profile": "slow"
+      "profile": "fast",
+      "category_id": "3001"
     },
     {
       "query": "cesare attolini suit",
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 300,
       "enabled": true,
-      "profile": "slow"
+      "profile": "fast",
+      "category_id": "3001"
     },
     {
       "query": "belvest suit",
       "size": [
         "42"
       ],
-      "max_price": 90,
+      "max_price": 300,
       "enabled": true,
-      "profile": "slow"
+      "profile": "fast",
+      "category_id": "3001"
     },
     {
       "query": "brioni sport coat",
@@ -786,6 +792,76 @@
       "enabled": true,
       "profile": "fast",
       "category_id": "31387"
+    },
+    {
+      "query": "brioni suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "isaia suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "ermenegildo zegna suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "corneliani suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 180,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "borrelli suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 180,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "southwick suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 180,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "oxxford suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -945,7 +1021,9 @@
     "watch pouch",
     "watch organizer",
     "storage case",
-    "radio"
+    "radio",
+    "advertisement",
+    "print ad"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",
