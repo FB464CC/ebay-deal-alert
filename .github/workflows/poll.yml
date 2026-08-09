@@ -62,7 +62,23 @@ jobs:
               fi
             done
             git commit -m "chore: update seen items [skip ci]"
-            git pull --rebase origin main && git push
+            if git pull --rebase origin main; then
+              git push
+            else
+              # Binary files (seen_items.db, a SQLite DB) can't be
+              # line-merged, so two runs racing to commit close together
+              # (native schedule + the 5-min external trigger + manual
+              # dispatches all landing near-simultaneously) sometimes hits
+              # a real rebase conflict here - confirmed live, it failed
+              # the whole job over this. All three files are low-stakes,
+              # self-healing state (a dedupe cache, an append-only log, a
+              # backoff timer) - dropping this run's specific update is
+              # harmless (worst case: one item re-scored, one extra probe
+              # of a rate limit), so abort the rebase and move on instead
+              # of failing the job over a binary-file merge conflict.
+              echo "Rebase conflict on state files - discarding this run's local update, not failing the job"
+              git rebase --abort
+            fi
           else
             echo "poll state files unchanged"
           fi
