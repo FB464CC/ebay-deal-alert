@@ -972,6 +972,68 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "knitwear bar: AI price estimate confidence too low to trust"
         return None
 
+    # FULL SUITS get a LOWER bar than the default - the mirror image of
+    # knitwear's stricter one, and for the same reasoning: inventory need.
+    # Explicit user report: real 2-piece suits (confirmed genuine via the
+    # is_jacket_only_suit_listing() pants/2-piece check) kept getting
+    # gate-blocked anyway - "Southwick...Blazer Suit Jacket Pants",
+    # "Ermenegildo Zegna...2-Piece Suit" - because they landed at Good
+    # Deal/Marginal, not the default Steal/Great-Deal bar. Only owns 2 full
+    # suits (both non-standard colors) and explicitly said a premium is
+    # worth paying for a designer suit that fits - and used-suit resale is
+    # naturally less liquid than streetwear/watches, so AI's honest resale
+    # estimate runs more conservative than on hyped categories, making the
+    # 50%+ default bar a near-permanent block on suits specifically.
+    # Scoped to actual suit queries (via search_query), not blazers/sport
+    # coats generally - already own 15+ standalone jackets and explicitly
+    # don't want the bar lowered for those.
+    is_suit_search = "suit" in (result.get("search_query") or "").lower()
+    if category == "tailoring" and is_suit_search:
+        if deal_rating is not None:
+            # Two independent ways to clear the bar. (1) Real resale-
+            # arbitrage margin - Good Deal or better vs AI's used-resale
+            # estimate, same as every other category. (2) A steep discount
+            # off RETAIL - suits here are bought to be WORN, not flipped,
+            # and used-suit resale is a naturally weak/illiquid market, so
+            # AI's honest resale estimate often shows little or no margin
+            # even on a genuinely great personal-wear price. Live example
+            # that (1) alone was missing: "Ermenegildo Zegna Roma 2-Piece
+            # Suit" in the user's exact size (52R IT/42 US), $200 ask vs
+            # $2500 retail (92% off) but $200 resale estimate (0%
+            # "discount", rated Marginal) - blocked despite being exactly
+            # the kind of deal asked for.
+            retail_price = result.get("estimated_retail_price")
+            item_price = result.get("price")
+            retail_discount_pct = None
+            if retail_price and item_price:
+                try:
+                    retail_discount_pct = (
+                        (float(retail_price) - float(item_price)) / float(retail_price) * 100
+                    )
+                except (TypeError, ValueError, ZeroDivisionError):
+                    retail_discount_pct = None
+            resale_ok = (
+                deal_rating in ("Steal", "Great Deal", "Good Deal")
+                and discount_pct is not None
+                and discount_pct > 0
+            )
+            retail_ok = retail_discount_pct is not None and retail_discount_pct >= 70
+            if not (resale_ok or retail_ok):
+                return (
+                    f"suit bar: deal_rating '{deal_rating}' below Good Deal "
+                    f"and retail discount ({retail_discount_pct}) below 70%"
+                )
+            if price_confidence == "low":
+                return "suit bar: AI price estimate confidence too low to trust"
+            return None
+        # No AI price signal this run - same blind-trust rule as every
+        # other non-knitwear/watches category (all current suit searches
+        # are grab_on_sight-tier brands already, so this is the common
+        # case whenever the AI budget doesn't reach a suit candidate).
+        if brand_tier != "grab_on_sight":
+            return "suit bar: no AI price estimate and brand not grab_on_sight-tier"
+        return None
+
     if category == "watches":
         # No blind-trust path for watches specifically, even on a
         # grab_on_sight brand. Live evidence: "Genuine Rolex Factory
