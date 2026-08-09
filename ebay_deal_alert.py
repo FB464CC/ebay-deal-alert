@@ -55,6 +55,11 @@ FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
 GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
 FABRIC_POLY_KEYWORD = _CONFIG["FABRIC_POLY_KEYWORD"]
 PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
+# Generic category/material words stripped out when checking whether a
+# marketplace listing's title actually matches what a saved search was
+# looking for. Only the leftover tokens (almost always the brand name) count
+# as a real match - see is_relevant_marketplace_listing().
+MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", []))
 # Non-eBay marketplaces to poll. eBay is always polled and is not listed here.
 MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
 # Hard wall-clock cap on the parallel marketplace fetch. GitHub bills private
@@ -398,6 +403,29 @@ def add_off_season_flag(result, category, current_month):
     result.setdefault("flags", []).append(
         f"Off-season buy for {category} - typically resells better {in_season}"
     )
+
+
+def is_relevant_marketplace_listing(listing, query):
+    """eBay listings arrive already scoped by category_id + query; Grailed/
+    Poshmark/Vinted/ShopGoodwill do plain word-relevance text search with no
+    such scoping. Confirmed live: a Vinted search for "alan paine merino
+    lambswool" (a specific niche brand) returned a "J. Crew" sweater with
+    zero relation to that brand - it matched on generic wool/knit terms.
+    PASS_BRANDS can't catch every off-topic brand a fuzzy search might
+    surface; this catches the whole class by requiring the title contain at
+    least one word from the query that isn't a generic category/material
+    term (see MARKETPLACE_QUERY_STOPWORDS) - in practice, the brand name.
+    eBay listings (platform unset) are never subject to this check."""
+    if not listing.get("platform"):
+        return True
+    query_tokens = [t for t in re.findall(r"[a-z0-9']+", query.lower()) if t not in MARKETPLACE_QUERY_STOPWORDS]
+    if not query_tokens:
+        # Nothing meaningful left after stripping stopwords (a query made
+        # entirely of category/material words) - nothing to check against,
+        # don't false-reject.
+        return True
+    title = listing.get("title", "").lower()
+    return any(token in title for token in query_tokens)
 
 
 def score_listing(listing, gap_report, shipping_cost=0.0):
@@ -1048,6 +1076,15 @@ def run():
             item_price = float(999999 if price_value is None else price_value)
             shipping_cost = get_shipping_cost(listing)
             total_price = item_price + shipping_cost
+
+            if not is_relevant_marketplace_listing(listing, saved_search["query"]):
+                logger.info(
+                    "Skipping %s: marketplace title has no relation to query %r",
+                    item_id,
+                    saved_search["query"],
+                )
+                mark_seen(conn, item_id)
+                continue
 
             fingerprint = listing_fingerprint(listing)
             if fingerprint:

@@ -614,7 +614,9 @@
     "vineyard vines",
     "southern tide",
     "johnston",
-    "cole haan"
+    "cole haan",
+    "j.crew",
+    "j crew"
   ],
   "CORPORATE_LOGO_KEYWORDS": [
     "tournament",
@@ -676,5 +678,41 @@
     "vinted"
   ],
   "MARKETPLACE_FETCH_BUDGET_SECONDS": 30,
-  "MAX_ALERTS_PER_RUN": 8
+  "MAX_ALERTS_PER_RUN": 8,
+  "MARKETPLACE_QUERY_STOPWORDS": [
+    "sweater",
+    "shirt",
+    "jacket",
+    "blazer",
+    "coat",
+    "shoes",
+    "loafers",
+    "loafer",
+    "belt",
+    "polo",
+    "suit",
+    "quarter",
+    "zip",
+    "merino",
+    "cashmere",
+    "wool",
+    "lambswool",
+    "cotton",
+    "silk",
+    "sport",
+    "tie",
+    "wingtip",
+    "oxford",
+    "boots",
+    "boot",
+    "trench",
+    "waxed",
+    "cardigan",
+    "vest",
+    "trousers",
+    "pants",
+    "chinos",
+    "watch",
+    "wristwatch"
+  ]
 }
