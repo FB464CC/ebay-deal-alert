@@ -2,5 +2,9 @@ __pycache__/
 .env
 *.pyc
 !seen_items.db
-!ebay_token_cache.json
 !alerts_log.jsonl
+# ebay_token_cache.json deliberately NOT tracked - a live OAuth bearer
+# token would sit in the repo (and its history) at all times otherwise,
+# since the workflow refreshes and recommits it every run. Cheap to
+# re-fetch each run instead; see poll.yml commit-back step.
+ebay_token_cache.json
