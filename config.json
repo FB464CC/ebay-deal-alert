@@ -644,7 +644,12 @@
     "moth holes",
     "case only",
     "for parts",
-    "for repair"
+    "for repair",
+    "left only",
+    "right only",
+    "left shoe only",
+    "right shoe only",
+    "single shoe"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",
