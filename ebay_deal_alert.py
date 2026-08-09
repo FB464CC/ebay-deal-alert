@@ -1312,15 +1312,31 @@ def run():
                     "saved_search": saved_search,
                 })
 
-    # PASS 2 - PRIORITIZE: grab_on_sight brands first (score_listing()'s own
-    # highest-confidence signal, already computed above for free), cheapest
-    # first as a tiebreaker so the limited budget stretches further. Pure
-    # iteration order otherwise meant "first search in config.json, first
-    # listing in the API response" won the AI budget every single run.
-    review_candidates.sort(key=lambda c: (
-        0 if c["result"].get("brand_tier") == "grab_on_sight" else 1,
-        c["result"].get("price", float("inf")),
-    ))
+    # PASS 2 - PRIORITIZE: candidates that CANNOT pass without an AI check go
+    # first, not grab_on_sight brands. Real bug found live: a grab_on_sight
+    # item in a normal category can already blind-trust through the steal-
+    # quality gate with zero AI data - spending a scarce AI slot on it is
+    # low-value. But knitwear/watches candidates of ANY tier, and any
+    # standard/unrecognized-brand candidate, are HARD-BLOCKED without an AI
+    # price check, full stop. The old grab_on_sight-first sort meant any run
+    # with 3+ grab_on_sight candidates burned the entire GEMINI_CALL_LIMIT
+    # budget on items that didn't need it, leaving zero slots for the
+    # candidates that actually depend on AI to have any chance at all -
+    # confirmed live via a 6.5-hour zero-alert stretch where every blocked
+    # candidate sampled was a standard-tier item starved of an AI check.
+    def _ai_check_priority(candidate):
+        result = candidate["result"]
+        category = candidate["category"]
+        brand_tier = result.get("brand_tier")
+        # 0 = cannot pass without AI, ever (knitwear/watches regardless of
+        # tier, or a non-grab_on_sight brand anywhere) - give these the
+        # budget first. 1 = grab_on_sight in a normal category - can
+        # already blind-trust through, AI here is a bonus quality check,
+        # not a requirement.
+        must_have_ai = category in ("knitwear", "watches") or brand_tier != "grab_on_sight"
+        return (0 if must_have_ai else 1, result.get("price", float("inf")))
+
+    review_candidates.sort(key=_ai_check_priority)
 
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
     # then alert (cap-gated), in priority order.
