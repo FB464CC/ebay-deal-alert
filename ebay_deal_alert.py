@@ -82,7 +82,18 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 DB_PATH = "seen_items.db"
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
-GEMINI_CALL_LIMIT = 6
+# Resized from a hardcoded 6 for the 5-min poll cadence (288 runs/day, up
+# from the old ~55min-real/day). At 6/run that's ~1,728 Gemini calls/day -
+# comfortably over a Flash-Lite free-tier's ~1,000 RPD budget, meaning most
+# days would hit 429s partway through. 3/run = ~864/day, ~86% of budget
+# with headroom for quota uncertainty and manual --draft-listing runs.
+# Config-driven (like MAX_ALERTS_PER_RUN) so it can be retuned without a
+# code push if the real quota turns out different than assumed.
+GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
+# 3 calls in a few seconds is trivially under any plausible RPM ceiling, so
+# the old 5s inter-call sleep wasn't buying RPM safety, just wall-clock -
+# which matters given GitHub bills Actions minutes rounded up per job.
+GEMINI_INTER_CALL_SLEEP_SECONDS = float(_CONFIG.get("GEMINI_INTER_CALL_SLEEP_SECONDS", 2))
 # eBay's "Wristwatches" leaf category (under the "Watches, Parts &
 # Accessories" tree, 260324) - a separate top-level tree from Men's Clothing
 # (260012), used for the deliberately narrow watch searches. Counterfeiting
@@ -633,7 +644,15 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
         "those are intentional collegiate fan apparel the buyer wants, not "
         "unwanted corporate branding. Only flag logos indicating a company, "
         "corporate event, golf tournament, country club, bank, or resort - "
-        "not a sports team or university. "
+        "not a sports team or university. IMPORTANT: this collegiate exemption "
+        "covers ONLY the school's own athletic team/mascot branding, not any "
+        "garment that merely mentions a university - a corporate/company/bank/ "
+        "resort/event logo does NOT become exempt just because a university "
+        "name or mascot also appears on the same garment (e.g. a bank-sponsored "
+        "'University Alumni Golf Classic' shirt, or a company-branded "
+        "'[Company] x [University] Bowl' shirt, is still weird_logo_found true - "
+        "the university name being present does not excuse the co-branded "
+        "corporate/event/sponsor logo). "
         "If you are unsure whether a marking is the designer's own logo, a "
         "university/college team logo, or unwanted corporate branding, err "
         "toward flagging it as weird_logo_found and explain the ambiguity in "
@@ -715,6 +734,51 @@ def compute_deal_rating(price, estimated_resale_value):
     else:
         rating_label = "Marginal"
     return rating_label, round(discount_pct * 100)
+
+
+def is_blocked_by_steal_quality_gate(result):
+    """Returns a reason string if this REVIEW-verdict listing should NOT
+    alert, or None if it clears the bar. REVIEW is score_listing()'s default
+    verdict - "nothing hard-failed it" - not positive evidence of a good
+    price, but until this gate existed every REVIEW listing alerted
+    regardless. Confirmed live: Marginal-rated and even negative-discount
+    listings (estimated resale value below asking price) were reaching
+    alerts, and so were listings where the Gemini budget ran out before
+    reaching them - zero price evidence, alerted anyway.
+
+    Deliberately asymmetric: a grab_on_sight-tier brand (score_listing()'s
+    curated "valuable enough" signal) gets the benefit of the doubt ONLY
+    when no AI price estimate exists at all - the curated brand list is a
+    proxy for value, not for price, so it can't override an actual bad-price
+    verdict once the AI has produced one. Missing a possible steal on a rare
+    grab_on_sight brand costs more than eating one unconfirmed alert on an
+    already-vetted brand; missing noise on an unrecognized brand costs
+    nothing.
+    """
+    deal_rating = result.get("deal_rating")
+    discount_pct = result.get("discount_pct")
+    price_confidence = result.get("price_confidence")
+    liquidity = result.get("liquidity")
+
+    if deal_rating is not None:
+        # AI price check ran and produced a usable estimate - trust it,
+        # hold the bar at genuinely-a-steal, not just "not overpriced".
+        if deal_rating not in ("Steal", "Great Deal"):
+            return f"deal_rating '{deal_rating}' below steal bar"
+        if discount_pct is None or discount_pct <= 0:
+            return "non-positive discount_pct"
+        if price_confidence == "low":
+            return "AI price estimate confidence too low to trust"
+        if liquidity == "slow" and deal_rating != "Steal":
+            return "slow liquidity needs Steal-tier margin, only Great Deal"
+        return None
+
+    # No AI price signal at all (Gemini budget exhausted / image download
+    # failed / model abstained). Only the curated grab_on_sight brand list
+    # is trusted blind - everything else needs actual price evidence.
+    if result.get("brand_tier") != "grab_on_sight":
+        return "no AI price estimate and brand not grab_on_sight-tier"
+    return None
 
 
 def _format_estimated_usd(value):
@@ -1034,9 +1098,7 @@ def run():
         logger.exception("Failed to fetch Wardrobe OS gap report; proceeding without gap data")
         gap_report = None
 
-    gemini_calls = 0
     alerts_sent = 0
-    gemini_budget_logged = False
     seller_username_presence_logged = False
     current_utc = datetime.now(timezone.utc)
     current_month = current_utc.month
@@ -1044,9 +1106,21 @@ def run():
 
     marketplace_listings = prefetch_marketplaces(current_utc)
 
-    for saved_search in SAVED_SEARCHES:
-        if not saved_search.get("enabled", True):
-            continue
+    # Same rotation trick as prefetch_marketplaces(): without it, the AI
+    # budget and any future collect-time truncation would always bias
+    # toward whichever search sits first in config.json, every run, forever.
+    enabled_searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
+    if enabled_searches:
+        offset = ((current_utc.hour * 60 + current_utc.minute) // 5) % len(enabled_searches)
+        enabled_searches = enabled_searches[offset:] + enabled_searches[:offset]
+
+    # PASS 1 - COLLECT: run every free (no-API-cost) filter exactly as
+    # before, but instead of spending Gemini calls inline in iteration
+    # order, park REVIEW-verdict candidates for the prioritize/spend passes
+    # below. This is what lets the limited AI budget go to the most
+    # promising candidates instead of whichever 3 happened to load first.
+    review_candidates = []
+    for saved_search in enabled_searches:
         category = classify_search_category(saved_search["query"])
         logger.info("Polling saved search: %s", saved_search["query"])
         try:
@@ -1145,102 +1219,146 @@ def run():
                 continue
 
             if result["verdict"] in ("REVIEW",):
-                ai_result = None
-                if gemini_calls < GEMINI_CALL_LIMIT:
-                    if gemini_calls > 0:
-                        time.sleep(5)
-                    gemini_calls += 1
-                    ai_result = check_photos_with_gemini(
-                        listing,
-                        category=category,
-                        current_month_name=current_month_name,
-                    )
-                elif not gemini_budget_logged:
-                    logger.info(
-                        "Gemini call budget exhausted for this run, skipping AI check for remaining listings"
-                    )
-                    gemini_budget_logged = True
+                review_candidates.append({
+                    "item_id": item_id,
+                    "listing": listing,
+                    "result": result,
+                    "category": category,
+                    "saved_search": saved_search,
+                })
 
-                if ai_result is not None:
-                    fabric_from_tag = ai_result.get("fabric_from_tag")
-                    if fabric_from_tag:
-                        fabric_note = f"AI fabric tag: {fabric_from_tag}"
-                        if ai_result.get("fabric_confidence"):
-                            fabric_note += f" ({ai_result['fabric_confidence']} confidence)"
-                        result.setdefault("flags", []).append(fabric_note)
-                    liquidity = ai_result.get("liquidity")
-                    if liquidity in ("fast", "medium", "slow"):
-                        result["liquidity"] = liquidity
+    # PASS 2 - PRIORITIZE: grab_on_sight brands first (score_listing()'s own
+    # highest-confidence signal, already computed above for free), cheapest
+    # first as a tiebreaker so the limited budget stretches further. Pure
+    # iteration order otherwise meant "first search in config.json, first
+    # listing in the API response" won the AI budget every single run.
+    review_candidates.sort(key=lambda c: (
+        0 if c["result"].get("brand_tier") == "grab_on_sight" else 1,
+        c["result"].get("price", float("inf")),
+    ))
 
-                if ai_result is not None and (
-                    ai_result.get("damage_found") is True
-                    or ai_result.get("weird_logo_found") is True
-                ):
-                    # Hard disqualifier, same tier as the text-based corporate
-                    # logo keyword match and moth/hole hard-fail - not a
-                    # borderline call. Suppress rather than flag-and-send:
-                    # confirmed via user feedback that visually-detected
-                    # damage/logos (the whole reason this check exists) were
-                    # still reaching alerts when only flagged, not suppressed.
-                    result["verdict"] = "PASS"
-                    result["reason"] = (
-                        "AI photo check found damage or unwanted logo: "
-                        + ai_result.get("summary", "manual review needed")
-                    )
-                    logger.info(
-                        "Suppressing %s based on AI photo check: %s",
-                        item_id,
-                        ai_result.get("summary", "no summary provided"),
-                    )
-                    append_alert_log(result)
-                    mark_seen(conn, item_id)
-                    continue
-                if ai_result is not None and ai_result.get("looks_good"):
-                    result.setdefault("flags", []).append(
-                        "AI photo check: " + ai_result.get("summary", "looks good")
-                    )
-                if ai_result is not None and (
-                    ai_result.get("estimated_retail_price") is not None
-                    or ai_result.get("estimated_resale_value") is not None
-                ):
-                    result["estimated_retail_price"] = ai_result.get("estimated_retail_price")
-                    result["estimated_resale_value"] = ai_result.get("estimated_resale_value")
-                    result["price_confidence"] = ai_result.get("price_confidence")
-                    rating_label, discount_pct = compute_deal_rating(
-                        result.get("price"),  # total landed cost: item + shipping
-                        result.get("estimated_resale_value"),
-                    )
-                    if rating_label is not None:
-                        result["deal_rating"] = rating_label
-                        result["discount_pct"] = discount_pct
+    # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
+    # then alert (cap-gated), in priority order.
+    gemini_calls = 0
+    gemini_budget_logged = False
+    for candidate in review_candidates:
+        item_id = candidate["item_id"]
+        listing = candidate["listing"]
+        result = candidate["result"]
+        category = candidate["category"]
+        saved_search = candidate["saved_search"]
 
-                try:
-                    similar_count = count_similar_listings(token, saved_search)
-                    if similar_count is not None:
-                        result["similar_listings_count"] = similar_count
-                except Exception:
-                    logger.exception(
-                        "Similar listings count failed for query: %s",
-                        saved_search["query"],
-                    )
+        ai_result = None
+        if gemini_calls < GEMINI_CALL_LIMIT:
+            if gemini_calls > 0:
+                time.sleep(GEMINI_INTER_CALL_SLEEP_SECONDS)
+            gemini_calls += 1
+            ai_result = check_photos_with_gemini(
+                listing,
+                category=category,
+                current_month_name=current_month_name,
+            )
+        elif not gemini_budget_logged:
+            logger.info(
+                "Gemini call budget exhausted for this run, skipping AI check for remaining listings"
+            )
+            gemini_budget_logged = True
 
-                append_alert_log(result)
-                try:
-                    send_alert(result)
-                    logger.info("Sent alert for %s", item_id)
-                    mark_seen(conn, item_id)
-                    alerts_sent += 1
-                    if alerts_sent >= MAX_ALERTS_PER_RUN:
-                        logger.info(
-                            "Hit per-run alert cap (%s); stopping this run. Remaining "
-                            "listings stay unseen and will be picked up next run.",
-                            MAX_ALERTS_PER_RUN,
-                        )
-                        conn.close()
-                        return
-                except Exception:
-                    logger.exception("Failed to send alert for %s", item_id)
-            # PASS results are not sent — logged only if you add logging here
+        if ai_result is not None:
+            fabric_from_tag = ai_result.get("fabric_from_tag")
+            if fabric_from_tag:
+                fabric_note = f"AI fabric tag: {fabric_from_tag}"
+                if ai_result.get("fabric_confidence"):
+                    fabric_note += f" ({ai_result['fabric_confidence']} confidence)"
+                result.setdefault("flags", []).append(fabric_note)
+            liquidity = ai_result.get("liquidity")
+            if liquidity in ("fast", "medium", "slow"):
+                result["liquidity"] = liquidity
+
+        if ai_result is not None and (
+            ai_result.get("damage_found") is True
+            or ai_result.get("weird_logo_found") is True
+        ):
+            # Hard disqualifier, same tier as the text-based corporate
+            # logo keyword match and moth/hole hard-fail - not a
+            # borderline call. Suppress rather than flag-and-send:
+            # confirmed via user feedback that visually-detected
+            # damage/logos (the whole reason this check exists) were
+            # still reaching alerts when only flagged, not suppressed.
+            result["verdict"] = "PASS"
+            result["reason"] = (
+                "AI photo check found damage or unwanted logo: "
+                + ai_result.get("summary", "manual review needed")
+            )
+            logger.info(
+                "Suppressing %s based on AI photo check: %s",
+                item_id,
+                ai_result.get("summary", "no summary provided"),
+            )
+            append_alert_log(result)
+            mark_seen(conn, item_id)
+            continue
+        if ai_result is not None and ai_result.get("looks_good"):
+            result.setdefault("flags", []).append(
+                "AI photo check: " + ai_result.get("summary", "looks good")
+            )
+        if ai_result is not None and (
+            ai_result.get("estimated_retail_price") is not None
+            or ai_result.get("estimated_resale_value") is not None
+        ):
+            result["estimated_retail_price"] = ai_result.get("estimated_retail_price")
+            result["estimated_resale_value"] = ai_result.get("estimated_resale_value")
+            result["price_confidence"] = ai_result.get("price_confidence")
+            rating_label, discount_pct = compute_deal_rating(
+                result.get("price"),  # total landed cost: item + shipping
+                result.get("estimated_resale_value"),
+            )
+            if rating_label is not None:
+                result["deal_rating"] = rating_label
+                result["discount_pct"] = discount_pct
+
+        try:
+            similar_count = count_similar_listings(token, saved_search)
+            if similar_count is not None:
+                result["similar_listings_count"] = similar_count
+        except Exception:
+            logger.exception(
+                "Similar listings count failed for query: %s",
+                saved_search["query"],
+            )
+
+        # STEAL-QUALITY GATE: REVIEW is a default verdict ("nothing hard-
+        # failed it"), not positive evidence of a good price. Confirmed live
+        # this session that Marginal-rated and even negative-discount
+        # listings (estimated resale value BELOW asking price) were still
+        # alerting as long as they cleared the six-check REVIEW bar - e.g.
+        # "Bowen & Wright v-neck sweater" at -28% discount. This blocks
+        # that class of alert entirely rather than just flagging it.
+        gate_reason = is_blocked_by_steal_quality_gate(result)
+        if gate_reason:
+            result["verdict"] = "PASS"
+            result["reason"] = f"blocked by steal-quality gate: {gate_reason}"
+            logger.info("Gate-blocked %s: %s", item_id, gate_reason)
+            append_alert_log(result)
+            mark_seen(conn, item_id)
+            continue
+
+        append_alert_log(result)
+        try:
+            send_alert(result)
+            logger.info("Sent alert for %s", item_id)
+            mark_seen(conn, item_id)
+            alerts_sent += 1
+            if alerts_sent >= MAX_ALERTS_PER_RUN:
+                logger.info(
+                    "Hit per-run alert cap (%s); stopping this run. Remaining "
+                    "listings stay unseen and will be picked up next run.",
+                    MAX_ALERTS_PER_RUN,
+                )
+                conn.close()
+                return
+        except Exception:
+            logger.exception("Failed to send alert for %s", item_id)
 
     logger.info("Finished eBay deal alert run")
     conn.close()
