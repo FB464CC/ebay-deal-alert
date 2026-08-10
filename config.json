@@ -548,26 +548,24 @@
       "profile": "slow"
     },
     {
-      "query": "peter millar \"south carolina gamecocks\" polo",
+      "query": "gamecocks polo",
       "size": [
         "M",
-        "L",
-        "XL"
+        "L"
       ],
       "max_price": 25,
-      "enabled": false,
+      "enabled": true,
       "profile": "slow"
     },
     {
-      "query": "peter millar \"south carolina gamecocks\" quarter zip",
+      "query": "gamecocks quarter zip",
       "size": [
-        "M",
         "L",
         "XL"
       ],
       "max_price": 30,
-      "enabled": false,
-      "profile": "fast"
+      "enabled": true,
+      "profile": "slow"
     },
     {
       "query": "j press blazer",
@@ -1104,9 +1102,7 @@
     "wristwatch",
     "cardholder",
     "wallet",
-    "clutch",
-    "gamecocks",
-    "carolina"
+    "clutch"
   ],
   "GEMINI_CALL_LIMIT": 8,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
