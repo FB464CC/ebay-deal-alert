@@ -509,6 +509,18 @@ def get_shipping_cost(listing):
 
 def classify_search_category(query):
     query = query.lower()
+    if "gamecocks" in query:
+        # Explicit carve-out from the brand/knitwear rules below: school
+        # gear is the one category where a real steal is worth buying even
+        # off-brand and without a Crown Crafted/Peter Millar logo - "if
+        # theres a steal for my school, gotta buy it". Checked before the
+        # knitwear branch specifically because a Gamecocks quarter-zip
+        # would otherwise hit that brand's structural dead-end (knitwear
+        # requires grab_on_sight tier, which off-brand fan gear never is).
+        # Falls through to the plain default gate below (real AI-confirmed
+        # Steal/Great Deal required, no blind trust) - not a free pass,
+        # just not held to the knitwear-specific/brand-specific bars.
+        return "school-gear"
     if "watch" in query:
         return "watches"
     if any(kw in query for kw in ("sweater", "cashmere", "merino", "quarter zip")):
