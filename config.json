@@ -31,7 +31,7 @@
       ],
       "max_price": 30,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "johnstons elgin cashmere",
@@ -42,7 +42,7 @@
       ],
       "max_price": 40,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "11484"
     },
     {
@@ -54,7 +54,7 @@
       ],
       "max_price": 25,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "pringle scotland merino cashmere",
@@ -65,7 +65,7 @@
       ],
       "max_price": 25,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "hickey freeman blazer",
@@ -114,7 +114,7 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "53120"
     },
     {
@@ -136,7 +136,7 @@
       ],
       "max_price": 20,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "loro piana cashmere sweater",
@@ -147,7 +147,7 @@
       ],
       "max_price": 90,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "brunello cucinelli sweater",
@@ -158,7 +158,7 @@
       ],
       "max_price": 90,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "kiton sport coat",
@@ -199,7 +199,7 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "ballantyne cashmere",
@@ -210,7 +210,7 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "edward green shoes",
@@ -271,7 +271,7 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "185100"
     },
     {
@@ -283,7 +283,7 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "185100"
     },
     {
@@ -304,7 +304,7 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "2993"
     },
     {
@@ -336,7 +336,7 @@
       ],
       "max_price": 80,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "2993"
     },
     {
@@ -347,7 +347,7 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "2993"
     },
     {
@@ -359,7 +359,7 @@
       ],
       "max_price": 30,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "barbour jacket",
@@ -481,28 +481,28 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "ferragamo cardholder",
       "size": null,
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "gucci cardholder",
       "size": null,
       "max_price": 70,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "bottega veneta cardholder",
       "size": null,
       "max_price": 80,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
@@ -540,14 +540,14 @@
       "size": null,
       "max_price": 90,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "berluti cardholder",
       "size": null,
       "max_price": 100,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "peter millar \"south carolina gamecocks\" polo",
@@ -558,7 +558,7 @@
       ],
       "max_price": 25,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "peter millar \"south carolina gamecocks\" quarter zip",
@@ -590,7 +590,7 @@
       ],
       "max_price": 90,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "zegna sport coat",
@@ -611,7 +611,7 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "185100"
     },
     {
@@ -643,7 +643,7 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "rolex watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
@@ -670,7 +670,7 @@
       ],
       "max_price": 40,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "185100"
     },
     {
@@ -681,7 +681,7 @@
       ],
       "max_price": 40,
       "enabled": true,
-      "profile": "fast",
+      "profile": "slow",
       "category_id": "2993"
     },
     {
@@ -718,7 +718,7 @@
       "size": null,
       "max_price": 30,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "zegna quarter zip",
@@ -729,7 +729,7 @@
       ],
       "max_price": 90,
       "enabled": true,
-      "profile": "fast"
+      "profile": "slow"
     },
     {
       "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
