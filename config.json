@@ -548,7 +548,7 @@
       "profile": "slow"
     },
     {
-      "query": "gamecocks polo",
+      "query": "\"peter millar\" gamecocks polo",
       "size": [
         "M",
         "L"
@@ -558,7 +558,7 @@
       "profile": "slow"
     },
     {
-      "query": "gamecocks quarter zip",
+      "query": "\"peter millar\" gamecocks quarter zip",
       "size": [
         "L",
         "XL"
@@ -631,7 +631,7 @@
       "category_id": "53120"
     },
     {
-      "query": "drakes london sweater",
+      "query": "drake london sweater",
       "size": [
         "M",
         "L",
@@ -728,7 +728,7 @@
       "profile": "slow"
     },
     {
-      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -court -manor -dynasty",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -1102,7 +1102,10 @@
     "wristwatch",
     "cardholder",
     "wallet",
-    "clutch"
+    "clutch",
+    "gamecocks",
+    "carolina",
+    "london"
   ],
   "GEMINI_CALL_LIMIT": 8,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
