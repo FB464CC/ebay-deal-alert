@@ -543,7 +543,7 @@ SUIT_TWO_PIECE_SIGNALS = re.compile(
     re.IGNORECASE,
 )
 SUIT_JACKET_ONLY_SIGNALS = re.compile(
-    r"\b(sport\s*coat|sportcoat|blazer|suit\s*jacket)\b", re.IGNORECASE
+    r"\b(sports?\s*coat|sportcoat|blazer|suit\s*jacket)\b", re.IGNORECASE
 )
 
 

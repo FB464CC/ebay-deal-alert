@@ -135,7 +135,7 @@
         "XL"
       ],
       "max_price": 20,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -353,9 +353,7 @@
     {
       "query": "peter millar crown crafted polo",
       "size": [
-        "M",
-        "L",
-        "XL"
+        "M"
       ],
       "max_price": 30,
       "enabled": true,
@@ -557,7 +555,7 @@
         "XL"
       ],
       "max_price": 25,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -740,7 +738,7 @@
       "category_id": "31387"
     },
     {
-      "query": "universal geneve watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "\"universal geneve\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -756,7 +754,7 @@
       "category_id": "31387"
     },
     {
-      "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -doorbell -chime",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -1001,7 +999,21 @@
     "storage case",
     "radio",
     "advertisement",
-    "print ad"
+    "print ad",
+    "watch movement",
+    "dial only",
+    "case and band only",
+    "pamphlet",
+    "watchstrap",
+    "watch strap",
+    "caseback",
+    "biography",
+    "book",
+    "paperback",
+    "hardcover",
+    "novel",
+    "stain",
+    "stains"
   ],
   "CONDITION_FLAG_KEYWORDS": [
     "hole",
