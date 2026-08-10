@@ -570,6 +570,12 @@ def is_jacket_only_suit_listing(title, query):
     return bool(SUIT_JACKET_ONLY_SIGNALS.search(title))
 
 
+REQUIRED_ITEM_TYPE_SYNONYMS = {
+    "cardholder": {"cardholder", "card holder", "card case", "wallet", "billfold", "coin purse"},
+    "wallet": {"wallet", "billfold", "cardholder", "card holder", "card case"},
+}
+
+
 def is_relevant_marketplace_listing(listing, query):
     """eBay listings arrive already scoped by category_id + query; Grailed/
     Poshmark/Vinted/ShopGoodwill do plain word-relevance text search with no
@@ -592,12 +598,31 @@ def is_relevant_marketplace_listing(listing, query):
     exclusion - confirmed live: a "Borrelli's Long Island" restaurant/bar
     hoodie (nothing to do with the Borrelli fashion house) still passed
     under `borrelli shirt -"long island" -barstool -hoodie`. Now parsed and
-    enforced as real exclusions for marketplace listings too."""
+    enforced as real exclusions for marketplace listings too.
+
+    Also enforces a required '"phrase"' (quoted, no leading '-') - the
+    query-wide OR-match otherwise lets any single token stand in for the
+    whole phrase. Confirmed live: `ralph lauren purple label` matched a
+    women's sweater on "purple" (the sweater's actual color, unrelated to
+    the men's Purple Label product line) + "label" independently; `peter
+    millar south carolina gamecocks polo` matched a Cutter & Buck polo with
+    zero Peter Millar involvement purely on the generic team name
+    "gamecocks". Write the saved search as `peter millar "south carolina
+    gamecocks" polo` to require that exact phrase.
+
+    Also enforces REQUIRED_ITEM_TYPE_SYNONYMS - a query for a specific
+    accessory type must actually match that item type, not just the brand.
+    Confirmed live: "loro piana cardholder" surfaced 5 different blazers/
+    jeans/dress pants (brand matched, item type didn't), and a "berluti
+    cardholder" search matched a Detective Conan anime cardholder with zero
+    Berluti brand match at all - "cardholder" alone satisfied the OR-match."""
     if not listing.get("platform"):
         return True
     query_lower = query.lower()
     excluded_phrases = re.findall(r'-"([^"]+)"', query_lower)
-    query_lower_no_phrases = re.sub(r'-"[^"]+"', " ", query_lower)
+    query_lower_no_excluded = re.sub(r'-"[^"]+"', " ", query_lower)
+    required_phrases = re.findall(r'"([^"]+)"', query_lower_no_excluded)
+    query_lower_no_phrases = re.sub(r'"[^"]+"', " ", query_lower_no_excluded)
     excluded_words = re.findall(r"-([a-z0-9']+)", query_lower_no_phrases)
     positive_query = re.sub(r"-([a-z0-9']+)", " ", query_lower_no_phrases)
 
@@ -606,6 +631,13 @@ def is_relevant_marketplace_listing(listing, query):
         return False
     if any(re.search(rf"\b{re.escape(w)}\b", title) for w in excluded_words):
         return False
+    if required_phrases and not all(phrase in title for phrase in required_phrases):
+        return False
+    for item_type, synonyms in REQUIRED_ITEM_TYPE_SYNONYMS.items():
+        if re.search(rf"\b{re.escape(item_type)}\b", positive_query) and not any(
+            syn in title for syn in synonyms
+        ):
+            return False
 
     query_tokens = [t for t in re.findall(r"[a-z0-9']+", positive_query) if t not in MARKETPLACE_QUERY_STOPWORDS]
     if not query_tokens:
@@ -1627,6 +1659,25 @@ def run():
                 "Gemini call budget exhausted for this run, skipping AI check for remaining listings"
             )
             gemini_budget_logged = True
+
+        if ai_result is not None and any(
+            kw in (ai_result.get("summary") or "").lower() for kw in GENDER_EXCLUDE_KEYWORDS
+        ):
+            # Same gender hard-disqualifier as score_listing()'s title check,
+            # re-run against the AI's own photo-check summary. Live leak:
+            # titles gave no gender hint at all ("Ralph Lauren Shawl Collar
+            # V-neck Sweater...", "Hamilton diamond"), but the AI summary
+            # said so explicitly ("Lauren Ralph Lauren women's purple 100%
+            # cotton...", "Vintage Hamilton women's dress watch...") and
+            # that text was never checked - only the listing title was.
+            result["verdict"] = "PASS"
+            result["reason"] = (
+                "AI photo check found gender-excluded keyword: " + ai_result.get("summary", "")
+            )
+            logger.info("Suppressing %s based on AI-detected gender: %s", item_id, ai_result.get("summary", ""))
+            append_alert_log(result)
+            mark_seen(conn, item_id)
+            continue
 
         if ai_result is not None:
             fabric_from_tag = ai_result.get("fabric_from_tag")
