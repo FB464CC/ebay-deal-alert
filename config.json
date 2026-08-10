@@ -8,7 +8,7 @@
         "XL"
       ],
       "max_price": 25,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast"
     },
     {
@@ -19,7 +19,7 @@
         "XL"
       ],
       "max_price": 25,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast"
     },
     {
@@ -73,7 +73,7 @@
         "42"
       ],
       "max_price": 40,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -83,7 +83,7 @@
         "42"
       ],
       "max_price": 30,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -93,7 +93,7 @@
         "42"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -103,7 +103,7 @@
         "42"
       ],
       "max_price": 25,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -131,7 +131,8 @@
       "query": "peter millar summer comfort polo",
       "size": [
         "M",
-        "L"
+        "L",
+        "XL"
       ],
       "max_price": 20,
       "enabled": true,
@@ -165,7 +166,7 @@
         "42"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -175,7 +176,7 @@
         "42"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -185,7 +186,7 @@
         "42"
       ],
       "max_price": 70,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -242,7 +243,7 @@
       "category_id": "53120"
     },
     {
-      "query": "church's shoes",
+      "query": "church's shoes -chicken -restaurant -franchise",
       "size": [
         "13"
       ],
@@ -292,7 +293,8 @@
       ],
       "max_price": 100,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "ferragamo belt",
@@ -312,7 +314,8 @@
       ],
       "max_price": 150,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "gucci belt",
@@ -350,7 +353,9 @@
     {
       "query": "peter millar crown crafted polo",
       "size": [
-        "M"
+        "M",
+        "L",
+        "XL"
       ],
       "max_price": 30,
       "enabled": true,
@@ -374,14 +379,15 @@
       ],
       "max_price": 70,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "category_id": "53120"
     },
     {
       "query": "hickey freeman suit",
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -391,7 +397,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -401,7 +407,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -411,7 +417,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -421,7 +427,7 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -431,7 +437,7 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -441,7 +447,7 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -452,7 +458,7 @@
         "42"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -462,12 +468,12 @@
         "42"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
     {
-      "query": "ralph lauren purple label",
+      "query": "ralph lauren \"purple label\"",
       "size": [
         "M",
         "L",
@@ -499,7 +505,7 @@
       "profile": "fast"
     },
     {
-      "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 60,
       "enabled": true,
@@ -507,7 +513,7 @@
       "category_id": "31387"
     },
     {
-      "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -musical -broadway -lin-manuel -playbill",
       "size": null,
       "max_price": 80,
       "enabled": true,
@@ -515,7 +521,7 @@
       "category_id": "31387"
     },
     {
-      "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 90,
       "enabled": true,
@@ -544,24 +550,25 @@
       "profile": "fast"
     },
     {
-      "query": "peter millar south carolina gamecocks polo",
+      "query": "peter millar \"south carolina gamecocks\" polo",
       "size": [
         "M",
-        "L"
+        "L",
+        "XL"
       ],
       "max_price": 25,
       "enabled": true,
       "profile": "fast"
     },
     {
-      "query": "peter millar south carolina gamecocks quarter zip",
+      "query": "peter millar \"south carolina gamecocks\" quarter zip",
       "size": [
         "M",
         "L",
         "XL"
       ],
       "max_price": 30,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast"
     },
     {
@@ -570,8 +577,9 @@
         "42"
       ],
       "max_price": 40,
-      "enabled": true,
-      "profile": "slow"
+      "enabled": false,
+      "profile": "slow",
+      "category_id": "3001"
     },
     {
       "query": "zegna sweater",
@@ -590,17 +598,7 @@
         "42"
       ],
       "max_price": 100,
-      "enabled": true,
-      "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "corneliani",
-      "size": [
-        "42"
-      ],
-      "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -617,33 +615,13 @@
       "category_id": "185100"
     },
     {
-      "query": "southwick",
+      "query": "corbin suit",
       "size": [
         "42"
       ],
-      "max_price": 40,
+      "max_price": 75,
       "enabled": true,
-      "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "oxxford",
-      "size": [
-        "42"
-      ],
-      "max_price": 80,
-      "enabled": true,
-      "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "corbin",
-      "size": [
-        "42"
-      ],
-      "max_price": 40,
-      "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "3001"
     },
     {
@@ -668,7 +646,7 @@
       "profile": "fast"
     },
     {
-      "query": "rolex watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "rolex watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -676,7 +654,7 @@
       "category_id": "31387"
     },
     {
-      "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -696,7 +674,7 @@
       "category_id": "185100"
     },
     {
-      "query": "trafalgar belt",
+      "query": "trafalgar belt -square -tours -battle -london",
       "size": [
         "34",
         "36"
@@ -728,7 +706,7 @@
       "category_id": "57988"
     },
     {
-      "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 150,
       "enabled": true,
@@ -754,7 +732,7 @@
       "profile": "fast"
     },
     {
-      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -762,7 +740,7 @@
       "category_id": "31387"
     },
     {
-      "query": "universal geneve watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "universal geneve watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -770,7 +748,7 @@
       "category_id": "31387"
     },
     {
-      "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -778,7 +756,7 @@
       "category_id": "31387"
     },
     {
-      "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -786,7 +764,7 @@
       "category_id": "31387"
     },
     {
-      "query": "iwc watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -shirt -hat -tote -bag",
+      "query": "iwc watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -798,7 +776,7 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -808,7 +786,7 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -818,7 +796,7 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -828,7 +806,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -838,7 +816,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -848,7 +826,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -858,7 +836,7 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -1043,10 +1021,17 @@
     "women",
     "women's",
     "womens",
+    "woman",
+    "woman's",
     "ladies",
     "misses",
     "juniors",
     "girls",
+    "boys",
+    "youth",
+    "toddler",
+    "kids",
+    "infant",
     "clutch",
     "purse",
     "handbag",
@@ -1068,7 +1053,7 @@
     "shopgoodwill",
     "vinted"
   ],
-  "MARKETPLACE_FETCH_BUDGET_SECONDS": 30,
+  "MARKETPLACE_FETCH_BUDGET_SECONDS": 90,
   "MAX_ALERTS_PER_RUN": 8,
   "MARKETPLACE_QUERY_STOPWORDS": [
     "sweater",
@@ -1104,7 +1089,12 @@
     "pants",
     "chinos",
     "watch",
-    "wristwatch"
+    "wristwatch",
+    "cardholder",
+    "wallet",
+    "clutch",
+    "gamecocks",
+    "carolina"
   ],
   "GEMINI_CALL_LIMIT": 8,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
