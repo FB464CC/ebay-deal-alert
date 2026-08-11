@@ -1079,6 +1079,27 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "suit bar: no AI price estimate and brand not grab_on_sight-tier"
         return None
 
+    # PETER MILLAR CROWN CRAFTED, same one-tier-looser treatment as suits.
+    # User audit via the Activity page's PASS filter found the real gap:
+    # 4 of 10 blocked Crown Crafted candidates were "Good Deal" - real,
+    # positive-margin steals, just one tier under the default Steal/Great-
+    # Deal-only bar. The other 6 blocks in that same sample (corporate-
+    # logo AI suppression, "corporate logo keyword match") are working
+    # exactly as designed - third-party company/golf-course logos
+    # permanently embroidered on the shirt ("Ponte Vedra Inn And Club",
+    # "Wallworks Logo") - left untouched. Scoped narrowly to this one
+    # query string, not "golf"/Peter Millar generally.
+    if "crown crafted" in (result.get("search_query") or "").lower():
+        if deal_rating is None:
+            return "crown crafted bar: no AI price estimate and brand not grab_on_sight-tier" if brand_tier != "grab_on_sight" else None
+        if deal_rating not in ("Steal", "Great Deal", "Good Deal"):
+            return f"crown crafted bar: deal_rating '{deal_rating}' below Good Deal"
+        if discount_pct is None or discount_pct <= 0:
+            return "crown crafted bar: non-positive discount_pct"
+        if price_confidence == "low":
+            return "crown crafted bar: AI price estimate confidence too low to trust"
+        return None
+
     if category == "watches":
         # No blind-trust path for watches specifically, even on a
         # grab_on_sight brand. Live evidence: "Genuine Rolex Factory
