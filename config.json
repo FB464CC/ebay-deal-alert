@@ -385,7 +385,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -395,7 +395,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -405,7 +405,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -415,7 +415,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -425,7 +425,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 150,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -435,7 +435,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 150,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -445,7 +445,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 150,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -615,7 +615,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -772,7 +772,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 150,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -782,7 +782,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 150,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -792,7 +792,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -802,7 +802,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -812,7 +812,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -822,7 +822,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -832,7 +832,7 @@
       "size": [
         "42"
       ],
-      "max_price": 75,
+      "max_price": 150,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -850,6 +850,36 @@
       "max_price": 80,
       "enabled": true,
       "profile": "slow"
+    },
+    {
+      "query": "loro piana suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "rubinacci suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "caruso suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -896,7 +926,9 @@
     "heuer",
     "zenith",
     "iwc",
-    "maison margiela"
+    "maison margiela",
+    "rubinacci",
+    "caruso"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
