@@ -585,6 +585,7 @@ def is_jacket_only_suit_listing(title, query):
 REQUIRED_ITEM_TYPE_SYNONYMS = {
     "cardholder": {"cardholder", "card holder", "card case", "wallet", "billfold", "coin purse"},
     "wallet": {"wallet", "billfold", "cardholder", "card holder", "card case"},
+    "hat": {"hat", "cap", "beanie", "snapback", "bucket hat", "fitted"},
 }
 
 

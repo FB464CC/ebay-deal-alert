@@ -836,6 +836,20 @@
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
+    },
+    {
+      "query": "\"maison margiela\" hat",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "\"maison margiela\" cardholder",
+      "size": null,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "slow"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -881,7 +895,8 @@
     "universal geneve",
     "heuer",
     "zenith",
-    "iwc"
+    "iwc",
+    "maison margiela"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
@@ -1105,7 +1120,8 @@
     "clutch",
     "gamecocks",
     "carolina",
-    "london"
+    "london",
+    "hat"
   ],
   "GEMINI_CALL_LIMIT": 8,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
