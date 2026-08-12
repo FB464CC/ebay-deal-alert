@@ -880,25 +880,121 @@
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
+    },
+    {
+      "query": "\"patek philippe\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"audemars piguet\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"vacheron constantin\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"jaeger lecoultre\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "cartier watch -perfume -cologne -necklace -bracelet -ring -sunglasses -scarf -pen -lighter -wallet -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"grand seiko\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"paul stuart\" suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "carmina shoes",
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120"
+    },
+    {
+      "query": "vass shoes",
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120"
+    },
+    {
+      "query": "\"gaziano\" \"girling\" shoes",
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120"
+    },
+    {
+      "query": "valextra cardholder",
+      "size": null,
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "marinella tie",
+      "size": null,
+      "max_price": 40,
+      "enabled": true,
+      "profile": "slow"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
-    "tom james",
-    "alan paine",
     "johnstons of elgin",
     "hickey freeman",
     "canali",
     "brioni",
     "isaia",
-    "pringle of scotland",
-    "hart schaffner marx",
     "loro piana",
     "brunello cucinelli",
     "kiton",
     "cesare attolini",
     "belvest",
-    "william lockie",
-    "ballantyne",
     "edward green",
     "john lobb",
     "crockett",
@@ -914,10 +1010,7 @@
     "zegna",
     "corneliani",
     "borrelli",
-    "southwick",
     "oxxford",
-    "corbin",
-    "cheaney",
     "drakes london",
     "rolex",
     "omega",
@@ -928,24 +1021,47 @@
     "iwc",
     "maison margiela",
     "rubinacci",
-    "caruso"
+    "caruso",
+    "alden",
+    "alfred sargent",
+    "patek philippe",
+    "audemars piguet",
+    "vacheron constantin",
+    "jaeger lecoultre",
+    "cartier",
+    "grand seiko",
+    "paul stuart",
+    "huntsman",
+    "gieves and hawkes",
+    "carmina",
+    "vass",
+    "gaziano",
+    "valextra",
+    "marinella"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
     "brooks brothers",
     "ralph lauren",
     "allen edmonds",
-    "alden",
     "barbour",
     "j press",
     "rancourt",
     "gitman",
     "trafalgar",
-    "alfred sargent",
     "cordings",
     "n peal",
     "longines",
-    "bills khakis"
+    "bills khakis",
+    "tom james",
+    "alan paine",
+    "pringle of scotland",
+    "william lockie",
+    "ballantyne",
+    "hart schaffner marx",
+    "southwick",
+    "corbin",
+    "cheaney"
   ],
   "PASS_BRANDS": [
     "travismathew",
