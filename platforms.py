@@ -278,6 +278,13 @@ def search_grailed(saved_search):
             # inside the job's 60-second billing window.
             cover += ("&" if "?" in cover else "?") + "w=800&fit=clip"
         user = hit.get("user") or {}
+        # Confirmed live: each hit carries a real per-listing "shipping.us"
+        # block (amount + enabled) - a $50 item with $7.99 US shipping
+        # enabled was showing as a flat $50 item with make_listing's 0.0
+        # shipping default. enabled:false means the seller's price already
+        # includes shipping (free-shipping listing), so 0.0 is correct there.
+        us_shipping = ((hit.get("shipping") or {}).get("us") or {})
+        shipping_cost = us_shipping.get("amount") or 0.0 if us_shipping.get("enabled") else 0.0
         listing = make_listing(
             "grailed",
             object_id,
@@ -287,6 +294,7 @@ def search_grailed(saved_search):
             image_url=cover,
             size=hit.get("size"),
             seller=user.get("username"),
+            shipping=shipping_cost,
         )
         if listing:
             # Real sold-comp data and seller trust signals, both sitting in
@@ -305,6 +313,13 @@ def search_grailed(saved_search):
 # ---------------------------------------------------------------------------
 # POSHMARK - the site's own frontend JSON endpoint, no auth of any kind.
 # ---------------------------------------------------------------------------
+
+# Poshmark charges every buyer this same flat rate regardless of item -
+# there's no per-listing shipping field in the API to read instead (checked
+# live). Confirmed against a real alert: a $22 item logged with $0.0
+# shipping actually sold for a reported $30 total - $22 + $7.97 = $29.97.
+POSHMARK_ASSUMED_SHIPPING = 7.97
+
 
 @adapter("poshmark")
 def search_poshmark(saved_search):
@@ -370,6 +385,7 @@ def search_poshmark(saved_search):
                 extra_images=extra_images,
                 size=size or post.get("size"),
                 seller=(post.get("creator_id") or post.get("creator_username")),
+                shipping=POSHMARK_ASSUMED_SHIPPING,
             )
         )
     return [x for x in listings if x], None
@@ -541,6 +557,16 @@ def search_vinted(saved_search):
         # exactly how a real hole/damage on a different angle got past it.
         all_photos = item.get("photos") or []
         extra_images = [p.get("url") for p in all_photos if not p.get("is_main") and p.get("url")]
+        # Real actual shipping cost isn't in the catalog response at all -
+        # Vinted only resolves that at checkout against the buyer's address.
+        # But "total_item_price" IS present and real (confirmed live): it's
+        # price + Vinted's mandatory buyer-protection service_fee, an extra
+        # cost every buyer definitely pays on top of the listed price. Using
+        # that delta beats treating shipping as $0, even though it still
+        # understates true landed cost by whatever shipping ends up being.
+        item_price = _to_float((item.get("price") or {}).get("amount")) or 0.0
+        total_price = _to_float((item.get("total_item_price") or {}).get("amount"))
+        service_fee = (total_price - item_price) if total_price is not None else 0.0
         listings.append(
             make_listing(
                 "vinted",
@@ -552,6 +578,7 @@ def search_vinted(saved_search):
                 extra_images=extra_images,
                 size=item.get("size_title"),
                 seller=(item.get("user") or {}).get("login"),
+                shipping=service_fee,
             )
         )
     return [x for x in listings if x], None
