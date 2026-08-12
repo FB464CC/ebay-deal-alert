@@ -283,7 +283,30 @@ def search_ebay(token, saved_search):
         # Program, none of which the lightweight search endpoint surfaces.
         # Filtering at the source avoids the whole class of "looks cheap,
         # isn't" international listing rather than trying to estimate it.
-        "filter": "conditions:{USED|UNSPECIFIED},itemLocationCountry:US",
+        # Price ceiling applied SERVER-side, not just client-side. This was a
+        # real, live coverage bug: sort=newlyListed + limit=50 means each
+        # search only ever sees the 50 newest listings, and without a price
+        # filter nearly all 50 slots got burned on listings way over
+        # max_price that the client-side check at the top of run()'s loop
+        # then threw away. Worst case measured: "allen edmonds" has ~26,000
+        # active listings (~870 new/day) against a max_price of $50 - the
+        # 50-newest window spanned ~83 minutes against a 65-minute poll
+        # cycle, so in-budget shoes were being dropped between polls
+        # entirely. Filtering at the source makes those 50 slots all
+        # in-budget candidates, which deepens the effective window from
+        # ~80 minutes to days.
+        #
+        # Filter at max_price (NOT max_price minus shipping): eBay's price
+        # filter is item-price-only, while the client-side check compares
+        # total landed cost (item + shipping + tax). Since total >= item
+        # price always, anything that would pass the client check
+        # necessarily has an item price under max_price too - so the
+        # server-side filter is a strict superset and can't cause a false
+        # negative. The client-side check stays as the real gate.
+        "filter": (
+            "conditions:{USED|UNSPECIFIED},itemLocationCountry:US,"
+            f"price:[..{saved_search['max_price']}],priceCurrency:USD"
+        ),
         "sort": "newlyListed",
         "limit": "50",
     }
@@ -386,32 +409,11 @@ def ebay_circuit_breaker_allows_calls(token):
         return True
 
 
-def count_similar_listings(token, saved_search):
-    """Lightweight active-market count for the saved search's query."""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-    }
-    query = saved_search["query"]
-    size_tokens = saved_search.get("size") or []
-    if size_tokens:
-        query += " " + " ".join(size_tokens)
-    # See search_ebay() - deliberately not appending gender exclusion terms
-    # here either, same full-text over-match problem.
-    params = {
-        "q": query,
-        "category_ids": saved_search.get("category_id", "260012"),
-        "filter": "conditions:{USED|UNSPECIFIED},itemLocationCountry:US",
-        "limit": "1",
-    }
-    resp = requests.get(
-        "https://api.ebay.com/buy/browse/v1/item_summary/search",
-        headers=headers,
-        params=params,
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.json().get("total")
+# count_similar_listings() lived here. Deleted along with its call site in
+# run() - it spent a dedicated Browse API call per review candidate to fetch
+# a market count that only the web UI displayed, and that the UI already
+# falls back to search_total_listings for (which search_ebay() returns for
+# free). See the note at its former call site for the full reasoning.
 
 
 # ---------------------------------------------------------------------------
@@ -1837,25 +1839,23 @@ def run():
                 f"{listing.get('seller_total_sales')} sales)"
             )
 
-        try:
-            # Also gated by the circuit breaker - this hits the SAME Browse
-            # API quota as search_ebay(). Was unconditional until now, which
-            # meant it kept wastefully firing (and risking extending) an
-            # active 429 cooldown even while the search rotation above
-            # correctly backed off. Also counted for real in the daily
-            # budget math: at GEMINI_CALL_LIMIT calls/run this can add up to
-            # ~2,300 more calls/day on top of the search rotation, which is
-            # why EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN has real margin built in below
-            # the confirmed 5,000/day hard limit rather than sitting right
-            # at the edge of it.
-            similar_count = count_similar_listings(token, saved_search) if ebay_circuit_closed else None
-            if similar_count is not None:
-                result["similar_listings_count"] = similar_count
-        except Exception:
-            logger.exception(
-                "Similar listings count failed for query: %s",
-                saved_search["query"],
-            )
+        # count_similar_listings() used to run here, spending a dedicated
+        # Browse API call per review candidate purely to populate
+        # result["similar_listings_count"]. Removed: nothing in the scoring
+        # or gating path ever read that field - its only consumer is the
+        # web UI's "N similar listings currently active" line, which
+        # already falls back to result["search_total_listings"], a value
+        # search_ebay() returns for free in the same response it was
+        # already making. So the call was buying a number we already had.
+        #
+        # It was also the only UNBOUNDED eBay call in the program: it sat
+        # in this per-candidate loop with no budget cap (unlike the Gemini
+        # calls above), so its volume scaled with marketplace candidate
+        # count rather than with anything we control. That's what drove the
+        # Aug 9 spike to 162 calls/day and contributed to the 13.5h
+        # rate-limit outage. The old comment here claiming it was bounded
+        # "at GEMINI_CALL_LIMIT calls/run" was simply wrong - that check
+        # gates the AI calls above, never this one.
 
         # STEAL-QUALITY GATE: REVIEW is a default verdict ("nothing hard-
         # failed it"), not positive evidence of a good price. Confirmed live
