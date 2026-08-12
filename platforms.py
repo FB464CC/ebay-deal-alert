@@ -220,19 +220,39 @@ GRAILED_SEARCH_KEY = "c89dbaddf15fe70e1941a109bf7c2a3d"
 GRAILED_INDEX = "Listing_by_date_added_production"
 
 
-GRAILED_SOLD_INDEX = "Listing_sold_by_high_price_production"
+# Relevance-sorted sold index. Was "Listing_sold_by_high_price_production",
+# which is sorted by PRICE DESCENDING - so pulling hitsPerPage=10 off it took
+# the ten most expensive sales ever recorded for the query and called their
+# median a typical resale value. Measured live, the overstatement was severe:
+#   "alden shell cordovan"  $875 -> $270 real 180-day median  (3.2x too high)
+#   "hermes tie"            $283 ->  $45 real 180-day median  (6.3x too high)
+# That number feeds estimated_resale_value -> discount_pct -> the steal gate,
+# so it was a systematic false-positive generator: it made ordinary listings
+# look like steals against a fantasy resale price.
+GRAILED_SOLD_INDEX = "Listing_sold_production"
+
+# Only count sales from the last ~6 months. The old index mixed 2022 sales in
+# with current ones; menswear resale prices move enough that a 4-year-old sale
+# is not a comp for today.
+SOLD_COMP_WINDOW_DAYS = 180
+SOLD_COMP_HITS = 50
 
 
 def fetch_grailed_sold_comps(query):
     """Real recent sold prices for this query, straight from Grailed's own
-    sold-comps index - confirmed live to return genuine historical sale
-    prices (sold_price field), not an estimate. Returns (median, count) or
-    (None, 0) if fewer than 3 comps exist (too few to trust a median on).
-    One extra call per search, same pacing/cost as the main search call."""
+    sold-comps index - genuine historical sale prices (sold_price field),
+    not an estimate. Returns (median, count) or (None, count) if fewer than
+    3 comps exist (too few to trust a median on). One extra call per search,
+    same pacing/cost as the main search call."""
+    cutoff = int(time.time()) - SOLD_COMP_WINDOW_DAYS * 86400
     body = get_json(
         "grailed",
         f"https://mnrwefss2q-dsn.algolia.net/1/indexes/{GRAILED_SOLD_INDEX}",
-        params={"query": query, "hitsPerPage": 10},
+        params={
+            "query": query,
+            "hitsPerPage": SOLD_COMP_HITS,
+            "numericFilters": f"sold_at_i>{cutoff}",
+        },
         headers={
             "X-Algolia-Application-Id": GRAILED_APP_ID,
             "X-Algolia-API-Key": GRAILED_SEARCH_KEY,
