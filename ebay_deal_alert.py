@@ -308,7 +308,16 @@ def search_ebay(token, saved_search):
             f"price:[..{saved_search['max_price']}],priceCurrency:USD"
         ),
         "sort": "newlyListed",
-        "limit": "50",
+        # 200 is eBay's documented max for this call and costs exactly the
+        # same one API call as 50 did - the quota counts calls, not results.
+        # Paired with the price filter above this is the real coverage win:
+        # 50 slots of mostly-over-budget listings becomes 200 slots of
+        # in-budget ones, which takes the newly-listed window a search can
+        # see from ~80 minutes (measured worst case: allen edmonds) out to
+        # days. That's the margin that stops listings slipping through
+        # between polls, and it's what makes it safe to poll less often
+        # rather than more.
+        "limit": "200",
     }
     # One short retry on a 429 - EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN already cut call
     # volume ~5x to stay under eBay's rate limit in normal operation, but a
