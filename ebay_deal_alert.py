@@ -974,7 +974,16 @@ def compute_deal_rating(price, estimated_resale_value):
         return None, None
 
     discount_pct = (estimated_resale_value - price) / estimated_resale_value
-    discount_pct = max(min(discount_pct, 1.0), -1.0)
+    # No clamp - previously floored at -100%, which hid real magnitude on
+    # badly-overpriced listings (a -280% miss and a -110% miss both logged
+    # as exactly -100%). Confirmed harmless to remove: every downstream
+    # consumer (the steal-quality gate's branches, the rating buckets right
+    # below) only ever checks discount_pct's sign or a >= threshold, never
+    # its magnitude past that - only the alerts_log.jsonl record and the
+    # human reading it were losing information. The old upper clamp
+    # (min(x, 1.0)) was dead code either way: price >= 0 and
+    # estimated_resale_value > 0 are already guaranteed above, so
+    # (resale - price) / resale can never exceed 1.0.
     if discount_pct >= 0.70:
         rating_label = "Steal"
     elif discount_pct >= 0.50:
