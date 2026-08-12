@@ -245,6 +245,13 @@ def search_ebay(token, saved_search):
     headers = {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        # Without a buyer location, eBay can't resolve "calculated"
+        # shipping (weight/dimension-based, the majority of sellers) and
+        # just omits shippingOptions entirely - get_shipping_cost() then
+        # silently falls back to 0.0, understating the real landed cost.
+        # Columbia, SC (29201) - Gamecocks territory - as the assumed
+        # buyer zip so calculated-shipping listings actually price out.
+        "X-EBAY-C-ENDUSERCTX": "contextualLocation=country=US,zip=29201",
     }
     query = saved_search["query"]
     # NOTE: deliberately NOT appending "-women -womens ..." to the query here.
@@ -493,6 +500,12 @@ def fetch_gap_report():
 # for manual review rather than guessing)
 # ---------------------------------------------------------------------------
 
+# Flat sales-tax estimate applied to total landed cost - per explicit user
+# instruction, 6% (SC's base state rate) is close enough; not trying to
+# model per-state/local rates for a single-buyer bot.
+SALES_TAX_RATE = 0.06
+
+
 def get_shipping_cost(listing):
     """First shipping option's cost, or 0.0 if free/unavailable. eBay Browse
     API item summaries include shippingOptions[].shippingCost.value when
@@ -664,9 +677,11 @@ def is_relevant_marketplace_listing(listing, query):
 def score_listing(listing, gap_report, shipping_cost=0.0):
     title = listing.get("title", "").lower()
     price_value = (listing.get("price") or {}).get("value", 0)
-    # Total landed cost (item + shipping), not just item price - a $7 shirt
-    # with $10 shipping is a $17 item, not a $7 one.
-    price = float(0 if price_value is None else price_value) + shipping_cost
+    # Total landed cost (item + shipping + estimated sales tax), not just
+    # item price - a $7 shirt with $10 shipping and tax on top is a ~$18
+    # item, not a $7 one. Flat 6% (SC's base state rate) - per explicit
+    # user instruction, close enough as an estimate.
+    price = (float(0 if price_value is None else price_value) + shipping_cost) * (1 + SALES_TAX_RATE)
     flags = []
     verdict = "REVIEW"  # default: don't auto-decide, surface it
 
@@ -1219,7 +1234,10 @@ def send_alert(result):
     # flags/market-context/sold-comps-link don't need to live in the body
     # (they're still in the alerts_log.jsonl record for the mobile app).
     if item_price is not None and shipping_cost is not None:
-        price_line = f"${item_price:g} + ${shipping_cost:g} = ${price:g}{profile_note}"
+        # price now bakes in the 6% tax estimate on top of item+shipping,
+        # so the two no longer sum to it - spell that out instead of
+        # showing a total that looks like a math error.
+        price_line = f"${item_price:g} + ${shipping_cost:g} + tax = ${price:g}{profile_note}"
     else:
         price_line = f"${price}{profile_note}"
     source = (listing.get("platform") or "ebay").upper()
