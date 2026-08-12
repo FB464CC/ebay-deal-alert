@@ -1265,7 +1265,17 @@ def send_alert(result):
             "\n⚠️ Watch: verify authenticity yourself (movement, serial, "
             "box/papers) - bot cannot detect counterfeits."
         )
-    alert_title = f"[{result['verdict']}] Deal alert"
+    # verdict is always "REVIEW" here (PASS results never reach send_alert -
+    # they're filtered out by the steal-quality gate above), so a
+    # verdict-based title was identical on every single push. Confirmed
+    # live: all 8 alerts sent today used the exact literal string
+    # "[REVIEW] Deal alert" - user reported only seeing 1 notification on
+    # their phone despite all 8 getting clean 200s from ntfy.sh. Identical
+    # titles arriving close together is a known trigger for Android/OEM
+    # notification-shade grouping to collapse multiple pushes into one
+    # bundled summary. Use platform + item title instead - unique per
+    # alert, and more useful at a glance than a constant string.
+    alert_title = f"[{source}] {title[:60]}"
 
     tags = ["moneybag"] if result.get("brand_tier") == "grab_on_sight" else ["eyes"]
     tags.append("zap" if profile == "fast" else "hourglass")
