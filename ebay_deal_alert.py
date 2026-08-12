@@ -572,24 +572,27 @@ SUIT_JACKET_ONLY_SIGNALS = re.compile(
 )
 
 
-def is_jacket_only_suit_listing(title, query):
-    """Explicit user report: searches for a full 2-piece suit (e.g. "isaia
-    suit") kept surfacing jacket-only/blazer-only listings - "ISAIA...Suit
-    Jacket, 42" and "Ermenegildo Zegna...Blazer" both alerted from suit
-    queries even though neither includes pants. Only owning 15+ standalone
-    jackets already and explicitly not wanting more of those - a suit
-    search needs to actually mean two pieces.
+def is_jacket_only_suit_listing(title, query=None):
+    """Explicit, standing user rule: no more standalone jackets, period -
+    "i do NOT need any more jackets. the exception is full suits[,]...
+    must have jacket+pants and both fit." Originally gated on the search
+    query containing "suit" (back when dedicated "X blazer" searches
+    existed and were meant to keep matching jacket-only listings) - those
+    blazer/sport-coat-only searches are all disabled now, and the user
+    explicitly asked for this to apply everywhere, not just to searches
+    literally worded as suit searches. Runs unconditionally on every
+    listing's title regardless of which saved search found it, so a
+    jacket-only listing can't leak through a bare-brand or off-label
+    query the suit-only wording never covered. `query` kept as an unused
+    param so the call site doesn't need touching.
 
-    Only applies to queries that are actually suit searches (not the
-    separate, deliberate "X blazer" searches, which should keep matching
-    jacket-only listings same as always). A title mentioning pants/
-    trousers/"2 piece" etc. always passes regardless of also saying
-    "blazer" (sellers commonly describe a suit jacket as a "blazer" even
-    on a genuine 2-piece listing, e.g. "Blazer Suit Jacket Pants 2-Button").
-    Only rejected when a jacket-only word appears with no pants signal at
-    all."""
-    if " suit" not in f" {query.lower()}":
-        return False
+    A title mentioning pants/trousers/"2 piece" etc. always passes
+    regardless of also saying "blazer" (sellers commonly describe a suit
+    jacket as a "blazer" even on a genuine 2-piece listing, e.g. "Blazer
+    Suit Jacket Pants 2-Button"). Only rejected when a jacket-only word
+    (blazer/sport coat/suit jacket) appears with no pants signal at all -
+    plain outerwear ("jacket", "coat") never matches this at all, so
+    Barbour-style outerwear is untouched."""
     if SUIT_TWO_PIECE_SIGNALS.search(title):
         return False
     return bool(SUIT_JACKET_ONLY_SIGNALS.search(title))
@@ -1622,9 +1625,9 @@ def run():
                 mark_seen(conn, item_id)
                 continue
 
-            if is_jacket_only_suit_listing(title, saved_search["query"]):
+            if is_jacket_only_suit_listing(title):
                 logger.info(
-                    "Skipping %s: suit search matched a jacket/blazer-only listing (no pants)",
+                    "Skipping %s: jacket/blazer/sport-coat-only listing, no pants (standing no-jackets rule)",
                     item_id,
                 )
                 mark_seen(conn, item_id)
