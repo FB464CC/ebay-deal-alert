@@ -1864,7 +1864,23 @@ def run():
         # already blind-trust through, AI here is a bonus quality check,
         # not a requirement.
         must_have_ai = category in ("knitwear", "watches") or brand_tier != "grab_on_sight"
-        return (0 if must_have_ai else 1, result.get("price", float("inf")))
+        # Price DESCENDING, not ascending. Every candidate is already under
+        # its search's max_price, so absolute price carries no deal signal -
+        # sorting cheapest-first just ranked the junk to the front, because
+        # the cheapest thing matching a brand token is a part, not the item.
+        #
+        # This is the root cause of the "the rolex is just a crystal, and a
+        # hand" complaint. Measured over the watch history: candidates that
+        # GOT the scarce AI slot had a median price of $45, while the 384
+        # blocked for "no AI price/authenticity check ran" had a median of
+        # $106. The budget bought vision checks on a Rolex watch crystal
+        # ($14.73, alerted "Great Deal"), a loose second hand ($15.79,
+        # "Great Deal") and a Vacheron price TAG ($7.42, alerted "Steal") -
+        # while real watches were starved and then hard-blocked for lacking
+        # the very check that was spent on the parts.
+        #
+        # Spend the budget where being wrong costs the most.
+        return (0 if must_have_ai else 1, -(result.get("price") or 0.0))
 
     review_candidates.sort(key=_ai_check_priority)
 
