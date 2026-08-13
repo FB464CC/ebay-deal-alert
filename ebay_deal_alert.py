@@ -594,6 +594,31 @@ SUIT_JACKET_ONLY_SIGNALS = re.compile(
 )
 
 
+# Garment words that mean "dress shirt / long-sleeve button-up", where the
+# user wears L. Deliberately NOT knitwear words (sweater, quarter-zip, polo,
+# cardigan, vest, jacket) - they genuinely are XL in those, so those must
+# keep passing at XL.
+DRESS_SHIRT_SIGNALS = re.compile(
+    r"\b(dress\s*shirt|button[\s-]?(?:up|down)|oxford\s*shirt|"
+    r"poplin|french\s*cuff|spread\s*collar|point\s*collar)\b",
+    re.IGNORECASE,
+)
+# Only XL and up. "XL" must not match inside "XXL"-style tokens by accident,
+# and 2XL/3XL are also too big.
+OVERSIZED_SHIRT_SIGNALS = re.compile(r"\b(xl|xxl|2xl|3xl|x-large|extra\s*large)\b", re.IGNORECASE)
+
+
+def is_oversized_dress_shirt(haystack):
+    """True for a dress shirt / long-sleeve button-up listed at XL or above.
+
+    The user is L in long-sleeve shirts but XL in knitwear, so this is
+    garment-aware on purpose: it must never fire on a sweater, quarter-zip,
+    polo or jacket, only on shirts."""
+    if not DRESS_SHIRT_SIGNALS.search(haystack):
+        return False
+    return bool(OVERSIZED_SHIRT_SIGNALS.search(haystack))
+
+
 def is_jacket_only_suit_listing(title, query=None):
     """Explicit, standing user rule: no more standalone jackets, period -
     "i do NOT need any more jackets. the exception is full suits[,]...
@@ -1670,6 +1695,21 @@ def run():
                 for size_token in size_tokens
             ):
                 logger.info("Skipping %s because title does not match size filter", item_id)
+                mark_seen(conn, item_id)
+                continue
+
+            if is_oversized_dress_shirt(size_haystack):
+                # Standing user sizing rule: they wear L in dress shirts /
+                # long-sleeve button-ups, but genuinely are XL in knitwear
+                # (quarter-zips, sweaters, outerwear). A single per-search
+                # `size` list can't express that, because a broad brand
+                # search like `ralph lauren "purple label"` legitimately
+                # needs XL for a sweater and L for a shirt. So the shirt
+                # case is handled here, on the garment, not on the search.
+                logger.info(
+                    "Skipping %s: dress shirt in XL (user wears L in long-sleeve shirts)",
+                    item_id,
+                )
                 mark_seen(conn, item_id)
                 continue
 
