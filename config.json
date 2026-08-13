@@ -887,6 +887,54 @@
       "max_price": 40,
       "enabled": true,
       "profile": "slow"
+    },
+    {
+      "query": "seiko watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "bulova watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "size": null,
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "movado watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "size": null,
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "zodiac watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "doxa watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "size": null,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
+    },
+    {
+      "query": "eterna watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "31387"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
