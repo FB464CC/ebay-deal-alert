@@ -477,13 +477,6 @@
       "profile": "slow"
     },
     {
-      "query": "gucci cardholder",
-      "size": null,
-      "max_price": 70,
-      "enabled": true,
-      "profile": "slow"
-    },
-    {
       "query": "bottega veneta cardholder",
       "size": null,
       "max_price": 80,
