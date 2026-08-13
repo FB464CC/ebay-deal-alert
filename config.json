@@ -98,16 +98,6 @@
       "category_id": "3001"
     },
     {
-      "query": "hart schaffner marx blazer",
-      "size": [
-        "42"
-      ],
-      "max_price": 25,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "3001"
-    },
-    {
       "query": "allen edmonds",
       "size": [
         "13"
@@ -263,18 +253,6 @@
       "category_id": "53120"
     },
     {
-      "query": "charvet shirt",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 60,
-      "enabled": true,
-      "profile": "slow",
-      "category_id": "185100"
-    },
-    {
       "query": "ferragamo loafers",
       "size": [
         "13"
@@ -389,16 +367,6 @@
       "category_id": "3001"
     },
     {
-      "query": "hart schaffner marx suit",
-      "size": [
-        "42"
-      ],
-      "max_price": 90,
-      "enabled": true,
-      "profile": "fast",
-      "category_id": "3001"
-    },
-    {
       "query": "brooks brothers golden fleece suit",
       "size": [
         "42"
@@ -484,7 +452,7 @@
       "profile": "slow"
     },
     {
-      "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -mathey -matthey -mathew -marcel",
       "size": null,
       "max_price": 60,
       "enabled": true,
@@ -577,28 +545,6 @@
       "max_price": 100,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "borrelli shirt -\"long island\" -barstool -hoodie -champion",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 60,
-      "enabled": true,
-      "profile": "slow",
-      "category_id": "185100"
-    },
-    {
-      "query": "corbin suit",
-      "size": [
-        "42"
-      ],
-      "max_price": 90,
-      "enabled": true,
-      "profile": "fast",
       "category_id": "3001"
     },
     {
@@ -778,16 +724,6 @@
     },
     {
       "query": "borrelli suit",
-      "size": [
-        "42"
-      ],
-      "max_price": 90,
-      "enabled": true,
-      "profile": "fast",
-      "category_id": "3001"
-    },
-    {
-      "query": "southwick suit",
       "size": [
         "42"
       ],
@@ -1025,9 +961,6 @@
     "pringle of scotland",
     "william lockie",
     "ballantyne",
-    "hart schaffner marx",
-    "southwick",
-    "corbin",
     "cheaney"
   ],
   "PASS_BRANDS": [
