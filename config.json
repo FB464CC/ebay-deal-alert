@@ -263,18 +263,6 @@
       "category_id": "53120"
     },
     {
-      "query": "turnbull asser shirt",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 50,
-      "enabled": true,
-      "profile": "slow",
-      "category_id": "185100"
-    },
-    {
       "query": "charvet shirt",
       "size": [
         "M",
@@ -503,7 +491,7 @@
       "profile": "slow"
     },
     {
-      "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 60,
       "enabled": true,
@@ -511,7 +499,7 @@
       "category_id": "31387"
     },
     {
-      "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -musical -broadway -lin-manuel -playbill",
+      "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -musical -broadway -lin-manuel -playbill -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 80,
       "enabled": true,
@@ -519,7 +507,7 @@
       "category_id": "31387"
     },
     {
-      "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 90,
       "enabled": true,
@@ -642,7 +630,7 @@
       "profile": "slow"
     },
     {
-      "query": "rolex watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "rolex watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -650,24 +638,12 @@
       "category_id": "31387"
     },
     {
-      "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
       "category_id": "31387"
-    },
-    {
-      "query": "gitman shirt",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 40,
-      "enabled": true,
-      "profile": "slow",
-      "category_id": "185100"
     },
     {
       "query": "trafalgar belt -square -tours -battle -london",
@@ -702,7 +678,7 @@
       "category_id": "57988"
     },
     {
-      "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 150,
       "enabled": true,
@@ -728,7 +704,7 @@
       "profile": "slow"
     },
     {
-      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -court -manor -dynasty",
+      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -court -manor -dynasty -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -736,7 +712,7 @@
       "category_id": "31387"
     },
     {
-      "query": "\"universal geneve\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "\"universal geneve\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -744,7 +720,7 @@
       "category_id": "31387"
     },
     {
-      "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -752,7 +728,7 @@
       "category_id": "31387"
     },
     {
-      "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -doorbell -chime",
+      "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -doorbell -chime -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -760,7 +736,7 @@
       "category_id": "31387"
     },
     {
-      "query": "iwc watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "iwc watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -882,7 +858,7 @@
       "category_id": "3001"
     },
     {
-      "query": "\"patek philippe\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "\"patek philippe\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -890,7 +866,7 @@
       "category_id": "31387"
     },
     {
-      "query": "\"audemars piguet\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "\"audemars piguet\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -898,7 +874,7 @@
       "category_id": "31387"
     },
     {
-      "query": "\"vacheron constantin\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "\"vacheron constantin\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -906,7 +882,7 @@
       "category_id": "31387"
     },
     {
-      "query": "\"jaeger lecoultre\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "\"jaeger lecoultre\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -914,7 +890,7 @@
       "category_id": "31387"
     },
     {
-      "query": "cartier watch -perfume -cologne -necklace -bracelet -ring -sunglasses -scarf -pen -lighter -wallet -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "cartier watch -perfume -cologne -necklace -bracelet -ring -sunglasses -scarf -pen -lighter -wallet -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -922,7 +898,7 @@
       "category_id": "31387"
     },
     {
-      "query": "\"grand seiko\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag",
+      "query": "\"grand seiko\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -1000,7 +976,6 @@
     "crockett",
     "church",
     "santoni",
-    "turnbull",
     "charvet",
     "ferragamo",
     "gucci",
@@ -1047,7 +1022,6 @@
     "barbour",
     "j press",
     "rancourt",
-    "gitman",
     "trafalgar",
     "cordings",
     "n peal",

@@ -579,7 +579,18 @@ SUIT_TWO_PIECE_SIGNALS = re.compile(
     re.IGNORECASE,
 )
 SUIT_JACKET_ONLY_SIGNALS = re.compile(
-    r"\b(sports?\s*coat|sportcoat|blazer|suit\s*jacket)\b", re.IGNORECASE
+    # tuxedo/dinner/tux jacket added after a live miss: "VTG Paul Stuart
+    # Tuxedo Jacket Size 42 Wool Black Suit Made In USA Union Coat" was
+    # ALERTED - a jacket with no pants, exactly what the standing rule is
+    # supposed to stop. It said "Suit" but never "pants"/"trousers"/"2
+    # piece", so the two-piece override didn't fire, and "tuxedo jacket"
+    # wasn't in this list, so nothing blocked it.
+    #
+    # Still deliberately does NOT match bare "jacket"/"coat" - that's what
+    # keeps genuine outerwear (Barbour, field jackets) working.
+    r"\b(sports?\s*coat|sportcoat|blazer|suit\s*jacket|"
+    r"tux(?:edo)?\s*jacket|dinner\s*jacket)\b",
+    re.IGNORECASE,
 )
 
 
@@ -1416,6 +1427,25 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
         return platform_name, saved_search["query"], []
     try:
         listings, _total = marketplaces.ADAPTERS[platform_name](saved_search)
+        # Enforce the search's "-term" exclusions on the RESULTS. Only eBay's
+        # API understands "-term" natively; every marketplace silently ignored
+        # it, so a query like `zenith watch -radio -canteen -mug` was happily
+        # returning a Zenith radio, a Tudor canteen and a Rolex coffee mug.
+        # Measured against the real alert history: 15 of 21 watch alerts ever
+        # sent were junk of exactly this kind, 12 of them from Vinted alone,
+        # every one naming a term its own search had already excluded.
+        _clean, excluded = marketplaces.split_query_exclusions(saved_search["query"])
+        if excluded:
+            kept = [
+                listing for listing in listings
+                if not marketplaces.title_matches_exclusion(listing.get("title"), excluded)
+            ]
+            if len(kept) != len(listings):
+                logger.info(
+                    "%s: dropped %s/%s listings matching excluded terms for %r",
+                    platform_name, len(listings) - len(kept), len(listings), _clean,
+                )
+            listings = kept
         return platform_name, saved_search["query"], listings
     except Exception:
         logger.exception("%s search failed for query: %s", platform_name, saved_search["query"])
