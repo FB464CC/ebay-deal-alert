@@ -516,6 +516,16 @@ def fetch_gap_report():
 # model per-state/local rates for a single-buyer bot.
 SALES_TAX_RATE = 0.06
 
+# How many real completed sales it takes before a sold-comp median is
+# trusted over a hedged AI price guess. 5 is deliberately conservative:
+# fetch_grailed_sold_comps() already refuses to return a median under 3
+# samples, and a handful of sales on a specific brand+garment query is a
+# far better basis than a vision model's estimate - but a 3-sale median is
+# still thin enough that it shouldn't overturn a real photo-based read.
+SOLD_COMP_MIN_TO_OVERRIDE_AI = 5
+# Enough samples that the median is genuinely stable, not just present.
+SOLD_COMP_HIGH_CONFIDENCE = 10
+
 
 def get_shipping_cost(listing):
     """First shipping option's cost, or 0.0 if free/unavailable. eBay Browse
@@ -1645,6 +1655,36 @@ def run():
         # identical scoring/AI/alert path below.
         listings = list(listings) + marketplace_listings.get(saved_search["query"], [])
 
+        # Real sold prices are per-QUERY, not per-platform: what a "zegna
+        # sweater" actually sells for doesn't change based on which site the
+        # listing was found on. Grailed's sold index is the only genuine
+        # sold-price data this bot has, and search_grailed() already stamps
+        # it onto its own listings - so spread that same figure across every
+        # listing for this query, whatever platform it came from.
+        #
+        # This costs ZERO extra API calls (the number is already fetched and
+        # riding on the Grailed listings) and is the difference between real
+        # comps covering only Grailed - 2,178 items seen but just 19 ever
+        # scored - and covering eBay/Poshmark/Vinted, which are where
+        # essentially all the volume actually is.
+        sold_comp = next(
+            (
+                (l.get("sold_comp_median"), l.get("sold_comp_count"))
+                for l in listings
+                if l.get("sold_comp_median") is not None
+            ),
+            None,
+        )
+        if sold_comp:
+            comp_median, comp_count = sold_comp
+            for listing in listings:
+                listing.setdefault("sold_comp_median", comp_median)
+                listing.setdefault("sold_comp_count", comp_count)
+            logger.info(
+                "Sold comps for %r: median $%s across %s recent sales (applied to all %s listings)",
+                saved_search["query"], comp_median, comp_count, len(listings),
+            )
+
         logger.info("Found %s listings for query: %s", len(listings), saved_search["query"])
         for listing in listings:
             if not seller_username_presence_logged:
@@ -1887,23 +1927,49 @@ def run():
                 result["deal_rating"] = rating_label
                 result["discount_pct"] = discount_pct
 
+        # Real sold prices beat a guess. Two cases use them:
+        #   (a) nothing else produced a rating at all, or
+        #   (b) the AI DID produce one but only at medium/low confidence and
+        #       there are enough real sales to trust the median instead.
+        #
+        # (b) is the important one. Measured across the alert history: of 97
+        # alerts ever sent, 56 rested on a medium-confidence AI guess and
+        # only 13 on a high-confidence one - so the bot's central claim
+        # ("this is a steal") was usually a vision model's estimate, and
+        # that model has been badly wrong in exactly the expensive direction
+        # (it valued a Rolex strap's resale at $100 against a $247 ask).
+        # An actual median of real completed sales is stronger evidence than
+        # a hedged guess, so it wins when both exist.
+        comp_median = listing.get("sold_comp_median")
+        comp_count = listing.get("sold_comp_count") or 0
+        ai_confidence = (result.get("price_confidence") or "").lower()
+        comp_overrides_weak_ai = (
+            result.get("deal_rating") is not None
+            and ai_confidence in ("medium", "low")
+            and comp_count >= SOLD_COMP_MIN_TO_OVERRIDE_AI
+        )
         if (
-            result.get("deal_rating") is None
+            comp_median is not None
             and category != "watches"
-            and listing.get("sold_comp_median") is not None
+            and (result.get("deal_rating") is None or comp_overrides_weak_ai)
         ):
-            # Grailed sold-comps fallback - real recent sold prices for this
-            # exact query (confirmed live, genuine sold_price data, not an
-            # estimate), used when no AI photo check ran or it didn't
-            # produce a price estimate. Excluded from "watches" on purpose:
-            # that gate exists for authentication/damage risk a price
-            # median can't address, so it must never substitute for the AI
-            # photo check there - see is_blocked_by_steal_quality_gate().
-            result["estimated_resale_value"] = listing["sold_comp_median"]
-            result["price_confidence"] = "medium"
+            # Excluded from "watches" on purpose: that gate exists for
+            # authentication/damage risk a price median can't address, so it
+            # must never substitute for the AI photo check there - see
+            # is_blocked_by_steal_quality_gate().
+            if comp_overrides_weak_ai:
+                result.setdefault("flags", []).append(
+                    f"Sold comps (${comp_median}, n={comp_count}) override "
+                    f"{ai_confidence}-confidence AI estimate of "
+                    f"${result.get('estimated_resale_value')}"
+                )
+            result["estimated_resale_value"] = comp_median
+            # Real completed sales, so this is genuinely better-evidenced
+            # than the medium it used to be labelled.
+            result["price_confidence"] = "high" if comp_count >= SOLD_COMP_HIGH_CONFIDENCE else "medium"
             result.setdefault("flags", []).append(
-                f"Grailed sold comps: median ${listing['sold_comp_median']} "
-                f"across {listing.get('sold_comp_count')} recent sales"
+                f"Grailed sold comps: median ${comp_median} "
+                f"across {comp_count} recent sales"
             )
             rating_label, discount_pct = compute_deal_rating(
                 result.get("price"), result.get("estimated_resale_value")
