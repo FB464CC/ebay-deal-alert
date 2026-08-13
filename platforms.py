@@ -204,6 +204,50 @@ def available_platforms():
     return sorted(ADAPTERS)
 
 
+# "-term" in a saved search is eBay Browse search syntax meaning "exclude
+# listings matching this". NO other marketplace understands it, and every
+# adapter here was passing the raw query straight through - so on Poshmark,
+# Grailed, Vinted and ShopGoodwill the exclusions did nothing at all, and
+# the literal "-radio -canteen -mug" text was also being fed into their
+# relevance matching as if it were something to search FOR.
+#
+# Confirmed against the real alert history: of 21 watch alerts ever sent,
+# 15 were junk, and 12 of those came from Vinted - including "Zenith radio"
+# ( -radio ), "Tudor watch brand canteen" ( -canteen ), "Hamilton Pullover
+# Sweatshirt" ( -sweatshirt ), "Rolex Oyster Perpetual Bone China Coffee
+# Mug" ( -mug ) and a Heath/Zenith doorbell. Every one of those was named
+# explicitly in its own search's exclusion list and got through anyway.
+_QUERY_EXCLUSION_RE = re.compile(r"(?:^|\s)-([A-Za-z0-9][\w'-]*)")
+
+
+def split_query_exclusions(query):
+    """Split an eBay-style query into (clean_query, [excluded_terms]).
+
+    Returns the query with all "-term" tokens removed (so marketplaces get
+    a clean set of words to actually match on) plus the lowercased terms
+    themselves, so the caller can enforce them on the results instead."""
+    query = query or ""
+    terms = [m.group(1).lower() for m in _QUERY_EXCLUSION_RE.finditer(query)]
+    clean = re.sub(r"\s+", " ", _QUERY_EXCLUSION_RE.sub(" ", query)).strip()
+    return clean, terms
+
+
+def title_matches_exclusion(title, terms):
+    """True if the listing title contains any excluded term as a whole word.
+
+    Deliberately TITLE-only, matching how the eBay-side gender/logo filters
+    work. eBay's own "-term" operator matches full listing text
+    (title+description+aspects), which was previously confirmed to collapse
+    real inventory by 90%+ on some searches when a description merely
+    mentioned the word. Whole-word so "-hat" can't kill "Thatcher"."""
+    if not terms:
+        return False
+    haystack = (title or "").lower()
+    return any(
+        re.search(rf"\b{re.escape(term)}\b", haystack) for term in terms
+    )
+
+
 def _slugify(text):
     return re.sub(r"-+", "-", re.sub(r"[^A-Za-z0-9]+", "-", text)).strip("-")
 
@@ -269,7 +313,7 @@ def fetch_grailed_sold_comps(query):
 
 @adapter("grailed")
 def search_grailed(saved_search):
-    query = saved_search["query"]
+    query, _excluded = split_query_exclusions(saved_search["query"])
     body = get_json(
         "grailed",
         f"https://mnrwefss2q-dsn.algolia.net/1/indexes/{GRAILED_INDEX}",
@@ -346,7 +390,7 @@ def search_poshmark(saved_search):
     request_filter = json.dumps({
         "filters": {"department": "Men", "inventory_status": ["available"]},
         "query_and_facet_filters": {},
-        "query": saved_search["query"],
+        "query": split_query_exclusions(saved_search["query"])[0],
         "experience": "all",
         "sizeSystem": "us",
         "sort_by": "added_desc",
@@ -448,7 +492,8 @@ def search_shopgoodwill(saved_search):
     payload = {
         "isSize": False, "isWeddingCatagory": "false", "isMultipleCategoryIds": False,
         "isFromHeaderMenuTab": False, "layout": "grid", "isFromHomePage": False,
-        "searchText": saved_search["query"], "selectedGroup": "Keyword",
+        "searchText": split_query_exclusions(saved_search["query"])[0],
+        "selectedGroup": "Keyword",
         "selectedCategoryIds": "", "selectedSellerIds": "",
         "lowPrice": "0", "highPrice": "999999",
         "searchBuyNowOnly": "", "searchPickupOnly": "false", "searchNoPickupOnly": "false",
@@ -554,7 +599,7 @@ def search_vinted(saved_search):
         "vinted",
         "https://www.vinted.com/api/v2/catalog/items",
         params={
-            "search_text": saved_search["query"],
+            "search_text": split_query_exclusions(saved_search["query"])[0],
             "order": "newest_first",
             # Confirmed live: Vinted's real cap is 96 (100 gets silently
             # clamped down to 96) - same single API call either way, ~5x
