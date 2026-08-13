@@ -618,6 +618,24 @@ DRESS_SHIRT_SIGNALS = re.compile(
 OVERSIZED_SHIRT_SIGNALS = re.compile(r"\b(xl|xxl|2xl|3xl|x-large|extra\s*large)\b", re.IGNORECASE)
 
 
+def brand_in(haystack, brands):
+    """Whole-word brand match.
+
+    Was a raw substring test, which produced real, systematic misfires
+    because short brand names hide inside ordinary words:
+      "arrow"   in "Allen Edmonds 13 C NARROW Apron Toe"   -> rejected
+      "arrow"   in "Alden ... 13 AA/B NARROW Apron Toe"    -> rejected
+      "nautica" in "Barbour NAUTICAl Astern Quilted Jacket"-> rejected
+    "Narrow" is a standard dress-shoe width, so the pass-list was killing
+    precisely the Alden / Allen Edmonds listings the shoe searches exist
+    to find. Same class of error gave "The Tudors" DVDs grab_on_sight tier
+    off "tudor".
+
+    Multi-word brands ("hart schaffner marx") still work - \\b anchors only
+    the outer edges, and interior spaces match literally."""
+    return any(re.search(rf"\b{re.escape(b)}\b", haystack) for b in brands)
+
+
 def is_oversized_dress_shirt(haystack):
     """True for a dress shirt / long-sleeve button-up listed at XL or above.
 
@@ -753,7 +771,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
 
     # 1. Brand
     brand_tier = None
-    if any(b in title for b in PASS_BRANDS):
+    if brand_in(title, PASS_BRANDS):
         return {"verdict": "PASS", "reason": "brand on pass list", "listing": listing}
     # Only count a grab_on_sight/standard match if it appears near the START
     # of the title. Every real listing title observed this session, across
@@ -767,9 +785,9 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     # exists to reject. PASS_BRANDS intentionally stays whole-title above -
     # a bad-brand mention anywhere is still a legitimate reason to reject.
     title_prefix = title[:BRAND_TITLE_WINDOW_CHARS]
-    if any(b in title_prefix for b in GRAB_ON_SIGHT_BRANDS):
+    if brand_in(title_prefix, GRAB_ON_SIGHT_BRANDS):
         brand_tier = "grab_on_sight"
-    elif any(b in title_prefix for b in STANDARD_BRANDS):
+    elif brand_in(title_prefix, STANDARD_BRANDS):
         brand_tier = "standard"
     if any(kw in title for kw in CORPORATE_LOGO_KEYWORDS):
         return {"verdict": "PASS", "reason": "corporate logo keyword match", "listing": listing}
@@ -1729,9 +1747,31 @@ def run():
             # eBay states size in the title; Grailed/Poshmark/Vinted carry it in
             # a structured `size` field the title often omits entirely. Matching
             # title-only would silently discard every marketplace listing.
-            size_haystack = f"{title} {listing.get('size') or ''}"
+            # "42R" / "42L" / "42S" is the normal way a jacket size is written,
+            # and \b42\b can NEVER match it - R/L/S are word characters, so
+            # there's no boundary after "42". Every suit search filters on
+            # size ["42"], which means the entire fast lane was throwing away
+            # correctly-sized suits: a live sweep found 16 of 30 real 2-piece
+            # suits dropped this way ("Kiton Pinstripe Suit 42R", "Canali
+            # 2-Piece Suit 42R", "Hickey Freeman Super 150s Suit 42L"). Only
+            # 17 suit listings have EVER been scored in the bot's whole
+            # history, which is the same bug seen from the other end.
+            #
+            # Split the drop letter off so the number stands alone. Done on
+            # the haystack rather than by loosening the pattern, so "42mm"
+            # (watch case) and "1942" (year) still correctly don't match.
+            size_haystack = re.sub(
+                r"\b(\d{2})\s?(R|L|S|XL|XS)\b",
+                r"\1 \2",
+                f"{title} {listing.get('size') or ''}",
+                flags=re.IGNORECASE,
+            )
             if size_tokens and not any(
-                re.search(rf"\b{re.escape(size_token)}\b", size_haystack, re.IGNORECASE)
+                # (?!\.\d) so shoe size "13" doesn't match "13.5" - "." is a
+                # word boundary, so \b13\b happily matched half sizes.
+                # Confirmed live: "Gucci Horsebit Loafers Men's 13.5" was
+                # ALERTED against a size ["13"] search.
+                re.search(rf"\b{re.escape(size_token)}\b(?!\.\d)", size_haystack, re.IGNORECASE)
                 for size_token in size_tokens
             ):
                 logger.info("Skipping %s because title does not match size filter", item_id)
