@@ -62,17 +62,30 @@ PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", []))
 # Hard cap on how many of the enabled searches get an actual eBay API call
 # per run, split across two priority lanes (see the fast/slow split at the
-# ebay_this_run computation in run()). Total (fast+slow) is 12, same daily
-# budget as before - this reallocates it by priority, not increases it.
-# eBay's own docs (developer.ebay.com) confirm the Browse API's default
-# limit is a hard 5,000 calls/day; count_similar_listings() hits the SAME
-# quota (up to GEMINI_CALL_LIMIT calls/run on top of the search rotation),
-# so 12/run total gives real margin: ~3,456 search calls/day + a realistic
-# ~540/day from similar-count (matches actual observed REVIEW-candidate
-# volume) = ~4,000/day, comfortably under 5,000. A free, legitimate path to
-# a higher limit exists (eBay's "Application Growth Check") if this ever
-# needs to be less conservative - requires the account owner to submit it.
-EBAY_FAST_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_FAST_SEARCHES_PER_RUN", 8))
+# ebay_this_run computation in run()). A given search only gets re-queried
+# once every ceil(lane_size / per_run) * 5 minutes - "fast" cycles faster
+# because it holds the highest-value searches (suits, watches), not because
+# it moves more listings.
+#
+# eBay's Browse API default limit is a hard 5,000 calls/day (developer.ebay
+# .com). At ~300 runs/day (confirmed from real GH Actions run history):
+#   fast(11) + slow(4) = 15/run -> 4,500/day (90%), ~15 min fast-lane cycle
+# Raised from 8/4 (12/run, 72%, 25 min cycle) once real numbers showed the
+# room: removing count_similar_listings() (an unbounded per-candidate call,
+# gone) and the circuit breaker's dedicated probe call (also gone, see
+# ebay_circuit_breaker_allows_calls()) freed enough budget to fund this
+# without sitting at the edge of the quota the way a straight 2-3x increase
+# would have (literally tripling fast alone would hit 174% of quota and
+# guarantee repeated 429s - worse than not doing it, since a tripped
+# breaker blocks ALL eBay calls for 30-120 min, the exact Aug 9 outage).
+# 90% still leaves real margin for a high-volume day, same philosophy as
+# the original 12/run choice.
+#
+# A free, legitimate path to a much higher limit exists (eBay's
+# "Application Growth Check" - filed, pending as of this writing) if this
+# ever needs to be less conservative; that's a quota increase, not a
+# workaround, and doesn't require any of the above trade-offs.
+EBAY_FAST_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_FAST_SEARCHES_PER_RUN", 11))
 EBAY_SLOW_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_SLOW_SEARCHES_PER_RUN", 4))
 # How many leading characters of a (lowercased) title count for
 # grab_on_sight/standard brand-tier matching - see score_listing(). 60 chars
@@ -374,10 +387,21 @@ def _write_ebay_rate_limit_state(state):
 
 def ebay_circuit_breaker_allows_calls(token):
     """Returns True if eBay calls should be attempted this run, False if
-    still in a backoff cooldown from a prior 429. See EBAY_RATE_LIMIT_STATE_PATH
-    module comment for why this exists. Manages its own persisted state as a
-    side effect - clears it on a successful probe, extends it (exponential
-    backoff, capped) on another 429."""
+    still in a backoff cooldown from a prior real 429. See
+    EBAY_RATE_LIMIT_STATE_PATH module comment for why this exists.
+
+    Stateless check only - a cheap state-file read, no eBay call of its own.
+    Previously this spent a dedicated probe API call every single run just
+    to test eBay's mood before committing to the real rotation: 1 call/run,
+    ~300/day, for zero search coverage. Worse, it meant a real 429 hit by an
+    ACTUAL search was silently swallowed by run()'s generic exception
+    handler and never tripped the breaker - only the probe's own 429 did, so
+    a mid-run rate-limit hit went undetected until the next run's probe
+    happened to also get one. The breaker now trips directly off real search
+    429s instead (see run()'s eBay-call exception handling and
+    _trip_ebay_circuit_breaker() below), which is both more accurate and
+    free - and removing the probe's fixed cost is what funds
+    EBAY_FAST_SEARCHES_PER_RUN's increase below (see config.json comment)."""
     state = _read_ebay_rate_limit_state()
     now_ts = time.time()
     blocked_until_ts = state.get("blocked_until_ts", 0)
@@ -389,33 +413,33 @@ def ebay_circuit_breaker_allows_calls(token):
             remaining_min, state.get("consecutive_429_streak", 0),
         )
         return False
+    return True
 
-    # Cooldown expired (or this is the first run ever) - probe with a single
-    # lightweight call before committing to the full per-run search rotation.
-    try:
-        search_ebay(token, {"query": "test", "max_price": 999999})
-        if state.get("consecutive_429_streak"):
-            logger.info("eBay circuit breaker: probe succeeded, resuming normal eBay calls")
+
+def _trip_ebay_circuit_breaker():
+    """Record a real 429 hit by an actual search call and back off.
+    Exponential, capped - same math the old probe used."""
+    state = _read_ebay_rate_limit_state()
+    streak = state.get("consecutive_429_streak", 0) + 1
+    backoff_minutes = min(EBAY_BACKOFF_INITIAL_MINUTES * (2 ** (streak - 1)), EBAY_BACKOFF_MAX_MINUTES)
+    _write_ebay_rate_limit_state({
+        "blocked_until_ts": time.time() + backoff_minutes * 60,
+        "consecutive_429_streak": streak,
+    })
+    logger.warning(
+        "eBay circuit breaker: real 429 from a search call (streak %s), backing off %s min",
+        streak, backoff_minutes,
+    )
+
+
+def _clear_ebay_circuit_breaker_if_tripped():
+    """Self-heal after a successful real search: no dedicated probe needed
+    to discover eBay is happy again, a genuine search succeeding IS that
+    signal. Only touches disk when there's actually a streak to clear."""
+    state = _read_ebay_rate_limit_state()
+    if state.get("consecutive_429_streak"):
+        logger.info("eBay circuit breaker: search succeeded, clearing prior 429 streak")
         _write_ebay_rate_limit_state({"blocked_until_ts": 0, "consecutive_429_streak": 0})
-        return True
-    except requests.exceptions.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 429:
-            streak = state.get("consecutive_429_streak", 0) + 1
-            backoff_minutes = min(EBAY_BACKOFF_INITIAL_MINUTES * (2 ** (streak - 1)), EBAY_BACKOFF_MAX_MINUTES)
-            _write_ebay_rate_limit_state({
-                "blocked_until_ts": now_ts + backoff_minutes * 60,
-                "consecutive_429_streak": streak,
-            })
-            logger.warning(
-                "eBay circuit breaker: probe still 429 (streak %s), backing off %s min",
-                streak, backoff_minutes,
-            )
-            return False
-        # Some other HTTP error (auth, server error, etc.) isn't a rate-limit
-        # signal - don't touch the cooldown state, let normal per-search
-        # exception handling in run() deal with it as it always has.
-        logger.warning("eBay circuit breaker probe hit a non-429 HTTP error: %s", exc)
-        return True
 
 
 # count_similar_listings() lived here. Deleted along with its call site in
@@ -1662,6 +1686,22 @@ def run():
             logger.info("Polling saved search (eBay + marketplaces): %s", saved_search["query"])
             try:
                 listings, search_total_listings = search_ebay(token, saved_search)
+                _clear_ebay_circuit_breaker_if_tripped()
+            except requests.exceptions.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    _trip_ebay_circuit_breaker()
+                    # Abandon the rest of THIS run's eBay calls too - no
+                    # point hammering a limit we just hit. Clearing the
+                    # rotation set makes every later iteration in this same
+                    # loop skip eBay via the membership check above.
+                    logger.warning(
+                        "eBay 429 mid-run on %r, abandoning remaining eBay calls this run",
+                        saved_search["query"],
+                    )
+                    ebay_this_run = set()
+                else:
+                    logger.exception("eBay search failed for query: %s", saved_search["query"])
+                listings, search_total_listings = [], None
             except Exception:
                 logger.exception("eBay search failed for query: %s", saved_search["query"])
                 listings, search_total_listings = [], None
