@@ -296,6 +296,23 @@ def fetch_grailed_sold_comps(query):
             "query": query,
             "hitsPerPage": SOLD_COMP_HITS,
             "numericFilters": f"sold_at_i>{cutoff}",
+            # Algolia fuzzy-matches by default, which is fine for browsing
+            # and actively dangerous for price evidence. Confirmed live:
+            #   "oxxford suit" -> Taylor Stitch OXFORD shirts, median $28
+            #   "vass shoes"   -> 49 of 50 hits were VANS sneakers
+            #   "maison margiela hat" -> Supreme x MM6 collab caps
+            # Those medians were then used as "genuine sold-price data" for
+            # a completely different brand - so an Oxxford suit got priced
+            # against $28 oxford shirts and was blocked forever, while
+            # searches whose fuzzy match landed on pricier junk rated
+            # anything in budget as a Steal.
+            #
+            # With both off, a brand Grailed barely carries returns too few
+            # real comps and the >=3 floor makes the function correctly
+            # ABSTAIN instead of inventing a number. Abstaining is the right
+            # failure mode for price evidence.
+            "typoTolerance": "false",
+            "removeWordsIfNoResults": "none",
         },
         headers={
             "X-Algolia-Application-Id": GRAILED_APP_ID,
