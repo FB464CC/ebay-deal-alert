@@ -117,6 +117,18 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 DB_PATH = "seen_items.db"
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
+# The settings web app reads this file via GitHub's Contents API
+# (web/api/history.js, and the same pattern in config.js/ledger.js), which
+# has a hard 1MB-per-file ceiling - past that, `file.content` comes back
+# empty instead of the base64 body, and every endpoint reading this file
+# breaks. Confirmed live: with the OLD row-count cap (1500 lines), the
+# real file was sitting at 1,027,782 bytes - 98% of that ceiling, on the
+# verge of silently breaking the settings app the next time record sizes
+# ticked up. A fixed row count can't reliably predict file size (records
+# vary 291-1258 bytes depending on how verbose the AI summary/flags text
+# is), so this caps by cumulative bytes instead, with real margin below
+# the ceiling.
+ALERTS_LOG_MAX_BYTES = 800_000
 EBAY_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("ebay_rate_limit_state.json")
 # Confirmed live: an eBay 429 lockout persisted for 5+ hours straight
 # through continuous every-5-min hammering (up to 15 calls/run) with no
@@ -1165,7 +1177,17 @@ def draft_resale_listing(image_paths):
         "measurements, condition, and flaws based only on what is visible. "
         "Use null for suggested_price if there is not enough visual evidence."
     )
-    return _call_gemini_json(prompt, image_parts, timeout=30)
+    try:
+        return _call_gemini_json(prompt, image_parts, timeout=30)
+    except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
+        # check_photos_with_gemini() (this function's near-identical sibling
+        # on the hot path) catches exactly these and degrades gracefully to
+        # None; this one didn't, so a network hiccup here meant an uncaught
+        # traceback instead of a clean failure message on what's already a
+        # manually-invoked CLI tool where a plain error is more useful than
+        # a stack trace.
+        logger.warning("Gemini draft-listing call failed: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1442,9 +1464,24 @@ def append_alert_log(result):
             lines = []
 
     lines.append(json.dumps(record, separators=(",", ":")))
-    lines = lines[-1500:]
+    # Trim from the OLDEST end by cumulative BYTE size, not a fixed row
+    # count - see ALERTS_LOG_MAX_BYTES above for why.
+    kept = []
+    total_bytes = 0
+    for line in reversed(lines):
+        line_bytes = len(line.encode("utf-8")) + 1  # +1 for the trailing newline
+        if total_bytes + line_bytes > ALERTS_LOG_MAX_BYTES:
+            break
+        kept.append(line)
+        total_bytes += line_bytes
+    lines = list(reversed(kept))
     try:
-        with ALERTS_LOG_PATH.open("w", encoding="utf-8") as log_file:
+        # newline="" so Windows doesn't translate \n -> \r\n on write - the
+        # byte-budget trim above counts exactly 1 byte per line ending, and
+        # a silent +1 byte/line from CRLF translation is exactly the kind
+        # of small, invisible drift that closes the safety margin below
+        # GitHub's 1MB ceiling this whole cap exists to respect.
+        with ALERTS_LOG_PATH.open("w", encoding="utf-8", newline="") as log_file:
             for line in lines:
                 log_file.write(line + "\n")
     except OSError as exc:
@@ -1557,9 +1594,12 @@ def _read_alert_log_records():
 
 
 def send_weekly_digest():
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7)
+    all_records = _read_alert_log_records()
+    all_timestamps = []
     recent_records = []
-    for record in _read_alert_log_records():
+    for record in all_records:
         timestamp = record.get("timestamp")
         if not timestamp:
             continue
@@ -1569,20 +1609,52 @@ def send_weekly_digest():
             continue
         if parsed_timestamp.tzinfo is None:
             parsed_timestamp = parsed_timestamp.replace(tzinfo=timezone.utc)
+        all_timestamps.append(parsed_timestamp)
         if parsed_timestamp >= cutoff:
             recent_records.append(record)
+
+    # alerts_log.jsonl is capped by BYTE SIZE, not a fixed row count or a
+    # fixed time window (see ALERTS_LOG_MAX_BYTES) - a busy week's real
+    # volume doesn't reliably fit under the 1MB the settings app's GitHub
+    # Contents API reads are limited to, so the file can genuinely retain
+    # less than 7 days on an active week. Silently calling everything
+    # retained "this week" would overclaim on those weeks - say what's
+    # ACTUALLY covered instead of asserting a window the data might not
+    # support.
+    oldest_retained = min(all_timestamps) if all_timestamps else now
+    covers_full_week = oldest_retained <= cutoff
+    if covers_full_week:
+        window_label = "this week"
+    else:
+        retained_hours = (now - oldest_retained).total_seconds() / 3600
+        window_label = (
+            f"in the last {retained_hours:.0f}h (log only retains that far back "
+            "right now, not the full week)"
+        )
 
     verdict_counts = Counter(record.get("verdict") or "unknown" for record in recent_records)
     rating_counts = Counter(
         record.get("deal_rating") for record in recent_records if record.get("deal_rating")
     )
-    brand_or_query_counts = Counter(
-        record.get("brand_tier") or record.get("query")
+    # Was Counter(brand_tier OR query) - two unrelated things sharing one
+    # bucket. brand_tier is a coarse 2-value field ("grab_on_sight"/
+    # "standard") shared by dozens of different searches, so it usually
+    # drowned out any individual query's count outright; the times it
+    # DIDN'T win were arguably worse - the stored query string includes
+    # the full un-stripped "-radio -canteen -bottle -mug..." exclusion
+    # suffix (40+ words on every watch search), so "Top brand/search"
+    # could print that entire wall of text as the headline of a push
+    # notification meant to be a short summary. Confirmed against the real
+    # log: "seiko watch -radio -canteen -bottle -mug -cup -thermos
+    # -keychain..." (364 occurrences) currently outranks "grab_on_sight"
+    # (156) for the top spot.
+    query_counts = Counter(
+        marketplaces.split_query_exclusions(record["query"])[0]
         for record in recent_records
-        if record.get("brand_tier") or record.get("query")
+        if record.get("query")
     )
-    top_brand_or_query = brand_or_query_counts.most_common(1)
-    top_label = top_brand_or_query[0][0] if top_brand_or_query else "n/a"
+    top_query = query_counts.most_common(1)
+    top_label = top_query[0][0] if top_query else "n/a"
 
     rating_parts = []
     for label in ("Steal", "Great Deal", "Good Deal", "Fair", "Marginal"):
@@ -1592,7 +1664,7 @@ def send_weekly_digest():
     verdict_parts = [
         f"{verdict}: {count}" for verdict, count in sorted(verdict_counts.items())
     ]
-    message = f"{len(recent_records)} alerts this week"
+    message = f"{len(recent_records)} alerts {window_label}"
     if rating_parts:
         message += " - " + ", ".join(rating_parts)
     if verdict_parts:
