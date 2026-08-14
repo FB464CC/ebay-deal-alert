@@ -327,6 +327,23 @@ class ScoreListingHardFails(unittest.TestCase):
         )
         self.assertNotEqual(result["verdict"], "PASS")
 
+    def test_watch_parts_accessory_hard_fails_before_reaching_ai(self):
+        # Live miss: "Authentic Hamilton Watch Service Case Black Zip Around
+        # w Insert & Watch Parts" - a watch service case/accessory bag, not
+        # a complete watch - had no CONDITION_HARD_FAIL_KEYWORDS match at
+        # all ("watch parts" wasn't in the list, only "for parts"/"for
+        # repair" and specific container phrases), so it sailed through to
+        # the AI price check, got priced as if it were a real watch, and
+        # was blocked only for being "Good Deal" instead of "Steal" - a
+        # correct block, but for a misleading reason that made it look like
+        # a real watch that just wasn't a good enough deal.
+        result = m.score_listing(
+            self._listing("Authentic Hamilton Watch Service Case Black Zip Around w Insert & Watch Parts"),
+            gap_report=None,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("condition hard-fail keyword", result["reason"])
+
     def test_real_condition_hard_fails_still_caught(self):
         # The whole-word fix must not lose real catches - these should
         # still hard-fail same as before.
