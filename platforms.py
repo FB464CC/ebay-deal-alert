@@ -644,8 +644,13 @@ def search_poshmark(saved_search):
 
 # Only surface an auction once it's this close to ending - per explicit user
 # instruction, currentPrice on a live auction isn't a real number until the
-# bidding is basically over.
-SHOPGOODWILL_CLOSING_SOON_MINUTES = 60
+# bidding is basically over. Tightened 60 -> 30: even at 60 min out, live
+# user report was still landing alerts on prices that had already moved on
+# by the time they looked. Contested auctions (numBids > 0) get an even
+# tighter window - a bid war is the strongest signal the current price is
+# NOT close to final, so those only surface once truly down to the wire.
+SHOPGOODWILL_CLOSING_SOON_MINUTES = 30
+SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES = 15
 # Flat assumed shipping+handling - per explicit user instruction, the API's
 # own shippingPrice/handlingPrice fields don't reflect real cost. Midpoint
 # of the $12-15 range given.
@@ -728,7 +733,9 @@ def search_shopgoodwill(saved_search):
         # current bid is close to being the FINAL price - same logic a
         # human sniper uses (watch it, don't bid until the last hour).
         remaining_minutes = _parse_shopgoodwill_remaining(item.get("remainingTime"))
-        if remaining_minutes is None or remaining_minutes > SHOPGOODWILL_CLOSING_SOON_MINUTES:
+        num_bids = item.get("numBids") or 0
+        threshold = SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES if num_bids > 0 else SHOPGOODWILL_CLOSING_SOON_MINUTES
+        if remaining_minutes is None or remaining_minutes > threshold:
             skipped_too_early += 1
             continue
         listings.append(
@@ -750,8 +757,9 @@ def search_shopgoodwill(saved_search):
         )
     if skipped_too_early:
         logger.info(
-            "shopgoodwill: skipped %s auction(s) more than %s min from closing",
-            skipped_too_early, SHOPGOODWILL_CLOSING_SOON_MINUTES,
+            "shopgoodwill: skipped %s auction(s) too far from closing "
+            "(>%s min uncontested, >%s min with bids already on it)",
+            skipped_too_early, SHOPGOODWILL_CLOSING_SOON_MINUTES, SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES,
         )
     return [x for x in listings if x], (body.get("searchResults") or {}).get("itemCount")
 

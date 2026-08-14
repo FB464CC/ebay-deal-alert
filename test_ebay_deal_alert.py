@@ -480,6 +480,39 @@ class EbayRateLimitCheck(unittest.TestCase):
         self.assertEqual((remaining, limit), (None, None))
 
 
+class ShopGoodwillClosingSoon(unittest.TestCase):
+    """currentPrice on a live ShopGoodwill auction isn't a real number until
+    bidding is basically over - per explicit user instruction, only surface
+    an auction once it's close enough to closing that the current price is
+    close to final. Contested auctions (numBids > 0) get an even tighter
+    window - a bid war is the strongest signal the price isn't done moving."""
+
+    def _fake_response(self, items):
+        resp = mock.Mock()
+        resp.ok = True
+        resp.json.return_value = {"searchResults": {"items": items, "itemCount": len(items)}}
+        return resp
+
+    def _item(self, item_id, remaining, num_bids=0):
+        return {
+            "itemId": item_id, "title": f"item {item_id}", "currentPrice": 20.0,
+            "remainingTime": remaining, "numBids": num_bids,
+            "imageURL": "http://x/img.jpg", "sellerName": "seller",
+        }
+
+    def test_uncontested_uses_wide_window_contested_uses_narrow_window(self):
+        items = [
+            self._item(1, "45m", num_bids=0),   # too early, uncontested (>30)
+            self._item(2, "20m", num_bids=0),   # in window, uncontested
+            self._item(3, "20m", num_bids=3),   # too early once contested (>15)
+            self._item(4, "10m", num_bids=3),   # in window, contested
+        ]
+        with mock.patch.object(p.requests, "post", return_value=self._fake_response(items)):
+            listings, _count = p.search_shopgoodwill({"query": "test watch"})
+        surfaced_ids = {int(l["itemId"].split(":")[1]) for l in listings}
+        self.assertEqual(surfaced_ids, {2, 4})
+
+
 class GrailedBatching(unittest.TestCase):
     """172 sequential Algolia calls (86 enabled searches x 2 queries each)
     ate ~60s of the ~90s marketplace fetch budget - Grailed alone was
