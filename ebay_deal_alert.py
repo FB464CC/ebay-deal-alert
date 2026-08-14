@@ -466,9 +466,23 @@ def get_ebay_rate_limit_remaining(token):
         resp.raise_for_status()
         body = resp.json()
         for api in body.get("rateLimits", []):
-            if api.get("apiName") != "browse":
+            # eBay's docs (and every third-party writeup) show apiName as
+            # lowercase "browse" - the REAL response, confirmed live, sends
+            # "Browse" (capital B). Case-fold the comparison rather than
+            # trust either source blindly.
+            if (api.get("apiName") or "").lower() != "browse":
                 continue
             for resource in api.get("resources", []):
+                # Confirmed live: this apiName actually carries TWO
+                # resources - "buy.browse" (item_summary/search, what this
+                # bot calls) and "buy.browse.item.bulk" (a different
+                # endpoint this bot never uses). Must match the resource
+                # name explicitly, not just take the first one - the two
+                # have entirely independent remaining/limit counts and
+                # silently reading the wrong one would report a healthy
+                # quota while the real one was exhausted, or vice versa.
+                if resource.get("name") != "buy.browse":
+                    continue
                 rates = resource.get("rates") or []
                 if rates:
                     rate = rates[0]
@@ -1653,16 +1667,53 @@ def prefetch_marketplaces(now):
     offset = ((now.hour * 60 + now.minute) // 20) % len(searches)
     searches = searches[offset:] + searches[:offset]
 
+    # Platforms with a BATCH_ADAPTERS entry (Grailed) get dispatched ONCE
+    # below with the full search list, not per-(search, platform) here -
+    # excluded from the normal task queue so there's no double-fetch.
+    batched_platforms = [pl for pl in active if pl in marketplaces.BATCH_ADAPTERS]
     tasks = [
         (s, p)
         for s in searches
         for p in s.get("platforms", active)
-        if p in marketplaces.ADAPTERS
+        if p in marketplaces.ADAPTERS and p not in marketplaces.BATCH_ADAPTERS
     ]
     deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
     found = {}
     counts = {}
     results_lock = threading.Lock()
+
+    def batch_worker(platform_name):
+        """Runs the platform's ONE batch call (covering every enabled
+        search for it) as its own daemon thread, in parallel with the
+        per-task queue workers below - same deadline, same merge lock."""
+        relevant = [s for s in searches if platform_name in s.get("platforms", active)]
+        if not relevant:
+            return
+        try:
+            results = marketplaces.BATCH_ADAPTERS[platform_name](relevant)
+        except Exception:
+            logger.exception("%s batch fetch failed", platform_name)
+            return
+        with results_lock:
+            for query, listings in (results or {}).items():
+                # Same "-term" exclusion enforcement _fetch_marketplace()
+                # applies to the per-task path - a batch call skips that
+                # function entirely, so it has to happen here instead.
+                clean, excluded = marketplaces.split_query_exclusions(query)
+                if excluded:
+                    kept = [
+                        listing for listing in listings
+                        if not marketplaces.title_matches_exclusion(listing.get("title"), excluded)
+                    ]
+                    if len(kept) != len(listings):
+                        logger.info(
+                            "%s: dropped %s/%s listings matching excluded terms for %r",
+                            platform_name, len(listings) - len(kept), len(listings), clean,
+                        )
+                    listings = kept
+                if listings:
+                    found.setdefault(query, []).extend(listings)
+                    counts[platform_name] = counts.get(platform_name, 0) + len(listings)
 
     # NOTE: deliberately plain threading.Thread(daemon=True), not
     # concurrent.futures.ThreadPoolExecutor. Proved live: ThreadPoolExecutor
@@ -1693,6 +1744,10 @@ def prefetch_marketplaces(now):
             work_queue.task_done()
 
     workers = [threading.Thread(target=worker, daemon=True) for _ in range(8)]
+    workers += [
+        threading.Thread(target=batch_worker, args=(pl,), daemon=True)
+        for pl in batched_platforms
+    ]
     for w in workers:
         w.start()
     # Bounded by the shared deadline, not remaining*worker_count - each join

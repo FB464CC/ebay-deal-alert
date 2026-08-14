@@ -343,13 +343,27 @@ class EbayRateLimitCheck(unittest.TestCase):
     instead."""
 
     def test_parses_real_response_shape(self):
+        # This is the ACTUAL body eBay returns, captured live in production
+        # - apiName is "Browse" (capital B, not the lowercase "browse" every
+        # doc/writeup shows), and there are TWO resources under it:
+        # buy.browse (what this bot calls) and buy.browse.item.bulk (a
+        # different endpoint it never uses, with its own independent
+        # remaining/limit). Both were real bugs caught only by deploying
+        # and reading the live log - a body built from the documented shape
+        # alone would have hidden both.
         body = {
             "rateLimits": [{
-                "apiContext": "buy", "apiName": "browse", "apiVersion": "v1",
-                "resources": [{"name": "buy.browse", "rates": [
-                    {"count": 3612, "limit": 5000, "remaining": 1388,
-                     "reset": "2026-08-14T07:00:00.000Z", "timeWindow": 86400},
-                ]}],
+                "apiContext": "buy", "apiName": "Browse", "apiVersion": "v1",
+                "resources": [
+                    {"name": "buy.browse", "rates": [
+                        {"count": 1170, "limit": 5000, "remaining": 3830,
+                         "reset": "2026-08-14T07:00:00.000Z", "timeWindow": 86400},
+                    ]},
+                    {"name": "buy.browse.item.bulk", "rates": [
+                        {"count": 0, "limit": 5000, "remaining": 5000,
+                         "reset": "2026-08-14T07:00:00.000Z", "timeWindow": 86400},
+                    ]},
+                ],
             }],
         }
         fake_resp = mock.Mock()
@@ -357,7 +371,7 @@ class EbayRateLimitCheck(unittest.TestCase):
         fake_resp.json = lambda: body
         with mock.patch("requests.get", return_value=fake_resp):
             remaining, limit = m.get_ebay_rate_limit_remaining("fake-token")
-        self.assertEqual((remaining, limit), (1388, 5000))
+        self.assertEqual((remaining, limit), (3830, 5000), "must read buy.browse, not buy.browse.item.bulk")
 
     def test_failure_returns_none_never_raises(self):
         # Must be a safety net, not a hard dependency - a failed quota
@@ -365,6 +379,60 @@ class EbayRateLimitCheck(unittest.TestCase):
         with mock.patch("requests.get", side_effect=requests.exceptions.ConnectionError("boom")):
             remaining, limit = m.get_ebay_rate_limit_remaining("fake-token")
         self.assertEqual((remaining, limit), (None, None))
+
+
+class GrailedBatching(unittest.TestCase):
+    """172 sequential Algolia calls (86 enabled searches x 2 queries each)
+    ate ~60s of the ~90s marketplace fetch budget - Grailed alone was
+    eating two-thirds of it, which is why prefetch_marketplaces() needed a
+    rotating start-offset just to spread which searches got cut off each
+    run, rather than ever covering all of them. Batching replaces that with
+    1-4 HTTP round trips total."""
+
+    def test_batch_adapter_called_once_not_per_search(self):
+        from datetime import datetime, timezone
+
+        calls = []
+
+        def fake_grailed_batch(saved_searches):
+            calls.append(len(saved_searches))
+            return {
+                s["query"]: [{"itemId": f"grailed:{s['query']}", "title": s["query"], "seller": {}}]
+                for s in saved_searches
+            }
+
+        def grailed_must_not_be_called_per_search(_saved_search):
+            raise AssertionError("grailed must be dispatched via BATCH_ADAPTERS, not the per-task queue")
+
+        orig_batch, orig_adapters = dict(p.BATCH_ADAPTERS), dict(p.ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS["grailed"] = fake_grailed_batch
+            p.ADAPTERS.clear()
+            p.ADAPTERS["grailed"] = grailed_must_not_be_called_per_search
+            p.ADAPTERS["poshmark"] = lambda s: (
+                [{"itemId": f"poshmark:{s['query']}", "title": s["query"], "seller": {}}], 1
+            )
+            m.MARKETPLACES_ENABLED = ["grailed", "poshmark"]
+            m.SAVED_SEARCHES = [
+                {"query": "canali suit", "enabled": True, "platforms": ["grailed", "poshmark"]},
+                {"query": "zegna sweater", "enabled": True, "platforms": ["grailed", "poshmark"]},
+            ]
+            result = m.prefetch_marketplaces(datetime.now(timezone.utc))
+        finally:
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertEqual(calls, [2], "expected exactly one batch call covering both searches")
+        for query in ("canali suit", "zegna sweater"):
+            ids = {l["itemId"] for l in result.get(query, [])}
+            self.assertIn(f"grailed:{query}", ids)
+            self.assertIn(f"poshmark:{query}", ids)
 
 
 if __name__ == "__main__":
