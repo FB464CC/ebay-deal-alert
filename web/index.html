@@ -1033,7 +1033,17 @@
           ${items.map((item) => {
             const badgeClass = item.ai_flagged ? "warning" : String(item.verdict || "").toLowerCase();
             const ratingClass = ratingClasses[item.deal_rating] || "rating-marginal";
-            const discountText = item.discount_pct == null ? "" : ` -${Math.round(Number(item.discount_pct))}%`;
+            // discount_pct is signed: positive = under resale (a real deal),
+            // negative = over resale (overpaying) - unbounded since the
+            // backend clamp was removed, so it can be e.g. -202. A hardcoded
+            // "-" prefix here used to double up into "--202%" on a bad
+            // listing, and made a genuine +67% steal read as "-67%" which,
+            // while a common discount-display convention, stopped being
+            // unambiguous the moment the sign could flip. Spell it out
+            // instead - matches the phone alert's "X% under resale" wording.
+            const discountValue = item.discount_pct == null ? null : Math.round(Number(item.discount_pct));
+            const discountText = discountValue == null ? "" :
+              (discountValue >= 0 ? ` ${discountValue}% under resale` : ` ${Math.abs(discountValue)}% OVER resale`);
             const ratingText = item.deal_rating ? `${item.deal_rating}${Number.isFinite(Number(item.discount_pct)) ? discountText : ""}` : "";
             const confidenceTitle = item.price_confidence ? ` title="Confidence: ${escapeHtml(item.price_confidence)}"` : "";
             const retailEstimate = formatEstimate(item.estimated_retail_price);
