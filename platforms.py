@@ -669,7 +669,17 @@ def search_shopgoodwill(saved_search):
         "searchClosedAuctions": "false", "closedAuctionEndingDate": "1/1/2000",
         "closedAuctionDaysBack": "0", "searchCanadaShipping": "false",
         "searchInternationalShippingOnly": "false",
-        "sortColumn": "1", "page": "1", "pageSize": "40", "sortDescending": "true",
+        # sortDescending was "true" - confirmed live this sorts by
+        # remainingTime DESCENDING (ending latest first: 6-7 days out),
+        # which is the exact opposite of useful against a 60-minute
+        # closing-soon filter. "false" sorts ending-SOONEST first
+        # (confirmed live: 46s, 1m46s, 2m46s remaining) - what
+        # SHOPGOODWILL_CLOSING_SOON_MINUTES actually needs to find
+        # anything. This is almost certainly why ShopGoodwill has been
+        # pulling ~4 listings/run against thousands from every other
+        # platform - it was showing this filter its least relevant page,
+        # every single call.
+        "sortColumn": "1", "page": "1", "pageSize": "40", "sortDescending": "false",
         "savedSearchId": 0, "useBuyerPrefs": "true", "searchUSOnlyShipping": "true",
         "categoryLevelNo": "1", "categoryLevel": 1, "categoryId": 0, "partNumber": "",
     }
