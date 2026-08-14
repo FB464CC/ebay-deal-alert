@@ -151,10 +151,25 @@ class WatchPriceBand(unittest.TestCase):
         # of $595-795 against real comps of $150-550 for those exact
         # models. The clamp must actually bring an estimate like that back
         # down to the known band, not just widen the band to fit it.
-        low, avg, high = m.watch_price_band("Movado Bold Evolution 2.0 Chronograph")
+        band = m.watch_price_band("Movado Bold Evolution 2.0 Chronograph")
+        low, avg, high = band
         self.assertLess(high, 795, "band must be tight enough to catch the real live miss")
-        clamped = max(low, min(high, 795))
-        self.assertEqual(clamped, high)
+        self.assertEqual(m.clamp_watch_resale_estimate(795, band), high)
+
+    def test_clamp_never_raises_a_low_estimate(self):
+        # Live miss: "Bulova Watch Crystal CMT162 ... Dustproof Envelope" -
+        # a watch-crystal storage envelope, not a watch - got an accurate
+        # $10 AI estimate (the AI correctly recognized it wasn't a
+        # complete watch). The old max(low, min(high, x)) clamp forced
+        # that UP to the Bulova band's $60 floor, manufacturing a fake
+        # 70% "Steal" that actually sent as a real push alert. The clamp
+        # must never raise a below-floor estimate - a low estimate on a
+        # "watches" listing is usually the AI correctly flagging that
+        # it's an accessory/part, not a real watch.
+        band = m.watch_price_band("Bulova Watch Crystal CMT162 Dustproof Envelope")
+        low, avg, high = band
+        self.assertEqual(low, 60, "sanity check against the real band that produced the live miss")
+        self.assertEqual(m.clamp_watch_resale_estimate(10, band), 10, "must stay at the AI's real number, not jump to the floor")
 
 
 class SizeMatching(unittest.TestCase):
@@ -326,6 +341,18 @@ class ScoreListingHardFails(unittest.TestCase):
             self._listing("Seiko Kinetic Two Tone Stainless Steel Watch White Dial"), gap_report=None
         )
         self.assertNotEqual(result["verdict"], "PASS")
+
+    def test_dustbag_envelope_hard_fails_before_reaching_ai(self):
+        # Belt-and-suspenders companion to the clamp fix - catches this
+        # class of accessory listing at the title stage so it never even
+        # burns an AI call, not just relying on the clamp to defang a
+        # false-positive result after the fact.
+        result = m.score_listing(
+            self._listing("Bulova Watch Crystal CMT162 12.0 x 11.7 G-S Dustproof Envelope"),
+            gap_report=None,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("condition hard-fail keyword", result["reason"])
 
     def test_watch_parts_accessory_hard_fails_before_reaching_ai(self):
         # Live miss: "Authentic Hamilton Watch Service Case Black Zip Around

@@ -846,6 +846,23 @@ def watch_price_band(title):
     return None
 
 
+def clamp_watch_resale_estimate(estimate, band):
+    """Cap an AI resale estimate at the known brand's ceiling. Ceiling
+    only - never raises a low estimate up to the band's floor.
+
+    Live miss: "Bulova Watch Crystal ... Dustproof Envelope" (a watch-
+    crystal storage envelope, not a watch) got an accurate $10 AI
+    estimate - the AI correctly recognized it wasn't a complete watch -
+    and the old max(low, min(high, estimate)) clamp forced that UP to
+    the Bulova band's $60 floor, manufacturing a fake 70% "Steal" that
+    actually sent as a real alert. A low AI estimate on a "watches"
+    listing is usually the AI correctly flagging that it isn't a real
+    complete watch (accessory/part/case), which is exactly the signal a
+    floor-clamp destroys."""
+    _low, _avg, high = band
+    return min(high, estimate)
+
+
 def is_oversized_dress_shirt(haystack):
     """True for a dress shirt / long-sleeve button-up listed at XL or above.
 
@@ -2399,24 +2416,23 @@ def run():
                 # Live miss: 3 Movado listings alerted off AI resale guesses
                 # of $595-795 while real comps for those exact models
                 # (Bold/Museum/Series 800/Edge) cluster $150-550 - see
-                # WATCH_PRICE_BANDS in config.json. Clamp to the known
-                # brand's [low, high] rather than trust the AI's number
-                # outright; a rough band is enough to catch a guess that's
-                # off by multiples, which is all this needs to do.
+                # WATCH_PRICE_BANDS in config.json and
+                # clamp_watch_resale_estimate() for why this is ceiling-
+                # only, never a floor.
                 band = watch_price_band(title)
                 if band is not None:
-                    low, _avg, high = band
+                    _low, _avg, high = band
                     original = result["estimated_resale_value"]
-                    clamped = max(low, min(high, original))
+                    clamped = clamp_watch_resale_estimate(original, band)
                     if clamped != original:
                         result["estimated_resale_value"] = clamped
                         result.setdefault("flags", []).append(
                             f"AI resale estimate ${original} clamped to ${clamped} "
-                            f"(known brand range ${low}-${high})"
+                            f"(known brand ceiling ${high})"
                         )
                         logger.info(
-                            "Clamping %s AI resale estimate $%s -> $%s (band $%s-$%s)",
-                            item_id, original, clamped, low, high,
+                            "Clamping %s AI resale estimate $%s -> $%s (ceiling $%s)",
+                            item_id, original, clamped, high,
                         )
 
             rating_label, discount_pct = compute_deal_rating(
