@@ -469,11 +469,26 @@ def is_new(conn, item_id):
     return cur.fetchone() is None
 
 
-def mark_seen(conn, item_id):
+def mark_seen(conn, item_id, fingerprint=None, price=None):
+    """Marks item_id seen and, if given, records the fingerprint's
+    best-price at the SAME final-disposition point. These two writes used
+    to happen at different times - the fingerprint was written the moment a
+    listing was COLLECTED, not when it actually reached a real verdict. That
+    broke the "will retry next run" promise the code made in two places: a
+    listing that ran out of AI budget or hit MAX_ALERTS_PER_RUN mid-run had
+    already been fingerprinted at that price, so on the next run's retry it
+    collided with its OWN fingerprint and got silently skipped as "a relist
+    at the same or higher price" - dropped for good, never actually
+    retried. Bundling both writes into this one function, called only at
+    genuine final-disposition points (rejected for a real reason, or
+    alerted), means an item that DIDN'T reach a verdict this run gets
+    neither write, and is genuinely fresh on retry."""
     conn.execute(
         "INSERT OR IGNORE INTO seen (item_id, seen_at) VALUES (?, ?)",
         (item_id, datetime.now(timezone.utc).isoformat()),
     )
+    if fingerprint:
+        upsert_fingerprint(conn, fingerprint, price)
     conn.commit()
 
 
@@ -486,6 +501,16 @@ def listing_fingerprint(listing):
     seller_username = (listing.get("seller") or {}).get("username")
     if not seller_username:
         return None
+    # Strip the "platform:" prefix make_listing() adds - that namespacing
+    # exists so itemId can't collide across marketplaces (see run()'s
+    # eBay-vs-marketplace itemId handling), but it doesn't belong in a
+    # cross-platform relist fingerprint. Confirmed live: the same reseller
+    # cross-posting one item to Poshmark and then eBay/Vinted (same handle,
+    # a common workflow) alerted TWICE, a cent or two apart, because
+    # "poshmark:izzysvintage" and eBay's bare "izzysvintage" hashed
+    # differently for the same human seller. 4 of 77 historical alerts were
+    # exactly this pattern.
+    seller_username = seller_username.split(":", 1)[-1]
     title = normalize_title_for_fingerprint(listing.get("title", ""))
     return hashlib.sha256(f"{title}|{seller_username}".encode("utf-8")).hexdigest()
 
@@ -1803,6 +1828,11 @@ def run():
             item_price = float(999999 if price_value is None else price_value)
             shipping_cost = get_shipping_cost(listing)
             total_price = item_price + shipping_cost
+            # Computed here, once, and threaded through every mark_seen()
+            # call below (including PASS 3's, via review_candidates) so the
+            # fingerprint is only ever WRITTEN at a real final disposition -
+            # see mark_seen()'s docstring for why that matters.
+            fingerprint = listing_fingerprint(listing)
 
             if not is_relevant_marketplace_listing(listing, saved_search["query"]):
                 logger.info(
@@ -1810,20 +1840,26 @@ def run():
                     item_id,
                     saved_search["query"],
                 )
-                mark_seen(conn, item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
-            fingerprint = listing_fingerprint(listing)
             if fingerprint:
                 best_price = get_fingerprint_best_price(conn, fingerprint)
-                if best_price is not None and total_price >= best_price:
+                # 5% tolerance, not a strict >=. Confirmed live: the
+                # cross-platform duplicates above priced within a cent or
+                # two of each other ($25.00 vs $24.99) - a trivial
+                # cross-listing/rounding difference, not a genuine markdown,
+                # but a bare >= let the lower one through as if the seller
+                # had dropped the price. A REAL relist markdown (a seller
+                # cutting price after no bites) is normally a real
+                # percentage cut, not a cent - this still catches those.
+                if best_price is not None and total_price >= best_price * 0.95:
                     logger.info(
-                        "Skipping %s as a relist of a previously-seen item at the same or higher price",
+                        "Skipping %s as a relist of a previously-seen item at essentially the same price",
                         item_id,
                     )
-                    mark_seen(conn, item_id)
+                    mark_seen(conn, item_id, fingerprint, total_price)
                     continue
-                upsert_fingerprint(conn, fingerprint, total_price)
 
             size_tokens = saved_search.get("size")
             title = listing.get("title", "")
@@ -1858,7 +1894,7 @@ def run():
                 for size_token in size_tokens
             ):
                 logger.info("Skipping %s because title does not match size filter", item_id)
-                mark_seen(conn, item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
             if is_oversized_dress_shirt(size_haystack):
@@ -1873,7 +1909,7 @@ def run():
                     "Skipping %s: dress shirt in XL (user wears L in long-sleeve shirts)",
                     item_id,
                 )
-                mark_seen(conn, item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
             if total_price > saved_search["max_price"]:
@@ -1885,7 +1921,7 @@ def run():
                     shipping_cost,
                     saved_search["max_price"],
                 )
-                mark_seen(conn, item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
             if is_jacket_only_suit_listing(title):
@@ -1893,7 +1929,7 @@ def run():
                     "Skipping %s: jacket/blazer/sport-coat-only listing, no pants (standing no-jackets rule)",
                     item_id,
                 )
-                mark_seen(conn, item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
             if category == "watches" and WATCH_AUTHENTICITY_RED_FLAGS.search(title):
@@ -1915,7 +1951,7 @@ def run():
                     "Skipping %s: title signals non-authentic ('fashion watch'/'style watch'/etc on a watch-category listing)",
                     item_id,
                 )
-                mark_seen(conn, item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
             result = score_listing(listing, gap_report, shipping_cost=shipping_cost)
@@ -1935,7 +1971,7 @@ def run():
             )
             if result["verdict"] == "PASS":
                 append_alert_log(result)
-                mark_seen(conn, item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
             if result["verdict"] in ("REVIEW",):
@@ -1945,6 +1981,8 @@ def run():
                     "result": result,
                     "category": category,
                     "saved_search": saved_search,
+                    "fingerprint": fingerprint,
+                    "total_price": total_price,
                 })
 
     # PASS 2 - PRIORITIZE: candidates that CANNOT pass without an AI check go
@@ -1999,6 +2037,8 @@ def run():
         result = candidate["result"]
         category = candidate["category"]
         saved_search = candidate["saved_search"]
+        fingerprint = candidate["fingerprint"]
+        total_price = candidate["total_price"]
 
         ai_result = None
         if gemini_calls < GEMINI_CALL_LIMIT:
@@ -2032,7 +2072,7 @@ def run():
             )
             logger.info("Suppressing %s based on AI-detected gender: %s", item_id, ai_result.get("summary", ""))
             append_alert_log(result)
-            mark_seen(conn, item_id)
+            mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
         if ai_result is not None:
@@ -2067,7 +2107,7 @@ def run():
                 ai_result.get("summary", "no summary provided"),
             )
             append_alert_log(result)
-            mark_seen(conn, item_id)
+            mark_seen(conn, item_id, fingerprint, total_price)
             continue
         if ai_result is not None and ai_result.get("looks_good"):
             result.setdefault("flags", []).append(
@@ -2176,14 +2216,14 @@ def run():
             result["reason"] = f"blocked by steal-quality gate: {gate_reason}"
             logger.info("Gate-blocked %s: %s", item_id, gate_reason)
             append_alert_log(result)
-            mark_seen(conn, item_id)
+            mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
         append_alert_log(result)
         try:
             send_alert(result)
             logger.info("Sent alert for %s", item_id)
-            mark_seen(conn, item_id)
+            mark_seen(conn, item_id, fingerprint, total_price)
             alerts_sent += 1
             if alerts_sent >= MAX_ALERTS_PER_RUN:
                 logger.info(
