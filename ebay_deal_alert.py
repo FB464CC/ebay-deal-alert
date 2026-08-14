@@ -608,13 +608,24 @@ def classify_search_category(query):
         return "watches"
     if any(kw in query for kw in ("sweater", "cashmere", "merino", "quarter zip")):
         return "knitwear"
-    if any(kw in query for kw in ("jacket", "coat")):
-        return "outerwear"
+    # Checked BEFORE the outerwear branch below - "sport coat" contains the
+    # substring "coat", so testing outerwear first made this branch
+    # unreachable: any query with "sport coat" (or "suit jacket") matched
+    # outerwear's "coat"/"jacket" check and never got here. No enabled
+    # search happened to use "sport coat" today, so this was a live but
+    # silent landmine - it would have misfired the moment one was added,
+    # applying outerwear's rules to what's actually tailoring.
     if any(kw in query for kw in ("blazer", "suit", "sport coat")):
         return "tailoring"
+    if any(kw in query for kw in ("jacket", "coat")):
+        return "outerwear"
     if any(kw in query for kw in ("polo", "golf")):
         return "golf"
-    if any(kw in query for kw in ("shoes", "loafers")):
+    # "allen edmonds" is a shoe-only brand but its search has no "shoes"/
+    # "loafers" word to match on, so it fell through to "other" - low
+    # impact (only costs it the off-season flag), but a real miscategorization
+    # for the one enabled search that hit it.
+    if any(kw in query for kw in ("shoes", "loafers")) or "allen edmonds" in query:
         return "footwear"
     if "tie" in query:
         return "neckwear"
