@@ -442,6 +442,43 @@ def _clear_ebay_circuit_breaker_if_tripped():
         _write_ebay_rate_limit_state({"blocked_until_ts": 0, "consecutive_429_streak": 0})
 
 
+def get_ebay_rate_limit_remaining(token):
+    """Ask eBay directly how much Browse API quota is actually left today,
+    instead of guessing. Previously the bot had NO visibility into this at
+    all - it found the wall by hitting it, which is what turned a busy day
+    into a 13.5-hour outage (Aug 9). This is the developer/analytics
+    getRateLimits endpoint - draws from a SEPARATE 5,000/day pool of its
+    own, so calling it every run (~300/day) doesn't touch the Browse
+    budget it's reporting on, and it uses the exact same client-credentials
+    token already minted for Browse calls, no new scope/grant needed.
+
+    Returns (remaining, limit) or (None, None) if the check itself fails
+    for any reason - this must never be allowed to block a real run over a
+    monitoring call. Callers should treat None as "unknown, proceed as
+    normal", not as a reason to stop."""
+    try:
+        resp = requests.get(
+            "https://api.ebay.com/developer/analytics/v1_beta/rate_limit/",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"api_name": "browse", "api_context": "buy"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        for api in body.get("rateLimits", []):
+            if api.get("apiName") != "browse":
+                continue
+            for resource in api.get("resources", []):
+                rates = resource.get("rates") or []
+                if rates:
+                    rate = rates[0]
+                    return rate.get("remaining"), rate.get("limit")
+        return None, None
+    except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+        logger.warning("Could not check eBay rate limit headroom: %s", exc)
+        return None, None
+
+
 # count_similar_listings() lived here. Deleted along with its call site in
 # run() - it spent a dedicated Browse API call per review candidate to fetch
 # a market count that only the web UI displayed, and that the UI already
@@ -1715,6 +1752,25 @@ def run():
         return {s["query"] for s in searches[batch_start:batch_start + per_run_limit]}
 
     ebay_circuit_closed = ebay_circuit_breaker_allows_calls(token)
+    if ebay_circuit_closed:
+        # Ask eBay directly instead of guessing. Costs nothing (separate
+        # quota pool, see get_ebay_rate_limit_remaining()) and turns "find
+        # the wall by 429ing into it" (the Aug 9 outage) into "see it
+        # coming and skip this run cleanly". A failed check (None) means
+        # proceed as normal - this is a safety net, not a hard dependency.
+        remaining, quota_limit = get_ebay_rate_limit_remaining(token)
+        needed_this_run = EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN
+        if remaining is not None:
+            logger.info("eBay Browse API quota: %s/%s remaining today", remaining, quota_limit)
+            if remaining < needed_this_run:
+                logger.warning(
+                    "eBay quota nearly exhausted (%s remaining, need up to %s this run) - "
+                    "skipping eBay calls this run rather than risking a 429 lockout. "
+                    "Not touching the circuit-breaker state - quota resets on eBay's own "
+                    "daily window, this is a one-run skip, not a backoff.",
+                    remaining, needed_this_run,
+                )
+                ebay_circuit_closed = False
     if ebay_circuit_closed:
         # Two independent rotation lanes, not one pool - "fast" profile
         # searches (the ones that actually matter more) get a bigger slice
