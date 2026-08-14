@@ -627,6 +627,33 @@ SUIT_JACKET_ONLY_SIGNALS = re.compile(
     re.IGNORECASE,
 )
 
+# Phrasing a seller uses when NOT claiming genuine authenticity - real resale
+# terminology, not a guess. Someone with a genuine Cartier writes "Cartier
+# Pasha"; "Cartier Fashion Watch" is how a non-luxury piece styled to
+# resemble a designer one gets listed. Deliberately does NOT include bare
+# "style watch" - "1960s style watch" / "Art Deco style watch" are common,
+# legitimate ways to describe genuine vintage pieces, and blocking on
+# "style" alone risked losing those. Tight on purpose; widen only against
+# more real misses, not speculatively.
+WATCH_AUTHENTICITY_RED_FLAGS = re.compile(
+    r"\b(fashion\s*watch|replica\s*watch|faux\s*\w*\s*watch|not\s*authentic|inspired\s*by)\b",
+    re.IGNORECASE,
+)
+
+# Whether a SEARCH QUERY (not a listing title) names a specific garment type,
+# vs. being a bare brand name that matches anything the brand makes. Built
+# from every enabled query in config.json - matches all of them except two
+# ("allen edmonds", 'ralph lauren "purple label"') which are exactly the
+# brand-only shape this is meant to catch. Used to gate sold-comp
+# application: see the comment at its call site in run() for why blending
+# comps across garment types produced a real bad alert.
+GARMENT_TYPE_WORDS = re.compile(
+    r"\b(suit|shoes?|loafers?|shirt|watch|cardholder|wallet|hat|jacket|coat|"
+    r"belt|trousers?|pants?|khakis?|polo|quarter\s*-?zip|tie|sweater|"
+    r"cashmere|merino|cardigan|vest|chinos?)\b",
+    re.IGNORECASE,
+)
+
 
 # Garment words that mean "dress shirt / long-sleeve button-up", where the
 # user wears L. Deliberately NOT knitwear words (sweater, quarter-zip, polo,
@@ -1725,6 +1752,7 @@ def run():
         # comps covering only Grailed - 2,178 items seen but just 19 ever
         # scored - and covering eBay/Poshmark/Vinted, which are where
         # essentially all the volume actually is.
+        clean_query, _ = marketplaces.split_query_exclusions(saved_search["query"])
         sold_comp = next(
             (
                 (l.get("sold_comp_median"), l.get("sold_comp_count"))
@@ -1732,7 +1760,22 @@ def run():
                 if l.get("sold_comp_median") is not None
             ),
             None,
-        )
+        ) if GARMENT_TYPE_WORDS.search(clean_query) else None
+        # Live miss: "ralph lauren \"purple label\"" has no garment word, so
+        # it matches ties AND cashmere sweaters AND suits AND basic cotton
+        # t-shirts alike - checked the real comps behind it live: 50 sold
+        # items ranging $46-$720 (ties, sweaters, a $420 suit), median $120.
+        # That blended median was then applied to a plain crewneck tee and
+        # OVERRODE the AI's own $55 estimate for it, rating it a 61% "Great
+        # Deal" - the tee-specific estimate was almost certainly the more
+        # accurate number, and the override made things worse, not better.
+        # A query naming a garment type ("zegna sweater", "loro piana suit")
+        # keeps its comps genuinely garment-matched even though price still
+        # varies with condition/rarity within that type - only bare
+        # brand-only queries mix garments indiscriminately. Comps are
+        # skipped entirely for those (falls back to whatever the AI/other
+        # scoring already provides) rather than trying to guess which
+        # comp subset applies to which listing.
         if sold_comp:
             comp_median, comp_count = sold_comp
             for listing in listings:
@@ -1848,6 +1891,28 @@ def run():
             if is_jacket_only_suit_listing(title):
                 logger.info(
                     "Skipping %s: jacket/blazer/sport-coat-only listing, no pants (standing no-jackets rule)",
+                    item_id,
+                )
+                mark_seen(conn, item_id)
+                continue
+
+            if category == "watches" and WATCH_AUTHENTICITY_RED_FLAGS.search(title):
+                # Live miss: "Cartier Fashion Watch" ($125 landed) alerted as
+                # a 96% "Steal" - the AI described it as a genuine Pasha de
+                # Cartier from the photos and priced it at $3500 resale. But
+                # "fashion watch" is standard resale terminology for a
+                # non-luxury piece styled to resemble a designer one - a
+                # seller with a genuine Cartier writes "Cartier Pasha", not
+                # "Cartier Fashion Watch". The bot has no way to verify
+                # authenticity from photos (see the mandatory watch
+                # disclaimer below) and titles using this language are
+                # sellers implicitly NOT claiming authenticity - alerting on
+                # one as a "Steal" is close to the worst possible failure
+                # mode for a watch listing. Hard block before it ever
+                # reaches the AI check, same tier as the gender/logo/
+                # moth-hole hard-fails.
+                logger.info(
+                    "Skipping %s: title signals non-authentic ('fashion watch'/'style watch'/etc on a watch-category listing)",
                     item_id,
                 )
                 mark_seen(conn, item_id)
