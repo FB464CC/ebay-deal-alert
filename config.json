@@ -25,22 +25,20 @@
     {
       "query": "tom james merino",
       "size": [
-        "M",
         "L",
         "XL"
       ],
-      "max_price": 30,
+      "max_price": 20,
       "enabled": true,
       "profile": "slow"
     },
     {
       "query": "johnstons elgin cashmere",
       "size": [
-        "M",
         "L",
         "XL"
       ],
-      "max_price": 40,
+      "max_price": 20,
       "enabled": true,
       "profile": "slow",
       "category_id": "11484"
@@ -48,7 +46,6 @@
     {
       "query": "alan paine merino lambswool",
       "size": [
-        "M",
         "L",
         "XL"
       ],
@@ -59,7 +56,6 @@
     {
       "query": "pringle scotland merino cashmere",
       "size": [
-        "M",
         "L",
         "XL"
       ],
@@ -183,7 +179,6 @@
     {
       "query": "william lockie cashmere",
       "size": [
-        "M",
         "L",
         "XL"
       ],
@@ -194,7 +189,6 @@
     {
       "query": "ballantyne cashmere",
       "size": [
-        "M",
         "L",
         "XL"
       ],
@@ -381,7 +375,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -440,7 +434,7 @@
     {
       "query": "ferragamo cardholder",
       "size": null,
-      "max_price": 50,
+      "max_price": 60,
       "enabled": true,
       "profile": "slow"
     },
@@ -485,7 +479,7 @@
     {
       "query": "loro piana cardholder",
       "size": null,
-      "max_price": 90,
+      "max_price": 100,
       "enabled": true,
       "profile": "slow"
     },
@@ -512,7 +506,7 @@
         "L",
         "XL"
       ],
-      "max_price": 30,
+      "max_price": 50,
       "enabled": true,
       "profile": "slow"
     },
@@ -560,7 +554,6 @@
     {
       "query": "drake london sweater",
       "size": [
-        "M",
         "L",
         "XL"
       ],
@@ -634,7 +627,6 @@
     {
       "query": "zegna quarter zip",
       "size": [
-        "M",
         "L",
         "XL"
       ],
@@ -687,7 +679,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 180,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -697,7 +689,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 180,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -707,7 +699,7 @@
       "size": [
         "42"
       ],
-      "max_price": 90,
+      "max_price": 180,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -761,7 +753,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 180,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -1057,34 +1049,125 @@
     "stacy adams",
     "eddie bauer",
     "abercrombie",
-    "cremieux",
-    "z zegna"
+    "cremieux"
   ],
   "WATCH_PRICE_BANDS": {
     "_comment": "Rough [low, avg, high] used resale $ per watch brand - sanity clamp on the AI's estimated_resale_value for the 'watches' category, not a precise valuation. Real live miss: 3 Movado listings alerted off AI resale guesses of $595-795 while real eBay/WatchCharts comps for those exact models (Bold/Museum/Series 800/Edge) cluster $150-550. Scraped from watchcharts.com (free, no-login) Aug 2026 where noted 'scraped'; brands not scraped there use rough market-knowledge ballparks marked 'estimated' - fine for this purpose since the gate only needs to catch estimates that are wildly (multiples) off, not be exact.",
-    "movado": [100, 300, 700],
-    "seiko": [50, 400, 2000],
-    "bulova": [60, 250, 700],
-    "zodiac": [200, 600, 1800],
-    "doxa": [500, 1500, 4000],
-    "eterna": [200, 700, 2000],
-    "tissot": [80, 300, 900],
-    "hamilton": [100, 350, 900],
-    "shinola": [80, 200, 500],
-    "longines": [200, 1200, 4000],
-    "omega": [300, 3000, 10000],
-    "zenith": [1500, 5000, 12000],
-    "rolex": [2000, 10000, 30000],
-    "tudor": [800, 3000, 8000],
-    "cartier": [700, 4000, 12000],
-    "universal geneve": [300, 1500, 5000],
-    "heuer": [800, 3500, 12000],
-    "iwc": [1500, 5000, 15000],
-    "patek philippe": [8000, 25000, 80000],
-    "audemars piguet": [8000, 25000, 80000],
-    "vacheron constantin": [6000, 20000, 60000],
-    "jaeger lecoultre": [1500, 5000, 15000],
-    "grand seiko": [1000, 3000, 8000]
+    "movado": [
+      100,
+      300,
+      700
+    ],
+    "seiko": [
+      50,
+      400,
+      2000
+    ],
+    "bulova": [
+      60,
+      250,
+      700
+    ],
+    "zodiac": [
+      200,
+      600,
+      1800
+    ],
+    "doxa": [
+      500,
+      1500,
+      4000
+    ],
+    "eterna": [
+      200,
+      700,
+      2000
+    ],
+    "tissot": [
+      80,
+      300,
+      900
+    ],
+    "hamilton": [
+      100,
+      350,
+      900
+    ],
+    "shinola": [
+      80,
+      200,
+      500
+    ],
+    "longines": [
+      200,
+      1200,
+      4000
+    ],
+    "omega": [
+      300,
+      3000,
+      10000
+    ],
+    "zenith": [
+      1500,
+      5000,
+      12000
+    ],
+    "rolex": [
+      2000,
+      10000,
+      30000
+    ],
+    "tudor": [
+      800,
+      3000,
+      8000
+    ],
+    "cartier": [
+      700,
+      4000,
+      12000
+    ],
+    "universal geneve": [
+      300,
+      1500,
+      5000
+    ],
+    "heuer": [
+      800,
+      3500,
+      12000
+    ],
+    "iwc": [
+      1500,
+      5000,
+      15000
+    ],
+    "patek philippe": [
+      8000,
+      25000,
+      80000
+    ],
+    "audemars piguet": [
+      8000,
+      25000,
+      80000
+    ],
+    "vacheron constantin": [
+      6000,
+      20000,
+      60000
+    ],
+    "jaeger lecoultre": [
+      1500,
+      5000,
+      15000
+    ],
+    "grand seiko": [
+      1000,
+      3000,
+      8000
+    ]
   },
   "CORPORATE_LOGO_KEYWORDS": [
     "tournament",
