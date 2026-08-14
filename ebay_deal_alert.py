@@ -813,6 +813,28 @@ def brand_in(haystack, brands):
     return any(re.search(rf"\b{re.escape(b)}\b", haystack) for b in brands)
 
 
+def matched_keyword(haystack, keywords):
+    """First whole-word match from keywords found in haystack, or None.
+
+    Same fix as brand_in(), for the other raw `kw in title` substring scans
+    in score_listing() (condition/corporate-logo/gender keyword lists) -
+    real live misfires found auditing a night's alerts_log.jsonl:
+      "stain"  in "Seiko ... STAINLESS STEEL Watch"     -> hard-failed as
+                                                            "moth/hole
+                                                            keyword in title"
+      "classic" in "Bulova Classic Blue Men's Watch"    -> hard-failed as
+                                                            "corporate logo
+                                                            keyword match"
+    Neither listing had anything wrong with it - "stainless" contains
+    "stain" and "Classic" is a real product-line name, not a corporate
+    logo. Returns the actual matched keyword (not just True/False) so
+    callers can log what really fired instead of a generic reason."""
+    for kw in keywords:
+        if re.search(rf"\b{re.escape(kw)}\b", haystack):
+            return kw
+    return None
+
+
 def watch_price_band(title):
     """[low, avg, high] rough resale $ for the first WATCH_PRICE_BANDS brand
     found in title, or None if no known watch brand matches. Same
@@ -954,7 +976,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     # 0. Gender - hard disqualifier, checked before anything else. Backstop
     # for search_ebay()'s query-level exclusion, in case a listing slips
     # through eBay's own "-term" matching.
-    if any(kw in title for kw in GENDER_EXCLUDE_KEYWORDS):
+    if brand_in(title, GENDER_EXCLUDE_KEYWORDS):
         return {"verdict": "PASS", "reason": "excluded gender keyword in title", "listing": listing}
     if PET_PRODUCT_SIGNALS.search(title):
         return {"verdict": "PASS", "reason": "pet product, not menswear", "listing": listing}
@@ -979,7 +1001,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
         brand_tier = "grab_on_sight"
     elif brand_in(title_prefix, STANDARD_BRANDS):
         brand_tier = "standard"
-    if any(kw in title for kw in CORPORATE_LOGO_KEYWORDS):
+    if brand_in(title, CORPORATE_LOGO_KEYWORDS):
         return {"verdict": "PASS", "reason": "corporate logo keyword match", "listing": listing}
     if brand_tier is None:
         flags.append("brand not recognized — manual check needed")
@@ -996,9 +1018,10 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     flags.append("fit unconfirmed — pull listing description for pit-to-pit measurement")
 
     # 4. Condition
-    if any(kw in title for kw in CONDITION_HARD_FAIL_KEYWORDS):
-        return {"verdict": "PASS", "reason": "moth/hole keyword in title", "listing": listing}
-    if any(kw in title for kw in CONDITION_FLAG_KEYWORDS):
+    hard_fail_hit = matched_keyword(title, CONDITION_HARD_FAIL_KEYWORDS)
+    if hard_fail_hit is not None:
+        return {"verdict": "PASS", "reason": f"condition hard-fail keyword in title: {hard_fail_hit!r}", "listing": listing}
+    if brand_in(title, CONDITION_FLAG_KEYWORDS):
         flags.append("condition keyword flagged — check description")
 
     # 5. Gap check (live)
@@ -1460,6 +1483,7 @@ def append_alert_log(result):
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "item_id": listing.get("itemId"),
         "title": listing.get("title", ""),
+        "url": listing.get("itemWebUrl", ""),
         "price": price,
         "verdict": result.get("verdict"),
         "reason": result.get("reason") or "; ".join(result.get("flags", [])),
@@ -2290,8 +2314,8 @@ def run():
             )
             gemini_budget_logged = True
 
-        if ai_result is not None and any(
-            kw in (ai_result.get("summary") or "").lower() for kw in GENDER_EXCLUDE_KEYWORDS
+        if ai_result is not None and brand_in(
+            (ai_result.get("summary") or "").lower(), GENDER_EXCLUDE_KEYWORDS
         ):
             # Same gender hard-disqualifier as score_listing()'s title check,
             # re-run against the AI's own photo-check summary. Live leak:
