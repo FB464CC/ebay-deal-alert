@@ -43,11 +43,25 @@ HTTP_TIMEOUT = 8
 _MIN_INTERVAL = {
     "grailed": 0.35,
     "depop": 0.35,
-    # Tightened from 0.60 - matches Grailed's pace, which has run all
-    # session with zero blocks/403s at that rate, so it's a proven-safe
-    # floor rather than a guess. User specifically wants Vinted covered
-    # harder (systematically underpriced/uninformed sellers observed).
-    "vinted": 0.35,
+    # Tightened again from 0.35, live-tested this time rather than
+    # inherited from Grailed's number: 55 real back-to-back requests
+    # against the actual endpoint, explicit sleep intervals stepped down
+    # 0.35 -> 0.25 -> 0.15 -> 0.08 -> 0.03s, then a genuine ZERO-sleep
+    # 15-request burst using real config.json brand queries (zegna,
+    # canali, loro piana, alden, edward green...). Zero 429s, zero
+    # CAPTCHA/challenge pages at any interval, despite Vinted's Cloudflare
+    # __cf_bm bot-management cookie being present and active. The
+    # zero-sleep burst landed at a natural ~0.42s/call floor - that's
+    # real network+server latency, not throttling. Landed on 0.15s
+    # (4x that natural floor) rather than the tested edge, same
+    # trust-but-verify margin this file already uses elsewhere - not
+    # maximum-observed-safe, real headroom below it.
+    # ponytail: no adaptive backoff on repeated 429s yet for Vinted
+    # specifically - get_json() already logs+returns None per failed
+    # call, so a real throttling event degrades gracefully rather than
+    # cascading, but if 429s start showing up in the logs for real, add
+    # exponential backoff here rather than re-loosening this number.
+    "vinted": 0.15,
     "poshmark": 0.60,
     "mercari": 0.60,
     "vestiaire": 0.50,
