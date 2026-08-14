@@ -47,12 +47,29 @@ _CONFIG = load_config()
 SAVED_SEARCHES = _CONFIG["SAVED_SEARCHES"]
 GRAB_ON_SIGHT_BRANDS = _CONFIG["GRAB_ON_SIGHT_BRANDS"]
 STANDARD_BRANDS = _CONFIG["STANDARD_BRANDS"]
+WATCH_PRICE_BANDS = {
+    k: v for k, v in _CONFIG.get("WATCH_PRICE_BANDS", {}).items() if not k.startswith("_")
+}
 PASS_BRANDS = _CONFIG["PASS_BRANDS"]
 CORPORATE_LOGO_KEYWORDS = _CONFIG["CORPORATE_LOGO_KEYWORDS"]
 CONDITION_HARD_FAIL_KEYWORDS = _CONFIG["CONDITION_HARD_FAIL_KEYWORDS"]
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
 FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
 GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
+# Real live miss: "Barbour waxed dog jacket" ($20 landed) alerted as a 54%
+# "Great Deal" - the AI photo check even correctly described it as a "Barbour
+# International waxed dog coat" in its own summary, but nothing downstream
+# acted on that. It's a pet product, not menswear, and "dog" was right there
+# in the title the whole time - no exclusion list for this category existed
+# at all. Whole-word matched, same hard-fail tier as gender. Deliberately
+# does NOT include bare "pet" or "cat" - "pet" substring-hits "petite" (word-
+# boundary-safe here, but still a common false-positive-prone word) and "cat"
+# is a real workwear brand (Caterpillar/"CAT boots"); kept to unambiguous
+# terms only.
+PET_PRODUCT_SIGNALS = re.compile(
+    r"\b(dog|puppy|kitten|pet\s*bed|pet\s*carrier|pet\s*harness|dog\s*leash)\b",
+    re.IGNORECASE,
+)
 FABRIC_POLY_KEYWORD = _CONFIG["FABRIC_POLY_KEYWORD"]
 PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 # Generic category/material words stripped out when checking whether a
@@ -796,6 +813,17 @@ def brand_in(haystack, brands):
     return any(re.search(rf"\b{re.escape(b)}\b", haystack) for b in brands)
 
 
+def watch_price_band(title):
+    """[low, avg, high] rough resale $ for the first WATCH_PRICE_BANDS brand
+    found in title, or None if no known watch brand matches. Same
+    whole-word-match approach as brand_in()."""
+    haystack = (title or "").lower()
+    for brand, band in WATCH_PRICE_BANDS.items():
+        if re.search(rf"\b{re.escape(brand)}\b", haystack):
+            return band
+    return None
+
+
 def is_oversized_dress_shirt(haystack):
     """True for a dress shirt / long-sleeve button-up listed at XL or above.
 
@@ -928,6 +956,8 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     # through eBay's own "-term" matching.
     if any(kw in title for kw in GENDER_EXCLUDE_KEYWORDS):
         return {"verdict": "PASS", "reason": "excluded gender keyword in title", "listing": listing}
+    if PET_PRODUCT_SIGNALS.search(title):
+        return {"verdict": "PASS", "reason": "pet product, not menswear", "listing": listing}
 
     # 1. Brand
     brand_tier = None
@@ -2279,6 +2309,22 @@ def run():
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
+        if ai_result is not None and PET_PRODUCT_SIGNALS.search((ai_result.get("summary") or "").lower()):
+            # Same pattern as the gender re-check just above. Live miss:
+            # "Barbour waxed dog jacket" - the title itself said "dog" too
+            # (score_listing()'s title check catches that one now), but this
+            # covers the case a title doesn't - e.g. "Barbour Waxed Coat XL"
+            # where only the AI's photo description reveals it's cut for a
+            # dog, not a person.
+            result["verdict"] = "PASS"
+            result["reason"] = (
+                "AI photo check found pet product: " + ai_result.get("summary", "")
+            )
+            logger.info("Suppressing %s: pet product per AI summary: %s", item_id, ai_result.get("summary", ""))
+            append_alert_log(result)
+            mark_seen(conn, item_id, fingerprint, total_price)
+            continue
+
         if ai_result is not None:
             fabric_from_tag = ai_result.get("fabric_from_tag")
             if fabric_from_tag:
@@ -2324,6 +2370,31 @@ def run():
             result["estimated_retail_price"] = ai_result.get("estimated_retail_price")
             result["estimated_resale_value"] = ai_result.get("estimated_resale_value")
             result["price_confidence"] = ai_result.get("price_confidence")
+
+            if category == "watches" and result["estimated_resale_value"] is not None:
+                # Live miss: 3 Movado listings alerted off AI resale guesses
+                # of $595-795 while real comps for those exact models
+                # (Bold/Museum/Series 800/Edge) cluster $150-550 - see
+                # WATCH_PRICE_BANDS in config.json. Clamp to the known
+                # brand's [low, high] rather than trust the AI's number
+                # outright; a rough band is enough to catch a guess that's
+                # off by multiples, which is all this needs to do.
+                band = watch_price_band(title)
+                if band is not None:
+                    low, _avg, high = band
+                    original = result["estimated_resale_value"]
+                    clamped = max(low, min(high, original))
+                    if clamped != original:
+                        result["estimated_resale_value"] = clamped
+                        result.setdefault("flags", []).append(
+                            f"AI resale estimate ${original} clamped to ${clamped} "
+                            f"(known brand range ${low}-${high})"
+                        )
+                        logger.info(
+                            "Clamping %s AI resale estimate $%s -> $%s (band $%s-$%s)",
+                            item_id, original, clamped, low, high,
+                        )
+
             rating_label, discount_pct = compute_deal_rating(
                 result.get("price"),  # total landed cost: item + shipping
                 result.get("estimated_resale_value"),

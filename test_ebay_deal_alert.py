@@ -135,6 +135,28 @@ class WatchAuthenticityRedFlags(unittest.TestCase):
         self.assertFalse(m.WATCH_AUTHENTICITY_RED_FLAGS.search("Rolex Submariner 116610"))
 
 
+class WatchPriceBand(unittest.TestCase):
+    def test_known_brand_returns_band(self):
+        band = m.watch_price_band("Movado Museum Quartz Black Dial 40mm")
+        self.assertIsNotNone(band)
+        low, avg, high = band
+        self.assertLess(low, avg)
+        self.assertLess(avg, high)
+
+    def test_unknown_brand_returns_none(self):
+        self.assertIsNone(m.watch_price_band("Fossil Grant Chronograph 44mm"))
+
+    def test_clamp_catches_the_movado_overestimate(self):
+        # Regression: 3 real Movado listings alerted off AI resale guesses
+        # of $595-795 against real comps of $150-550 for those exact
+        # models. The clamp must actually bring an estimate like that back
+        # down to the known band, not just widen the band to fit it.
+        low, avg, high = m.watch_price_band("Movado Bold Evolution 2.0 Chronograph")
+        self.assertLess(high, 795, "band must be tight enough to catch the real live miss")
+        clamped = max(low, min(high, 795))
+        self.assertEqual(clamped, high)
+
+
 class SizeMatching(unittest.TestCase):
     """The size-normalization step is inlined in run() (ebay_deal_alert.py,
     right after total_price is computed), not its own function - these
@@ -273,6 +295,22 @@ class ScoreListingHardFails(unittest.TestCase):
         )
         self.assertEqual(result["verdict"], "REVIEW")
         self.assertEqual(result["brand_tier"], "grab_on_sight")
+
+    def test_pet_product_blocks(self):
+        # Live miss: "Barbour waxed dog jacket" ($20 landed) alerted as a
+        # 54% "Great Deal" - it's a pet product, not menswear, and "dog" was
+        # right there in the title the whole time.
+        result = m.score_listing(self._listing("Barbour Waxed Dog Jacket XL"), gap_report=None)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("pet product", result["reason"])
+
+    def test_pet_product_does_not_false_positive_on_petite_or_cat_brand(self):
+        # PET_PRODUCT_SIGNALS is whole-word matched on purpose - it
+        # deliberately does NOT include bare "pet" or "cat": "pet"
+        # substring-hits "petite", and "cat" is a real workwear brand
+        # (Caterpillar/"CAT boots").
+        self.assertFalse(m.PET_PRODUCT_SIGNALS.search("ralph lauren petite sweater m"))
+        self.assertFalse(m.PET_PRODUCT_SIGNALS.search("cat caterpillar steel toe boots 10"))
 
 
 class StealQualityGate(unittest.TestCase):
