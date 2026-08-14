@@ -312,6 +312,50 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertFalse(m.PET_PRODUCT_SIGNALS.search("ralph lauren petite sweater m"))
         self.assertFalse(m.PET_PRODUCT_SIGNALS.search("cat caterpillar steel toe boots 10"))
 
+    def test_stainless_steel_does_not_false_positive_as_condition_hard_fail(self):
+        # Live miss found auditing a night's alerts_log.jsonl: "stain" is a
+        # CONDITION_HARD_FAIL_KEYWORDS entry (meant to catch "stain"/
+        # "stains" damage callouts) and was raw-substring-matched, so
+        # "Stainless Steel" - present in the overwhelming majority of real
+        # watch titles - silently PASS'd dozens of perfectly good watches
+        # every run under the misleading fixed reason string "moth/hole
+        # keyword in title". Confirmed real titles that were wrongly killed:
+        # "Seiko Kinetic 5M42-0K09 Two Tone Stainless Steel Watch White Dial
+        # 97.4g" and "Bulova 96X003 Stainless Steel Bangle Watch".
+        result = m.score_listing(
+            self._listing("Seiko Kinetic Two Tone Stainless Steel Watch White Dial"), gap_report=None
+        )
+        self.assertNotEqual(result["verdict"], "PASS")
+
+    def test_real_condition_hard_fails_still_caught(self):
+        # The whole-word fix must not lose real catches - these should
+        # still hard-fail same as before.
+        for title in (
+            "Vintage Watch For Parts Or Repair",
+            "Seiko Chronograph Watch For Repair",
+            "Vintage Movado Watch Movement Gold Dial Untested",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertEqual(result["verdict"], "PASS", title)
+            self.assertIn("condition hard-fail keyword", result["reason"])
+
+    def test_classic_product_line_does_not_false_positive_as_corporate_logo(self):
+        # Live miss: "Bulova Classic Blue Men's Watch - 96B334" hard-failed
+        # as "corporate logo keyword match" off bare "classic" in
+        # CORPORATE_LOGO_KEYWORDS. Unlike the "stain"/"stainless" bug this
+        # wasn't a substring-match issue - "classic" really is a standalone
+        # word there - it's just too generic a keyword: "Classic" is a real
+        # Bulova/Movado/Seiko product-line name, not a corporate-event logo
+        # signal like "tournament" or "invitational". Removed from
+        # CORPORATE_LOGO_KEYWORDS entirely.
+        result = m.score_listing(self._listing("Bulova Classic Blue Men's Watch - 96B334"), gap_report=None)
+        self.assertNotEqual(result["verdict"], "PASS")
+
+    def test_real_corporate_logo_still_caught(self):
+        result = m.score_listing(self._listing("Peter Millar Pebble Beach Golf Tournament Polo M"), gap_report=None)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("corporate logo", result["reason"])
+
 
 class StealQualityGate(unittest.TestCase):
     def test_watches_never_blind_trust(self):

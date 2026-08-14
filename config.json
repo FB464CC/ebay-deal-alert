@@ -1058,7 +1058,6 @@
     "eddie bauer",
     "abercrombie",
     "cremieux",
-    "zegna sport",
     "z zegna"
   ],
   "WATCH_PRICE_BANDS": {
@@ -1104,8 +1103,7 @@
     "foundation",
     "corporate",
     "insurance",
-    "open",
-    "classic"
+    "open"
   ],
   "CONDITION_HARD_FAIL_KEYWORDS": [
     "moth",
