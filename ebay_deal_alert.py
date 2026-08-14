@@ -473,9 +473,19 @@ def get_ebay_rate_limit_remaining(token):
                 if rates:
                     rate = rates[0]
                     return rate.get("remaining"), rate.get("limit")
+        # Reached live in production with a 200 OK and NEITHER this path
+        # nor the except below logging anything - a real silent-failure
+        # gap in this function itself. Logging the actual shape now so the
+        # next run's log says why, instead of guessing again.
+        logger.warning(
+            "eBay rate-limit response had no matching browse resource - "
+            "response body (first 500 chars): %s",
+            str(body)[:500],
+        )
         return None, None
     except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
-        logger.warning("Could not check eBay rate limit headroom: %s", exc)
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.warning("Could not check eBay rate limit headroom (HTTP %s): %s", status, exc)
         return None, None
 
 
