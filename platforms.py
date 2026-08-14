@@ -21,6 +21,7 @@ import logging
 import re
 import threading
 import time
+from urllib.parse import urlencode
 
 import requests
 
@@ -191,11 +192,29 @@ def make_listing(
 # ---------------------------------------------------------------------------
 
 ADAPTERS = {}
+# Platforms whose ADAPTERS entry handles ONE saved_search per call get
+# dispatched by prefetch_marketplaces() through a per-(search, platform)
+# task queue - fine when a search costs one HTTP call. Grailed cost TWO
+# (a live-listing query and a sold-comps query) per search, so 86 enabled
+# searches meant 172 sequential HTTP round trips eating most of the ~90s
+# marketplace fetch budget. BATCH_ADAPTERS holds platforms that instead
+# take the FULL LIST of enabled searches and return {query: [listings]}
+# for all of them in one (or a few, chunk-limited) HTTP round trips -
+# prefetch_marketplaces() calls these once, outside the normal task queue,
+# and excludes them from it so there's no double-dispatch.
+BATCH_ADAPTERS = {}
 
 
 def adapter(name):
     def register(fn):
         ADAPTERS[name] = fn
+        return fn
+    return register
+
+
+def batch_adapter(name):
+    def register(fn):
+        BATCH_ADAPTERS[name] = fn
         return fn
     return register
 
@@ -328,8 +347,54 @@ def fetch_grailed_sold_comps(query):
     return prices[len(prices) // 2], len(prices)
 
 
+def _grailed_hit_to_listing(hit, sold_median, sold_count):
+    """One Algolia hit -> one normalized listing. Shared by both the
+    single-search and batched adapters below so there's exactly one place
+    that knows Grailed's hit shape, not two copies that can drift."""
+    object_id = hit.get("objectID")
+    cover = (hit.get("cover_photo") or {}).get("url")
+    if cover:
+        # Full-res covers are ~2.2MB; the resized form is ~160KB and
+        # plenty for vision. Matters because every byte is downloaded
+        # inside the job's 60-second billing window.
+        cover += ("&" if "?" in cover else "?") + "w=800&fit=clip"
+    user = hit.get("user") or {}
+    # Confirmed live: each hit carries a real per-listing "shipping.us"
+    # block (amount + enabled) - a $50 item with $7.99 US shipping
+    # enabled was showing as a flat $50 item with make_listing's 0.0
+    # shipping default. enabled:false means the seller's price already
+    # includes shipping (free-shipping listing), so 0.0 is correct there.
+    us_shipping = ((hit.get("shipping") or {}).get("us") or {})
+    shipping_cost = us_shipping.get("amount") or 0.0 if us_shipping.get("enabled") else 0.0
+    listing = make_listing(
+        "grailed",
+        object_id,
+        hit.get("title"),
+        hit.get("price"),
+        f"https://www.grailed.com/listings/{object_id}",
+        image_url=cover,
+        size=hit.get("size"),
+        seller=user.get("username"),
+        shipping=shipping_cost,
+    )
+    if listing:
+        # Real sold-comp data and seller trust signals, both sitting in
+        # fields Grailed already returns - just never extracted before.
+        if sold_median is not None:
+            listing["sold_comp_median"] = sold_median
+            listing["sold_comp_count"] = sold_count
+        seller_score = user.get("seller_score") or {}
+        listing["seller_trusted"] = bool(user.get("trusted_seller"))
+        listing["seller_rating"] = seller_score.get("rating_average")
+        listing["seller_total_sales"] = user.get("total_bought_and_sold")
+    return listing
+
+
 @adapter("grailed")
 def search_grailed(saved_search):
+    """Single-search fallback - kept working (and still directly testable
+    in isolation) even though prefetch_marketplaces() routes real runs
+    through search_grailed_batch() below via BATCH_ADAPTERS instead."""
     query, _excluded = split_query_exclusions(saved_search["query"])
     body = get_json(
         "grailed",
@@ -349,46 +414,132 @@ def search_grailed(saved_search):
     if not body:
         return [], None
     sold_median, sold_count = fetch_grailed_sold_comps(query)
-    listings = []
-    for hit in body.get("hits", []):
-        object_id = hit.get("objectID")
-        cover = (hit.get("cover_photo") or {}).get("url")
-        if cover:
-            # Full-res covers are ~2.2MB; the resized form is ~160KB and
-            # plenty for vision. Matters because every byte is downloaded
-            # inside the job's 60-second billing window.
-            cover += ("&" if "?" in cover else "?") + "w=800&fit=clip"
-        user = hit.get("user") or {}
-        # Confirmed live: each hit carries a real per-listing "shipping.us"
-        # block (amount + enabled) - a $50 item with $7.99 US shipping
-        # enabled was showing as a flat $50 item with make_listing's 0.0
-        # shipping default. enabled:false means the seller's price already
-        # includes shipping (free-shipping listing), so 0.0 is correct there.
-        us_shipping = ((hit.get("shipping") or {}).get("us") or {})
-        shipping_cost = us_shipping.get("amount") or 0.0 if us_shipping.get("enabled") else 0.0
-        listing = make_listing(
-            "grailed",
-            object_id,
-            hit.get("title"),
-            hit.get("price"),
-            f"https://www.grailed.com/listings/{object_id}",
-            image_url=cover,
-            size=hit.get("size"),
-            seller=user.get("username"),
-            shipping=shipping_cost,
-        )
-        if listing:
-            # Real sold-comp data and seller trust signals, both sitting in
-            # fields Grailed already returns - just never extracted before.
-            if sold_median is not None:
-                listing["sold_comp_median"] = sold_median
-                listing["sold_comp_count"] = sold_count
-            seller_score = user.get("seller_score") or {}
-            listing["seller_trusted"] = bool(user.get("trusted_seller"))
-            listing["seller_rating"] = seller_score.get("rating_average")
-            listing["seller_total_sales"] = user.get("total_bought_and_sold")
-        listings.append(listing)
+    listings = [_grailed_hit_to_listing(hit, sold_median, sold_count) for hit in body.get("hits", [])]
     return [x for x in listings if x], body.get("nbHits")
+
+
+# Confirmed live: a multi-query request with 60 sub-queries returns HTTP 400
+# ("Too many queries in multi query request"); 50 is the real ceiling.
+ALGOLIA_MAX_BATCH = 50
+ALGOLIA_MULTI_QUERY_URL = f"https://{GRAILED_APP_ID.lower()}-dsn.algolia.net/1/indexes/*/queries"
+
+
+def _algolia_multi_query(sub_requests):
+    """POST up to ALGOLIA_MAX_BATCH sub-queries per HTTP call, chunking as
+    needed, and return one result dict per sub-request in the SAME ORDER
+    they were submitted (None for any that failed). Never raises - same
+    "adapters must never break the run" contract as get_json()."""
+    results = []
+    for i in range(0, len(sub_requests), ALGOLIA_MAX_BATCH):
+        chunk = sub_requests[i:i + ALGOLIA_MAX_BATCH]
+        _pace("grailed")
+        try:
+            resp = requests.post(
+                ALGOLIA_MULTI_QUERY_URL,
+                json={"requests": chunk},
+                headers={
+                    "User-Agent": USER_AGENT, "Accept": "application/json",
+                    "X-Algolia-Application-Id": GRAILED_APP_ID,
+                    "X-Algolia-API-Key": GRAILED_SEARCH_KEY,
+                },
+                timeout=HTTP_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            logger.warning("grailed batch request failed: %s", exc)
+            results.extend([None] * len(chunk))
+            continue
+        if not resp.ok:
+            logger.warning("grailed batch returned HTTP %s: %s", resp.status_code, resp.text[:300])
+            results.extend([None] * len(chunk))
+            continue
+        try:
+            body = resp.json()
+        except ValueError:
+            logger.warning("grailed batch returned non-JSON body")
+            results.extend([None] * len(chunk))
+            continue
+        chunk_results = list(body.get("results") or [])
+        # Defensive: if Algolia ever returns a different count than
+        # requested, pad/truncate rather than let a later zip() misalign
+        # and silently attribute one search's results to another.
+        if len(chunk_results) != len(chunk):
+            logger.warning(
+                "grailed batch result count mismatch: sent %s sub-queries, got %s results back",
+                len(chunk), len(chunk_results),
+            )
+            chunk_results += [None] * (len(chunk) - len(chunk_results))
+            chunk_results = chunk_results[:len(chunk)]
+        results.extend(chunk_results)
+    return results
+
+
+@batch_adapter("grailed")
+def search_grailed_batch(saved_searches):
+    """Same live-search + sold-comps pair per query as search_grailed(),
+    but for EVERY grailed-enabled search in 1-4 HTTP round trips via
+    Algolia's multi-query endpoint instead of one round trip PER search.
+
+    Measured live: 86 enabled searches x 2 queries each (live + sold-comps)
+    = 172 sequential calls, ~60s of the ~90s marketplace fetch budget -
+    Grailed alone was eating two-thirds of it. That's why
+    prefetch_marketplaces() needed a rotating start-offset in the first
+    place: the budget cutoff was truncating the search list every run, and
+    the offset only spread WHICH searches got cut, it never stopped it
+    from happening. Batching frees that budget for every other platform
+    and search instead of just moving the truncation point around.
+
+    Returns {query: [listings]} covering every search passed in."""
+    cutoff = int(time.time()) - SOLD_COMP_WINDOW_DAYS * 86400
+    clean_queries = [split_query_exclusions(s["query"])[0] for s in saved_searches]
+
+    sub_requests = []
+    for query in clean_queries:
+        sub_requests.append({
+            "indexName": GRAILED_INDEX,
+            "params": urlencode({
+                "query": query,
+                "hitsPerPage": 30,
+                "filters": 'location:"United States"',
+            }),
+        })
+        sub_requests.append({
+            "indexName": GRAILED_SOLD_INDEX,
+            "params": urlencode({
+                "query": query,
+                "hitsPerPage": SOLD_COMP_HITS,
+                "numericFilters": f"sold_at_i>{cutoff}",
+                "typoTolerance": "false",
+                "removeWordsIfNoResults": "none",
+            }),
+        })
+
+    raw_results = _algolia_multi_query(sub_requests)
+
+    out = {}
+    for i, saved_search in enumerate(saved_searches):
+        query = saved_search["query"]  # the ORIGINAL (unstripped) query - the
+        # dict key prefetch_marketplaces() looks results up by everywhere else.
+        live_result = raw_results[2 * i]
+        sold_result = raw_results[2 * i + 1]
+
+        sold_median = sold_count = None
+        if sold_result:
+            prices = sorted(
+                h.get("sold_price") for h in sold_result.get("hits", []) if h.get("sold_price")
+            )
+            if len(prices) >= 3:
+                sold_median, sold_count = prices[len(prices) // 2], len(prices)
+
+        if not live_result:
+            out.setdefault(query, [])
+            continue
+        listings = [
+            _grailed_hit_to_listing(hit, sold_median, sold_count)
+            for hit in live_result.get("hits", [])
+        ]
+        out.setdefault(query, []).extend(x for x in listings if x)
+
+    return out
 
 
 # ---------------------------------------------------------------------------
