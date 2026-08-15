@@ -296,6 +296,25 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("gender", result["reason"])
 
+    def test_womens_size_crossref_blocks_even_with_no_gender_word(self):
+        # Live miss: "Brunello Cuccinelli Water-Resistant Jacket | Size 46
+        # (US 10)" alerted as a 59% "Great Deal" - no gender word anywhere
+        # in the title (GENDER_EXCLUDE_KEYWORDS had nothing to match), but
+        # "(US 10)" is exactly how European designer women's ready-to-wear
+        # cross-references its size tag.
+        result = m.score_listing(
+            self._listing("Brunello Cuccinelli Water-Resistant Jacket | Size 46 (US 10)"), gap_report=None
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("women's size", result["reason"])
+
+    def test_womens_size_crossref_does_not_false_positive_on_mens_shoe_size(self):
+        # Must not fire on the extremely common men's-shoe phrasing this
+        # bot's shoe searches are full of - "US 10" bare, not inside an
+        # "EU size (US N)" parenthetical cross-reference.
+        self.assertFalse(m.WOMENS_SIZE_CROSSREF_SIGNAL.search("alden cap toe boot us 10 d"))
+        self.assertFalse(m.WOMENS_SIZE_CROSSREF_SIGNAL.search("allen edmonds park avenue size 10 us"))
+
     def test_pass_brand_blocks(self):
         # "travismathew" is a real PASS_BRANDS entry (mall-tier golf brand).
         result = m.score_listing(self._listing("TravisMathew Golf Polo Shirt M"), gap_report=None)
@@ -422,6 +441,47 @@ class StealQualityGate(unittest.TestCase):
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
         result["brand_tier"] = "grab_on_sight"
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+
+    def test_gamecocks_bar_always_alerts_even_with_no_ai_check(self):
+        # Explicit user instruction: "PM USC is always something I want to
+        # check" - doesn't need an insane steal, just a good deal, and
+        # should ALWAYS alert under ~$50 in good condition. Unlike every
+        # other scoped bar in this file, no AI check having run at all must
+        # NOT block it (condition is already enforced upstream via
+        # CONDITION_HARD_FAIL_KEYWORDS before this gate ever runs).
+        result = {"deal_rating": None, "brand_tier": "standard", "search_query": "peter millar gamecocks quarter zip"}
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+
+    def test_gamecocks_bar_requires_at_least_good_deal(self):
+        result = {"deal_rating": "Fair", "discount_pct": 15, "brand_tier": "standard", "search_query": "peter millar gamecocks polo"}
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+        result["deal_rating"] = "Good Deal"
+        result["discount_pct"] = 35
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_gamecocks_bar_is_scoped_to_peter_millar_not_all_usc(self):
+        # Explicit correction: "the above is for PETER MILLAR USC, not just
+        # all usc" - a bare "gamecocks" search (no "peter millar") must not
+        # get the loose bar.
+        result = {"deal_rating": None, "brand_tier": "standard", "search_query": "gamecocks polo"}
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_loro_piana_cucinelli_bar_requires_steal_tier(self):
+        # Live miss: a $200 Brunello Cucinelli jacket alerted as a
+        # well-evidenced 59% "Great Deal" (real Grailed sold comps) - not
+        # what "still has to be a steal" meant. Scoped to these two
+        # brands' searches specifically, not the whole knitwear category -
+        # "brunello cucinelli jacket" doesn't trigger the knitwear
+        # classifier at all.
+        result = {"deal_rating": "Great Deal", "discount_pct": 59, "price_confidence": "high", "search_query": "brunello cucinelli jacket"}
+        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+        self.assertIsNotNone(reason)
+        self.assertIn("below Steal", reason)
+        result["deal_rating"] = "Steal"
+        result["discount_pct"] = 72
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+        result2 = {"deal_rating": "Steal", "discount_pct": 75, "price_confidence": "high", "search_query": "loro piana suit"}
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result2, category="other"))
 
     def test_default_category_no_ai_data_blind_trusts_grab_on_sight_only(self):
         result = {"deal_rating": None, "brand_tier": "grab_on_sight"}

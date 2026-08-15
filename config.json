@@ -342,6 +342,36 @@
       "profile": "slow"
     },
     {
+      "query": "peter millar gamecocks polo",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "peter millar gamecocks quarter zip",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
+      "query": "peter millar gamecocks jacket",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast"
+    },
+    {
       "query": "barbour jacket",
       "size": [
         "L",
