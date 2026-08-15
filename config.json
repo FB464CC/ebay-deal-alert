@@ -1072,14 +1072,7 @@
       "profile": "slow"
     },
     {
-      "query": "hermes tie",
-      "size": null,
-      "max_price": 60,
-      "enabled": true,
-      "profile": "slow"
-    },
-    {
-      "query": "montblanc pen",
+      "query": "montblanc pen -perfume -cologne -umbrella -cosmetic -makeup -wallet -cardholder -belt -sunglasses -eyeglass -eyewear -watch -cufflink -box -case -tray -guide -cloth -bag -briefcase -notebook -journal -diary -planner",
       "size": null,
       "max_price": 80,
       "enabled": true,
@@ -1152,7 +1145,6 @@
     "panerai",
     "smythson",
     "ettinger",
-    "hermes",
     "montblanc",
     "turnbull & asser"
   ],
