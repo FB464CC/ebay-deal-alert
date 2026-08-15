@@ -162,6 +162,7 @@ def make_listing(
     size=None,
     condition=None,
     currency="USD",
+    description=None,
 ):
     """Normalize one marketplace listing into eBay Browse API item shape.
 
@@ -198,6 +199,18 @@ def make_listing(
         listing["size"] = size
     if condition:
         listing["condition"] = condition
+    # Per explicit user instruction: "not all sizes etc are in the titles.
+    # take the descriptions as well." Poshmark and ShopGoodwill both return
+    # a full description in the SAME search response already being fetched
+    # - zero extra cost, just previously dropped on the floor. Confirmed
+    # live: a real Poshmark listing's description had "Size: 54R(EU)
+    # 44R(US)" and "small hole on..." - a disclosed flaw invisible to
+    # every title-only check in score_listing(). Vinted/Grailed don't
+    # return description at all in their search responses (checked live);
+    # eBay's item_summary/search never has, only its separate per-item
+    # get_item call does - see fetch_ebay_item_description().
+    if description:
+        listing["description"] = description
     return listing
 
 
@@ -632,6 +645,7 @@ def search_poshmark(saved_search):
                 size=size or post.get("size"),
                 seller=(post.get("creator_id") or post.get("creator_username")),
                 shipping=POSHMARK_ASSUMED_SHIPPING,
+                description=post.get("description"),
             )
         )
     return [x for x in listings if x], None
@@ -753,6 +767,7 @@ def search_shopgoodwill(saved_search):
                 # instead of trusting what the API reports.
                 shipping=SHOPGOODWILL_ASSUMED_SHIPPING,
                 seller=item.get("sellerName") or item.get("sellerId"),
+                description=item.get("description"),
             )
         )
     if skipped_too_early:

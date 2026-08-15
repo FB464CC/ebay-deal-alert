@@ -288,11 +288,62 @@ class MarkSeenFingerprintTiming(unittest.TestCase):
 
 
 class ScoreListingHardFails(unittest.TestCase):
-    def _listing(self, title, price=50.0):
-        return {"title": title, "price": {"value": price, "currency": "USD"}, "itemId": "t1"}
+    def _listing(self, title, price=50.0, description=None):
+        listing = {"title": title, "price": {"value": price, "currency": "USD"}, "itemId": "t1"}
+        if description is not None:
+            listing["description"] = description
+        return listing
 
     def test_gender_keyword_blocks(self):
         result = m.score_listing(self._listing("Women's Ralph Lauren Sweater M"), gap_report=None)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("gender", result["reason"])
+
+    def test_condition_flag_caught_from_description_not_just_title(self):
+        # Real live example: a Poshmark "Canali Travel Single Breasted...
+        # Suit Blazer" listing's TITLE said nothing about damage, but its
+        # description read "...Gently worn; FLAWS ... small hole on t...".
+        # "hole" alone is CONDITION_FLAG_KEYWORDS (a soft flag, not
+        # CONDITION_HARD_FAIL_KEYWORDS's "moth hole"), so this must surface
+        # as a flag on the result rather than block it outright - but
+        # before this fix it was invisible either way, since only the
+        # title was ever checked and the title said nothing about it.
+        result = m.score_listing(
+            self._listing(
+                "Canali Travel Single Breasted Wool Suit Blazer Men Size 44R",
+                description="Gently worn; FLAWS: small hole on the left sleeve cuff.",
+            ),
+            gap_report=None,
+        )
+        self.assertIn("condition keyword flagged", " ".join(result.get("flags") or []))
+
+    def test_condition_hard_fail_caught_from_description_too(self):
+        # The hard-fail tier ("moth hole", not bare "hole") must also reach
+        # into the description, not just the flag tier above.
+        result = m.score_listing(
+            self._listing("Canali Wool Suit Blazer Sz 44R", description="Has a small moth hole near the pocket."),
+            gap_report=None,
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("condition hard-fail keyword", result["reason"])
+
+    def test_fabric_recognized_from_description_not_just_title(self):
+        # Same principle, the other direction: a description that states
+        # the fabric should clear the "fabric not stated" flag even when
+        # the title itself says nothing about material.
+        no_desc = m.score_listing(self._listing("Canali Suit Blazer Sz 44R"), gap_report=None)
+        self.assertIn("fabric not stated", " ".join(no_desc.get("flags") or []))
+        with_desc = m.score_listing(
+            self._listing("Canali Suit Blazer Sz 44R", description="100% cashmere, made in Italy."),
+            gap_report=None,
+        )
+        self.assertNotIn("fabric not stated", " ".join(with_desc.get("flags") or []))
+
+    def test_gender_keyword_caught_from_description_too(self):
+        result = m.score_listing(
+            self._listing("Canali Suit Blazer Sz 44R", description="Beautiful women's blazer, great fit."),
+            gap_report=None,
+        )
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("gender", result["reason"])
 
@@ -633,6 +684,48 @@ class EbayRateLimitCheck(unittest.TestCase):
         with mock.patch("requests.get", side_effect=requests.exceptions.ConnectionError("boom")):
             remaining, limit = m.get_ebay_rate_limit_remaining("fake-token")
         self.assertEqual((remaining, limit), (None, None))
+
+
+class EbayItemDescription(unittest.TestCase):
+    """eBay's item_summary/search (search_ebay()) never returns a
+    description, only this separate per-item call does - added per
+    explicit user instruction to use descriptions for size/fabric/
+    condition context the AI decides with. Must degrade gracefully:
+    description enrichment is a nice-to-have, never worth failing or
+    slowing down a run over."""
+
+    def test_strips_html_and_unescapes_entities(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.json = lambda: {"description": "<p>100% wool &amp; cashmere.</p><br/>Size 44R"}
+        with mock.patch("requests.get", return_value=fake_resp):
+            text = m.fetch_ebay_item_description("fake-token", "v1|123|0")
+        self.assertEqual(text, "100% wool & cashmere. Size 44R")
+
+    def test_failure_returns_none_never_raises(self):
+        with mock.patch("requests.get", side_effect=requests.exceptions.ConnectionError("boom")):
+            text = m.fetch_ebay_item_description("fake-token", "v1|123|0")
+        self.assertIsNone(text)
+
+    def test_missing_description_field_returns_none(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.json = lambda: {"title": "no description key at all"}
+        with mock.patch("requests.get", return_value=fake_resp):
+            text = m.fetch_ebay_item_description("fake-token", "v1|123|0")
+        self.assertIsNone(text)
+
+
+class MakeListingDescription(unittest.TestCase):
+    def test_description_passed_through_when_present(self):
+        listing = p.make_listing(
+            "poshmark", "abc123", "Canali Suit", 50.0, "https://example.com/x", description="Small hole on cuff."
+        )
+        self.assertEqual(listing["description"], "Small hole on cuff.")
+
+    def test_no_description_key_when_absent(self):
+        listing = p.make_listing("poshmark", "abc123", "Canali Suit", 50.0, "https://example.com/x")
+        self.assertNotIn("description", listing)
 
 
 class AsciiSafeHeader(unittest.TestCase):
