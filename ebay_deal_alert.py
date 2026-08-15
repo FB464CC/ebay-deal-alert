@@ -1625,6 +1625,33 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # is trusted blind - everything else needs actual price evidence.
     if brand_tier != "grab_on_sight":
         return "no AI price estimate and brand not grab_on_sight-tier"
+
+    # NARROW-CATEGORY SEARCHES FOR BRANDS THAT SPAN MANY PRODUCT LINES -
+    # can't blind-trust these even on a grab_on_sight brand. Real live
+    # miss: "montblanc pen" fired alerts for an umbrella, perfume, an
+    # empty leather gift box, a cosmetic bag, a sunglasses case, and even
+    # AFTER adding a real exclusion list (same pattern "cartier watch"
+    # already uses), STILL let through "Montblanc red pen ink refills
+    # new" - Montblanc genuinely sells pens/refills/perfume/leather goods/
+    # eyewear/watches/gift sets, so a hand-curated exclusion list will
+    # always be one step behind. The actual root cause: these searches
+    # are new/narrow/unproven (unlike e.g. Alden, which really only
+    # sells shoes), and grab_on_sight blind-trust was built for brands
+    # where that's a safe bet. Explicit user instruction: "even more
+    # reason to use ai to identify the descriptions and titles etc" -
+    # require a real AI check to have actually run for these specific
+    # searches, same "no AI price estimate" treatment as a non-grab_on_
+    # sight brand gets everywhere else.
+    NARROW_CATEGORY_NO_BLIND_TRUST_SEARCHES = (
+        "montblanc pen", "smythson cardholder", "ettinger cardholder", "turnbull asser shirt",
+    )
+    # search_query_lower carries the RAW config query, "-exclusion" terms
+    # and all (e.g. "montblanc pen -perfume -cologne...") - strip those
+    # with the same utility marketplace relevance-checking already uses,
+    # or this membership check can never match.
+    clean_query = marketplaces.split_query_exclusions(search_query_lower)[0].strip()
+    if clean_query in NARROW_CATEGORY_NO_BLIND_TRUST_SEARCHES:
+        return "narrow-category bar: no AI price estimate - brand spans too many product lines to blind-trust"
     return None
 
 
@@ -1766,6 +1793,21 @@ def send_alert(result):
         discount_pct = result.get("discount_pct")
         if discount_pct is not None:
             message += f" ({discount_pct}% under resale)"
+
+    # Per explicit user instruction: "it could be nice to see estimated
+    # retail + what its worth now etc. so i can see at a quick glance."
+    # Kept to one short line each, same "ntfy truncates long messages on
+    # the lock screen" constraint noted above - the full flags/reasoning
+    # already live in alerts_log.jsonl for the mobile app.
+    retail_str = _format_estimated_usd(result.get("estimated_retail_price"))
+    resale_str = _format_estimated_usd(result.get("estimated_resale_value"))
+    if retail_str or resale_str:
+        parts = []
+        if retail_str:
+            parts.append(f"retail ~${retail_str}")
+        if resale_str:
+            parts.append(f"resale ~${resale_str}")
+        message += "\n" + " / ".join(parts)
 
     if result.get("category_id") == WATCH_CATEGORY_ID:
         # Unconditional - never gated on the AI's judgment, since it has no

@@ -472,6 +472,41 @@ class ScoreListingHardFails(unittest.TestCase):
 
 
 class StealQualityGate(unittest.TestCase):
+    def test_narrow_category_grab_on_sight_searches_never_blind_trust(self):
+        # Real live miss: "montblanc pen" (grab_on_sight tier) fired
+        # alerts for an umbrella, perfume, an empty leather gift box, a
+        # cosmetic bag, a sunglasses case, and even AFTER adding a real
+        # exclusion list, STILL let through "Montblanc red pen ink
+        # refills new" - Montblanc spans too many product lines for a
+        # hand-curated exclusion list to ever fully keep up with. Must
+        # require a real AI check to have actually run, same as a non-
+        # grab_on_sight brand needs everywhere else - the search_query
+        # comparison must survive the real "-exclusion" terms these
+        # queries actually carry in config.json (this test uses the
+        # exact real montblanc pen query string, exclusions and all).
+        real_query = (
+            "montblanc pen -perfume -cologne -umbrella -cosmetic -makeup -wallet -cardholder "
+            "-belt -sunglasses -eyeglass -eyewear -watch -cufflink -box -case -tray -guide "
+            "-cloth -bag -briefcase -notebook -journal -diary -planner -refill -refills -ink "
+            "-cartridge -cartridges -jewelry -ring -necklace -bracelet -earring -earrings"
+        )
+        result = {"deal_rating": None, "brand_tier": "grab_on_sight", "search_query": real_query}
+        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+        self.assertIsNotNone(reason)
+        self.assertIn("narrow-category bar", reason)
+        # But once the AI DID actually check it and it clears the normal
+        # bar, it must alert same as anything else.
+        result["deal_rating"] = "Steal"
+        result["discount_pct"] = 75
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_other_grab_on_sight_brands_still_blind_trust_normally(self):
+        # This must be scoped ONLY to the specific narrow-category
+        # searches, not grab_on_sight brands in general - e.g. Alden
+        # (shoes-only, long track record) should be unaffected.
+        result = {"deal_rating": None, "brand_tier": "grab_on_sight", "search_query": "alden shoes"}
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
     def test_watches_never_blind_trust(self):
         # No deal_rating at all (AI budget didn't reach it) must ALWAYS
         # block a watch, even on a grab_on_sight brand - counterfeit risk,
@@ -751,6 +786,44 @@ class AsciiSafeHeader(unittest.TestCase):
         safe = m._ascii_safe_header("Café Watch \U0001f600")
         safe.encode("ascii")  # must not raise
         self.assertIn("Watch", safe)
+
+
+class SendAlertRetailResaleLine(unittest.TestCase):
+    """Per explicit user instruction: "it could be nice to see estimated
+    retail + what its worth now etc. so i can see at a quick glance.\""""
+
+    def _send_and_capture(self, result):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured["message"] = data.decode("utf-8")
+            return fake_resp
+
+        with mock.patch("requests.post", side_effect=fake_post):
+            m.send_alert(result)
+        return captured["message"]
+
+    def test_retail_and_resale_both_shown(self):
+        result = {
+            "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
+            "price": 100.0, "item_price": 90.0, "shipping_cost": 10.0,
+            "estimated_retail_price": 800, "estimated_resale_value": 250,
+            "deal_rating": "Steal", "discount_pct": 60,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("retail ~$800", message)
+        self.assertIn("resale ~$250", message)
+
+    def test_gracefully_omitted_when_no_estimate_available(self):
+        result = {
+            "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
+            "price": 100.0, "item_price": 90.0, "shipping_cost": 10.0,
+        }
+        message = self._send_and_capture(result)
+        self.assertNotIn("retail", message)
+        self.assertNotIn("resale", message)
 
 
 class ShopGoodwillClosingSoon(unittest.TestCase):
