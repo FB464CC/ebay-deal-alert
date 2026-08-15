@@ -1072,7 +1072,7 @@
       "profile": "slow"
     },
     {
-      "query": "montblanc pen -perfume -cologne -umbrella -cosmetic -makeup -wallet -cardholder -belt -sunglasses -eyeglass -eyewear -watch -cufflink -box -case -tray -guide -cloth -bag -briefcase -notebook -journal -diary -planner",
+      "query": "montblanc pen -perfume -cologne -umbrella -cosmetic -makeup -wallet -cardholder -belt -sunglasses -eyeglass -eyewear -watch -cufflink -box -case -tray -guide -cloth -bag -briefcase -notebook -journal -diary -planner -refill -refills -ink -cartridge -cartridges -jewelry -ring -necklace -bracelet -earring -earrings",
       "size": null,
       "max_price": 80,
       "enabled": true,
@@ -1084,7 +1084,7 @@
         "L",
         "XL"
       ],
-      "max_price": 150,
+      "max_price": 15,
       "enabled": true,
       "profile": "slow"
     }
