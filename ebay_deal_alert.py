@@ -70,6 +70,20 @@ PET_PRODUCT_SIGNALS = re.compile(
     r"\b(dog|puppy|kitten|pet\s*bed|pet\s*carrier|pet\s*harness|dog\s*leash)\b",
     re.IGNORECASE,
 )
+# Live miss: "Brunello Cuccinelli Water-Resistant Jacket | Size 46 (US 10)"
+# alerted as a 59% "Great Deal" - no gender word anywhere in the title, so
+# GENDER_EXCLUDE_KEYWORDS had nothing to match, but "US 10" is a women's
+# dress-size number, and "EU/IT size NN (US N)" is exactly how European
+# designer women's ready-to-wear cross-references its size tag - a
+# convention men's clothing never uses (men's sizing is chest-inches or
+# S/M/L, and a men's-shoe "US 10" is never written inside a parenthetical
+# EU-size cross-reference like this). Scoped to the parenthetical pattern
+# specifically, not bare "us 10", so it doesn't false-positive on a
+# genuine men's shoe listing ("Alden Cap Toe US 10") - the shoe searches
+# in this bot are full of exactly that phrasing.
+WOMENS_SIZE_CROSSREF_SIGNAL = re.compile(
+    r"\(us\s*(?:0|2|4|6|8|10|12|14|16|18|20)\)", re.IGNORECASE
+)
 FABRIC_POLY_KEYWORD = _CONFIG["FABRIC_POLY_KEYWORD"]
 PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 # Generic category/material words stripped out when checking whether a
@@ -995,6 +1009,8 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     # through eBay's own "-term" matching.
     if brand_in(title, GENDER_EXCLUDE_KEYWORDS):
         return {"verdict": "PASS", "reason": "excluded gender keyword in title", "listing": listing}
+    if WOMENS_SIZE_CROSSREF_SIGNAL.search(title):
+        return {"verdict": "PASS", "reason": "women's size cross-reference in title", "listing": listing}
     if PET_PRODUCT_SIGNALS.search(title):
         return {"verdict": "PASS", "reason": "pet product, not menswear", "listing": listing}
 
@@ -1347,6 +1363,60 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     price_confidence = result.get("price_confidence")
     liquidity = result.get("liquidity")
     brand_tier = result.get("brand_tier")
+
+    # These two scoped bars run BEFORE the category checks below on
+    # purpose - "peter millar gamecocks quarter zip" triggers the knitwear
+    # category classifier (the query contains "quarter zip"), and the
+    # stricter knitwear check below would otherwise run first and block
+    # the gamecocks bar's whole "always alert, no AI needed" intent before
+    # it ever got a chance to apply. Caught live by a test written against
+    # this exact scenario before shipping - see
+    # test_gamecocks_bar_always_alerts_even_with_no_ai_check.
+    search_query_lower = (result.get("search_query") or "").lower()
+
+    # UNIVERSITY OF SOUTH CAROLINA GAMECOCKS - Peter Millar collegiate line
+    # specifically, not any USC merch from any brand (explicit user
+    # correction: "the above is for PETER MILLAR USC, not just all usc").
+    # Per explicit instruction: doesn't need to be an "insane steal", just
+    # a good deal, and should ALWAYS alert on anything under ~$50 in good
+    # condition - "PM USC is always something I want to check", a
+    # want-to-see-every-one category, not a steal-hunting one. Loosest bar
+    # in the file on purpose: doesn't require an AI check to have even run
+    # at all (unlike every other scoped bar here, all of which fall back to
+    # "no AI price estimate and brand not grab_on_sight-tier" when
+    # deal_rating is None). Condition ("no rips or holes like usual") is
+    # already enforced upstream in score_listing() via
+    # CONDITION_HARD_FAIL_KEYWORDS before a listing ever reaches this gate,
+    # so this only relaxes the price-evidence requirement, not the
+    # condition one.
+    if "peter millar" in search_query_lower and "gamecocks" in search_query_lower:
+        if deal_rating is None:
+            return None
+        if deal_rating not in ("Steal", "Great Deal", "Good Deal"):
+            return f"gamecocks bar: deal_rating '{deal_rating}' below Good Deal"
+        if discount_pct is None or discount_pct <= 0:
+            return "gamecocks bar: non-positive discount_pct"
+        return None
+
+    # LORO PIANA / BRUNELLO CUCINELLI - opposite of the gamecocks bar
+    # above: per explicit user instruction when asking for wider search
+    # coverage on these two brands ("still has to be a steal, can be on
+    # slow, not a NEED"), and reinforced by a real live miss the same
+    # session (a $200 Brunello Cucinelli jacket alerted as a 59% "Great
+    # Deal" backed by real sold comps - well-evidenced, but not what the
+    # user meant by "a steal"). Steal-tier only, same as knitwear's
+    # grail-or-better bar, but scoped to these two brands' searches
+    # specifically rather than the whole knitwear category (a "brunello
+    # cucinelli jacket" search doesn't trigger the knitwear category
+    # classifier at all - only sweater/cashmere/merino/quarter-zip do).
+    if "loro piana" in search_query_lower or "cucinelli" in search_query_lower:
+        if deal_rating != "Steal":
+            return f"loro piana/cucinelli bar: deal_rating '{deal_rating}' below Steal"
+        if discount_pct is None or discount_pct <= 0:
+            return "loro piana/cucinelli bar: non-positive discount_pct"
+        if price_confidence == "low":
+            return "loro piana/cucinelli bar: AI price estimate confidence too low to trust"
+        return None
 
     if category == "knitwear":
         if brand_tier != "grab_on_sight":
