@@ -1378,20 +1378,31 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # specifically, not any USC merch from any brand (explicit user
     # correction: "the above is for PETER MILLAR USC, not just all usc").
     # Per explicit instruction: doesn't need to be an "insane steal", just
-    # a good deal, and should ALWAYS alert on anything under ~$50 in good
-    # condition - "PM USC is always something I want to check", a
-    # want-to-see-every-one category, not a steal-hunting one. Loosest bar
-    # in the file on purpose: doesn't require an AI check to have even run
-    # at all (unlike every other scoped bar here, all of which fall back to
-    # "no AI price estimate and brand not grab_on_sight-tier" when
-    # deal_rating is None). Condition ("no rips or holes like usual") is
-    # already enforced upstream in score_listing() via
-    # CONDITION_HARD_FAIL_KEYWORDS before a listing ever reaches this gate,
-    # so this only relaxes the price-evidence requirement, not the
-    # condition one.
-    if "peter millar" in search_query_lower and "gamecocks" in search_query_lower:
+    # a good deal - Good-Deal-or-better clears it, one tier looser than the
+    # site-wide Steal/Great-Deal default.
+    #
+    # Real live miss, first night this ran: "peter millar gamecocks jacket"
+    # alerted a Stanford quarter-zip and two completely generic plaid PM
+    # shirts with zero South Carolina connection - is_relevant_marketplace_
+    # listing() only requires ONE non-stopword query token in the title
+    # (satisfied by "peter"/"millar" alone), so it doesn't actually enforce
+    # "gamecocks" at all. One of those shirts alerted with NO AI check
+    # having run - the original "doesn't require an AI check" design here
+    # meant nothing had looked at its photos for a corporate logo, which is
+    # exactly what the user then reported ("bad peter millar alerts...
+    # others with logos"). Two fixes: (1) the listing's own title must
+    # actually say "gamecocks" or "south carolina" - the saved search's
+    # query text matching isn't enough, given how loose real Vinted/
+    # Poshmark search relevance is; (2) an AI check must have actually run
+    # (same "no AI price estimate and brand not grab_on_sight-tier"
+    # fallback every other scoped bar in this file uses) - title-only
+    # CORPORATE_LOGO_KEYWORDS can't see a logo that's only in the photos,
+    # which is the whole reason the AI photo check exists.
+    gamecocks_query = "peter millar" in search_query_lower and "gamecocks" in search_query_lower
+    gamecocks_title = brand_in((result.get("listing") or {}).get("title", "").lower(), ("gamecocks", "south carolina"))
+    if gamecocks_query and gamecocks_title:
         if deal_rating is None:
-            return None
+            return "gamecocks bar: no AI price estimate and brand not grab_on_sight-tier" if brand_tier != "grab_on_sight" else None
         if deal_rating not in ("Steal", "Great Deal", "Good Deal"):
             return f"gamecocks bar: deal_rating '{deal_rating}' below Good Deal"
         if discount_pct is None or discount_pct <= 0:
