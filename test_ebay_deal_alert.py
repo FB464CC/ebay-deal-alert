@@ -473,24 +473,21 @@ class ScoreListingHardFails(unittest.TestCase):
 
 class StealQualityGate(unittest.TestCase):
     def test_narrow_category_grab_on_sight_searches_never_blind_trust(self):
-        # Real live miss: "montblanc pen" (grab_on_sight tier) fired
-        # alerts for an umbrella, perfume, an empty leather gift box, a
-        # cosmetic bag, a sunglasses case, and even AFTER adding a real
-        # exclusion list, STILL let through "Montblanc red pen ink
-        # refills new" - Montblanc spans too many product lines for a
-        # hand-curated exclusion list to ever fully keep up with. Must
-        # require a real AI check to have actually run, same as a non-
-        # grab_on_sight brand needs everywhere else - the search_query
-        # comparison must survive the real "-exclusion" terms these
-        # queries actually carry in config.json (this test uses the
-        # exact real montblanc pen query string, exclusions and all).
-        real_query = (
-            "montblanc pen -perfume -cologne -umbrella -cosmetic -makeup -wallet -cardholder "
-            "-belt -sunglasses -eyeglass -eyewear -watch -cufflink -box -case -tray -guide "
-            "-cloth -bag -briefcase -notebook -journal -diary -planner -refill -refills -ink "
-            "-cartridge -cartridges -jewelry -ring -necklace -bracelet -earring -earrings"
-        )
-        result = {"deal_rating": None, "brand_tier": "grab_on_sight", "search_query": real_query}
+        # Root issue this mechanism exists for: "montblanc pen"
+        # (grab_on_sight tier) fired alerts for an umbrella, perfume, an
+        # empty leather gift box, a cosmetic bag, a sunglasses case, and
+        # even AFTER adding a real exclusion list, STILL let through
+        # "Montblanc red pen ink refills new" - Montblanc spans too many
+        # product lines for a hand-curated exclusion list to ever fully
+        # keep up with. Removed entirely afterward per explicit user
+        # instruction ("i do NOT need a pen...dont waste ur time and
+        # resources on those"), but the underlying mechanism (require a
+        # real AI check for brand-new/narrow searches, same as a non-
+        # grab_on_sight brand needs everywhere else) still protects the
+        # remaining searches in this tuple - exercised here via
+        # "smythson cardholder", a real live entry with no exclusion
+        # terms attached.
+        result = {"deal_rating": None, "brand_tier": "grab_on_sight", "search_query": "smythson cardholder"}
         reason = m.is_blocked_by_steal_quality_gate(result, category="other")
         self.assertIsNotNone(reason)
         self.assertIn("narrow-category bar", reason)
@@ -499,6 +496,23 @@ class StealQualityGate(unittest.TestCase):
         result["deal_rating"] = "Steal"
         result["discount_pct"] = 75
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_narrow_category_bar_survives_real_exclusion_terms_in_query(self):
+        # search_query carries the RAW config query, "-exclusion" terms
+        # and all (e.g. a real search might read "foo bar -baz -qux") -
+        # the membership check must strip those first or it can never
+        # match. Uses turnbull asser shirt's real shape as a stand-in
+        # since it (like montblanc pen used to) has no exclusions of its
+        # own today - constructing one here to guard against a future
+        # search in this tuple gaining exclusions and silently breaking
+        # this check the same way it broke on montblanc pen.
+        result = {
+            "deal_rating": None, "brand_tier": "grab_on_sight",
+            "search_query": "turnbull asser shirt -logo -damaged",
+        }
+        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+        self.assertIsNotNone(reason)
+        self.assertIn("narrow-category bar", reason)
 
     def test_other_grab_on_sight_brands_still_blind_trust_normally(self):
         # This must be scoped ONLY to the specific narrow-category

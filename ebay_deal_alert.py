@@ -1628,7 +1628,11 @@ def is_blocked_by_steal_quality_gate(result, category=None):
 
     # NARROW-CATEGORY SEARCHES FOR BRANDS THAT SPAN MANY PRODUCT LINES -
     # can't blind-trust these even on a grab_on_sight brand. Real live
-    # miss: "montblanc pen" fired alerts for an umbrella, perfume, an
+    # miss that motivated this: "montblanc pen" (removed entirely per
+    # explicit user instruction - "why on earth is there so many pens? i
+    # do NOT need a pen...dont waste ur time and resources on those" -
+    # 244 log records for a category the user never wanted at all, not
+    # worth further tuning) fired alerts for an umbrella, perfume, an
     # empty leather gift box, a cosmetic bag, a sunglasses case, and even
     # AFTER adding a real exclusion list (same pattern "cartier watch"
     # already uses), STILL let through "Montblanc red pen ink refills
@@ -1643,7 +1647,7 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # searches, same "no AI price estimate" treatment as a non-grab_on_
     # sight brand gets everywhere else.
     NARROW_CATEGORY_NO_BLIND_TRUST_SEARCHES = (
-        "montblanc pen", "smythson cardholder", "ettinger cardholder", "turnbull asser shirt",
+        "smythson cardholder", "ettinger cardholder", "turnbull asser shirt",
     )
     # search_query_lower carries the RAW config query, "-exclusion" terms
     # and all (e.g. "montblanc pen -perfume -cologne...") - strip those
