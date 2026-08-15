@@ -442,18 +442,28 @@ class StealQualityGate(unittest.TestCase):
         result["brand_tier"] = "grab_on_sight"
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
 
-    def test_gamecocks_bar_always_alerts_even_with_no_ai_check(self):
-        # Explicit user instruction: "PM USC is always something I want to
-        # check" - doesn't need an insane steal, just a good deal, and
-        # should ALWAYS alert under ~$50 in good condition. Unlike every
-        # other scoped bar in this file, no AI check having run at all must
-        # NOT block it (condition is already enforced upstream via
-        # CONDITION_HARD_FAIL_KEYWORDS before this gate ever runs).
-        result = {"deal_rating": None, "brand_tier": "standard", "search_query": "peter millar gamecocks quarter zip"}
+    def _gamecocks_result(self, title, **kwargs):
+        result = {"listing": {"title": title}, "search_query": "peter millar gamecocks quarter zip"}
+        result.update(kwargs)
+        return result
+
+    def test_gamecocks_bar_requires_ai_check_to_have_run(self):
+        # Live miss: a generic Peter Millar plaid shirt (no Gamecocks
+        # branding at all) alerted with NO AI check having run - the
+        # original "doesn't require an AI check" design meant nothing ever
+        # looked at its photos for a corporate logo, which is exactly what
+        # the user then reported ("bad peter millar alerts...with logos").
+        # Must now fall back to the same "no AI price estimate and brand
+        # not grab_on_sight-tier" rule every other scoped bar uses.
+        result = self._gamecocks_result("Peter Millar Gamecocks Quarter Zip", deal_rating=None, brand_tier="standard")
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+        result["brand_tier"] = "grab_on_sight"
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
 
     def test_gamecocks_bar_requires_at_least_good_deal(self):
-        result = {"deal_rating": "Fair", "discount_pct": 15, "brand_tier": "standard", "search_query": "peter millar gamecocks polo"}
+        result = self._gamecocks_result(
+            "Peter Millar Gamecocks Polo", deal_rating="Fair", discount_pct=15, brand_tier="standard"
+        )
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
         result["deal_rating"] = "Good Deal"
         result["discount_pct"] = 35
@@ -463,8 +473,24 @@ class StealQualityGate(unittest.TestCase):
         # Explicit correction: "the above is for PETER MILLAR USC, not just
         # all usc" - a bare "gamecocks" search (no "peter millar") must not
         # get the loose bar.
-        result = {"deal_rating": None, "brand_tier": "standard", "search_query": "gamecocks polo"}
+        result = self._gamecocks_result("Gamecocks Polo", deal_rating=None, brand_tier="standard")
+        result["search_query"] = "gamecocks polo"
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_gamecocks_bar_does_not_apply_to_off_target_matches(self):
+        # Live miss: "peter millar gamecocks jacket" alerted a Stanford
+        # quarter-zip and generic plaid PM shirts with zero South Carolina
+        # connection - is_relevant_marketplace_listing() only requires ONE
+        # non-stopword query token in the title (satisfied by "peter"/
+        # "millar" alone), so the saved search's query string matching
+        # "gamecocks" isn't enough on its own. The listing's own title must
+        # say "gamecocks" or "south carolina" - anything else falls through
+        # to normal (stricter) treatment instead of the loose bar.
+        for title in ("Peter Millar Quarter Zip Stanford Men's L", "Peter Millar Shirt Plaid Check Button Down"):
+            result = self._gamecocks_result(title, deal_rating=None, brand_tier="standard")
+            reason = m.is_blocked_by_steal_quality_gate(result, category="knitwear")
+            self.assertIsNotNone(reason)
+            self.assertNotIn("gamecocks bar", reason, f"{title!r} must not get the loose gamecocks bar")
 
     def test_loro_piana_cucinelli_bar_requires_steal_tier(self):
         # Live miss: a $200 Brunello Cucinelli jacket alerted as a
