@@ -611,12 +611,64 @@
       "category_id": "53120"
     },
     {
-      "query": "drake london sweater",
+      "query": "drake's london sweater",
       "size": [
         "L",
         "XL"
       ],
       "max_price": 50,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "charvet shirt",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "huntsman suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 300,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "3001"
+    },
+    {
+      "query": "gieves and hawkes suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 300,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "3001"
+    },
+    {
+      "query": "pringle of scotland sweater",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "n peal sweater",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 120,
       "enabled": true,
       "profile": "slow"
     },
@@ -1024,7 +1076,7 @@
     "corneliani",
     "borrelli",
     "oxxford",
-    "drakes london",
+    "drake's london",
     "rolex",
     "omega",
     "tudor",
