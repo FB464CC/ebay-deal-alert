@@ -429,6 +429,40 @@ class StealQualityGate(unittest.TestCase):
         result["brand_tier"] = "standard"
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
 
+    def test_all_never_got_ai_check_reasons_share_the_no_ai_price_substring(self):
+        # run() decides whether to mark_seen() a gate-blocked candidate by
+        # checking "no AI price" in gate_reason - a candidate the AI never
+        # actually evaluated (GEMINI_CALL_LIMIT exhausted) must be left
+        # unseen so it gets a real shot on a later run, vs. one the AI DID
+        # evaluate and reject, which should never be reconsidered. Live
+        # miss: Vinted alone surfaces 5,000-6,500 listings/run against an
+        # 8-call AI budget, so most "watches" candidates were hitting
+        # exactly this path and then getting permanently thrown away
+        # before ever being evaluated once - user report: "vinted watches
+        # ... sell almost instantly before I could even do any research."
+        # This test locks in the substring every "never evaluated" reason
+        # must contain, across all 4 gate variants, so a future wording
+        # change can't silently break that dispatch.
+        never_evaluated = {
+            "watches": {"deal_rating": None, "brand_tier": "standard"},
+            "suit": {"deal_rating": None, "brand_tier": "standard"},
+            "other": {"deal_rating": None, "brand_tier": "standard"},
+        }
+        for category, result in never_evaluated.items():
+            reason = m.is_blocked_by_steal_quality_gate(result, category=category)
+            self.assertIn("no AI price", reason, f"category={category}")
+        crown_crafted_result = {"deal_rating": None, "brand_tier": "standard", "search_query": "peter millar crown crafted polo"}
+        reason = m.is_blocked_by_steal_quality_gate(crown_crafted_result, category="other")
+        self.assertIn("no AI price", reason)
+
+    def test_ai_evaluated_rejections_do_not_share_the_no_ai_price_substring(self):
+        # The flip side of the above - an AI-evaluated-and-rejected
+        # candidate must NOT match "no AI price", or run() would wrongly
+        # leave it unseen and re-attempt it forever.
+        evaluated_reject = {"deal_rating": "Good Deal", "discount_pct": 35, "brand_tier": "grab_on_sight"}
+        reason = m.is_blocked_by_steal_quality_gate(evaluated_reject, category="watches")
+        self.assertNotIn("no AI price", reason)
+
 
 class MarketplaceQueryExclusions(unittest.TestCase):
     def test_exclusions_stripped_from_search_query(self):
