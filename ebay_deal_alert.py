@@ -1391,15 +1391,18 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # meant nothing had looked at its photos for a corporate logo, which is
     # exactly what the user then reported ("bad peter millar alerts...
     # others with logos"). Two fixes: (1) the listing's own title must
-    # actually say "gamecocks" or "south carolina" - the saved search's
-    # query text matching isn't enough, given how loose real Vinted/
-    # Poshmark search relevance is; (2) an AI check must have actually run
-    # (same "no AI price estimate and brand not grab_on_sight-tier"
-    # fallback every other scoped bar in this file uses) - title-only
+    # actually say "gamecocks" - the saved search's query text matching
+    # isn't enough, given how loose real Vinted/Poshmark search relevance
+    # is. Deliberately NOT "south carolina" too, per explicit user
+    # correction - that phrase alone hits golf courses and plenty of other
+    # things with no connection to the team; "gamecocks" is specific
+    # enough to stand alone. (2) an AI check must have actually run (same
+    # "no AI price estimate and brand not grab_on_sight-tier" fallback
+    # every other scoped bar in this file uses) - title-only
     # CORPORATE_LOGO_KEYWORDS can't see a logo that's only in the photos,
     # which is the whole reason the AI photo check exists.
     gamecocks_query = "peter millar" in search_query_lower and "gamecocks" in search_query_lower
-    gamecocks_title = brand_in((result.get("listing") or {}).get("title", "").lower(), ("gamecocks", "south carolina"))
+    gamecocks_title = brand_in((result.get("listing") or {}).get("title", "").lower(), ("gamecocks",))
     if gamecocks_query and gamecocks_title:
         if deal_rating is None:
             return "gamecocks bar: no AI price estimate and brand not grab_on_sight-tier" if brand_tier != "grab_on_sight" else None

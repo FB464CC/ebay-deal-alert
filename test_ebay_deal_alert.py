@@ -484,9 +484,17 @@ class StealQualityGate(unittest.TestCase):
         # non-stopword query token in the title (satisfied by "peter"/
         # "millar" alone), so the saved search's query string matching
         # "gamecocks" isn't enough on its own. The listing's own title must
-        # say "gamecocks" or "south carolina" - anything else falls through
-        # to normal (stricter) treatment instead of the loose bar.
-        for title in ("Peter Millar Quarter Zip Stanford Men's L", "Peter Millar Shirt Plaid Check Button Down"):
+        # say "gamecocks" - anything else falls through to normal
+        # (stricter) treatment instead of the loose bar. Deliberately does
+        # NOT include "south carolina" - explicit user correction, that
+        # phrase alone hits golf courses and plenty of other things with
+        # no connection to the team ("Peter Millar South Carolina Country
+        # Club Polo" would otherwise wrongly qualify).
+        for title in (
+            "Peter Millar Quarter Zip Stanford Men's L",
+            "Peter Millar Shirt Plaid Check Button Down",
+            "Peter Millar South Carolina Country Club Polo",
+        ):
             result = self._gamecocks_result(title, deal_rating=None, brand_tier="standard")
             reason = m.is_blocked_by_steal_quality_gate(result, category="knitwear")
             self.assertIsNotNone(reason)
