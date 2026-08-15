@@ -507,6 +507,31 @@ class EbayRateLimitCheck(unittest.TestCase):
         self.assertEqual((remaining, limit), (None, None))
 
 
+class AsciiSafeHeader(unittest.TestCase):
+    """Live miss: a genuine 72%-under-resale "Steal" (Allen Edmonds
+    LaSalle, size 13) sat completely unsent for 6+ hours because its
+    title's apostrophe was a curly U+2019 from "Men's", and
+    UnicodeEncodeError building the ntfy Title header isn't a
+    requests.exceptions.RequestException - send_alert()'s retry loop
+    never caught it, so it failed identically on every 5-min run without
+    ever getting marked seen."""
+
+    def test_curly_apostrophe_becomes_straight_and_stays_ascii(self):
+        title = "Allen Edmonds LaSalle Brown Leather Derby Dress Shoes Men’s US 13 Round Toe"
+        safe = m._ascii_safe_header(f"[EBAY] {title[:60]}")
+        safe.encode("ascii")  # must not raise - this is the actual live crash
+        self.assertIn("Men's", safe)
+
+    def test_common_smart_punctuation_translated_not_just_stripped(self):
+        safe = m._ascii_safe_header("‘quoted’ – em—dash …")
+        self.assertEqual(safe, "'quoted' - em-dash ...")
+
+    def test_unknown_non_ascii_stripped_rather_than_crashing(self):
+        safe = m._ascii_safe_header("Café Watch \U0001f600")
+        safe.encode("ascii")  # must not raise
+        self.assertIn("Watch", safe)
+
+
 class ShopGoodwillClosingSoon(unittest.TestCase):
     """currentPrice on a live ShopGoodwill auction isn't a real number until
     bidding is basically over - per explicit user instruction, only surface
