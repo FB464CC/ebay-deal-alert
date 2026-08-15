@@ -1561,6 +1561,31 @@ def append_alert_log(result):
         logger.warning("Failed to write alerts log: %s", exc)
 
 
+def _ascii_safe_header(text):
+    """HTTP header values must be ASCII/latin-1 - the ntfy "Title" header
+    is built straight from scraped listing titles, which routinely carry
+    smart quotes/em-dashes/ellipses (sellers pasting from Word/Notes).
+    requests/urllib3 raises UnicodeEncodeError trying to encode those into
+    a header, deep enough in the stack that it's NOT a
+    requests.exceptions.RequestException - send_alert()'s retry loop never
+    catches it, so the whole send permanently fails on every retry,
+    forever, with nothing but a log line to show for it (mark_seen() never
+    runs, so it keeps re-scoring and re-attempting every 5 min run after
+    run). Real live miss: a genuine 72%-under-resale "Steal" (Allen
+    Edmonds LaSalle, its title's apostrophe was a curly U+2019 from
+    "Men's") sat completely unsent for 6+ hours before this was caught.
+    Translate common smart-punctuation to plain ASCII, then hard-strip
+    anything else non-ASCII rather than let this ever fail to encode
+    again - a perfectly readable truncated title beats a permanently
+    stuck alert."""
+    for bad, good in {
+        "‘": "'", "’": "'", "“": '"', "”": '"',
+        "–": "-", "—": "-", "…": "...",
+    }.items():
+        text = text.replace(bad, good)
+    return text.encode("ascii", errors="ignore").decode("ascii")
+
+
 def send_alert(result):
     listing = result["listing"]
     title = listing.get("title", "")
@@ -1615,7 +1640,7 @@ def send_alert(result):
     # notification-shade grouping to collapse multiple pushes into one
     # bundled summary. Use platform + item title instead - unique per
     # alert, and more useful at a glance than a constant string.
-    alert_title = f"[{source}] {title[:60]}"
+    alert_title = _ascii_safe_header(f"[{source}] {title[:60]}")
 
     tags = ["moneybag"] if result.get("brand_tier") == "grab_on_sight" else ["eyes"]
     tags.append("zap" if profile == "fast" else "hourglass")
