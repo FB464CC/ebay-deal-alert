@@ -2556,7 +2556,24 @@ def run():
             result["reason"] = f"blocked by steal-quality gate: {gate_reason}"
             logger.info("Gate-blocked %s: %s", item_id, gate_reason)
             append_alert_log(result)
-            mark_seen(conn, item_id, fingerprint, total_price)
+            # NOT marked seen when the block reason is "never got an AI
+            # check" (all 4 variants of this gate contain "no AI price") -
+            # covers watches/knitwear/suit/crown-crafted candidates starved
+            # by GEMINI_CALL_LIMIT, not ones the AI actually evaluated and
+            # rejected. Live miss: Vinted alone surfaces 5,000-6,500
+            # listings/run against an 8-call AI budget, so the overwhelming
+            # majority of "watches" candidates (which can NEVER blind-trust
+            # through without AI) were hitting this exact gate reason and
+            # then getting permanently mark_seen'd anyway - thrown away
+            # forever after never once being evaluated, not just delayed to
+            # a later run. User report: "vinted watches...sell almost
+            # instantly before I could even do any research" - a real
+            # steal that never got its shot reads identically to one that
+            # sold fast, except this one never even got the chance. Leaving
+            # it unseen means it competes for a slot again on the very next
+            # run (5 min later) instead of never again.
+            if "no AI price" not in gate_reason:
+                mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
         append_alert_log(result)
