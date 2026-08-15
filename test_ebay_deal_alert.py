@@ -536,6 +536,38 @@ class StealQualityGate(unittest.TestCase):
         result["deal_rating"] = "Great Deal"
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="watches"))
 
+    def test_suit_bar_retail_discount_path_requires_recognized_brand(self):
+        # Live bug: 5 "Hunter Haig" suits (brand_tier None - totally
+        # unrecognized, an eBay fuzzy-match on the "huntsman suit" query,
+        # not the searched-for brand) all cleared the suit bar on the
+        # retail-discount path despite Marginal/Fair resale ratings - the
+        # AI's own retail guess for this unknown brand was self-
+        # inconsistent ($250-600 for the same style of vintage suit).
+        # Real fields from one: $58.82 landed, $250 "retail", Marginal.
+        result = {
+            "deal_rating": "Marginal", "discount_pct": -47, "price_confidence": "medium",
+            "brand_tier": None, "search_query": "huntsman suit -hunter",
+            "estimated_retail_price": 250.0, "price": 58.82,
+        }
+        reason = m.is_blocked_by_steal_quality_gate(result, category="tailoring")
+        self.assertIsNotNone(reason)
+        self.assertIn("suit bar", reason)
+        # Same numbers, but a brand the AI actually has pricing knowledge
+        # of (the Zegna case the retail-discount path was built for) -
+        # must still clear it.
+        result["brand_tier"] = "standard"
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="tailoring"))
+
+    def test_suit_bar_resale_path_unaffected_by_brand_recognition(self):
+        # The retail-discount path is only ONE of two ways to clear the
+        # bar - a genuinely good resale-based deal_rating must still pass
+        # regardless of brand_tier, unrecognized brand included.
+        result = {
+            "deal_rating": "Good Deal", "discount_pct": 40, "price_confidence": "medium",
+            "brand_tier": None, "search_query": "huntsman suit -hunter",
+        }
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="tailoring"))
+
     def test_knitwear_requires_grab_on_sight_and_steal(self):
         result = {"deal_rating": "Steal", "discount_pct": 75, "brand_tier": "standard"}
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
@@ -762,6 +794,41 @@ class EbayItemDescription(unittest.TestCase):
         fake_resp.json = lambda: {"title": "no description key at all"}
         with mock.patch("requests.get", return_value=fake_resp):
             text = m.fetch_ebay_item_description("fake-token", "v1|123|0")
+        self.assertIsNone(text)
+
+
+class VintedItemDescription(unittest.TestCase):
+    """search_vinted()'s catalog API never returns a description (confirmed
+    live) - only the item's public page does, via its og:description meta
+    tag. Live bug: "Vintage Seiko SQ gold-tone quartz watch" (gender-
+    neutral title) blind-trust alerted, but its real page opened "This is
+    a vintage women's Seiko SQ Gold-Tone Day-Date Quartz Watch..." -
+    invisible to GENDER_EXCLUDE_KEYWORDS because Vinted had no description
+    to check it against at all."""
+
+    def test_extracts_and_unescapes_og_description(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.text = (
+            '<html><head><meta property="og:description" '
+            'content="This is a vintage women&#x27;s Seiko SQ watch.">'
+            "</head></html>"
+        )
+        with mock.patch("requests.get", return_value=fake_resp):
+            text = m.fetch_vinted_item_description("https://www.vinted.com/items/123-seiko")
+        self.assertEqual(text, "This is a vintage women's Seiko SQ watch.")
+
+    def test_failure_returns_none_never_raises(self):
+        with mock.patch("requests.get", side_effect=requests.exceptions.ConnectionError("boom")):
+            text = m.fetch_vinted_item_description("https://www.vinted.com/items/123-seiko")
+        self.assertIsNone(text)
+
+    def test_missing_meta_tag_returns_none(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.text = "<html><head></head></html>"
+        with mock.patch("requests.get", return_value=fake_resp):
+            text = m.fetch_vinted_item_description("https://www.vinted.com/items/123-seiko")
         self.assertIsNone(text)
 
 

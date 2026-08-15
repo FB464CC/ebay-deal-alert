@@ -631,7 +631,7 @@
       "profile": "slow"
     },
     {
-      "query": "huntsman suit",
+      "query": "huntsman suit -hunter",
       "size": [
         "42"
       ],

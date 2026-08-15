@@ -586,6 +586,45 @@ def fetch_ebay_item_description(token, item_id):
     return re.sub(r"\s+", " ", text).strip() or None
 
 
+def fetch_vinted_item_description(item_url):
+    """GET a Vinted item's public page for its og:description meta tag -
+    search_vinted()'s catalog API never returns a description, only
+    title/price/photos/size (confirmed live).
+
+    Real live bug this closes: "Vintage Seiko SQ gold-tone quartz watch"
+    alerted with a gender-neutral title, but its actual page opened "This
+    is a vintage women's Seiko SQ Gold-Tone Day-Date Quartz Watch..." -
+    invisible to every title-only check (GENDER_EXCLUDE_KEYWORDS included)
+    because Vinted listings never carried a description at all.
+
+    UNLIKE fetch_ebay_item_description(), deliberately NOT gated behind
+    the Gemini AI budget: this is a plain public page fetch (no
+    auth/session, no daily quota - confirmed live), and gender/logo/
+    condition filtering has to run on every new Vinted candidate
+    regardless of whether it ever reaches an AI check at all (that's
+    exactly the gap here - a grab_on_sight-tier watch blind-trusts past
+    the AI step entirely). Still bounded the same way eBay's fetch is:
+    only ever called once per genuinely NEW (unseen) candidate, in PASS 1,
+    never per-search or per-refresh.
+
+    Returns plain text or None on any failure - never worth failing or
+    slowing down a run over."""
+    try:
+        resp = requests.get(
+            item_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        logger.info("Could not fetch Vinted item description for %s: %s", item_url, exc)
+        return None
+    match = re.search(r'<meta property="og:description" content="([^"]*)"', resp.text)
+    if not match:
+        return None
+    return html.unescape(match.group(1)).strip() or None
+
+
 # ---------------------------------------------------------------------------
 # SEEN-ITEM DEDUPE (SQLite — swap for a Wardrobe OS sheet tab if preferred)
 # ---------------------------------------------------------------------------
@@ -1549,7 +1588,21 @@ def is_blocked_by_steal_quality_gate(result, category=None):
                 and discount_pct is not None
                 and discount_pct > 0
             )
-            retail_ok = retail_discount_pct is not None and retail_discount_pct >= 70
+            # Retail-discount path requires a brand the AI actually has
+            # pricing knowledge of (grab_on_sight/standard/pass tier all
+            # count - anything brand_in() recognized). Real bug: 5 "Hunter
+            # Haig" suits (brand_tier None - totally unrecognized, an eBay
+            # fuzzy-match on the "huntsman suit" query) cleared this bar on
+            # a self-inconsistent AI retail guess ($250-600 for the same
+            # style of vintage suit) despite Marginal/Fair resale ratings -
+            # the AI has no real ground truth for an obscure/unknown brand,
+            # so its retail number alone shouldn't be trusted to override a
+            # weak resale signal the way it can for a brand like Zegna.
+            retail_ok = (
+                retail_discount_pct is not None
+                and retail_discount_pct >= 70
+                and brand_tier is not None
+            )
             if not (resale_ok or retail_ok):
                 return (
                     f"suit bar: deal_rating '{deal_rating}' below Good Deal "
@@ -2453,6 +2506,11 @@ def run():
                 )
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
+
+            if listing.get("platform") == "vinted" and not listing.get("description"):
+                description = fetch_vinted_item_description(listing.get("itemWebUrl"))
+                if description:
+                    listing["description"] = description
 
             result = score_listing(listing, gap_report, shipping_cost=shipping_cost)
             result["item_price"] = item_price
