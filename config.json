@@ -131,7 +131,7 @@
         "L",
         "XL"
       ],
-      "max_price": 90,
+      "max_price": 150,
       "enabled": true,
       "profile": "slow"
     },
@@ -142,7 +142,29 @@
         "L",
         "XL"
       ],
-      "max_price": 90,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "loro piana jacket",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 250,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "brunello cucinelli jacket",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 250,
       "enabled": true,
       "profile": "slow"
     },
@@ -484,6 +506,13 @@
       "profile": "slow"
     },
     {
+      "query": "brunello cucinelli cardholder",
+      "size": null,
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
       "query": "berluti cardholder",
       "size": null,
       "max_price": 100,
@@ -756,6 +785,16 @@
       "max_price": 180,
       "enabled": true,
       "profile": "fast",
+      "category_id": "3001"
+    },
+    {
+      "query": "brunello cucinelli suit",
+      "size": [
+        "42"
+      ],
+      "max_price": 220,
+      "enabled": true,
+      "profile": "slow",
       "category_id": "3001"
     },
     {
