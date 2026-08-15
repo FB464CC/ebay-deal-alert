@@ -635,17 +635,17 @@
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 200,
       "enabled": true,
       "profile": "slow",
       "category_id": "3001"
     },
     {
-      "query": "gieves and hawkes suit",
+      "query": "gieves & hawkes suit",
       "size": [
         "42"
       ],
-      "max_price": 300,
+      "max_price": 200,
       "enabled": true,
       "profile": "slow",
       "category_id": "3001"
@@ -874,7 +874,7 @@
       "size": [
         "42"
       ],
-      "max_price": 220,
+      "max_price": 200,
       "enabled": true,
       "profile": "slow",
       "category_id": "3001"
@@ -1048,6 +1048,52 @@
       "enabled": true,
       "profile": "slow",
       "category_id": "31387"
+    },
+    {
+      "query": "panerai watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch",
+      "size": null,
+      "max_price": 800,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "smythson cardholder",
+      "size": null,
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "ettinger cardholder",
+      "size": null,
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "hermes tie",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "montblanc pen",
+      "size": null,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "turnbull asser shirt",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -1097,12 +1143,18 @@
     "grand seiko",
     "paul stuart",
     "huntsman",
-    "gieves and hawkes",
+    "gieves & hawkes",
     "carmina",
     "vass",
     "gaziano",
     "valextra",
-    "marinella"
+    "marinella",
+    "panerai",
+    "smythson",
+    "ettinger",
+    "hermes",
+    "montblanc",
+    "turnbull & asser"
   ],
   "STANDARD_BRANDS": [
     "peter millar",
@@ -1288,6 +1340,11 @@
       1000,
       3000,
       8000
+    ],
+    "panerai": [
+      500,
+      3000,
+      7000
     ]
   },
   "CORPORATE_LOGO_KEYWORDS": [
