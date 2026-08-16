@@ -1617,6 +1617,38 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "loro piana/cucinelli bar: AI price estimate confidence too low to trust"
         return None
 
+    # PETER MILLAR CROWN CRAFTED, same one-tier-looser treatment as suits.
+    # User audit via the Activity page's PASS filter found the real gap:
+    # 4 of 10 blocked Crown Crafted candidates were "Good Deal" - real,
+    # positive-margin steals, just one tier under the default Steal/Great-
+    # Deal-only bar. The other 6 blocks in that same sample (corporate-
+    # logo AI suppression, "corporate logo keyword match") are working
+    # exactly as designed - third-party company/golf-course logos
+    # permanently embroidered on the shirt ("Ponte Vedra Inn And Club",
+    # "Wallworks Logo") - left untouched. Scoped narrowly to this one
+    # query string, not "golf"/Peter Millar generally. Reinforced by
+    # explicit user instruction: "$20 for a crown crafted polo and $25 for
+    # a crown crafted quarter zip are a great deal...even just a good
+    # deal, doesn't have to be crazy" - real personal-wear/compliment
+    # value the default Steal-only bar was built to price in.
+    #
+    # MUST run before the knitwear check below - "quarter zip" (added to
+    # this search alongside "polo" per that same instruction) triggers the
+    # knitwear category classifier, which would otherwise apply its much
+    # stricter grab_on_sight+Steal-only bar first and silently defeat this
+    # carve-out entirely. Same ordering bug already fixed once for the
+    # gamecocks bar above - moved here for the same reason.
+    if "crown crafted" in (result.get("search_query") or "").lower():
+        if deal_rating is None:
+            return "crown crafted bar: no AI price estimate and brand not grab_on_sight-tier" if brand_tier != "grab_on_sight" else None
+        if deal_rating not in ("Steal", "Great Deal", "Good Deal"):
+            return f"crown crafted bar: deal_rating '{deal_rating}' below Good Deal"
+        if discount_pct is None or discount_pct <= 0:
+            return "crown crafted bar: non-positive discount_pct"
+        if price_confidence == "low":
+            return "crown crafted bar: AI price estimate confidence too low to trust"
+        return None
+
     if category == "knitwear":
         if brand_tier != "grab_on_sight":
             return "knitwear bar: brand not grab_on_sight-tier (already own plenty of standard-tier sweaters)"
@@ -1702,27 +1734,6 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         # case whenever the AI budget doesn't reach a suit candidate).
         if brand_tier != "grab_on_sight":
             return "suit bar: no AI price estimate and brand not grab_on_sight-tier"
-        return None
-
-    # PETER MILLAR CROWN CRAFTED, same one-tier-looser treatment as suits.
-    # User audit via the Activity page's PASS filter found the real gap:
-    # 4 of 10 blocked Crown Crafted candidates were "Good Deal" - real,
-    # positive-margin steals, just one tier under the default Steal/Great-
-    # Deal-only bar. The other 6 blocks in that same sample (corporate-
-    # logo AI suppression, "corporate logo keyword match") are working
-    # exactly as designed - third-party company/golf-course logos
-    # permanently embroidered on the shirt ("Ponte Vedra Inn And Club",
-    # "Wallworks Logo") - left untouched. Scoped narrowly to this one
-    # query string, not "golf"/Peter Millar generally.
-    if "crown crafted" in (result.get("search_query") or "").lower():
-        if deal_rating is None:
-            return "crown crafted bar: no AI price estimate and brand not grab_on_sight-tier" if brand_tier != "grab_on_sight" else None
-        if deal_rating not in ("Steal", "Great Deal", "Good Deal"):
-            return f"crown crafted bar: deal_rating '{deal_rating}' below Good Deal"
-        if discount_pct is None or discount_pct <= 0:
-            return "crown crafted bar: non-positive discount_pct"
-        if price_confidence == "low":
-            return "crown crafted bar: AI price estimate confidence too low to trust"
         return None
 
     if category == "watches":
