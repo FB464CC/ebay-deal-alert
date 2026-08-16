@@ -177,6 +177,23 @@ EBAY_BACKOFF_MAX_MINUTES = 120
 # with headroom for quota uncertainty and manual --draft-listing runs.
 # Config-driven (like MAX_ALERTS_PER_RUN) so it can be retuned without a
 # code push if the real quota turns out different than assumed.
+#
+# History: raised 3 -> 8 on Aug 9 against real demand measured THAT day
+# (~540 candidates/day, comfortably under 1,000 RPD even at 8/run). Demand
+# didn't stay there - this session's search-list growth (48 -> 100+ saved
+# searches) pushed real review-candidate volume past 1,000/day easily (one
+# single run alone produced 96 new candidates). At 8/run the daily RPD
+# quota was getting fully exhausted by ~03:00-04:00 UTC every day (confirmed
+# live: 12 straight runs, 100% Gemini 429s, zero successful AI checks),
+# leaving a ~3.5h dead zone with NO AI capacity at all until the next
+# quota reset (~07:00 UTC, midnight Pacific) - every review candidate
+# during that window sat blocked on "no AI price estimate" until the reset,
+# which is what was actually behind the "alerts landing 3+ hours after
+# posting" complaint. Reset to 3/run so the fixed daily quota gets spread
+# across the FULL day instead of front-loaded and exhausted early - with
+# demand now essentially unbounded (100+ searches easily overflow any
+# plausible per-run budget), "raise the limit to match demand" no longer
+# applies the way it did on Aug 9; the only lever left is pacing.
 GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
 # 3 calls in a few seconds is trivially under any plausible RPM ceiling, so
 # the old 5s inter-call sleep wasn't buying RPM safety, just wall-clock -
@@ -636,8 +653,46 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS fingerprints "
         "(fingerprint TEXT PRIMARY KEY, best_price REAL, seen_at TEXT)"
     )
+    # Tracks candidates stuck retrying "no AI price estimate" (see
+    # mark_seen()'s docstring - these are deliberately left unseen so they
+    # get another shot next run) so PASS 2 can age-prioritize them instead
+    # of leaving them to _ai_check_priority's price-only tiebreak forever.
+    # See that function's comment for the real bug this fixes.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)"
+    )
     conn.commit()
     return conn
+
+
+def get_ai_pending_minutes(conn, item_ids):
+    """Batch-looks-up how long each item_id has been sitting in the
+    ai_pending backlog (see init_db()). Returns {item_id: minutes}, only
+    for ids that actually have a row - callers should default missing ids
+    to 0 (brand new this run, never stuck before)."""
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"SELECT item_id, first_seen_at FROM ai_pending WHERE item_id IN ({placeholders})",
+        list(item_ids),
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    result = {}
+    for item_id, first_seen_at in rows:
+        try:
+            first_seen = datetime.fromisoformat(first_seen_at)
+        except (TypeError, ValueError):
+            continue
+        result[item_id] = (now - first_seen).total_seconds() / 60
+    return result
+
+
+def mark_ai_pending(conn, item_id):
+    conn.execute(
+        "INSERT OR IGNORE INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)",
+        (item_id, datetime.now(timezone.utc).isoformat()),
+    )
 
 
 def is_new(conn, item_id):
@@ -663,6 +718,9 @@ def mark_seen(conn, item_id, fingerprint=None, price=None):
         "INSERT OR IGNORE INTO seen (item_id, seen_at) VALUES (?, ?)",
         (item_id, datetime.now(timezone.utc).isoformat()),
     )
+    # Final disposition also means any ai_pending backlog row (see
+    # init_db()) is stale - this item is resolved, not waiting anymore.
+    conn.execute("DELETE FROM ai_pending WHERE item_id = ?", (item_id,))
     if fingerprint:
         upsert_fingerprint(conn, fingerprint, price)
     conn.commit()
@@ -838,6 +896,10 @@ SUIT_JACKET_ONLY_SIGNALS = re.compile(
     r"tux(?:edo)?\s*jacket|dinner\s*jacket)\b",
     re.IGNORECASE,
 )
+# Bare "jacket"/"coat" - see is_jacket_only_suit_listing()'s docstring for
+# why this is only ever checked against a suit-worded search's results,
+# never on its own.
+BARE_JACKET_OR_COAT_WORD = re.compile(r"\b(jacket|coat)\b", re.IGNORECASE)
 
 # Phrasing a seller uses when NOT claiming genuine authenticity - real resale
 # terminology, not a guess. Someone with a genuine Cartier writes "Cartier
@@ -971,8 +1033,7 @@ def is_jacket_only_suit_listing(title, query=None):
     literally worded as suit searches. Runs unconditionally on every
     listing's title regardless of which saved search found it, so a
     jacket-only listing can't leak through a bare-brand or off-label
-    query the suit-only wording never covered. `query` kept as an unused
-    param so the call site doesn't need touching.
+    query the suit-only wording never covered.
 
     A title mentioning pants/trousers/"2 piece" etc. always passes
     regardless of also saying "blazer" (sellers commonly describe a suit
@@ -980,10 +1041,26 @@ def is_jacket_only_suit_listing(title, query=None):
     Suit Jacket Pants 2-Button"). Only rejected when a jacket-only word
     (blazer/sport coat/suit jacket) appears with no pants signal at all -
     plain outerwear ("jacket", "coat") never matches this at all, so
-    Barbour-style outerwear is untouched."""
+    Barbour-style outerwear (and dedicated jacket searches like "loro
+    piana jacket") is untouched.
+
+    `query` DOES matter for one narrow case: live miss, "Ermenegildo Zegna
+    ... Soft 100% Silk Jacket Blue Check Jacket" alerted from the
+    "ermenegildo zegna suit" search - a bare "jacket"/"coat" word (never
+    flagged above, on purpose, so genuine standalone-outerwear searches
+    keep working) is a totally different signal when the search that
+    surfaced it was explicitly FOR a suit: nobody lists a real 2-piece
+    suit without the word "pants"/"trousers"/"2-piece" appearing
+    SOMEWHERE in the title, so a suit-search result saying only "jacket"
+    is a mismatched blazer/sport-coat listing wearing a different label,
+    not a real suit. Scoped strictly to suit-worded searches (which never
+    overlap with this config's jacket-specific searches) so those are
+    untouched."""
     if SUIT_TWO_PIECE_SIGNALS.search(title):
         return False
-    return bool(SUIT_JACKET_ONLY_SIGNALS.search(title))
+    if SUIT_JACKET_ONLY_SIGNALS.search(title):
+        return True
+    return bool(query and "suit" in query.lower() and BARE_JACKET_OR_COAT_WORD.search(title))
 
 
 REQUIRED_ITEM_TYPE_SYNONYMS = {
@@ -2477,7 +2554,7 @@ def run():
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
-            if is_jacket_only_suit_listing(title):
+            if is_jacket_only_suit_listing(title, saved_search["query"]):
                 logger.info(
                     "Skipping %s: jacket/blazer/sport-coat-only listing, no pants (standing no-jackets rule)",
                     item_id,
@@ -2555,6 +2632,21 @@ def run():
     # candidates that actually depend on AI to have any chance at all -
     # confirmed live via a 6.5-hour zero-alert stretch where every blocked
     # candidate sampled was a standard-tier item starved of an AI check.
+    # Batch-load how long each candidate has already been stuck in the
+    # ai_pending backlog (see init_db()/mark_ai_pending()) - needed so the
+    # price tiebreak below can't starve a candidate forever. Real live bug:
+    # a Brooks Brothers suit re-scored 49 times over ~4 hours, blocked every
+    # single run on "no AI price estimate," because every run kept
+    # producing enough PRICIER must-have-AI candidates to bump it back down
+    # a static price-descending sort with no memory of how long anything
+    # had already waited. 154 distinct items hit this retry loop at least
+    # once; 14 retried more than 5 times; the worst went 57 rounds. Matches
+    # the user's real complaint: alerts landing 3+ hours after posting on a
+    # market where a genuine steal sells out in minutes.
+    pending_minutes_by_item = get_ai_pending_minutes(
+        conn, [c["item_id"] for c in review_candidates]
+    )
+
     def _ai_check_priority(candidate):
         result = candidate["result"]
         category = candidate["category"]
@@ -2565,23 +2657,31 @@ def run():
         # already blind-trust through, AI here is a bonus quality check,
         # not a requirement.
         must_have_ai = category in ("knitwear", "watches") or brand_tier != "grab_on_sight"
-        # Price DESCENDING, not ascending. Every candidate is already under
-        # its search's max_price, so absolute price carries no deal signal -
-        # sorting cheapest-first just ranked the junk to the front, because
-        # the cheapest thing matching a brand token is a part, not the item.
+        # Age FIRST (longest-waiting goes first), price DESCENDING only as
+        # a tiebreak among equally-fresh candidates (almost always 0 vs 0,
+        # i.e. every candidate new this run) - preserves the original
+        # price-descending behavior for a run's first look at something,
+        # while guaranteeing anything that's been waiting multiple runs
+        # eventually outranks brand-new, pricier competitors instead of
+        # losing to them indefinitely.
         #
-        # This is the root cause of the "the rolex is just a crystal, and a
-        # hand" complaint. Measured over the watch history: candidates that
-        # GOT the scarce AI slot had a median price of $45, while the 384
-        # blocked for "no AI price/authenticity check ran" had a median of
-        # $106. The budget bought vision checks on a Rolex watch crystal
-        # ($14.73, alerted "Great Deal"), a loose second hand ($15.79,
-        # "Great Deal") and a Vacheron price TAG ($7.42, alerted "Steal") -
-        # while real watches were starved and then hard-blocked for lacking
-        # the very check that was spent on the parts.
-        #
-        # Spend the budget where being wrong costs the most.
-        return (0 if must_have_ai else 1, -(result.get("price") or 0.0))
+        # Price DESCENDING, not ascending, in the first place: every
+        # candidate is already under its search's max_price, so absolute
+        # price carries no deal signal - sorting cheapest-first just ranked
+        # the junk to the front, because the cheapest thing matching a
+        # brand token is a part, not the item. This is the root cause of
+        # the "the rolex is just a crystal, and a hand" complaint. Measured
+        # over the watch history: candidates that GOT the scarce AI slot
+        # had a median price of $45, while the 384 blocked for "no AI
+        # price/authenticity check ran" had a median of $106. The budget
+        # bought vision checks on a Rolex watch crystal ($14.73, alerted
+        # "Great Deal"), a loose second hand ($15.79, "Great Deal") and a
+        # Vacheron price TAG ($7.42, alerted "Steal") - while real watches
+        # were starved and then hard-blocked for lacking the very check
+        # that was spent on the parts. Spend the budget where being wrong
+        # costs the most - but never let that mean "never."
+        pending_minutes = pending_minutes_by_item.get(candidate["item_id"], 0)
+        return (0 if must_have_ai else 1, -pending_minutes, -(result.get("price") or 0.0))
 
     review_candidates.sort(key=_ai_check_priority)
 
@@ -2843,6 +2943,14 @@ def run():
             # run (5 min later) instead of never again.
             if "no AI price" not in gate_reason:
                 mark_seen(conn, item_id, fingerprint, total_price)
+            else:
+                # Record (or preserve, via INSERT OR IGNORE) when this
+                # candidate first got stuck waiting for an AI check, so
+                # next run's _ai_check_priority can age it up instead of
+                # letting it lose to pricier newcomers forever - see that
+                # function's comment for the real 4-hour-starvation bug
+                # this closes.
+                mark_ai_pending(conn, item_id)
             continue
 
         append_alert_log(result)

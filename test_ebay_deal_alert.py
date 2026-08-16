@@ -20,6 +20,7 @@ import re
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import requests
@@ -114,6 +115,28 @@ class JacketOnlySuitListing(unittest.TestCase):
     def test_blazer_alone_is_blocked(self):
         self.assertTrue(m.is_jacket_only_suit_listing(
             "Hickey Freeman Mens Blazer Size 42 Reg Blue Worsted Wool Jacket"))
+
+    def test_bare_jacket_word_blocked_only_when_query_was_a_suit_search(self):
+        # Real live miss: "Ermenegildo Zegna ... Soft 100% Silk Jacket Blue
+        # Check Jacket" alerted from the "ermenegildo zegna suit" search -
+        # bare "jacket" is deliberately never flagged on its own (see
+        # test_plain_outerwear_never_matches), but a SUIT search returning
+        # a title that never once says pants/trousers/2-piece is a
+        # mismatched blazer, not a real suit.
+        title = "Ermenegildo Zegna Italy EU 52R/US 42R Soft 100% Silk Jacket Blue Check Jacket"
+        self.assertTrue(m.is_jacket_only_suit_listing(title, "ermenegildo zegna suit"))
+        # No query, or a query that isn't suit-worded, must NOT flag it -
+        # this is exactly what keeps dedicated jacket searches (e.g. "loro
+        # piana jacket", added this session) working correctly.
+        self.assertFalse(m.is_jacket_only_suit_listing(title))
+        self.assertFalse(m.is_jacket_only_suit_listing(title, "loro piana jacket"))
+
+    def test_bare_jacket_word_still_allowed_when_suit_search_has_pants(self):
+        # A genuine 2-piece suit from a suit-worded search must still pass -
+        # the new bare-word check only fires when NO pants signal exists at
+        # all, same as every other branch of this function.
+        self.assertFalse(m.is_jacket_only_suit_listing(
+            "Ermenegildo Zegna Suit Jacket and Pants 42R", "ermenegildo zegna suit"))
 
 
 class WatchAuthenticityRedFlags(unittest.TestCase):
@@ -256,6 +279,7 @@ class MarkSeenFingerprintTiming(unittest.TestCase):
         self.conn.execute(
             "CREATE TABLE fingerprints (fingerprint TEXT PRIMARY KEY, best_price REAL, seen_at TEXT)"
         )
+        self.conn.execute("CREATE TABLE ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)")
 
     def test_fingerprint_not_written_without_mark_seen(self):
         # Merely computing a fingerprint (as PASS 1 does for every listing,
@@ -285,6 +309,58 @@ class MarkSeenFingerprintTiming(unittest.TestCase):
 
     def tearDown(self):
         self.conn.close()
+
+
+class AiPendingBacklogAging(unittest.TestCase):
+    """Real live bug: a Brooks Brothers suit was re-scored 49 times over
+    ~4 hours, blocked every single run on "no AI price estimate," because
+    _ai_check_priority's only tiebreak within the must-have-AI bucket was
+    descending price with no memory of how long a candidate had already
+    waited - any run producing enough pricier must-have-AI candidates
+    bumped it back down forever. 154 distinct items hit this retry loop at
+    least once; 14 retried more than 5 times; the worst went 57 rounds.
+    These test the persistence primitives that let PASS 2 age a stuck
+    candidate up instead of losing to fresh, pricier competitors
+    indefinitely."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.conn = sqlite3.connect(f"{self.tmpdir}/test.db")
+        self.conn.execute("CREATE TABLE seen (item_id TEXT PRIMARY KEY, seen_at TEXT)")
+        self.conn.execute(
+            "CREATE TABLE fingerprints (fingerprint TEXT PRIMARY KEY, best_price REAL, seen_at TEXT)"
+        )
+        self.conn.execute("CREATE TABLE ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)")
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_untracked_item_has_no_pending_minutes(self):
+        self.assertEqual(m.get_ai_pending_minutes(self.conn, ["item1"]), {})
+
+    def test_mark_ai_pending_is_tracked_and_ages(self):
+        past = (datetime.now(timezone.utc) - timedelta(minutes=42)).isoformat()
+        self.conn.execute("INSERT INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)", ("item1", past))
+        minutes = m.get_ai_pending_minutes(self.conn, ["item1"])
+        self.assertAlmostEqual(minutes["item1"], 42, delta=1)
+
+    def test_mark_ai_pending_does_not_overwrite_original_timestamp(self):
+        # A candidate stuck across multiple runs must keep its ORIGINAL
+        # first-seen time, not get reset to "now" on every retry - that
+        # would defeat aging entirely (it would look freshly-stuck forever).
+        past = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
+        self.conn.execute("INSERT INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)", ("item1", past))
+        m.mark_ai_pending(self.conn, "item1")  # simulates a later run re-hitting the same block
+        minutes = m.get_ai_pending_minutes(self.conn, ["item1"])
+        self.assertGreater(minutes["item1"], 55)
+
+    def test_mark_seen_clears_pending_backlog_row(self):
+        # Once an item reaches a genuine final disposition, it's resolved -
+        # the backlog row must be cleaned up so it can't linger forever.
+        m.mark_ai_pending(self.conn, "item1")
+        self.assertIn("item1", m.get_ai_pending_minutes(self.conn, ["item1"]))
+        m.mark_seen(self.conn, "item1")
+        self.assertEqual(m.get_ai_pending_minutes(self.conn, ["item1"]), {})
 
 
 class ScoreListingHardFails(unittest.TestCase):
