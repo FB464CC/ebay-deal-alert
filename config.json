@@ -335,9 +335,19 @@
     {
       "query": "peter millar crown crafted polo",
       "size": [
-        "M"
+        "L"
       ],
       "max_price": 30,
+      "enabled": true,
+      "profile": "slow"
+    },
+    {
+      "query": "peter millar crown crafted quarter zip",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 35,
       "enabled": true,
       "profile": "slow"
     },

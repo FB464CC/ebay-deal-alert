@@ -663,6 +663,26 @@ class StealQualityGate(unittest.TestCase):
         result["brand_tier"] = "grab_on_sight"
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
 
+    def test_crown_crafted_bar_applies_to_quarter_zips_not_the_stricter_knitwear_bar(self):
+        # Real gap: "peter millar crown crafted quarter zip" (added per
+        # explicit user instruction - "$20 for a crown crafted polo and
+        # $25 for a crown crafted quarter zip are a great deal...even just
+        # a good deal, doesn't have to be crazy") classifies as "knitwear"
+        # (quarter-zip triggers that classifier), and the knitwear check
+        # used to run BEFORE the crown-crafted carve-out - so a standard-
+        # tier, Good-Deal-rated crown crafted quarter zip would have been
+        # silently caught by knitwear's much stricter grab_on_sight+Steal-
+        # only bar instead. Same ordering bug already fixed once for the
+        # gamecocks bar.
+        result = {
+            "deal_rating": "Good Deal", "discount_pct": 40, "price_confidence": "medium",
+            "brand_tier": "standard", "search_query": "peter millar crown crafted quarter zip",
+        }
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+        # Marginal/Fair still correctly blocked - the bar is looser, not gone.
+        result["deal_rating"] = "Marginal"
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+
     def _gamecocks_result(self, title, **kwargs):
         result = {"listing": {"title": title}, "search_query": "peter millar gamecocks quarter zip"}
         result.update(kwargs)
