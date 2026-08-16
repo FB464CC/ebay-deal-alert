@@ -453,7 +453,7 @@
       "category_id": "3001"
     },
     {
-      "query": "brioni sport coat",
+      "query": "brioni sport coat -bianco",
       "size": [
         "42"
       ],
@@ -786,7 +786,7 @@
       "category_id": "31387"
     },
     {
-      "query": "brioni suit",
+      "query": "brioni suit -bianco",
       "size": [
         "42"
       ],
