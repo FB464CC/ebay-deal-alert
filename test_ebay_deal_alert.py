@@ -224,21 +224,34 @@ class SizeMatching(unittest.TestCase):
         self.assertTrue(re.search(r"\b13\b(?!\.\d)", haystack_real))
 
 
-class OversizedDressShirt(unittest.TestCase):
+class OversizedFittedShirt(unittest.TestCase):
     def test_xl_dress_shirt_is_flagged(self):
-        self.assertTrue(m.is_oversized_dress_shirt("Charvet Dress Shirt Mens XL French Cuff"))
-        self.assertTrue(m.is_oversized_dress_shirt("Ralph Lauren Purple Label Button Down Shirt XL"))
+        self.assertTrue(m.is_oversized_fitted_shirt("Charvet Dress Shirt Mens XL French Cuff"))
+        self.assertTrue(m.is_oversized_fitted_shirt("Ralph Lauren Purple Label Button Down Shirt XL"))
+
+    def test_xl_polo_is_flagged(self):
+        # Real live miss: this exact title alerted before polo was added
+        # to FITTED_SHIRT_SIGNALS - polo was wrongly grouped with knitwear
+        # (assumed XL-correct) until the user corrected it live: they're L
+        # in polos too, same as dress shirts.
+        self.assertTrue(m.is_oversized_fitted_shirt(
+            "Ralph Lauren Men's Green/White Striped Short Sleeve Polo Shirt XL purple label"))
+        self.assertTrue(m.is_oversized_fitted_shirt("Peter Millar Crown Crafted Polo XL"))
+
+    def test_l_polo_is_not_flagged(self):
+        self.assertFalse(m.is_oversized_fitted_shirt("Ralph Lauren Purple Label Polo Shirt L"))
 
     def test_xl_knitwear_and_outerwear_untouched(self):
-        # Standing rule: user is L in long-sleeve dress shirts but
-        # genuinely XL in knitwear/outerwear - must never conflate the two.
+        # Standing rule: user is L in fitted collared shirts (dress
+        # shirts/polos) but genuinely XL in knitwear/outerwear - must
+        # never conflate the two.
         for title in (
             "Zegna Cashmere Sweater XL",
             "Peter Millar Quarter Zip XL",
             "Barbour Waxed Jacket XL",
             "Loro Piana Cashmere Cardigan XXL",
         ):
-            self.assertFalse(m.is_oversized_dress_shirt(title), title)
+            self.assertFalse(m.is_oversized_fitted_shirt(title), title)
 
 
 class ListingFingerprint(unittest.TestCase):

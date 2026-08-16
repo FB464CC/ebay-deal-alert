@@ -933,9 +933,14 @@ GARMENT_TYPE_WORDS = re.compile(
 # user wears L. Deliberately NOT knitwear words (sweater, quarter-zip, polo,
 # cardigan, vest, jacket) - they genuinely are XL in those, so those must
 # keep passing at XL.
-DRESS_SHIRT_SIGNALS = re.compile(
+FITTED_SHIRT_SIGNALS = re.compile(
+    # "polo"/"polo shirt" added after a live miss: "Ralph Lauren...Short
+    # Sleeve Polo Shirt XL purple label" alerted - polos were originally
+    # grouped with knitwear (assumed XL-correct) same as a quarter-zip or
+    # sweater, but the user corrected that live: they're L in polos too,
+    # same as dress shirts, not XL like actual knitwear.
     r"\b(dress\s*shirt|button[\s-]?(?:up|down)|oxford\s*shirt|"
-    r"poplin|french\s*cuff|spread\s*collar|point\s*collar)\b",
+    r"poplin|french\s*cuff|spread\s*collar|point\s*collar|polo(?:\s*shirt)?)\b",
     re.IGNORECASE,
 )
 # Only XL and up. "XL" must not match inside "XXL"-style tokens by accident,
@@ -1011,13 +1016,16 @@ def clamp_watch_resale_estimate(estimate, band):
     return min(high, estimate)
 
 
-def is_oversized_dress_shirt(haystack):
-    """True for a dress shirt / long-sleeve button-up listed at XL or above.
+def is_oversized_fitted_shirt(haystack):
+    """True for a dress shirt / button-up / polo listed at XL or above.
 
-    The user is L in long-sleeve shirts but XL in knitwear, so this is
-    garment-aware on purpose: it must never fire on a sweater, quarter-zip,
-    polo or jacket, only on shirts."""
-    if not DRESS_SHIRT_SIGNALS.search(haystack):
+    The user is L in fitted collared shirts (dress shirts AND polos) but
+    genuinely XL in knitwear, so this is garment-aware on purpose: it must
+    never fire on a sweater, quarter-zip, or jacket, only on the fitted-
+    shirt category. Originally polo was grouped with knitwear here (wrong
+    assumption) - see FITTED_SHIRT_SIGNALS for the live miss that corrected
+    it."""
+    if not FITTED_SHIRT_SIGNALS.search(haystack):
         return False
     return bool(OVERSIZED_SHIRT_SIGNALS.search(haystack))
 
@@ -2527,16 +2535,20 @@ def run():
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
-            if is_oversized_dress_shirt(size_haystack):
-                # Standing user sizing rule: they wear L in dress shirts /
-                # long-sleeve button-ups, but genuinely are XL in knitwear
-                # (quarter-zips, sweaters, outerwear). A single per-search
-                # `size` list can't express that, because a broad brand
-                # search like `ralph lauren "purple label"` legitimately
-                # needs XL for a sweater and L for a shirt. So the shirt
-                # case is handled here, on the garment, not on the search.
+            if is_oversized_fitted_shirt(size_haystack):
+                # Standing user sizing rule: they wear L in fitted collared
+                # shirts - dress shirts/button-ups AND polos - but genuinely
+                # are XL in knitwear (quarter-zips, sweaters, outerwear). A
+                # single per-search `size` list can't express that, because
+                # a broad brand search like `ralph lauren "purple label"`
+                # legitimately needs XL for a sweater and L for a polo. So
+                # the shirt case is handled here, on the garment, not on
+                # the search. Live miss: "Ralph Lauren...Short Sleeve Polo
+                # Shirt XL purple label" alerted before polo was added to
+                # FITTED_SHIRT_SIGNALS - polo was wrongly grouped with
+                # knitwear until the user corrected it live.
                 logger.info(
-                    "Skipping %s: dress shirt in XL (user wears L in long-sleeve shirts)",
+                    "Skipping %s: fitted shirt (dress shirt/polo) in XL (user wears L)",
                     item_id,
                 )
                 mark_seen(conn, item_id, fingerprint, total_price)
