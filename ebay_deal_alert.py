@@ -913,6 +913,20 @@ WATCH_AUTHENTICITY_RED_FLAGS = re.compile(
     r"\b(fashion\s*watch|replica\s*watch|faux\s*\w*\s*watch|not\s*authentic|inspired\s*by)\b",
     re.IGNORECASE,
 )
+# Live miss: "Bulova Emporio Armani Citizen Skagen Dress Watch Lot" (4
+# different brands bundled together) alerted as a 65% "Great Deal" off a
+# $600 AI "retail" estimate for the whole lot - the watch-pricing
+# methodology (match one reference watch to comps) has no coherent meaning
+# applied to a grab-bag of unrelated watches, some possibly non-working,
+# authenticity unverifiable per-item from lot photos. Hard block before
+# the AI ever prices it, same tier as the "fashion watch" authenticity
+# check above - a genuine single-watch listing essentially never uses
+# these words.
+WATCH_LOT_SIGNALS = re.compile(
+    r"\b(watch\s*lot|lot\s*of\s*\d+|\d+\s*(?:pc|piece)s?\s*(?:watch\s*)?lot|"
+    r"assorted\s*watches|watches?\s*bundle|bundle\s*of\s*watches)\b",
+    re.IGNORECASE,
+)
 
 # Whether a SEARCH QUERY (not a listing title) names a specific garment type,
 # vs. being a bare brand name that matches anything the brand makes. Built
@@ -2611,6 +2625,14 @@ def run():
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
+            if category == "watches" and WATCH_LOT_SIGNALS.search(title):
+                logger.info(
+                    "Skipping %s: watch lot/bundle listing - per-item authenticity/condition unverifiable",
+                    item_id,
+                )
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
+
             if listing.get("platform") == "vinted" and not listing.get("description"):
                 description = fetch_vinted_item_description(listing.get("itemWebUrl"))
                 if description:
@@ -2684,6 +2706,27 @@ def run():
         # already blind-trust through, AI here is a bonus quality check,
         # not a requirement.
         must_have_ai = category in ("knitwear", "watches") or brand_tier != "grab_on_sight"
+        # Real live gap the pure age-first sort below opened up: watches
+        # are ALL must_have_ai regardless of brand, but eBay simply lists
+        # vastly more Seiko/Bulova than Rolex/Panerai/Patek - measured
+        # live, "seiko watch" + "bulova watch" alone accounted for 95% of
+        # every watch candidate stuck waiting on an AI check (489 of 515)
+        # in one window. Sheer volume means those two brands build up
+        # backlog age faster than genuinely rare/valuable brands ever can,
+        # so a strict age-first tiebreak let a $50 Seiko that's been
+        # waiting 10 minutes consistently outrank a $2000 Omega that just
+        # showed up - exactly the "budget spent on parts, not the real
+        # find" failure this sort was built to prevent, just relocated
+        # from price to volume. mass_market_watch uses the real avg resale
+        # band (WATCH_PRICE_BANDS) rather than a hardcoded brand list, and
+        # only ever deprioritizes WITHIN the watches category - never
+        # touches other categories, and an unrecognized-brand watch (no
+        # band on file) gets the benefit of the doubt, not deprioritized.
+        mass_market_watch = (
+            category == "watches"
+            and (band := watch_price_band(candidate["listing"].get("title", "")))
+            and band[1] < 500
+        )
         # Age FIRST (longest-waiting goes first), price DESCENDING only as
         # a tiebreak among equally-fresh candidates (almost always 0 vs 0,
         # i.e. every candidate new this run) - preserves the original
@@ -2708,7 +2751,12 @@ def run():
         # that was spent on the parts. Spend the budget where being wrong
         # costs the most - but never let that mean "never."
         pending_minutes = pending_minutes_by_item.get(candidate["item_id"], 0)
-        return (0 if must_have_ai else 1, -pending_minutes, -(result.get("price") or 0.0))
+        return (
+            0 if must_have_ai else 1,
+            1 if mass_market_watch else 0,
+            -pending_minutes,
+            -(result.get("price") or 0.0),
+        )
 
     review_candidates.sort(key=_ai_check_priority)
 
