@@ -1797,6 +1797,10 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # sight brand gets everywhere else.
     NARROW_CATEGORY_NO_BLIND_TRUST_SEARCHES = (
         "smythson cardholder", "ettinger cardholder", "turnbull asser shirt",
+        # Goyard fits this even more than most - spans bags/totes/wallets/
+        # cardholders (not a one-category brand) AND is one of the most
+        # commonly counterfeited luxury leather goods brands on eBay.
+        "goyard cardholder",
     )
     # search_query_lower carries the RAW config query, "-exclusion" terms
     # and all (e.g. "montblanc pen -perfume -cologne...") - strip those
