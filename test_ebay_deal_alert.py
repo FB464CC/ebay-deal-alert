@@ -158,6 +158,24 @@ class WatchAuthenticityRedFlags(unittest.TestCase):
         self.assertFalse(m.WATCH_AUTHENTICITY_RED_FLAGS.search("Rolex Submariner 116610"))
 
 
+class WatchLotSignals(unittest.TestCase):
+    """Real live miss: "Bulova Emporio Armani Citizen Skagen Dress Watch
+    Lot" (4 different brands bundled) alerted as a 65% "Great Deal" off a
+    $600 AI "retail" estimate for the whole lot - the watch-pricing
+    methodology has no coherent meaning applied to a grab-bag of unrelated
+    watches, authenticity/condition unverifiable per-item."""
+
+    def test_lot_listings_flagged(self):
+        self.assertTrue(m.WATCH_LOT_SIGNALS.search("Bulova Emporio Armani Citizen Skagen Dress Watch Lot"))
+        self.assertTrue(m.WATCH_LOT_SIGNALS.search("Lot of 5 Vintage Watches for Parts or Repair"))
+        self.assertTrue(m.WATCH_LOT_SIGNALS.search("5 Piece Watch Lot Seiko Bulova Timex"))
+        self.assertTrue(m.WATCH_LOT_SIGNALS.search("Assorted Watches Untested"))
+
+    def test_single_watch_listings_untouched(self):
+        self.assertFalse(m.WATCH_LOT_SIGNALS.search("Rolex Submariner 116610 Automatic"))
+        self.assertFalse(m.WATCH_LOT_SIGNALS.search("Vintage Omega Seamaster Automatic Watch"))
+
+
 class WatchPriceBand(unittest.TestCase):
     def test_known_brand_returns_band(self):
         band = m.watch_price_band("Movado Museum Quartz Black Dial 40mm")
