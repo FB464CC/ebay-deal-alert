@@ -52,6 +52,46 @@ WATCH_PRICE_BANDS = {
     k: v for k, v in _CONFIG.get("WATCH_PRICE_BANDS", {}).items() if not k.startswith("_")
 }
 PASS_BRANDS = _CONFIG["PASS_BRANDS"]
+# Real live miss: "Go- Yard Men's Slim Luxury Leather Card Holder Wallet
+# blue" ($33 landed) alerted as a 91% "Steal" with HIGH price confidence -
+# real Grailed sold comps ($375 median, n=14) got applied to it as if it
+# were one of those genuine sales. "Go- Yard" is a textbook eBay
+# counterfeit-listing evasion spelling: sellers of fakes routinely break
+# up a protected brand name with a stray space/hyphen/dot so it still
+# reads as the brand to a shopper but dodges exact-match brand-protection
+# filters. A genuine seller has no reason to ever write a brand name this
+# way. Built from every single-word GRAB_ON_SIGHT_BRANDS entry (skips
+# multi-word ones - internal-space obfuscation there is a much rarer,
+# noisier signal to try to catch) - for each, every single-point split of
+# the word with 1+ separator characters in between, so "Goyard" itself
+# never matches (zero separators) but "Go-Yard", "Go- Yard", "G Oyard"
+# etc. all do. Checked BEFORE the AI ever sees it, same hard-fail tier as
+# gender/condition/logo - deliberate brand obfuscation is a strong enough
+# signal on its own that no deal_rating should be able to override it.
+def _build_obfuscated_brand_signals(brands):
+    patterns = []
+    for brand in brands:
+        word = brand.replace(" ", "").replace("&", "")
+        if " " in brand or len(word) < 4:
+            continue
+        for split in range(1, len(word)):
+            prefix, suffix = re.escape(word[:split]), re.escape(word[split:])
+            patterns.append(rf"\b{prefix}[\s\-.]+{suffix}\b")
+    return re.compile("|".join(patterns), re.IGNORECASE) if patterns else re.compile(r"(?!)")
+
+
+OBFUSCATED_BRAND_SIGNALS = _build_obfuscated_brand_signals(GRAB_ON_SIGHT_BRANDS)
+# "Swatch X Audemars Piguet Royal Pop Huit Blanc Pocket Watch" ($125
+# landed) alerted as a 56% "Great Deal" with brand_tier "grab_on_sight" -
+# a Swatch collab piece is a genuine, honestly-described product, but it
+# is a Swatch (mass-produced, ~$50-300), not a real piece of whatever
+# luxury house it name-drops in the collab title. Matching brand_in()
+# against the raw title_prefix credited it with Audemars Piguet's tier
+# purely because "Audemars Piguet" appeared in the collab name. Checked
+# before brand-tier assignment below - suppresses tier credit entirely
+# (falls back to "brand not recognized," same conservative path as any
+# unrecognized item) rather than crediting the collab partner's tier.
+SWATCH_COLLAB_SIGNAL = re.compile(r"\bswatch\s*x\b", re.IGNORECASE)
 CORPORATE_LOGO_KEYWORDS = _CONFIG["CORPORATE_LOGO_KEYWORDS"]
 CONDITION_HARD_FAIL_KEYWORDS = _CONFIG["CONDITION_HARD_FAIL_KEYWORDS"]
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
@@ -1235,6 +1275,13 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
         return {"verdict": "PASS", "reason": "women's size cross-reference in title/description", "listing": listing}
     if PET_PRODUCT_SIGNALS.search(haystack):
         return {"verdict": "PASS", "reason": "pet product, not menswear", "listing": listing}
+    obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
+    if obfuscation_hit:
+        return {
+            "verdict": "PASS",
+            "reason": f"obfuscated/split brand name (counterfeit-listing pattern): {obfuscation_hit.group(0)!r}",
+            "listing": listing,
+        }
 
     # 1. Brand
     brand_tier = None
@@ -1252,7 +1299,9 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     # exists to reject. PASS_BRANDS intentionally stays whole-title above -
     # a bad-brand mention anywhere is still a legitimate reason to reject.
     title_prefix = title[:BRAND_TITLE_WINDOW_CHARS]
-    if brand_in(title_prefix, GRAB_ON_SIGHT_BRANDS):
+    if SWATCH_COLLAB_SIGNAL.search(title_prefix):
+        pass  # see SWATCH_COLLAB_SIGNAL's comment - never credit the collab partner's tier
+    elif brand_in(title_prefix, GRAB_ON_SIGHT_BRANDS):
         brand_tier = "grab_on_sight"
     elif brand_in(title_prefix, STANDARD_BRANDS):
         brand_tier = "standard"

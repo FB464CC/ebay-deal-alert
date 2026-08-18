@@ -446,6 +446,33 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("gender", result["reason"])
 
+    def test_obfuscated_brand_name_blocks(self):
+        # Real live miss: "Go- Yard Men's Slim Luxury Leather Card Holder
+        # Wallet blue" ($33 landed) alerted as a 91% "Steal" with HIGH
+        # price confidence - real Grailed sold comps ($375 median) got
+        # applied to it as if genuine. "Go- Yard" is a textbook eBay
+        # counterfeit-listing evasion spelling.
+        result = m.score_listing(self._listing("Go- Yard Men's Slim Luxury Leather Card Holder Wallet blue"), gap_report=None)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("obfuscated", result["reason"])
+
+    def test_clean_brand_spelling_not_flagged_as_obfuscated(self):
+        result = m.score_listing(self._listing("Goyard Blue Card Holder Wallet Excellent Condition"), gap_report=None)
+        self.assertNotIn("obfuscated", result.get("reason", ""))
+        self.assertEqual(result["verdict"], "REVIEW")
+
+    def test_swatch_collab_does_not_inherit_luxury_partner_tier(self):
+        # Real live miss: "Swatch X Audemars Piguet Royal Pop Huit Blanc
+        # Pocket Watch" ($125 landed) alerted as a 56% "Great Deal" with
+        # brand_tier "grab_on_sight" - a Swatch collab piece is a genuine
+        # Swatch (mass-produced, ~$50-300), not a real Audemars Piguet.
+        result = m.score_listing(self._listing("Swatch X Audemars Piguet Royal Pop Huit Blanc Pocket Watch"), gap_report=None)
+        self.assertIsNone(result.get("brand_tier"))
+
+    def test_real_luxury_brand_still_gets_credit_without_swatch_collab(self):
+        result = m.score_listing(self._listing("Audemars Piguet Royal Oak Chronograph", price=5000.0), gap_report=None)
+        self.assertEqual(result.get("brand_tier"), "grab_on_sight")
+
     def test_condition_flag_caught_from_description_not_just_title(self):
         # Real live example: a Poshmark "Canali Travel Single Breasted...
         # Suit Blazer" listing's TITLE said nothing about damage, but its
