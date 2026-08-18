@@ -394,6 +394,46 @@ class AiPendingBacklogAging(unittest.TestCase):
         self.assertEqual(m.get_ai_pending_minutes(self.conn, ["item1"]), {})
 
 
+class SeenTablePruning(unittest.TestCase):
+    """Real live bug: seen_items.db grew to 57.66 MB (over GitHub's 50 MB
+    warning threshold) - 264,822 rows in `seen` going back to Aug 7 with
+    NO retention policy at all, committed to git on every run that
+    touched it. Same class of problem as the binary-file git issues
+    behind the Aug 9 outage."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.conn = sqlite3.connect(f"{self.tmpdir}/test.db")
+        self.conn.execute("CREATE TABLE seen (item_id TEXT PRIMARY KEY, seen_at TEXT)")
+        self.conn.execute(
+            "CREATE TABLE fingerprints (fingerprint TEXT PRIMARY KEY, best_price REAL, seen_at TEXT)"
+        )
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_old_rows_pruned_recent_rows_kept(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        self.conn.execute("INSERT INTO seen VALUES ('old-item', ?)", (old,))
+        self.conn.execute("INSERT INTO seen VALUES ('recent-item', ?)", (recent,))
+        self.conn.execute("INSERT INTO fingerprints VALUES ('old-fp', 50.0, ?)", (old,))
+        self.conn.execute("INSERT INTO fingerprints VALUES ('recent-fp', 50.0, ?)", (recent,))
+        self.conn.commit()
+        seen_deleted, fp_deleted = m.prune_old_seen_entries(self.conn)
+        self.assertEqual((seen_deleted, fp_deleted), (1, 1))
+        self.assertTrue(m.is_new(self.conn, "old-item"))
+        self.assertFalse(m.is_new(self.conn, "recent-item"))
+        self.assertIsNone(m.get_fingerprint_best_price(self.conn, "old-fp"))
+        self.assertEqual(m.get_fingerprint_best_price(self.conn, "recent-fp"), 50.0)
+
+    def test_no_deletions_returns_zero_without_vacuum_error(self):
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        self.conn.execute("INSERT INTO seen VALUES ('recent-item', ?)", (recent,))
+        self.conn.commit()
+        self.assertEqual(m.prune_old_seen_entries(self.conn), (0, 0))
+
+
 class ScoreListingHardFails(unittest.TestCase):
     def _listing(self, title, price=50.0, description=None):
         listing = {"title": title, "price": {"value": price, "currency": "USD"}, "itemId": "t1"}

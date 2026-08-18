@@ -665,6 +665,43 @@ def init_db():
     return conn
 
 
+SEEN_RETENTION_DAYS = 60
+
+
+def prune_old_seen_entries(conn):
+    """Deletes seen/fingerprint rows older than SEEN_RETENTION_DAYS and
+    VACUUMs to actually reclaim disk space - a bare DELETE leaves the
+    SQLite file the same size on disk.
+
+    Real live bug this closes: seen_items.db grew to 57.66 MB (over
+    GitHub's 50 MB warning threshold, confirmed live via a push warning)
+    purely from unbounded growth - 264,822 rows in `seen` going back to
+    Aug 7 with NO retention policy at all, every one committed to git on
+    every run that touched it. Same class of problem as the binary-file
+    git issues behind the Aug 9 outage - left unchecked this eventually
+    crosses GitHub's 100 MB hard limit and pushes start failing outright,
+    a much worse version of "no alerts for hours."
+
+    A listing gone this many days is never coming back as "new" in any
+    way that matters - real relist/undercut detection uses the separate
+    `fingerprints` table (price-keyed), not raw seen-item membership,
+    and both get the same retention window here.
+
+    VACUUM rebuilds the whole file, so this is gated by the caller to run
+    once/day, not every 5-minute run."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=SEEN_RETENTION_DAYS)).isoformat()
+    seen_deleted = conn.execute("DELETE FROM seen WHERE seen_at < ?", (cutoff,)).rowcount
+    fp_deleted = conn.execute("DELETE FROM fingerprints WHERE seen_at < ?", (cutoff,)).rowcount
+    conn.commit()
+    if seen_deleted or fp_deleted:
+        logger.info(
+            "Pruned %s seen + %s fingerprint rows older than %s days, reclaiming disk space",
+            seen_deleted, fp_deleted, SEEN_RETENTION_DAYS,
+        )
+        conn.execute("VACUUM")
+    return seen_deleted, fp_deleted
+
+
 def get_ai_pending_minutes(conn, item_ids):
     """Batch-looks-up how long each item_id has been sitting in the
     ai_pending backlog (see init_db()). Returns {item_id: minutes}, only
@@ -2292,6 +2329,13 @@ def prefetch_marketplaces(now):
 def run():
     logger.info("Starting eBay deal alert run")
     conn = init_db()
+    # Once/day, not every 5-min run - VACUUM rebuilds the whole (currently
+    # tens-of-MB) file, no need to pay that cost 288 times a day. Any
+    # 15-minute window once daily is fine; this one has no other
+    # significance.
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.hour == 7 and now_utc.minute < 15:
+        prune_old_seen_entries(conn)
     try:
         token = get_ebay_token()
     except Exception as exc:
