@@ -1534,6 +1534,7 @@
       "query": "suit",
       "category_id": "3001",
       "max_price": 800,
+      "size": ["42"],
       "enabled": true
     }
   ]
