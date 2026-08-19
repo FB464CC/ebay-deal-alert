@@ -769,7 +769,16 @@ class StealQualityGate(unittest.TestCase):
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
 
     def _gamecocks_result(self, title, **kwargs):
-        result = {"listing": {"title": title}, "search_query": "peter millar gamecocks quarter zip"}
+        # peter_millar_back_crown_visible defaults to True so these tests
+        # exercise the GAMECOCKS bar specifically, isolated from the newer,
+        # stricter back-crown requirement (see PeterMillarBackCrownRequired) -
+        # every Peter Millar title now needs the crown confirmed first,
+        # regardless of which more specific bar it would otherwise hit.
+        result = {
+            "listing": {"title": title},
+            "search_query": "peter millar gamecocks quarter zip",
+            "peter_millar_back_crown_visible": True,
+        }
         result.update(kwargs)
         return result
 
@@ -882,6 +891,58 @@ class StealQualityGate(unittest.TestCase):
         evaluated_reject = {"deal_rating": "Good Deal", "discount_pct": 35, "brand_tier": "grab_on_sight"}
         reason = m.is_blocked_by_steal_quality_gate(evaluated_reject, category="watches")
         self.assertNotIn("no AI price", reason)
+
+
+class PeterMillarBackCrownRequired(unittest.TestCase):
+    """Explicit, standing user instruction: "every incoming Peter Millar
+    top (polo, quarter-zip, mid-layer) must feature the raised/metallic or
+    silicone back crown below the rear collar. No back crown = automatic
+    PASS...regardless of price or fabric...in general i need crowns in
+    them all rn anyways." Runs before every other Peter Millar-specific
+    bar - a stricter, universal precondition on top of them, not an
+    alternate looser path."""
+
+    def _pm_result(self, title="Peter Millar Green Polo L", **kwargs):
+        result = {"listing": {"title": title}}
+        result.update(kwargs)
+        return result
+
+    def test_no_ai_check_yet_blocks_and_is_retry_eligible(self):
+        result = self._pm_result(deal_rating=None, brand_tier="grab_on_sight")
+        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+        self.assertIsNotNone(reason)
+        self.assertIn("no AI price", reason)  # retry-eligible substring
+
+    def test_crown_confirmed_present_clears_it(self):
+        result = self._pm_result(
+            deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
+            peter_millar_back_crown_visible=True,
+        )
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_crown_confirmed_absent_blocks_regardless_of_deal_rating(self):
+        result = self._pm_result(
+            deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
+            peter_millar_back_crown_visible=False,
+        )
+        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+        self.assertIsNotNone(reason)
+        self.assertNotIn("no AI price", reason)  # permanent, not retry-eligible
+
+    def test_crown_unconfirmed_after_a_real_check_still_blocks(self):
+        # AI ran and looked, but couldn't tell either way (null) - still a
+        # hard block, not a pass-by-default.
+        result = self._pm_result(
+            deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
+            peter_millar_back_crown_visible=None,
+        )
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_non_peter_millar_item_unaffected(self):
+        result = self._pm_result(
+            title="Ralph Lauren Polo L", deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
+        )
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
 
 
 class MarketplaceQueryExclusions(unittest.TestCase):

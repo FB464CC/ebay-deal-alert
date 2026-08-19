@@ -1469,6 +1469,7 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
         "this exact shape: {\"damage_found\": bool, \"damage_desc\": string, "
         "\"weird_logo_found\": bool, \"logo_desc\": string, \"looks_good\": bool, "
         "\"summary\": string, \"visible_brand_evidence\": string, "
+        "\"peter_millar_back_crown_visible\": bool|null, "
         "\"pricing_basis\": string, \"estimated_retail_price\": number|null, "
         "\"estimated_resale_value\": number|null, \"price_confidence\": string, "
         "\"fabric_from_tag\": string|null, \"fabric_confidence\": string|null, "
@@ -1515,7 +1516,16 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
         "university/college team logo, or unwanted corporate branding, err "
         "toward flagging it as weird_logo_found and explain the ambiguity in "
         "logo_desc. looks_good should be true only when no damage and no "
-        "unwanted (non-designer, non-collegiate) logo is visible."
+        "unwanted (non-designer, non-collegiate) logo is visible. "
+        "If (and only if) this item is a Peter Millar polo, quarter-zip, or "
+        "mid-layer, examine the back of the collar/neckline closely for "
+        "Peter Millar's small raised/metallic or silicone \"back crown\" "
+        "logo (distinct from the embroidered crown/quill on the chest) and "
+        "set peter_millar_back_crown_visible to true if you can clearly see "
+        "it, false if you can see that area clearly and it is NOT there, or "
+        "null if no photo shows that area clearly enough to tell either way. "
+        "For any non-Peter-Millar item, peter_millar_back_crown_visible must "
+        "always be null."
     )
 
     try:
@@ -1658,6 +1668,24 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # this exact scenario before shipping - see
     # test_gamecocks_bar_always_alerts_even_with_no_ai_check.
     search_query_lower = (result.get("search_query") or "").lower()
+    listing_title_lower = (result.get("listing") or {}).get("title", "").lower()
+
+    # PETER MILLAR BACK-CROWN REQUIREMENT - explicit, standing user
+    # instruction: "every incoming Peter Millar top (polo, quarter-zip,
+    # mid-layer) must feature the raised/metallic or silicone back crown
+    # below the rear collar. No back crown = automatic PASS...regardless
+    # of price or fabric...in general i need crowns in them all rn
+    # anyways." Runs before every other Peter Millar-specific bar below
+    # (crown-crafted, gamecocks) - it's a stricter, universal precondition
+    # on top of them, not an alternate looser path. Retry-eligible (same
+    # "no AI price estimate" substring every other bar uses) only while no
+    # AI check has run yet; once one HAS run and still didn't confirm the
+    # crown, that's the final answer, not a "try again later."
+    if brand_in(listing_title_lower, ("peter millar",)):
+        if result.get("peter_millar_back_crown_visible") is not True:
+            if result.get("deal_rating") is None:
+                return "peter millar back-crown requirement: no AI price estimate - crown visibility unconfirmed"
+            return "peter millar back-crown requirement: crown not confirmed visible in photos"
 
     # UNIVERSITY OF SOUTH CAROLINA GAMECOCKS - Peter Millar collegiate line
     # specifically, not any USC merch from any brand (explicit user
@@ -2962,6 +2990,8 @@ def run():
             append_alert_log(result)
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
+        if ai_result is not None:
+            result["peter_millar_back_crown_visible"] = ai_result.get("peter_millar_back_crown_visible")
         if ai_result is not None and ai_result.get("looks_good"):
             result.setdefault("flags", []).append(
                 "AI photo check: " + ai_result.get("summary", "looks good")
