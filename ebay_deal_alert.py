@@ -1033,6 +1033,14 @@ SALES_TAX_RATE = 0.06
 SOLD_COMP_MIN_TO_OVERRIDE_AI = 5
 # Enough samples that the median is genuinely stable, not just present.
 SOLD_COMP_HIGH_CONFIDENCE = 10
+# search_total_listings this high or above means the query is genuinely
+# common/oversupplied, not scarce - see is_blocked_by_steal_quality_gate()'s
+# "MARKET SATURATION" comment for the real live example (977 active
+# listings for a $9.99 belt the AI guessed was a $22 resale "Great Deal").
+# Real observed range across normal searches this session has mostly been
+# well under this (82-401 for typical brand/category queries); a search
+# clearing 500 is a real outlier, not just a popular brand.
+MARKET_SATURATION_LISTINGS_THRESHOLD = 500
 
 
 def get_shipping_cost(listing):
@@ -2067,6 +2075,38 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "AI price estimate confidence too low to trust"
         if liquidity == "slow" and deal_rating != "Steal":
             return "slow liquidity needs Steal-tier margin, only Great Deal"
+        # MARKET SATURATION - an AI resale-value guess with no real
+        # sold-comp backing is vulnerable to exactly this: an oversupplied,
+        # common item where the AI has no scarcity signal to correct for.
+        # Real live miss: "TRAFALGAR...BELT" alerted as a 52% "Great Deal"
+        # ($9.99 vs a $22 AI resale guess) - real evidence in the SAME
+        # result: search_total_listings was 977 for this exact query,
+        # meaning ~1,000 near-identical belts are already live on eBay
+        # right now. A market that flooded can't support the resale
+        # premium the AI guessed at - real resale value there tracks the
+        # already-saturated going rate, not an independent retail-based
+        # estimate. User's own words: "trafalgar has like a billion items
+        # for like $15 on ebay, not special." Scoped to searches with NO
+        # real sold-comp evidence - comps, when they exist, already
+        # reflect real completed sales in this same saturated market and
+        # don't need this extra check, same reasoning clamp_watch_resale_
+        # estimate() uses for a known brand's price band. Only applies
+        # when a Great Deal (not Steal) is the rating - a genuine Steal is
+        # a big enough apparent gap to survive scrutiny even in a
+        # saturated market; "Great Deal" is exactly the borderline case
+        # where an inflated guess does the most damage.
+        has_real_comps = any("sold comps" in (f or "").lower() for f in (result.get("flags") or []))
+        search_total_listings = result.get("search_total_listings")
+        if (
+            not has_real_comps
+            and deal_rating != "Steal"
+            and search_total_listings is not None
+            and search_total_listings >= MARKET_SATURATION_LISTINGS_THRESHOLD
+        ):
+            return (
+                f"oversaturated market ({search_total_listings} active listings, "
+                "no real sold comps) - Great Deal not trusted without Steal-tier margin"
+            )
         return None
 
     # No AI price signal at all (Gemini budget exhausted / image download
