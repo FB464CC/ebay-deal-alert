@@ -965,6 +965,50 @@ class SellerFeedbackWatchGate(unittest.TestCase):
             ), category)
 
 
+class MarketSaturationGate(unittest.TestCase):
+    """Real live miss: "TRAFALGAR HANDMADE BLACK GLOVE LEATHER BELT" ($9.99)
+    alerted as a 52% "Great Deal" against a $22 AI resale guess with zero
+    real sold-comp backing - search_total_listings was 977 for that exact
+    query, meaning ~1,000 near-identical belts were already live on eBay.
+    User's own words: "trafalgar has like a billion items for like $15 on
+    ebay, not special.\""""
+
+    def _result(self, **kwargs):
+        result = {
+            "deal_rating": "Great Deal", "discount_pct": 52, "price_confidence": "medium",
+            "brand_tier": "standard", "liquidity": "medium", "search_total_listings": 977,
+            "flags": ["fabric not stated", "AI fabric tag: Leather (high confidence)"],
+        }
+        result.update(kwargs)
+        return result
+
+    def test_oversaturated_market_with_no_real_comps_blocks(self):
+        reason = m.is_blocked_by_steal_quality_gate(self._result(), category="other")
+        self.assertIsNotNone(reason)
+        self.assertIn("oversaturated market", reason)
+
+    def test_real_sold_comps_bypass_the_saturation_check(self):
+        # Comps already reflect real completed sales in this same
+        # saturated market - the AI-guess-specific risk doesn't apply.
+        result = self._result(flags=["Grailed sold comps: median $25 across 8 recent sales"])
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_steal_tier_survives_saturation(self):
+        # A genuine Steal is a big enough apparent gap to survive scrutiny
+        # even in a saturated market - only "Great Deal" is the borderline
+        # case this guards.
+        result = self._result(deal_rating="Steal")
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_low_listing_count_unaffected(self):
+        result = self._result(search_total_listings=50)
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_missing_listing_count_does_not_block(self):
+        result = self._result(search_total_listings=None)
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+
 class PeterMillarBackCrownRequired(unittest.TestCase):
     """Explicit, standing user instruction: "every incoming Peter Millar
     top (polo, quarter-zip, mid-layer) must feature the raised/metallic or
