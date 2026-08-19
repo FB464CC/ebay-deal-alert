@@ -893,6 +893,78 @@ class StealQualityGate(unittest.TestCase):
         self.assertNotIn("no AI price", reason)
 
 
+class SellerFeedbackWatchGate(unittest.TestCase):
+    """Real motivating case: a "Rolex Two-Tone Datejust" alerted at $208
+    against the AI's own $7,500 retail estimate - a genuine Rolex never
+    sells that cheap, and an established, high-feedback seller is far less
+    likely to be running a counterfeit-listing scam than a brand-new/
+    low-feedback account. This gate adds seller feedbackScore/
+    feedbackPercentage as a trust signal ON TOP of the existing watches bar
+    (which already requires a real AI check + Steal/Great Deal). It only
+    ever fires on eBay listings that actually carry the fields - the
+    motivating example itself was on Poshmark, which has no public
+    seller-feedback field, so non-eBay listings (both fields None) must
+    never be blocked here."""
+
+    def _steal_watch(self, **kwargs):
+        result = {
+            "deal_rating": "Steal", "discount_pct": 75, "price_confidence": "high",
+        }
+        result.update(kwargs)
+        return result
+
+    def test_steal_watch_with_low_feedback_score_is_blocked(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._steal_watch(seller_feedback_score=5, seller_feedback_percentage=90.0),
+            category="watches",
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("watches bar", reason)
+        self.assertNotIn("no AI price", reason)  # permanent reject, not retry-eligible
+
+    def test_steal_watch_with_high_feedback_score_allowed(self):
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            self._steal_watch(seller_feedback_score=500, seller_feedback_percentage=99.5),
+            category="watches",
+        ))
+
+    def test_high_percentage_or_high_score_alone_satisfies_the_bar(self):
+        # The bar is "score >= 50 OR percentage >= 95.0" - either signal
+        # on its own must rescue a watch the other would otherwise block.
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            self._steal_watch(seller_feedback_score=5, seller_feedback_percentage=99.8),
+            category="watches",
+        ))
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            self._steal_watch(seller_feedback_score=80, seller_feedback_percentage=90.0),
+            category="watches",
+        ))
+
+    def test_absent_feedback_fields_do_not_block(self):
+        # Non-eBay platform (Poshmark/Vinted/Grailed/ShopGoodwill) or an
+        # eBay response that omitted seller feedback - both fields None, so
+        # there's no signal to check against and the watch must clear the
+        # existing watches bar unchanged.
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            self._steal_watch(), category="watches",
+        ))
+
+    def test_non_watch_categories_unaffected_regardless_of_feedback(self):
+        # The gate is watches-only - a low-feedback seller on any other
+        # category must still clear that category's normal bar, not be
+        # newly blocked on feedback. brand_tier=grab_on_sight keeps the
+        # knitwear case on its normal pass path so only the feedback signal
+        # (which must be ignored) is being exercised here.
+        for category in ("other", "tailoring", "knitwear", "golf"):
+            self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+                self._steal_watch(
+                    brand_tier="grab_on_sight",
+                    seller_feedback_score=3, seller_feedback_percentage=80.0,
+                ),
+                category=category,
+            ), category)
+
+
 class PeterMillarBackCrownRequired(unittest.TestCase):
     """Explicit, standing user instruction: "every incoming Peter Millar
     top (polo, quarter-zip, mid-layer) must feature the raised/metallic or
@@ -1227,6 +1299,67 @@ class SendAlertRetailResaleLine(unittest.TestCase):
         message = self._send_and_capture(result)
         self.assertNotIn("retail", message)
         self.assertNotIn("resale", message)
+
+    def test_seller_feedback_line_appears_when_present(self):
+        # Feature 1: seller feedback shown for EVERY eBay listing that
+        # carries it, so the user can factor it in even outside watches.
+        result = {
+            "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
+            "price": 100.0, "item_price": 90.0, "shipping_cost": 10.0,
+            "seller_feedback_score": 120, "seller_feedback_percentage": 99.2,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("seller: 120 feedback, 99.2% positive", message)
+
+    def test_seller_feedback_line_omitted_when_absent(self):
+        # Non-eBay listings never carry the field - no stray "seller:"
+        # line must appear in their alerts.
+        result = {
+            "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
+            "price": 100.0, "item_price": 90.0, "shipping_cost": 10.0,
+        }
+        message = self._send_and_capture(result)
+        self.assertNotIn("seller:", message)
+
+    def test_verify_sold_comps_link_appears_when_search_query_present(self):
+        # Feature 2: the one-tap sold-comps link rides on the raw saved
+        # search query, with exclusions stripped and terms URL-encoded.
+        result = {
+            "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
+            "price": 100.0, "item_price": 90.0, "shipping_cost": 10.0,
+            "search_query": "canali suit -navy",
+        }
+        message = self._send_and_capture(result)
+        self.assertIn(
+            "verify: https://www.ebay.com/sch/i.html?_nkw=canali+suit&LH_Sold=1&LH_Complete=1",
+            message,
+        )
+
+
+class EbaySoldCompsUrl(unittest.TestCase):
+    """Feature 2 helper: build eBay's public sold/completed-listings search
+    URL so the AI's resale/retail estimates are independently checkable in
+    one tap (per explicit user instruction) - a normal no-auth results page,
+    not an API call."""
+
+    def test_normal_query_strips_exclusions_and_url_encodes(self):
+        url = m.ebay_sold_comps_url("zenith watch -tv -radio -canteen")
+        self.assertEqual(
+            url,
+            "https://www.ebay.com/sch/i.html?_nkw=zenith+watch&LH_Sold=1&LH_Complete=1",
+        )
+
+    def test_quoted_phrase_is_percent_encoded(self):
+        url = m.ebay_sold_comps_url('ralph lauren "purple label"')
+        self.assertEqual(
+            url,
+            "https://www.ebay.com/sch/i.html?_nkw=ralph+lauren+%22purple+label%22&LH_Sold=1&LH_Complete=1",
+        )
+
+    def test_empty_or_falsy_query_returns_none(self):
+        self.assertIsNone(m.ebay_sold_comps_url(""))
+        self.assertIsNone(m.ebay_sold_comps_url(None))
+        self.assertIsNone(m.ebay_sold_comps_url("   "))
 
 
 class ShopGoodwillClosingSoon(unittest.TestCase):

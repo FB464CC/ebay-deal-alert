@@ -29,6 +29,7 @@ import requests
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote_plus
 
 # ---------------------------------------------------------------------------
 # CONFIG — saved searches ported from CareerOS project instructions
@@ -354,6 +355,35 @@ def get_ebay_token():
     raise last_exc
 
 
+def _attach_seller_feedback(item):
+    """Thread eBay's seller-trust signals from a raw Browse API item_summary
+    onto the listing dict as flat keys, so score_listing()/the steal gate/
+    send_alert() can read them without reaching back into the nested seller
+    object.
+
+    eBay's item_summary carries seller.feedbackScore (int, total feedback
+    count) and seller.feedbackPercentage (string like "99.2", % positive) -
+    read with .get() since either can be absent, and the percentage is
+    parsed to a float (None on any parse failure).
+
+    eBay listings only. Poshmark/Vinted/Grailed/ShopGoodwill have no
+    comparable public seller-feedback field in their listing data, so this
+    is simply never called for them - the downstream gate reads both fields
+    with .get() and does nothing (no crash, no over-strict block) when
+    they're absent, which is exactly the non-eBay case."""
+    seller = item.get("seller") or {}
+    feedback_score = seller.get("feedbackScore")
+    feedback_pct = None
+    feedback_pct_raw = seller.get("feedbackPercentage")
+    try:
+        feedback_pct = float(feedback_pct_raw) if feedback_pct_raw is not None else None
+    except (TypeError, ValueError):
+        feedback_pct = None
+    item["seller_feedback_score"] = feedback_score
+    item["seller_feedback_percentage"] = feedback_pct
+    return item
+
+
 def search_ebay(token, saved_search):
     """One call to the Browse API for a saved search config."""
     headers = {
@@ -463,7 +493,10 @@ def search_ebay(token, saved_search):
         logger.warning("eBay 429 rate-limit headers for %r: %s | body: %s", query, rate_headers, resp.text[:300])
     resp.raise_for_status()
     body = resp.json()
-    return body.get("itemSummaries", []), body.get("total")
+    items = body.get("itemSummaries", [])
+    for item in items:
+        _attach_seller_feedback(item)
+    return items, body.get("total")
 
 
 # eBay auctions typically run 3-7 days - alerting on the current bid the
@@ -564,6 +597,7 @@ def search_ebay_ending_soon_auctions(token, auction_search):
             skipped_too_early += 1
             continue
         item = dict(item)
+        _attach_seller_feedback(item)
         item["is_ending_soon_auction"] = True
         item["auction_minutes_remaining"] = minutes_remaining
         item["bid_count"] = bid_count
@@ -1996,6 +2030,30 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "watches bar: non-positive discount_pct"
         if price_confidence == "low":
             return "watches bar: AI price estimate confidence too low to trust"
+        # Seller-feedback trust gate (eBay only) - runs AFTER a real AI
+        # check has already run and the item would otherwise clear the
+        # watches bar above, as an extra check on top of the existing
+        # "never blind-trust" bar rather than a replacement for it. Real
+        # live miss this guards against: a "Rolex Two-Tone Datejust"
+        # alerted at $208 against the AI's own $7,500 retail estimate - a
+        # genuine Rolex never sells that cheap, and an established,
+        # high-feedback seller is far less likely to be running a
+        # counterfeit-listing scam than a brand-new/low-feedback account.
+        # Only enforced when either field is actually present (eBay
+        # listings) - if both are None (a non-eBay platform, or eBay
+        # omitted them) there's no signal to check against, so it does NOT
+        # block. That exact case is the boundary: the motivating example
+        # above was on Poshmark, which has no public seller-feedback field,
+        # so this gate can only ever fire where eBay's own data carries it.
+        feedback_score = result.get("seller_feedback_score")
+        feedback_pct = result.get("seller_feedback_percentage")
+        if feedback_score is not None or feedback_pct is not None:
+            trusted = (
+                (feedback_score is not None and feedback_score >= 50)
+                or (feedback_pct is not None and feedback_pct >= 95.0)
+            )
+            if not trusted:
+                return "watches bar: seller feedback too low to trust for a watch listing"
         return None
 
     if deal_rating is not None:
@@ -2157,6 +2215,27 @@ def _ascii_safe_header(text):
     return text.encode("ascii", errors="ignore").decode("ascii")
 
 
+def ebay_sold_comps_url(query):
+    """Build eBay's public sold/completed-listings search URL for a saved
+    search query, so the AI's own resale/retail estimates can be checked
+    independently in one tap instead of trusted blindly (per explicit user
+    instruction). This is a normal, no-auth eBay search results page, not
+    an API call - safe to link to directly.
+
+    Strips "-excluded" terms through the same split_query_exclusions() the
+    marketplace adapters already use (they're eBay-only search syntax and
+    would otherwise land in the _nkw terms as things to search FOR), then
+    URL-encodes what's left. Returns None for an empty/falsy query rather
+    than a broken URL."""
+    clean_query = marketplaces.split_query_exclusions(query or "")[0].strip()
+    if not clean_query:
+        return None
+    return (
+        "https://www.ebay.com/sch/i.html?_nkw=" + quote_plus(clean_query)
+        + "&LH_Sold=1&LH_Complete=1"
+    )
+
+
 def send_alert(result):
     listing = result["listing"]
     title = listing.get("title", "")
@@ -2217,6 +2296,27 @@ def send_alert(result):
         if resale_str:
             parts.append(f"resale ~${resale_str}")
         message += "\n" + " / ".join(parts)
+
+    # Seller feedback as a trust signal, shown for EVERY eBay listing that
+    # carries it (not just watches) so the user can factor it in even where
+    # it isn't a hard gate. Non-eBay listings never carry the field, so
+    # they're simply skipped here.
+    feedback_score = result.get("seller_feedback_score")
+    if feedback_score is not None:
+        feedback_pct = result.get("seller_feedback_percentage")
+        if feedback_pct is not None:
+            message += f"\nseller: {feedback_score} feedback, {feedback_pct:g}% positive"
+        else:
+            message += f"\nseller: {feedback_score} feedback"
+
+    # One-tap sold-comps link - per explicit user instruction, the AI's own
+    # resale/retail estimates should be independently checkable rather than
+    # trusted blindly. One short "verify:" line, the only deliberate
+    # exception to the "ntfy truncates long messages on the lock screen"
+    # note above - and kept to the single line for exactly that reason.
+    verify_url = ebay_sold_comps_url(result.get("search_query"))
+    if verify_url:
+        message += f"\nverify: {verify_url}"
 
     if result.get("category_id") == WATCH_CATEGORY_ID:
         # Unconditional - never gated on the AI's judgment, since it has no
@@ -2925,6 +3025,8 @@ def run():
             result["profile"] = saved_search.get("profile", "slow")
             result["search_query"] = saved_search["query"]
             result["category_id"] = saved_search.get("category_id", "260012")
+            result["seller_feedback_score"] = listing.get("seller_feedback_score")
+            result["seller_feedback_percentage"] = listing.get("seller_feedback_percentage")
             if listing.get("is_ending_soon_auction"):
                 result["is_ending_soon_auction"] = True
                 result["auction_minutes_remaining"] = listing.get("auction_minutes_remaining")
