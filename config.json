@@ -1514,5 +1514,27 @@
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
   "EBAY_SEARCHES_PER_RUN_LIMIT": 12,
   "EBAY_FAST_SEARCHES_PER_RUN": 11,
-  "EBAY_SLOW_SEARCHES_PER_RUN": 4
+  "EBAY_SLOW_SEARCHES_PER_RUN": 4,
+  "EBAY_AUCTION_CLOSING_SOON_MINUTES": 15,
+  "EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES": 6,
+  "EBAY_AUCTION_SEARCHES": [
+    {
+      "query": "watch",
+      "category_id": "31387",
+      "max_price": 6000,
+      "enabled": true
+    },
+    {
+      "query": "cardholder",
+      "category_id": "260012",
+      "max_price": 500,
+      "enabled": true
+    },
+    {
+      "query": "suit",
+      "category_id": "3001",
+      "max_price": 800,
+      "enabled": true
+    }
+  ]
 }

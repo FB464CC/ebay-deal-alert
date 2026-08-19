@@ -1052,6 +1052,73 @@ class EbayItemDescription(unittest.TestCase):
         self.assertIsNone(text)
 
 
+class EbayEndingSoonAuctions(unittest.TestCase):
+    """Per explicit user instruction: "auctions that are underwatched and
+    that I can get alerted like 15 min before it ends, do some research
+    quick, and then immediately scoop it up last second." eBay auctions
+    run 3-7 days - alerting the moment a search finds one means alerting
+    on a bid nowhere near final, same reason search_shopgoodwill() gates
+    on remaining time. Contested (bidCount > 0) gets a tighter window -
+    a bid war means the price is already being pushed toward fair value,
+    the opposite of "underwatched"."""
+
+    def _item(self, minutes_from_now, bid_count=0, item_id="v1|1|0"):
+        end = datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)
+        return {
+            "itemId": item_id, "title": "Rolex Datejust",
+            "price": {"value": 200.0, "currency": "USD"},
+            "itemWebUrl": "https://example.com/1",
+            "itemEndDate": end.isoformat().replace("+00:00", "Z"),
+            "bidCount": bid_count,
+        }
+
+    def _search(self, items):
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 200
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.json = lambda: {"itemSummaries": items, "total": len(items)}
+        with mock.patch("requests.get", return_value=fake_resp):
+            return m.search_ebay_ending_soon_auctions(
+                "fake-token", {"query": "watch", "category_id": "31387", "max_price": 6000}
+            )
+
+    def test_uncontested_within_15min_window_included(self):
+        listings, _ = self._search([self._item(10, bid_count=0)])
+        self.assertEqual(len(listings), 1)
+        self.assertTrue(listings[0]["is_ending_soon_auction"])
+        self.assertEqual(listings[0]["bid_count"], 0)
+
+    def test_uncontested_too_far_out_excluded(self):
+        listings, _ = self._search([self._item(45, bid_count=0)])
+        self.assertEqual(listings, [])
+
+    def test_contested_uses_tighter_window(self):
+        # 10 min out clears the 15-min uncontested bar but not the 6-min
+        # contested one - a bid war means it's NOT underwatched anymore.
+        listings, _ = self._search([self._item(10, bid_count=3)])
+        self.assertEqual(listings, [])
+        listings, _ = self._search([self._item(4, bid_count=3)])
+        self.assertEqual(len(listings), 1)
+
+    def test_already_ended_excluded(self):
+        listings, _ = self._search([self._item(-5)])
+        self.assertEqual(listings, [])
+
+    def test_missing_or_unparseable_end_date_excluded_not_crashed(self):
+        item = self._item(10)
+        del item["itemEndDate"]
+        listings, _ = self._search([item])
+        self.assertEqual(listings, [])
+        item2 = self._item(10)
+        item2["itemEndDate"] = "not-a-date"
+        listings, _ = self._search([item2])
+        self.assertEqual(listings, [])
+
+    def test_auction_minutes_remaining_recorded(self):
+        listings, _ = self._search([self._item(12)])
+        self.assertAlmostEqual(listings[0]["auction_minutes_remaining"], 12, delta=1)
+
+
 class VintedItemDescription(unittest.TestCase):
     """search_vinted()'s catalog API never returns a description (confirmed
     live) - only the item's public page does, via its og:description meta

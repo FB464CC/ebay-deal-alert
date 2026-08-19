@@ -466,6 +466,120 @@ def search_ebay(token, saved_search):
     return body.get("itemSummaries", []), body.get("total")
 
 
+# eBay auctions typically run 3-7 days - alerting on the current bid the
+# moment a search finds one is alerting on a number nowhere near final
+# (same reason search_shopgoodwill() gates on remaining time, not just
+# price). Per explicit user instruction: "auctions that are underwatched
+# and that I can get alerted like 15 min before it ends, do some research
+# quick, and then immediately scoop it up last second." Contested
+# (bidCount > 0) gets a tighter window than uncontested, same asymmetry as
+# ShopGoodwill's - a bid war means the price is already being pushed
+# toward fair value by other bidders, the opposite of "underwatched."
+EBAY_AUCTION_CLOSING_SOON_MINUTES = int(_CONFIG.get("EBAY_AUCTION_CLOSING_SOON_MINUTES", 15))
+EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES = int(_CONFIG.get("EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES", 6))
+EBAY_AUCTION_SEARCHES = _CONFIG.get("EBAY_AUCTION_SEARCHES", [])
+
+
+def search_ebay_ending_soon_auctions(token, auction_search):
+    """One call to the Browse API for an always-on auction-snipe search -
+    live AUCTION-format listings only, sorted soonest-ending-first,
+    filtered client-side to ones actually closing soon (see
+    EBAY_AUCTION_CLOSING_SOON_MINUTES's comment for why).
+
+    Deliberately NOT run through the normal fast/slow rotation
+    (EBAY_FAST_SEARCHES_PER_RUN/EBAY_SLOW_SEARCHES_PER_RUN) - those only
+    guarantee a given search runs once every ~25-55 minutes, which is
+    fine for a listing with days left but would mean a real chance of
+    never once looking at an auction during its entire 15-minute closing
+    window. Called unconditionally every run instead (see its call site
+    in run()), same as the eBay OAuth token fetch itself.
+
+    Returns (listings, total) same shape as search_ebay() - listings carry
+    the same raw Browse API item-summary shape PLUS is_ending_soon_auction/
+    auction_minutes_remaining/bid_count, so they flow through PASS 1
+    scoring identically to every other eBay result, just tagged for
+    priority and message-formatting purposes downstream."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        "X-EBAY-C-ENDUSERCTX": "contextualLocation=country=US,zip=29201",
+    }
+    query = auction_search.get("query") or ""
+    params = {
+        "category_ids": auction_search.get("category_id", WATCH_CATEGORY_ID),
+        "filter": (
+            "conditions:{USED|UNSPECIFIED},itemLocationCountry:US,"
+            f"price:[..{auction_search['max_price']}],priceCurrency:USD,"
+            "buyingOptions:{AUCTION}"
+        ),
+        "sort": "endingSoonest",
+        "limit": "200",
+    }
+    if query:
+        params["q"] = query
+    for attempt in range(2):
+        resp = requests.get(
+            "https://api.ebay.com/buy/browse/v1/item_summary/search",
+            headers=headers,
+            params=params,
+            timeout=15,
+        )
+        if resp.status_code == 429 and attempt == 0:
+            time.sleep(2)
+            continue
+        break
+    if resp.status_code == 429:
+        rate_headers = {
+            k: v for k, v in resp.headers.items()
+            if "rate" in k.lower() or "retry" in k.lower() or "limit" in k.lower()
+        }
+        logger.warning("eBay auction search 429 rate-limit headers for %r: %s | body: %s", query, rate_headers, resp.text[:300])
+    resp.raise_for_status()
+    body = resp.json()
+    items = body.get("itemSummaries", [])
+
+    now_utc = datetime.now(timezone.utc)
+    listings = []
+    skipped_too_early = 0
+    skipped_unparseable = 0
+    for item in items:
+        end_date_str = item.get("itemEndDate")
+        if not end_date_str:
+            skipped_unparseable += 1
+            continue
+        try:
+            end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+        except ValueError:
+            skipped_unparseable += 1
+            continue
+        minutes_remaining = (end_date - now_utc).total_seconds() / 60
+        if minutes_remaining < 0:
+            continue  # already ended, listing search just hasn't caught up yet
+        bid_count = item.get("bidCount") or 0
+        threshold = (
+            EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES if bid_count > 0
+            else EBAY_AUCTION_CLOSING_SOON_MINUTES
+        )
+        if minutes_remaining > threshold:
+            skipped_too_early += 1
+            continue
+        item = dict(item)
+        item["is_ending_soon_auction"] = True
+        item["auction_minutes_remaining"] = minutes_remaining
+        item["bid_count"] = bid_count
+        listings.append(item)
+
+    if skipped_too_early or skipped_unparseable:
+        logger.info(
+            "eBay auction search %r: skipped %s too far from closing (>%s min "
+            "uncontested, >%s min contested), %s with no parseable end date",
+            query or auction_search.get("category_id"), skipped_too_early,
+            EBAY_AUCTION_CLOSING_SOON_MINUTES, EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES,
+            skipped_unparseable,
+        )
+    return listings, body.get("total")
+
+
 def _read_ebay_rate_limit_state():
     if not EBAY_RATE_LIMIT_STATE_PATH.exists():
         return {}
@@ -2071,6 +2185,16 @@ def send_alert(result):
         # currentPrice on a live auction is a floor that climbs until close,
         # not a purchase price - do not read it as the eBay-style fixed price.
         message += "\n(auction - price climbs until close)"
+    if result.get("is_ending_soon_auction"):
+        # Per explicit user instruction: "alerted like 15 min before it
+        # ends, do some research quick, and then immediately scoop it up
+        # last second." This is the one line in the whole alert that says
+        # "act now, not later" - kept blunt on purpose.
+        minutes_left = result.get("auction_minutes_remaining")
+        bid_count = result.get("bid_count") or 0
+        minutes_str = f"{minutes_left:.0f}m" if minutes_left is not None else "?"
+        bid_word = "bid" if bid_count == 1 else "bids"
+        message += f"\n⏰ ENDS IN {minutes_str} ({bid_count} {bid_word}) - bid now, don't wait"
 
     deal_rating = result.get("deal_rating")
     if deal_rating:
@@ -2444,6 +2568,25 @@ def run():
         offset = ((current_utc.hour * 60 + current_utc.minute) // 5) % len(enabled_searches)
         enabled_searches = enabled_searches[offset:] + enabled_searches[:offset]
 
+    # Auction-snipe searches (EBAY_AUCTION_SEARCHES) appended to the LOCAL
+    # enabled_searches only, deliberately AFTER the rotation-shuffle above
+    # and NOT into module-level SAVED_SEARCHES - the fast/slow batching
+    # below (stable_searches/fast_searches/slow_searches) re-derives from
+    # SAVED_SEARCHES directly, so these never enter that rotation and are
+    # fetched unconditionally every run instead (see the dispatch check
+    # in PASS 1 below and search_ebay_ending_soon_auctions()'s docstring
+    # for why rotation is wrong for a 15-minute closing window).
+    enabled_searches = enabled_searches + [
+        {
+            "query": s.get("query", ""),
+            "category_id": s.get("category_id", WATCH_CATEGORY_ID),
+            "max_price": s["max_price"],
+            "size": s.get("size"),
+            "is_auction_search": True,
+        }
+        for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)
+    ]
+
     # Only this run's rotating BATCH actually calls eBay's API - see
     # EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN. Deliberately a distinct non-overlapping
     # slice per run, not a 1-position sliding window over the (already
@@ -2513,7 +2656,24 @@ def run():
     review_candidates = []
     for saved_search in enabled_searches:
         category = classify_search_category(saved_search["query"])
-        if saved_search["query"] in ebay_this_run:
+        if saved_search.get("is_auction_search"):
+            # Unconditional every run - see search_ebay_ending_soon_auctions()'s
+            # docstring for why this bypasses the normal rotation entirely.
+            logger.info("Polling auction-snipe search: %s (category %s)", saved_search["query"] or "(any)", saved_search["category_id"])
+            try:
+                listings, search_total_listings = search_ebay_ending_soon_auctions(token, saved_search)
+                _clear_ebay_circuit_breaker_if_tripped()
+            except requests.exceptions.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    _trip_ebay_circuit_breaker()
+                    logger.warning("eBay 429 on auction-snipe search %r", saved_search["query"])
+                else:
+                    logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
+                listings, search_total_listings = [], None
+            except Exception:
+                logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
+                listings, search_total_listings = [], None
+        elif saved_search["query"] in ebay_this_run:
             logger.info("Polling saved search (eBay + marketplaces): %s", saved_search["query"])
             try:
                 listings, search_total_listings = search_ebay(token, saved_search)
@@ -2765,6 +2925,10 @@ def run():
             result["profile"] = saved_search.get("profile", "slow")
             result["search_query"] = saved_search["query"]
             result["category_id"] = saved_search.get("category_id", "260012")
+            if listing.get("is_ending_soon_auction"):
+                result["is_ending_soon_auction"] = True
+                result["auction_minutes_remaining"] = listing.get("auction_minutes_remaining")
+                result["bid_count"] = listing.get("bid_count")
             if search_total_listings is not None:
                 result["search_total_listings"] = search_total_listings
             add_off_season_flag(result, category, current_month)
@@ -2872,7 +3036,16 @@ def run():
         # that was spent on the parts. Spend the budget where being wrong
         # costs the most - but never let that mean "never."
         pending_minutes = pending_minutes_by_item.get(candidate["item_id"], 0)
+        # Ending-soon auctions (see search_ebay_ending_soon_auctions()) beat
+        # EVERYTHING else, unconditionally - a regular candidate that misses
+        # the AI budget this run just waits for the next one, but an auction
+        # with minutes left before it closes forever does not get a next
+        # run. Sorted soonest-first among themselves too (least negative
+        # minutes_remaining = most urgent = sorts first).
+        is_ending_soon_auction = bool(result.get("is_ending_soon_auction"))
         return (
+            0 if is_ending_soon_auction else 1,
+            result.get("auction_minutes_remaining") or 0,
             0 if must_have_ai else 1,
             1 if mass_market_watch else 0,
             -pending_minutes,
