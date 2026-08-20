@@ -2400,6 +2400,21 @@ def send_alert(result):
         else:
             message += f"\nseller: {feedback_score} feedback"
 
+    if result.get("category_id") == WATCH_CATEGORY_ID:
+        # Unconditional - never gated on the AI's judgment, since it has no
+        # real ability to authenticate a watch. Always shown, not a flag
+        # the model can suppress or skip. Moved ABOVE the verify: link
+        # (was below it) - real live finding: ntfy truncates long bodies
+        # on the lock screen, and this safety-critical line was the LAST
+        # thing appended, meaning it was the FIRST thing cut on a long
+        # watch alert (retail/resale + seller feedback + verify link all
+        # ahead of it). The one line that exists to prevent a counterfeit
+        # buy mistake was the one most likely to never reach the user.
+        message += (
+            "\n⚠️ Watch: verify authenticity yourself (movement, serial, "
+            "box/papers) - bot cannot detect counterfeits."
+        )
+
     # One-tap sold-comps link - per explicit user instruction, the AI's own
     # resale/retail estimates should be independently checkable rather than
     # trusted blindly. One short "verify:" line, the only deliberate
@@ -2408,15 +2423,6 @@ def send_alert(result):
     verify_url = ebay_sold_comps_url(result.get("search_query"))
     if verify_url:
         message += f"\nverify: {verify_url}"
-
-    if result.get("category_id") == WATCH_CATEGORY_ID:
-        # Unconditional - never gated on the AI's judgment, since it has no
-        # real ability to authenticate a watch. Always shown, not a flag
-        # the model can suppress or skip.
-        message += (
-            "\n⚠️ Watch: verify authenticity yourself (movement, serial, "
-            "box/papers) - bot cannot detect counterfeits."
-        )
     # verdict is always "REVIEW" here (PASS results never reach send_alert -
     # they're filtered out by the steal-quality gate above), so a
     # verdict-based title was identical on every single push. Confirmed
@@ -2849,21 +2855,31 @@ def run():
         category = classify_search_category(saved_search["query"])
         if saved_search.get("is_auction_search"):
             # Unconditional every run - see search_ebay_ending_soon_auctions()'s
-            # docstring for why this bypasses the normal rotation entirely.
-            logger.info("Polling auction-snipe search: %s (category %s)", saved_search["query"] or "(any)", saved_search["category_id"])
-            try:
-                listings, search_total_listings = search_ebay_ending_soon_auctions(token, saved_search)
-                _clear_ebay_circuit_breaker_if_tripped()
-            except requests.exceptions.HTTPError as exc:
-                if exc.response is not None and exc.response.status_code == 429:
-                    _trip_ebay_circuit_breaker()
-                    logger.warning("eBay 429 on auction-snipe search %r", saved_search["query"])
-                else:
+            # docstring for why this bypasses the normal ROTATION entirely.
+            # It must NOT bypass the circuit breaker too, though - real live
+            # bug: this branch never checked ebay_circuit_closed, so during
+            # a real 429 backoff (meant to block ALL eBay calls for 30-120
+            # min) the 3 auction searches kept firing every 5-minute run
+            # regardless, directly undermining the recovery the breaker
+            # exists to protect.
+            if not ebay_circuit_closed:
+                logger.debug("Skipping auction-snipe search (circuit breaker open): %s", saved_search["query"])
+                listings, search_total_listings = [], None
+            else:
+                logger.info("Polling auction-snipe search: %s (category %s)", saved_search["query"] or "(any)", saved_search["category_id"])
+                try:
+                    listings, search_total_listings = search_ebay_ending_soon_auctions(token, saved_search)
+                    _clear_ebay_circuit_breaker_if_tripped()
+                except requests.exceptions.HTTPError as exc:
+                    if exc.response is not None and exc.response.status_code == 429:
+                        _trip_ebay_circuit_breaker()
+                        logger.warning("eBay 429 on auction-snipe search %r", saved_search["query"])
+                    else:
+                        logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
+                    listings, search_total_listings = [], None
+                except Exception:
                     logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
-                listings, search_total_listings = [], None
-            except Exception:
-                logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
-                listings, search_total_listings = [], None
+                    listings, search_total_listings = [], None
         elif saved_search["query"] in ebay_this_run:
             logger.info("Polling saved search (eBay + marketplaces): %s", saved_search["query"])
             try:
