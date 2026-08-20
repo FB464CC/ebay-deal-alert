@@ -3092,7 +3092,24 @@ def run():
             if not item_id:
                 logger.info("Skipping listing without itemId: %s", listing.get("title", "untitled"))
                 continue
-            if not is_new(conn, item_id):
+            # An auction inside its final minutes is genuinely NEW
+            # information about an item that may have been seen days ago
+            # at a totally different price and urgency, so the seen-dedupe
+            # must not apply to it. Real bug this fixes, traced with live
+            # diagnostics: the auction lane WAS correctly finding items in
+            # the closing window (measured end-offsets of 1, 3, 6, 8, 11,
+            # 14 minutes across a single run), but only 1 item was scored
+            # in that entire run and zero alerts fired. The in-window
+            # auctions were being dropped right here, because they'd
+            # already been marked seen - either by a regular brand search
+            # (search_ebay has no buyingOptions filter, so it returns
+            # AUCTION listings too, days before they close) or by an
+            # earlier auction-lane pass that scored and rejected them
+            # while still in-window. Either way the item could never be
+            # reconsidered at the one moment that actually matters.
+            # Re-evaluating these every run is cheap - the window filter
+            # already caps it at a handful per run.
+            if not listing.get("is_ending_soon_auction") and not is_new(conn, item_id):
                 continue
 
             price_value = (listing.get("price") or {}).get("value", 999999)
@@ -3758,10 +3775,28 @@ def run():
                 mark_ai_pending(conn, item_id)
             continue
 
+        # Ending-soon auctions deliberately bypass the seen-dedupe in
+        # PASS 1 (see the comment there) so they can be re-evaluated at
+        # the moment that matters. That bypass would otherwise let the
+        # SAME auction alert again on every run across its 15-minute
+        # window - up to 3 duplicate pushes. A separate namespaced key
+        # records the alert itself rather than the item's general
+        # seen-ness, so "already alerted you about this auction" and
+        # "already scored this item" stay independent facts. Uses the
+        # existing seen table (and so is covered by its retention prune)
+        # rather than adding another one.
+        auction_alert_key = f"auction-alerted:{item_id}"
+        if result.get("is_ending_soon_auction") and not is_new(conn, auction_alert_key):
+            logger.info("Skipping %s: already sent an ending-soon alert for this auction", item_id)
+            mark_seen(conn, item_id, fingerprint, total_price)
+            continue
+
         append_alert_log(result)
         try:
             send_alert(result)
             logger.info("Sent alert for %s", item_id)
+            if result.get("is_ending_soon_auction"):
+                mark_seen(conn, auction_alert_key)
             mark_seen(conn, item_id, fingerprint, total_price)
             alerts_sent += 1
             if alerts_sent >= MAX_ALERTS_PER_RUN:
