@@ -813,6 +813,47 @@ class StealQualityGate(unittest.TestCase):
         result["discount_pct"] = 0
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="tailoring"))
 
+    def test_no_ai_candidate_is_never_permanently_discarded(self):
+        # THE contract that makes the pre-AI skip safe. PASS 3 calls this
+        # gate BEFORE spending an AI call and permanently mark_seen()s
+        # anything whose reason lacks the "no AI price" retry marker. So
+        # any bar that rejects purely because deal_rating is None (= "not
+        # checked yet", the normal pre-AI state) silently throws the
+        # candidate away before it is ever evaluated.
+        #
+        # Real bug this pins, caught by an independent audit and confirmed
+        # live: the loro piana/cucinelli and knitwear bars both did
+        # `if deal_rating != "Steal": return "...below Steal"`, which fires
+        # on None - so every Loro Piana, Brunello Cucinelli and knitwear
+        # candidate was discarded before its first AI check and those
+        # searches could never alert at all.
+        #
+        # Exhaustive on purpose: a targeted test would only have covered
+        # the bars someone thought to check.
+        import itertools
+        categories = ["other", "knitwear", "watches", "tailoring", "school-gear", "outerwear", "shoes"]
+        tiers = ["grab_on_sight", "standard", None]
+        queries = [
+            "loro piana cashmere sweater", "brunello cucinelli jacket", "johnstons elgin cashmere",
+            "canali suit", "omega watch", "peter millar gamecocks polo",
+            "peter millar crown crafted polo", "smythson cardholder", "alden shoes", "zegna sweater",
+        ]
+        for category, tier, query in itertools.product(categories, tiers, queries):
+            result = {
+                "deal_rating": None, "brand_tier": tier, "price": 100.0, "search_query": query,
+                "listing": {"title": "Test Item L"}, "peter_millar_back_crown_visible": None,
+            }
+            reason = m.is_blocked_by_steal_quality_gate(result, category=category)
+            if reason is None or "no AI price" in reason:
+                continue
+            # The ONE legitimate exception: a permanent block an AI check
+            # could never resolve, because it doesn't depend on price at
+            # all. brand_tier is fixed before the AI ever runs.
+            self.assertIn(
+                "brand not grab_on_sight-tier", reason,
+                f"{category}/{tier}/{query} is permanently discarded before any AI check: {reason}",
+            )
+
     def test_permanent_blocks_are_distinguishable_from_needs_ai(self):
         # PASS 3 relies on this split twice: it skips spending a scarce AI
         # call on anything permanently blocked, and _ai_check_priority uses
