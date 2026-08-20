@@ -1710,3 +1710,39 @@ class GrailedBatching(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SaneAiPrice(unittest.TestCase):
+    """The AI's JSON price fields were trusted as-is. Two real risks:
+    a string ("$1,200") flows into clamp_watch_resale_estimate()'s numeric
+    comparison and raises TypeError, killing the ENTIRE run since nothing
+    catches it; and a negative value inverts compute_deal_rating()'s math
+    - (-100 - 50) / -100 = +1.5 - fabricating a 150% "Steal" out of
+    nonsense."""
+
+    def test_parses_real_near_miss_formats(self):
+        self.assertEqual(m._sane_ai_price(1200), 1200.0)
+        self.assertEqual(m._sane_ai_price("$1,200"), 1200.0)
+        self.assertEqual(m._sane_ai_price("1200 USD"), 1200.0)
+        self.assertEqual(m._sane_ai_price("  950  "), 950.0)
+
+    def test_rejects_values_that_are_not_a_usable_price(self):
+        for bad in (None, True, -100, 0, "abc", "", "1.2.3", float("inf"), float("nan")):
+            self.assertIsNone(m._sane_ai_price(bad), repr(bad))
+
+    def test_negative_resale_can_no_longer_fabricate_a_steal(self):
+        # The raw arithmetic really does produce a bogus Steal...
+        self.assertEqual(m.compute_deal_rating(50, -100), ("Steal", 150))
+        # ...so the sanitizer must stop it ever reaching that call.
+        self.assertEqual(
+            m.compute_deal_rating(50, m._sane_ai_price(-100)), (None, None)
+        )
+
+    def test_string_price_does_not_crash_the_watch_clamp(self):
+        band = m.watch_price_band("Movado Museum Watch")
+        self.assertIsNotNone(band)
+        with self.assertRaises(TypeError):
+            m.clamp_watch_resale_estimate("$1,200", band)
+        self.assertEqual(
+            m.clamp_watch_resale_estimate(m._sane_ai_price("$1,200"), band), band[2]
+        )
