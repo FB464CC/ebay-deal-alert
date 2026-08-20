@@ -393,6 +393,26 @@ class AiPendingBacklogAging(unittest.TestCase):
         m.mark_seen(self.conn, "item1")
         self.assertEqual(m.get_ai_pending_minutes(self.conn, ["item1"]), {})
 
+    def test_mark_ai_pending_actually_commits(self):
+        # Real live bug: mark_ai_pending() never called conn.commit(). A
+        # read on the SAME connection sees its own uncommitted writes (so
+        # every other test here would pass even with the bug present) -
+        # the only way to catch it is a fresh connection to the same file,
+        # exactly what run()'s conn.close() at the end of every run does.
+        # Without the commit, that close silently rolled back every
+        # pending row written that run unless something else (mark_seen)
+        # happened to commit the same connection afterward - the common
+        # case is PASS 3 calling this back-to-back with nothing else
+        # committing in between, re-opening the exact starvation bug this
+        # table exists to close.
+        m.mark_ai_pending(self.conn, "item1")
+        self.conn.close()
+        reopened = sqlite3.connect(f"{self.tmpdir}/test.db")
+        try:
+            self.assertIn("item1", m.get_ai_pending_minutes(reopened, ["item1"]))
+        finally:
+            reopened.close()
+
 
 class SeenTablePruning(unittest.TestCase):
     """Real live bug: seen_items.db grew to 57.66 MB (over GitHub's 50 MB
@@ -1059,6 +1079,59 @@ class PeterMillarBackCrownRequired(unittest.TestCase):
             title="Ralph Lauren Polo L", deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
         )
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_non_top_garment_skips_the_crown_gate_entirely(self):
+        # Real live bug: this used to key off "peter millar" appearing
+        # ANYWHERE in the title, but the AI prompt only ever evaluates
+        # crown visibility for a polo/quarter-zip/mid-layer - a jacket
+        # always gets peter_millar_back_crown_visible=null (not applicable,
+        # not "missing"), so the enabled "peter millar gamecocks jacket"
+        # search could never alert on anything at all. Must fall through to
+        # the gamecocks bar instead of being blocked here.
+        result = self._pm_result(
+            title="Peter Millar Gamecocks Full-Zip Jacket XL",
+            deal_rating="Good Deal", discount_pct=30, brand_tier="grab_on_sight",
+            search_query="peter millar gamecocks jacket",
+            peter_millar_back_crown_visible=None,
+        )
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
+    def test_quarter_zip_and_mid_layer_still_require_the_crown(self):
+        for title in ("Peter Millar Quarter Zip Pullover L", "Peter Millar 1/4 Zip Mid Layer L"):
+            result = self._pm_result(
+                title=title, deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
+                peter_millar_back_crown_visible=None,
+            )
+            reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+            self.assertIsNotNone(reason, title)
+            self.assertIn("back-crown", reason)
+
+
+class MarketplaceRelevanceTokenMatching(unittest.TestCase):
+    """Real live bug: is_relevant_marketplace_listing()'s final fallback
+    check used bare substring matching with no minimum token length -
+    "n peal sweater" (enabled search) tokenized to ["n", "peal"] after
+    "sweater" dropped as a stopword, and "n" in title matched virtually
+    any English title, defeating the whole relevance check for that
+    search. "tom james merino" had the same problem in a subtler form:
+    "tom" (3 chars, looks like a real token) still substring-matched
+    "custom"/"bottom"/"Tommy Hilfiger" - a different brand entirely."""
+
+    def test_single_letter_token_no_longer_matches_everything(self):
+        listing = {"platform": "vinted", "title": "Vintage brown wool cardigan sweater, knit"}
+        self.assertFalse(m.is_relevant_marketplace_listing(listing, "n peal sweater"))
+
+    def test_real_n_peal_listing_still_matches(self):
+        listing = {"platform": "vinted", "title": "N.Peal Cashmere Crew Neck Sweater Navy"}
+        self.assertTrue(m.is_relevant_marketplace_listing(listing, "n peal sweater"))
+
+    def test_short_token_no_longer_substring_matches_a_different_brand(self):
+        listing = {"platform": "poshmark", "title": "Custom Tommy Hilfiger merino sweater"}
+        self.assertFalse(m.is_relevant_marketplace_listing(listing, "tom james merino"))
+
+    def test_real_tom_james_listing_still_matches(self):
+        listing = {"platform": "poshmark", "title": "Tom James Custom Merino Wool Sweater"}
+        self.assertTrue(m.is_relevant_marketplace_listing(listing, "tom james merino"))
 
 
 class MarketplaceQueryExclusions(unittest.TestCase):
