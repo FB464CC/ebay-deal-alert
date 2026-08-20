@@ -327,9 +327,18 @@ def _read_cached_ebay_token():
 
 def _write_cached_ebay_token(access_token, expires_in):
     expires_at = time.time() + int(expires_in) - 300
-    with TOKEN_CACHE_PATH.open("w", encoding="utf-8") as cache_file:
-        json.dump({"access_token": access_token, "expires_at": expires_at}, cache_file)
-        cache_file.write("\n")
+    # Caching the token is an optimization, never a hard requirement: a
+    # read-only filesystem, full disk, or permissions error must not abort
+    # the whole run when a perfectly valid token is already in hand. The
+    # write used to raise straight through get_ebay_token(), which run()
+    # read as a fatal token failure (bot-down alert, early return). Same
+    # best-effort pattern as _write_ebay_rate_limit_state().
+    try:
+        with TOKEN_CACHE_PATH.open("w", encoding="utf-8") as cache_file:
+            json.dump({"access_token": access_token, "expires_at": expires_at}, cache_file)
+            cache_file.write("\n")
+    except OSError as exc:
+        logger.warning("Failed to write cached eBay token: %s", exc)
 
 
 def get_ebay_token():
@@ -2410,23 +2419,32 @@ def _format_estimated_usd(value):
 
 def append_alert_log(result):
     listing = result["listing"]
+    # `price` is the total landed cost (item + shipping + tax) computed in
+    # full scoring - it only exists on REVIEW results. Early hard-fail PASS
+    # records never compute one, so do NOT silently fall back to the raw
+    # listing item price under the same key: that writes a differently-
+    # scoped number (raw item price, no shipping/tax) where downstream
+    # readers (mobile app, weekly digest) expect landed cost and can't tell
+    # which they got. The raw item price always lives in item_price instead,
+    # so the two scopes are never conflated.
     price = result.get("price")
-    if price is None:
-        price_value = (listing.get("price") or {}).get("value", 0)
-        price = float(0 if price_value is None else price_value)
+    item_price = result.get("item_price")
+    if item_price is None:
+        raw_price_value = (listing.get("price") or {}).get("value", 0)
+        item_price = float(0 if raw_price_value is None else raw_price_value)
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "item_id": listing.get("itemId"),
         "title": listing.get("title", ""),
         "url": listing.get("itemWebUrl", ""),
         "price": price,
+        "item_price": item_price,
         "verdict": result.get("verdict"),
         "reason": result.get("reason") or "; ".join(result.get("flags", [])),
     }
     if result.get("search_query"):
         record["query"] = result["search_query"]
     for key in (
-        "item_price",
         "shipping_cost",
         "estimated_retail_price",
         "estimated_resale_value",
@@ -2751,7 +2769,15 @@ def send_weekly_digest():
     verdict_parts = [
         f"{verdict}: {count}" for verdict, count in sorted(verdict_counts.items())
     ]
-    message = f"{len(recent_records)} alerts {window_label}"
+    # The headline "alerts" count must mean ONLY what the user actually
+    # received - verdict REVIEW (sent). append_alert_log() also writes PASS
+    # (blocked/rejected) records to the same log, and counting them here
+    # presented a week heavy on blocked junk as if those were alerts.
+    alert_count = sum(1 for record in recent_records if record.get("verdict") == "REVIEW")
+    blocked_count = len(recent_records) - alert_count
+    message = f"{alert_count} alerts {window_label}"
+    if blocked_count:
+        message += f" ({blocked_count} blocked)"
     if rating_parts:
         message += " - " + ", ".join(rating_parts)
     if verdict_parts:
@@ -3009,7 +3035,22 @@ def run():
         # coming and skip this run cleanly". A failed check (None) means
         # proceed as normal - this is a safety net, not a hard dependency.
         remaining, quota_limit = get_ebay_rate_limit_remaining(token)
-        needed_this_run = EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN
+        # Must count EVERY eBay call this run will make, not just the
+        # rotation. It previously counted only the fast+slow lanes (15),
+        # while the run also fires one call per always-on auction search
+        # and up to GEMINI_CALL_LIMIT per-item description fetches - a
+        # ~40% undercount. That matters because this guard exists to see
+        # the wall coming and skip cleanly instead of 429ing into it: at
+        # the real rate (15 + 3 + 3 = 21 per run) the daily total runs
+        # ~5,184 against eBay's 5,000 hard limit, so the bot can cross the
+        # line while the guard still reports headroom. That is precisely
+        # the shape of the Aug 9 rate-limit outage this was built after.
+        needed_this_run = (
+            EBAY_FAST_SEARCHES_PER_RUN
+            + EBAY_SLOW_SEARCHES_PER_RUN
+            + len([s for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)])
+            + GEMINI_CALL_LIMIT  # fetch_ebay_item_description(), one per AI check
+        )
         if remaining is not None:
             logger.info("eBay Browse API quota: %s/%s remaining today", remaining, quota_limit)
             if remaining < needed_this_run:

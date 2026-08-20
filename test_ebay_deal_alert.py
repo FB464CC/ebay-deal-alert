@@ -2055,3 +2055,121 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(alerted["deal_rating"], "Steal")
         self.assertEqual(alerted["listing"]["itemId"], item_id)
         self.assertFalse(m.is_new(self._db(), item_id), "an alerted item is seen")
+
+
+class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
+    """send_weekly_digest() counted EVERY record in alerts_log.jsonl as an
+    "alert", but append_alert_log() writes both sent alerts (verdict REVIEW)
+    and blocked/rejected candidates (verdict PASS). The weekly headline
+    could therefore present a week heavy on blocked junk as if it were
+    alerts the user actually received."""
+
+    def _digest_message(self, records):
+        captured = {}
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured["message"] = data.decode("utf-8")
+            return fake_resp
+
+        with mock.patch.object(m, "_read_alert_log_records", return_value=records), \
+             mock.patch("requests.post", side_effect=fake_post):
+            m.send_weekly_digest()
+        return captured["message"]
+
+    def test_blocked_records_are_not_counted_as_alerts(self):
+        ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        records = [
+            {"timestamp": ts, "verdict": "REVIEW", "deal_rating": "Steal", "query": "canali suit"},
+            {"timestamp": ts, "verdict": "REVIEW", "deal_rating": "Great Deal", "query": "alden shoes"},
+            {"timestamp": ts, "verdict": "PASS", "reason": "excluded gender keyword", "query": "canali suit"},
+            {"timestamp": ts, "verdict": "PASS", "reason": "pet product, not menswear", "query": "barbour jacket"},
+            {"timestamp": ts, "verdict": "PASS", "reason": "brand on pass list", "query": "canali suit"},
+        ]
+        message = self._digest_message(records)
+        self.assertIn("2 alerts", message)
+        self.assertNotIn("5 alerts", message)
+        self.assertIn("3 blocked", message)
+
+    def test_all_blocked_week_reports_zero_alerts(self):
+        ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        records = [
+            {"timestamp": ts, "verdict": "PASS", "reason": "excluded gender keyword", "query": "canali suit"},
+            {"timestamp": ts, "verdict": "PASS", "reason": "pet product, not menswear", "query": "barbour jacket"},
+        ]
+        message = self._digest_message(records)
+        self.assertIn("0 alerts", message)
+        self.assertIn("2 blocked", message)
+
+
+class EbayTokenCacheWriteFailure(unittest.TestCase):
+    """A token-cache WRITE failure used to propagate straight out of
+    get_ebay_token() (read-only filesystem / full disk / permissions), and
+    run() read it as a fatal token failure - "bot down" alert, early return
+    - even though a perfectly valid token was already in hand. Caching is an
+    optimization, never a hard requirement."""
+
+    def test_write_failure_does_not_raise(self):
+        # FileNotFoundError (a missing parent dir) is an OSError, the same
+        # class as read-only/permission/disk-full on a real write.
+        missing_parent = pathlib.Path(tempfile.mkdtemp()) / "does_not_exist" / "cache.json"
+        with mock.patch.object(m, "TOKEN_CACHE_PATH", missing_parent):
+            m._write_cached_ebay_token("fake-token", 7200)  # must not raise
+
+    def test_token_fetch_returns_token_when_cache_write_fails(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.json = lambda: {"access_token": "tok-123", "expires_in": 7200}
+        missing_parent = pathlib.Path(tempfile.mkdtemp()) / "does_not_exist" / "cache.json"
+        with mock.patch.object(m, "_read_cached_ebay_token", return_value=None), \
+             mock.patch.object(m, "TOKEN_CACHE_PATH", missing_parent), \
+             mock.patch("requests.post", return_value=fake_resp), \
+             mock.patch.dict("os.environ", {"EBAY_CLIENT_ID": "client", "EBAY_CLIENT_SECRET": "secret"}):
+            self.assertEqual(m.get_ebay_token(), "tok-123")
+
+
+class AlertLogPriceSemantics(unittest.TestCase):
+    """append_alert_log()'s `price` field meant two different things -
+    landed cost (item + shipping + tax) on a REVIEW record, but the raw
+    item price (no shipping/tax) on an early hard-fail PASS record that had
+    no landed cost. Downstream readers (mobile app, weekly digest) couldn't
+    tell which they were looking at."""
+
+    def _write_and_read(self, result):
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        orig = m.ALERTS_LOG_PATH
+        m.ALERTS_LOG_PATH = tmpdir / "alerts_log.jsonl"
+        try:
+            m.append_alert_log(result)
+            with m.ALERTS_LOG_PATH.open("r", encoding="utf-8") as f:
+                return json.loads(f.read().strip())
+        finally:
+            m.ALERTS_LOG_PATH = orig
+
+    def test_pass_record_price_is_none_item_price_is_raw(self):
+        # Early hard-fail PASS: no landed cost computed. `price` must be
+        # None (not silently the raw item price), and the raw item price
+        # must be carried by item_price instead.
+        result = {
+            "listing": {"itemId": "v1|1|0", "title": "Women's Canali Sweater",
+                        "price": {"value": 40.0, "currency": "USD"}},
+            "verdict": "PASS",
+            "reason": "excluded gender keyword in title/description",
+        }
+        record = self._write_and_read(result)
+        self.assertIsNone(record["price"])
+        self.assertEqual(record["item_price"], 40.0)
+
+    def test_review_record_keeps_landed_price_and_raw_item_price(self):
+        result = {
+            "listing": {"itemId": "v1|2|0", "title": "Canali Suit",
+                        "price": {"value": 80.0, "currency": "USD"}},
+            "verdict": "REVIEW",
+            "price": 100.0,      # landed cost
+            "item_price": 80.0,  # raw item price
+            "shipping_cost": 14.0,
+        }
+        record = self._write_and_read(result)
+        self.assertEqual(record["price"], 100.0)
+        self.assertEqual(record["item_price"], 80.0)
