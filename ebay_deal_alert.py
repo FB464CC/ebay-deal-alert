@@ -548,14 +548,37 @@ def search_ebay_ending_soon_auctions(token, auction_search):
         "X-EBAY-C-ENDUSERCTX": "contextualLocation=country=US,zip=29201",
     }
     query = auction_search.get("query") or ""
+    # Filter the closing window SERVER-side rather than sorting and hoping.
+    # Real live bug: this used sort=endingSoonest, which is NOT a valid
+    # sort value for Browse API item_summary/search (the documented set is
+    # price / -price / distance / newlyListed). eBay silently ignores an
+    # unrecognized sort and falls back to Best Match, so end dates came
+    # back effectively random - measured across many consecutive runs,
+    # ~100% of results were rejected as "too far from closing" (180
+    # watches, 195 suits, 100 cardholders per run, never a single one
+    # inside the window). That is statistically impossible under a real
+    # soonest-first sort, where the top hits would be ending in seconds.
+    # Net effect: the auction lane fetched thousands of listings a day and
+    # could essentially never alert. User report: "havent got a single
+    # one" bidding alert.
+    #
+    # itemEndDate:[start..end] constrains it properly - every item that
+    # comes back is already inside the window, no sort needed. Uses the
+    # WIDER uncontested window; the client-side pass below still applies
+    # the tighter contested threshold per-item.
+    now_utc_for_filter = datetime.now(timezone.utc)
+    window_end = now_utc_for_filter + timedelta(minutes=EBAY_AUCTION_CLOSING_SOON_MINUTES)
+    end_date_filter = (
+        f"itemEndDate:[{now_utc_for_filter.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        f"..{window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}]"
+    )
     params = {
         "category_ids": auction_search.get("category_id", WATCH_CATEGORY_ID),
         "filter": (
             "conditions:{USED|UNSPECIFIED},itemLocationCountry:US,"
             f"price:[..{auction_search['max_price']}],priceCurrency:USD,"
-            "buyingOptions:{AUCTION}"
+            f"buyingOptions:{{AUCTION}},{end_date_filter}"
         ),
-        "sort": "endingSoonest",
         "limit": "200",
     }
     if query:
