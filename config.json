@@ -740,7 +740,9 @@
     },
     {
       "query": "bills khakis trousers",
-      "size": null,
+      "size": [
+        "34"
+      ],
       "max_price": 30,
       "enabled": true,
       "profile": "slow"
