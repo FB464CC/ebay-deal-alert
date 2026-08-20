@@ -2028,6 +2028,17 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # cucinelli jacket" search doesn't trigger the knitwear category
     # classifier at all - only sweater/cashmere/merino/quarter-zip do).
     if "loro piana" in search_query_lower or "cucinelli" in search_query_lower:
+        # deal_rating None means the AI hasn't run YET, which is now the
+        # normal pre-check state (the gate is called before the AI to
+        # decide whether spending a call is worthwhile). It must return
+        # the shared retry-eligible marker, NOT a permanent "below Steal"
+        # rejection - otherwise the pre-AI skip discards the candidate and
+        # marks it seen, so every Loro Piana / Brunello Cucinelli listing
+        # is thrown away before it is ever checked and these searches can
+        # never alert at all. Found by an independent audit of this file
+        # and confirmed live before shipping.
+        if deal_rating is None:
+            return "loro piana/cucinelli bar: no AI price estimate yet - needs a real AI check"
         if deal_rating != "Steal":
             return f"loro piana/cucinelli bar: deal_rating '{deal_rating}' below Steal"
         if discount_pct is None or discount_pct <= 0:
@@ -2071,6 +2082,12 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     if category == "knitwear":
         if brand_tier != "grab_on_sight":
             return "knitwear bar: brand not grab_on_sight-tier (already own plenty of standard-tier sweaters)"
+        # Same pre-AI-state distinction as the loro piana/cucinelli bar
+        # above - None means "not checked yet" (retry), not "checked and
+        # found wanting" (permanent). Without this every knitwear
+        # candidate is discarded before its first AI check.
+        if deal_rating is None:
+            return "knitwear bar: no AI price estimate yet - needs a real AI check"
         if deal_rating != "Steal":
             return f"knitwear bar: deal_rating '{deal_rating}' below Steal - only grail-or-better on sweaters"
         if discount_pct is None or discount_pct <= 0:
