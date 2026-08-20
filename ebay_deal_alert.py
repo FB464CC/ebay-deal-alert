@@ -1151,6 +1151,28 @@ SUIT_JACKET_ONLY_SIGNALS = re.compile(
     r"tux(?:edo)?\s*jacket|dinner\s*jacket)\b",
     re.IGNORECASE,
 )
+# Explicit seller disclaimers that a "suit" listing is really jacket-only.
+# Per explicit user report ("i keep getting suit jackets that dont have the
+# full suits...maybe read the descriptions for pants/trouser"). These are
+# deliberate, unambiguous statements a seller writes to pre-empt a return,
+# so they're trusted over an optimistic title. Deliberately specific
+# phrasings rather than a bare "no pants" - incidental description text
+# ("no pants pockets", "pants pictured are not included in other listings")
+# shouldn't over-block, but "pants not included" always means what it says.
+JACKET_ONLY_DISCLAIMER_SIGNALS = re.compile(
+    r"\b(jacket\s*only|blazer\s*only|coat\s*only|top\s*only|"
+    r"(?:pants?|trousers?|bottoms?)\s*(?:are\s*)?not\s*included|"
+    # "no pants" must END a clause or be explicitly "...included" - a bare
+    # \b let it match "No pants POCKETS damage" on a genuine complete suit
+    # (caught in testing before shipping). Clause-boundary anchored instead.
+    r"no\s+(?:matching\s+)?(?:pants?|trousers?)\s+included|"
+    r"no\s+(?:matching\s+)?(?:pants?|trousers?)(?=\s*[.,;!)]|\s*$)|"
+    r"without\s*(?:the\s*)?(?:pants?|trousers?)|"
+    r"(?:pants?|trousers?)\s*sold\s*separately|"
+    r"missing\s*(?:the\s*)?(?:pants?|trousers?)|"
+    r"does\s*not\s*(?:come|include)\s*with\s*(?:pants?|trousers?))",
+    re.IGNORECASE,
+)
 # Bare "jacket"/"coat" - see is_jacket_only_suit_listing()'s docstring for
 # why this is only ever checked against a suit-worded search's results,
 # never on its own.
@@ -1299,7 +1321,7 @@ def is_oversized_fitted_shirt(haystack):
     return bool(OVERSIZED_SHIRT_SIGNALS.search(haystack))
 
 
-def is_jacket_only_suit_listing(title, query=None):
+def is_jacket_only_suit_listing(title, query=None, description=None):
     """Explicit, standing user rule: no more standalone jackets, period -
     "i do NOT need any more jackets. the exception is full suits[,]...
     must have jacket+pants and both fit." Originally gated on the search
@@ -1332,12 +1354,39 @@ def is_jacket_only_suit_listing(title, query=None):
     is a mismatched blazer/sport-coat listing wearing a different label,
     not a real suit. Scoped strictly to suit-worded searches (which never
     overlap with this config's jacket-specific searches) so those are
-    untouched."""
-    if SUIT_TWO_PIECE_SIGNALS.search(title):
-        return False
-    if SUIT_JACKET_ONLY_SIGNALS.search(title):
+    untouched.
+
+    `description` closes the biggest remaining hole, per explicit user
+    report: "i keep getting suit jackets that dont have the full suits,
+    just the jackets...maybe read the descriptions for pants/trouser or
+    something." Confirmed live against realistic titles - "Canali Wool
+    Suit 42R Navy", "Hickey Freeman Suit 42R Charcoal Pinstripe",
+    "Ermenegildo Zegna Suit Size 42 Regular Gray" and similar ALL pass
+    every title-only check above: they say "Suit" but never "pants"/
+    "2-piece" (so the allow doesn't fire), and carry no "blazer"/"sport
+    coat"/bare-"jacket" word (so no block fires either). The seller's
+    disclaimer lives in the description instead ("jacket only", "pants
+    not included", "pants sold separately"). Those are deliberate,
+    unambiguous seller statements, so a match blocks even when the title
+    looked like a complete suit - the title is marketing, the disclaimer
+    is the truth. Deliberately specific phrasings only (not a bare "no
+    pants" substring) to avoid over-blocking on incidental description
+    text.
+
+    NOTE on coverage: at PASS 1 the description is only present for
+    Poshmark/ShopGoodwill (free in their search response) and Vinted
+    (fetched there). eBay's description costs a separate per-item call
+    that's deliberately budget-gated to PASS 3, so eBay listings get
+    re-checked there once it's available - see the second call site."""
+    haystack_title = title or ""
+    description = description or ""
+    if JACKET_ONLY_DISCLAIMER_SIGNALS.search(description):
         return True
-    return bool(query and "suit" in query.lower() and BARE_JACKET_OR_COAT_WORD.search(title))
+    if SUIT_TWO_PIECE_SIGNALS.search(haystack_title):
+        return False
+    if SUIT_JACKET_ONLY_SIGNALS.search(haystack_title):
+        return True
+    return bool(query and "suit" in query.lower() and BARE_JACKET_OR_COAT_WORD.search(haystack_title))
 
 
 REQUIRED_ITEM_TYPE_SYNONYMS = {
@@ -3080,10 +3129,35 @@ def run():
                     shipping_cost,
                     saved_search["max_price"],
                 )
+                # Log NEAR-misses to alerts_log so an over-cap rejection is
+                # diagnosable after the fact. Real user report: a $100
+                # "Navy Canali Men's Suit 42R" on Vinted - correct brand,
+                # exact size, genuinely wanted - never alerted and left NO
+                # trace anywhere, because this branch (like the size/
+                # relevance/jacket-only ones) silently mark_seen'd and moved
+                # on. The run log has it, but GitHub Actions logs age out
+                # and aren't searchable from the phone/mobile app the way
+                # alerts_log is. Capped at 1.5x so a $12 belt matching a
+                # $2000 watch search doesn't spam the log - only genuine
+                # "you set the cap slightly too low" cases get recorded,
+                # which is exactly the class of miss this closes.
+                if total_price <= saved_search["max_price"] * 1.5:
+                    append_alert_log({
+                        "listing": listing,
+                        "price": total_price,
+                        "item_price": item_price,
+                        "shipping_cost": shipping_cost,
+                        "search_query": saved_search["query"],
+                        "verdict": "PASS",
+                        "reason": (
+                            f"over max price: ${total_price:.2f} landed > ${saved_search['max_price']} cap "
+                            "(near-miss - raise this search's max_price if you'd want it)"
+                        ),
+                    })
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
-            if is_jacket_only_suit_listing(title, saved_search["query"]):
+            if is_jacket_only_suit_listing(title, saved_search["query"], listing.get("description")):
                 logger.info(
                     "Skipping %s: jacket/blazer/sport-coat-only listing, no pants (standing no-jackets rule)",
                     item_id,
@@ -3292,6 +3366,28 @@ def run():
                 description = fetch_ebay_item_description(token, item_id)
                 if description:
                     listing["description"] = description
+            # eBay's description only becomes available HERE (it costs a
+            # separate per-item call, deliberately budget-gated), so the
+            # PASS 1 jacket-only check ran title-only for eBay listings.
+            # Re-check now that the disclaimer text is readable - see
+            # is_jacket_only_suit_listing()'s docstring for why the
+            # description is the only place "jacket only"/"pants not
+            # included" usually appears on an otherwise complete-looking
+            # "Suit" title. Cheap (pure regex, no extra call) and catches
+            # the exact case the user reported.
+            if is_jacket_only_suit_listing(
+                listing.get("title", ""), saved_search["query"], listing.get("description")
+            ):
+                logger.info(
+                    "Skipping %s: description discloses jacket/blazer-only, no pants "
+                    "(standing no-jackets rule)",
+                    item_id,
+                )
+                result["verdict"] = "PASS"
+                result["reason"] = "jacket/blazer-only disclosed in listing description, no pants"
+                append_alert_log(result)
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
             ai_result = check_photos_with_gemini(
                 listing,
                 category=category,

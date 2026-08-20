@@ -138,6 +138,43 @@ class JacketOnlySuitListing(unittest.TestCase):
         self.assertFalse(m.is_jacket_only_suit_listing(
             "Ermenegildo Zegna Suit Jacket and Pants 42R", "ermenegildo zegna suit"))
 
+    def test_description_disclaimer_blocks_a_complete_looking_suit_title(self):
+        # Explicit user report: "i keep getting suit jackets that dont have
+        # the full suits, just the jackets...maybe read the descriptions for
+        # pants/trouser." Confirmed live: these titles pass EVERY title-only
+        # check (they say "Suit" but never "pants"/"2-piece", and carry no
+        # blazer/sport-coat/bare-jacket word), so the seller's disclaimer in
+        # the description was the only available signal.
+        title = "Canali Wool Suit 42R Navy"
+        for description in (
+            "Jacket only, pants not included.",
+            "Blazer only. No pants.",
+            "Canali suit jacket - pants sold separately",
+            "Beautiful suit, however the trousers are not included",
+            "Does not come with pants",
+            "Missing the pants unfortunately",
+            "Top only, no matching trousers included",
+        ):
+            self.assertTrue(
+                m.is_jacket_only_suit_listing(title, "canali suit", description), description
+            )
+
+    def test_description_check_does_not_overblock_real_two_piece_suits(self):
+        # "No pants POCKETS damage" on a genuine complete suit was a real
+        # false positive caught in testing before shipping - a bare \b after
+        # "no pants" matched it. The pattern is clause-boundary anchored now.
+        title = "Canali Wool Suit 42R Navy"
+        for description in (
+            "Two piece suit, jacket and pants both included. Excellent condition.",
+            "Suit with pants, 42R jacket 34W trousers. No pants pockets damage.",
+            "Full suit. Pants hemmed. Smoke free home.",
+            "Navy wool suit, includes trousers, minor wear",
+            "Jacket and pants, no pants alterations needed",
+        ):
+            self.assertFalse(
+                m.is_jacket_only_suit_listing(title, "canali suit", description), description
+            )
+
 
 class WatchAuthenticityRedFlags(unittest.TestCase):
     def test_fashion_watch_is_flagged(self):
