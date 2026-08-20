@@ -813,6 +813,26 @@ class StealQualityGate(unittest.TestCase):
         result["discount_pct"] = 0
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="tailoring"))
 
+    def test_permanent_blocks_are_distinguishable_from_needs_ai(self):
+        # PASS 3 relies on this split twice: it skips spending a scarce AI
+        # call on anything permanently blocked, and _ai_check_priority uses
+        # it to rank candidates that are one check away from alerting. Any
+        # block an AI check could resolve MUST carry the shared "no AI
+        # price" retry marker; anything else must not.
+        needs_ai = {
+            "deal_rating": None, "brand_tier": "grab_on_sight", "price": 200.0,
+            "search_query": "omega watch", "listing": {"title": "Omega Seamaster"},
+        }
+        reason = m.is_blocked_by_steal_quality_gate(needs_ai, category="watches")
+        self.assertIn("no AI price", reason)
+        permanent = {
+            "deal_rating": None, "brand_tier": "standard", "price": 40.0,
+            "search_query": "zegna sweater", "listing": {"title": "Zegna Sweater L"},
+        }
+        reason = m.is_blocked_by_steal_quality_gate(permanent, category="knitwear")
+        self.assertIsNotNone(reason)
+        self.assertNotIn("no AI price", reason)
+
     def test_suit_blind_trust_has_a_price_ceiling(self):
         # 10 of 15 alerts in one real flood had deal_rating None - zero
         # price evidence, alerted purely on grab_on_sight brand tier, at
