@@ -407,7 +407,7 @@
       "size": [
         "42"
       ],
-      "max_price": 90,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -417,7 +417,7 @@
       "size": [
         "42"
       ],
-      "max_price": 90,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -427,7 +427,7 @@
       "size": [
         "42"
       ],
-      "max_price": 90,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -447,7 +447,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -457,7 +457,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -802,7 +802,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -812,7 +812,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -822,7 +822,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -832,7 +832,7 @@
       "size": [
         "42"
       ],
-      "max_price": 90,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -842,7 +842,7 @@
       "size": [
         "42"
       ],
-      "max_price": 90,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -852,7 +852,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -876,7 +876,7 @@
       "size": [
         "42"
       ],
-      "max_price": 180,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -896,7 +896,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -906,7 +906,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
@@ -964,7 +964,7 @@
       "size": [
         "42"
       ],
-      "max_price": 150,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "category_id": "3001"
