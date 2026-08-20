@@ -2975,7 +2975,8 @@ def run():
     # order, park REVIEW-verdict candidates for the prioritize/spend passes
     # below. This is what lets the limited AI budget go to the most
     # promising candidates instead of whichever 3 happened to load first.
-    review_candidates = []
+    # Keyed by item_id to dedupe - see the append site below.
+    review_candidates = {}
     for saved_search in enabled_searches:
         category = classify_search_category(saved_search["query"])
         if saved_search.get("is_auction_search"):
@@ -3320,7 +3321,28 @@ def run():
                 continue
 
             if result["verdict"] in ("REVIEW",):
-                review_candidates.append({
+                # Dedupe by item_id. The same listing genuinely can arrive
+                # twice in one run: search_ebay() has no buyingOptions
+                # filter, so a regular brand search returns AUCTION
+                # listings too, and the always-on auction lane can surface
+                # that same item independently. Config also carries
+                # overlapping queries by design (e.g. "hickey freeman
+                # blazer" vs "hickey freeman suit"). Without this, one
+                # listing could burn two of the three AI calls a run has
+                # AND push two identical alerts.
+                #
+                # Prefer whichever copy is the ending-soon auction: it
+                # carries the time-critical flag, sorts to the top of the
+                # AI queue, and its alert says "ENDS IN Xm". Keeping the
+                # plain copy instead would silently downgrade a closing
+                # auction to an ordinary listing. This became reachable
+                # the moment ending-soon auctions started bypassing the
+                # is_new() dedupe in PASS 1 - before that, the second copy
+                # was usually filtered there.
+                existing = review_candidates.get(item_id)
+                if existing is not None and not listing.get("is_ending_soon_auction"):
+                    continue
+                review_candidates[item_id] = {
                     "item_id": item_id,
                     "listing": listing,
                     "result": result,
@@ -3328,7 +3350,7 @@ def run():
                     "saved_search": saved_search,
                     "fingerprint": fingerprint,
                     "total_price": total_price,
-                })
+                }
 
     # PASS 2 - PRIORITIZE: candidates that CANNOT pass without an AI check go
     # first, not grab_on_sight brands. Real bug found live: a grab_on_sight
@@ -3353,8 +3375,10 @@ def run():
     # once; 14 retried more than 5 times; the worst went 57 rounds. Matches
     # the user's real complaint: alerts landing 3+ hours after posting on a
     # market where a genuine steal sells out in minutes.
+    # review_candidates is keyed BY item_id at this point (the sort below
+    # is what turns it into a list), so its keys are exactly the ids.
     pending_minutes_by_item = get_ai_pending_minutes(
-        conn, [c["item_id"] for c in review_candidates]
+        conn, list(review_candidates)
     )
 
     def _ai_check_priority(candidate):
@@ -3438,7 +3462,7 @@ def run():
             -(result.get("price") or 0.0),
         )
 
-    review_candidates.sort(key=_ai_check_priority)
+    review_candidates = sorted(review_candidates.values(), key=_ai_check_priority)
 
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
     # then alert (cap-gated), in priority order.
