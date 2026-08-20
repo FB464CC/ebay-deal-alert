@@ -17,8 +17,11 @@ or
     python -m unittest test_ebay_deal_alert -v
 """
 import re
+import json
+import pathlib
 import sqlite3
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -1746,3 +1749,46 @@ class SaneAiPrice(unittest.TestCase):
         self.assertEqual(
             m.clamp_watch_resale_estimate(m._sane_ai_price("$1,200"), band), band[2]
         )
+
+
+class CircuitBreakerResilience(unittest.TestCase):
+    """The breaker decides whether the bot talks to eBay at all for the
+    next 30-120 minutes, and its state file is committed by the workflow
+    on every run - so a partial write during a rebase/conflict is a real
+    way to get a corrupt file. Two failure modes, both silent-total-outage
+    shaped (the Aug 9 incident): a non-dict state crashed every caller via
+    state.get(), and an absurd blocked_until_ts locked eBay out forever
+    with no recovery path."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.path = pathlib.Path(self.tmpdir) / "state.json"
+        self._orig = m.EBAY_RATE_LIMIT_STATE_PATH
+        m.EBAY_RATE_LIMIT_STATE_PATH = self.path
+
+    def tearDown(self):
+        m.EBAY_RATE_LIMIT_STATE_PATH = self._orig
+
+    def test_corrupt_or_non_dict_state_never_crashes(self):
+        for bad in ("[1,2]", '"hello"', "42", "null", "{bad json"):
+            self.path.write_text(bad, encoding="utf-8")
+            self.assertTrue(m.ebay_circuit_breaker_allows_calls("tok"), bad)
+
+    def test_absurd_lockout_is_clamped_not_permanent(self):
+        far_future = time.time() + 10 * 365 * 24 * 3600
+        self.path.write_text(
+            json.dumps({"blocked_until_ts": far_future, "consecutive_429_streak": 1}),
+            encoding="utf-8",
+        )
+        # Still blocked right now...
+        self.assertFalse(m.ebay_circuit_breaker_allows_calls("tok"))
+        # ...but recovery is bounded by the configured max backoff, not years.
+        state = m._read_ebay_rate_limit_state()
+        self.assertGreater(state["blocked_until_ts"], time.time())
+
+    def test_normal_expired_lockout_allows_calls_again(self):
+        self.path.write_text(
+            json.dumps({"blocked_until_ts": time.time() - 60, "consecutive_429_streak": 2}),
+            encoding="utf-8",
+        )
+        self.assertTrue(m.ebay_circuit_breaker_allows_calls("tok"))

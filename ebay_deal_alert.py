@@ -652,10 +652,20 @@ def _read_ebay_rate_limit_state():
         return {}
     try:
         with EBAY_RATE_LIMIT_STATE_PATH.open("r", encoding="utf-8") as f:
-            return json.load(f)
+            state = json.load(f)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         logger.warning("Ignoring invalid eBay rate-limit state: %s", exc)
         return {}
+    # Valid JSON isn't necessarily a dict - a truncated or half-written
+    # file can parse as a list, string or number, and every caller
+    # immediately does state.get(...), which would raise AttributeError
+    # and abort the whole run. This file is committed by the workflow on
+    # every run, so a partial write during a rebase/conflict is a real
+    # way to get here.
+    if not isinstance(state, dict):
+        logger.warning("eBay rate-limit state is %s, not an object - ignoring", type(state).__name__)
+        return {}
+    return state
 
 
 def _write_ebay_rate_limit_state(state):
@@ -686,7 +696,25 @@ def ebay_circuit_breaker_allows_calls(token):
     EBAY_FAST_SEARCHES_PER_RUN's increase below (see config.json comment)."""
     state = _read_ebay_rate_limit_state()
     now_ts = time.time()
-    blocked_until_ts = state.get("blocked_until_ts", 0)
+    # Clamp to the intended maximum backoff. Without this, a corrupt or
+    # absurd blocked_until_ts (a bad write, a clock skew, a stray unit
+    # error putting it years out) locks the bot out of eBay PERMANENTLY
+    # with no recovery path and no error - the single worst failure mode
+    # this file has, and the exact silent-total-outage shape of the Aug 9
+    # incident. The breaker should never be able to block for longer than
+    # it was ever designed to.
+    raw_blocked_until = state.get("blocked_until_ts", 0)
+    if not isinstance(raw_blocked_until, (int, float)) or raw_blocked_until != raw_blocked_until:
+        raw_blocked_until = 0
+    max_reasonable = now_ts + EBAY_BACKOFF_MAX_MINUTES * 60
+    if raw_blocked_until > max_reasonable:
+        logger.warning(
+            "eBay circuit breaker blocked_until_ts was %s (beyond the %s-min max backoff) - "
+            "clamping rather than staying locked out indefinitely",
+            raw_blocked_until, EBAY_BACKOFF_MAX_MINUTES,
+        )
+        raw_blocked_until = max_reasonable
+    blocked_until_ts = raw_blocked_until
 
     if now_ts < blocked_until_ts:
         remaining_min = round((blocked_until_ts - now_ts) / 60)
