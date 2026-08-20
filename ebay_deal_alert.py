@@ -605,6 +605,28 @@ def search_ebay_ending_soon_auctions(token, auction_search):
     items = body.get("itemSummaries", [])
 
     now_utc = datetime.now(timezone.utc)
+    # TEMPORARY DIAGNOSTIC - remove once the auction lane is confirmed
+    # working. Two fixes (valid sort, then a server-side itemEndDate
+    # range filter) both failed to change the ~100% rejection rate, so
+    # log what eBay is ACTUALLY returning instead of guessing a third time.
+    if items:
+        _diag_opts = Counter()
+        _diag_offsets = []
+        for _it in items[:25]:
+            for _bo in (_it.get("buyingOptions") or ["(none)"]):
+                _diag_opts[_bo] += 1
+            _ed = _it.get("itemEndDate")
+            if _ed:
+                try:
+                    _d = datetime.fromisoformat(_ed.replace("Z", "+00:00"))
+                    _diag_offsets.append(round((_d - now_utc).total_seconds() / 60))
+                except ValueError:
+                    pass
+        logger.info(
+            "AUCTION DIAG %r: total=%s buyingOptions=%s end-offsets-min(first25)=%s",
+            query or auction_search.get("category_id"), body.get("total"),
+            dict(_diag_opts), sorted(_diag_offsets)[:12],
+        )
     listings = []
     skipped_too_early = 0
     skipped_unparseable = 0
