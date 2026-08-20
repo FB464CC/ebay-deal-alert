@@ -3321,12 +3321,22 @@ def run():
         result = candidate["result"]
         category = candidate["category"]
         brand_tier = result.get("brand_tier")
-        # 0 = cannot pass without AI, ever (knitwear/watches regardless of
-        # tier, or a non-grab_on_sight brand anywhere) - give these the
-        # budget first. 1 = grab_on_sight in a normal category - can
-        # already blind-trust through, AI here is a bonus quality check,
-        # not a requirement.
-        must_have_ai = category in ("knitwear", "watches") or brand_tier != "grab_on_sight"
+        # Every alert now requires a real AI check (see the "must be
+        # AI-vetted" rule in PASS 3), so the old must_have_ai split -
+        # which ranked grab_on_sight items LAST because they could
+        # blind-trust through without one - is now exactly backwards:
+        # those are the candidates ONE check away from alerting, and
+        # burying them would defer them forever.
+        #
+        # Rank by how close a candidate is to actually alerting instead.
+        # A candidate the gate already accepts on everything except price
+        # evidence (no-AI gate reason is the retry-eligible "no AI price"
+        # marker, or no reason at all) is one check from a real alert;
+        # anything else still has other obstacles even if the AI comes
+        # back perfect. Cheap to compute - pure dict reads, no I/O.
+        no_ai_block = is_blocked_by_steal_quality_gate(result, category=category)
+        one_check_from_alerting = (no_ai_block is None) or ("no AI price" in no_ai_block)
+        must_have_ai = not one_check_from_alerting
         # Real live gap the pure age-first sort below opened up: watches
         # are ALL must_have_ai regardless of brand, but eBay simply lists
         # vastly more Seiko/Bulova than Rolex/Panerai/Patek - measured
@@ -3402,6 +3412,24 @@ def run():
         saved_search = candidate["saved_search"]
         fingerprint = candidate["fingerprint"]
         total_price = candidate["total_price"]
+
+        # Don't spend a scarce AI call on a candidate the gate already
+        # rejects for a reason an AI check can't change. Everything that
+        # merely NEEDS price evidence returns a "no AI price" reason (the
+        # shared retry-eligible marker), so anything else here - e.g.
+        # "knitwear bar: brand not grab_on_sight-tier" - is a permanent
+        # no regardless of what the photos show. Checking first means the
+        # 3 calls/run budget actually reaches candidates that could
+        # really alert, which is what makes the "every alert is AI-vetted"
+        # rule below affordable.
+        pre_ai_block = is_blocked_by_steal_quality_gate(result, category=category)
+        if pre_ai_block and "no AI price" not in pre_ai_block:
+            result["verdict"] = "PASS"
+            result["reason"] = f"blocked by steal-quality gate: {pre_ai_block}"
+            logger.info("Gate-blocked %s before spending an AI call: %s", item_id, pre_ai_block)
+            append_alert_log(result)
+            mark_seen(conn, item_id, fingerprint, total_price)
+            continue
 
         ai_result = None
         if gemini_calls < GEMINI_CALL_LIMIT:
@@ -3649,6 +3677,31 @@ def run():
         # "Bowen & Wright v-neck sweater" at -28% discount. This blocks
         # that class of alert entirely rather than just flagging it.
         gate_reason = is_blocked_by_steal_quality_gate(result, category=category)
+        # EVERY alert must be AI-vetted first. Per explicit user
+        # instruction: "it should always be ai checked right? every alert?
+        # theres only a few a day that get through - those should really
+        # go through some vetting first."
+        #
+        # This closes the blind-trust hole for good. Real report that
+        # motivated it: 10 of 15 suit alerts in one flood had deal_rating
+        # None - zero price evidence, alerted purely on brand tier at
+        # $126-$206 each. The per-category blind-trust carve-outs were
+        # each individually defensible when the AI budget was the binding
+        # constraint, but they add up to "most alerts were never actually
+        # vetted," which is the opposite of what a handful-per-day alert
+        # stream should be.
+        #
+        # ai_result is None covers both "budget didn't reach it" and "the
+        # AI call itself failed" - neither is a vetted check, so neither
+        # may alert. Deliberately reuses the "no AI price" retry marker so
+        # the existing machinery applies unchanged: NOT marked seen, and
+        # mark_ai_pending() ages it up so it wins an AI slot on a later
+        # run rather than being discarded. A real steal is deferred by a
+        # few minutes, not lost.
+        if not gate_reason and ai_result is None:
+            gate_reason = (
+                "no AI price estimate - every alert must be AI-vetted before sending"
+            )
         if gate_reason:
             result["verdict"] = "PASS"
             result["reason"] = f"blocked by steal-quality gate: {gate_reason}"
