@@ -783,11 +783,55 @@ class StealQualityGate(unittest.TestCase):
         reason = m.is_blocked_by_steal_quality_gate(result, category="tailoring")
         self.assertIsNotNone(reason)
         self.assertIn("suit bar", reason)
-        # Same numbers, but a brand the AI actually has pricing knowledge
-        # of (the Zegna case the retail-discount path was built for) -
-        # must still clear it.
+        # A brand the AI actually has pricing knowledge of (the Zegna case
+        # the retail-discount path was built for) must still clear it.
+        # discount_pct raised to 0 (break-even vs resale) to match the real
+        # Zegna fixture this path exists for - $200 ask / $200 resale /
+        # $2500 retail. The original -47 here is now correctly blocked by
+        # the newer "don't pay MORE than resale" rule, so it can't double
+        # as the passing case anymore; that rule has its own test below.
         result["brand_tier"] = "standard"
+        result["discount_pct"] = 0
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="tailoring"))
+
+    def test_suit_retail_path_rejects_paying_more_than_resale(self):
+        # Real user report after the suit caps were raised to $200: a flood
+        # of alerts like "$212 landed vs $130 resale" (-63%) and "$175 vs
+        # $75" (-134%), all rated Marginal, all correctly identified as bad
+        # by the AI, all alerted anyway. Luxury suit RETAIL is always
+        # $1200-2500 while the used market is $75-300, so "70% off retail"
+        # was trivially true for anything in range - a rubber stamp.
+        result = {
+            "deal_rating": "Marginal", "discount_pct": -63, "price_confidence": "medium",
+            "brand_tier": "grab_on_sight", "search_query": "brooks brothers golden fleece suit",
+            "estimated_retail_price": 1500.0, "price": 212.0,
+        }
+        reason = m.is_blocked_by_steal_quality_gate(result, category="tailoring")
+        self.assertIsNotNone(reason)
+        self.assertIn("suit bar", reason)
+        # Break-even or better against resale still clears (the Zegna case).
+        result["discount_pct"] = 0
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="tailoring"))
+
+    def test_suit_blind_trust_has_a_price_ceiling(self):
+        # 10 of 15 alerts in one real flood had deal_rating None - zero
+        # price evidence, alerted purely on grab_on_sight brand tier, at
+        # $126-$206 each. Blind-trusting a cheap suit is a reasonable bet;
+        # blind-trusting a $200 one is paying for brand recognition alone.
+        # User's stated comfort zone: "rather purchase suits for like
+        # $80-150 tops...i just dont wanna filter out steal of lifetimes."
+        base = {
+            "deal_rating": None, "brand_tier": "grab_on_sight",
+            "search_query": "hickey freeman suit", "listing": {"title": "Hickey Freeman Suit 42R"},
+        }
+        over = dict(base, price=206.0)
+        reason = m.is_blocked_by_steal_quality_gate(over, category="tailoring")
+        self.assertIsNotNone(reason)
+        # Retry-eligible so it keeps competing for an AI slot on later runs.
+        self.assertIn("no AI price", reason)
+        # Inside the comfort zone, brand tier alone is still enough.
+        under = dict(base, price=126.0)
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(under, category="tailoring"))
 
     def test_suit_bar_resale_path_unaffected_by_brand_recognition(self):
         # The retail-discount path is only ONE of two ways to clear the
