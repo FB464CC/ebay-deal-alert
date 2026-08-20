@@ -93,6 +93,16 @@ OBFUSCATED_BRAND_SIGNALS = _build_obfuscated_brand_signals(GRAB_ON_SIGHT_BRANDS)
 # (falls back to "brand not recognized," same conservative path as any
 # unrecognized item) rather than crediting the collab partner's tier.
 SWATCH_COLLAB_SIGNAL = re.compile(r"\bswatch\s*x\b", re.IGNORECASE)
+# Same garment scope as check_photos_with_gemini()'s prompt - "a Peter
+# Millar polo, quarter-zip, or mid-layer" - the ONLY garment types the AI
+# ever evaluates crown visibility for. See the back-crown gate's comment
+# in is_blocked_by_steal_quality_gate() for the real bug this matching
+# scope fixes (a jacket search could never alert since the AI always
+# returns null - not applicable - for anything outside this list).
+PETER_MILLAR_TOP_SIGNALS = re.compile(
+    r"\b(polo|quarter[\s-]?zip|1/4[\s-]?zip|qz|mid[\s-]?layer|pullover)\b",
+    re.IGNORECASE,
+)
 CORPORATE_LOGO_KEYWORDS = _CONFIG["CORPORATE_LOGO_KEYWORDS"]
 CONDITION_HARD_FAIL_KEYWORDS = _CONFIG["CONDITION_HARD_FAIL_KEYWORDS"]
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
@@ -914,10 +924,22 @@ def get_ai_pending_minutes(conn, item_ids):
 
 
 def mark_ai_pending(conn, item_id):
+    # Real live bug: this never committed. sqlite3's default isolation_level
+    # opens an implicit transaction on the first INSERT, and conn.close()
+    # (run()'s final line) rolls back anything uncommitted - so every
+    # ai_pending row written by a run that didn't ALSO happen to call
+    # mark_seen() afterward (committing the same connection) was silently
+    # lost. That's the common case: PASS 3 calls this back-to-back for
+    # every must-have-AI candidate once GEMINI_CALL_LIMIT is exhausted, with
+    # nothing else committing in between. Silently re-opened the exact
+    # "Brooks Brothers suit retried 49 times" starvation bug this table
+    # exists to close, just intermittently instead of always - looked like
+    # the fix "mostly worked" while quietly not persisting most of the time.
     conn.execute(
         "INSERT OR IGNORE INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)",
         (item_id, datetime.now(timezone.utc).isoformat()),
     )
+    conn.commit()
 
 
 def is_new(conn, item_id):
@@ -1388,13 +1410,30 @@ def is_relevant_marketplace_listing(listing, query):
         ):
             return False
 
-    query_tokens = [t for t in re.findall(r"[a-z0-9']+", positive_query) if t not in MARKETPLACE_QUERY_STOPWORDS]
+    # Real live bug: length < 3 wasn't filtered AND the final match was a
+    # bare substring test, not whole-word. "n peal sweater" (enabled search)
+    # tokenized to ["n", "peal"] after "sweater" dropped as a stopword -
+    # "n" in title is true for virtually any English title (any word
+    # containing the letter n), so this search's whole relevance check was
+    # defeated, admitting whatever Vinted's fuzzy match for "peal sweater"
+    # returned. Same class of bug on "tom james merino": "tom" in title
+    # (substring) matched "custom"/"bottom"/"Tommy" - a completely
+    # different brand - even though "tom" itself is long enough to look
+    # like a real token. Both fixed together: drop tokens under 3 chars
+    # (a real brand/word token is never that short) AND require a whole
+    # word match (\b), not substring - this is the exact check the
+    # docstring's own past incidents (purple label, gamecocks) were fixed
+    # by switching to, but this specific final fallback line was missed.
+    query_tokens = [
+        t for t in re.findall(r"[a-z0-9']+", positive_query)
+        if t not in MARKETPLACE_QUERY_STOPWORDS and len(t) >= 3
+    ]
     if not query_tokens:
         # Nothing meaningful left after stripping stopwords (a query made
         # entirely of category/material words) - nothing to check against,
         # don't false-reject.
         return True
-    return any(token in title for token in query_tokens)
+    return any(re.search(rf"\b{re.escape(token)}\b", title) for token in query_tokens)
 
 
 def score_listing(listing, gap_report, shipping_cost=0.0):
@@ -1837,7 +1876,19 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # "no AI price estimate" substring every other bar uses) only while no
     # AI check has run yet; once one HAS run and still didn't confirm the
     # crown, that's the final answer, not a "try again later."
-    if brand_in(listing_title_lower, ("peter millar",)):
+    #
+    # Real live bug: this used to key off "peter millar" appearing ANYWHERE
+    # in the title, with no garment-type check - but the AI prompt only
+    # ever evaluates crown visibility for "a Peter Millar polo, quarter-zip,
+    # or mid-layer" (see check_photos_with_gemini()'s prompt), returning
+    # null for everything else (jackets, blazers, shirts, pants). That
+    # meant the enabled "peter millar gamecocks jacket" search could NEVER
+    # alert - every jacket got peter_millar_back_crown_visible=null forever
+    # and was blocked here before the gamecocks bar (built specifically for
+    # that search) ever ran. Scoped to the same garment types the AI prompt
+    # actually checks, so a jacket/blazer/shirt/pant candidate skips this
+    # gate entirely and falls through to its normal category-specific bar.
+    if brand_in(listing_title_lower, ("peter millar",)) and PETER_MILLAR_TOP_SIGNALS.search(listing_title_lower):
         if result.get("peter_millar_back_crown_visible") is not True:
             if result.get("deal_rating") is None:
                 return "peter millar back-crown requirement: no AI price estimate - crown visibility unconfirmed"
