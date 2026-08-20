@@ -1792,3 +1792,266 @@ class CircuitBreakerResilience(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertTrue(m.ebay_circuit_breaker_allows_calls("tok"))
+
+
+class RunIntegration(unittest.TestCase):
+    """run() is the orchestrator every other function in this file feeds
+    into, and until now it had ZERO direct tests - which is exactly where
+    the two worst production bugs of the Aug 2026 session lived, both
+    shipping green:
+
+    (a) the loro piana/cucinelli and knitwear gate bars returned a
+        PERMANENT "below Steal" rejection for the pre-AI state
+        (deal_rating None, meaning "not checked yet"), so PASS 3's
+        pre-AI skip discarded and mark_seen'd every Loro Piana /
+        Brunello Cucinelli / knitwear candidate before a single photo was
+        ever looked at. Every unit test of the gate passed - none of them
+        exercised the pre-AI state through the code path that acts on it.
+
+    (b) review_candidates became a dict keyed by item_id (to dedupe an
+        item arriving from both a brand search and the auction lane), but
+        one line still iterated it as a list of dicts - an AttributeError
+        that kills the entire run. Nothing caught it because run() was
+        never called by anything but production.
+
+    So these call the REAL run() with only its outer edges mocked: eBay,
+    Gemini, ntfy, the gap report, and the three state files. Everything
+    between - PASS 1's free filters, PASS 2's priority sort, PASS 3's
+    budget/gate/alert logic - is the code under test."""
+
+    # A real eBay Browse API item_summary, trimmed to the fields
+    # search_ebay() actually parses (shape copied from a live response and
+    # from the records in alerts_log.jsonl).
+    def _ebay_item(self, item_id, title, price, *, seller="mensweardepot",
+                   feedback_score=1204, feedback_pct="99.4", shipping=0.0):
+        end_date = datetime.now(timezone.utc) + timedelta(hours=72)
+        return m._attach_seller_feedback({
+            "itemId": item_id,
+            "title": title,
+            "price": {"value": f"{price:.2f}", "currency": "USD"},
+            "itemWebUrl": f"https://www.ebay.com/itm/{item_id.split('|')[1]}",
+            "image": {"imageUrl": "https://i.ebayimg.com/images/g/9tkAAeSw/s-l1600.jpg"},
+            "seller": {
+                "username": seller,
+                "feedbackScore": feedback_score,
+                "feedbackPercentage": feedback_pct,
+            },
+            "buyingOptions": ["FIXED_PRICE"],
+            "itemEndDate": end_date.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            "shippingOptions": [
+                {"shippingCost": {"value": f"{shipping:.2f}", "currency": "USD"}}
+            ],
+        })
+
+    # What check_photos_with_gemini() returns on a clean, well-priced item:
+    # no damage, no third-party logo, and a resale estimate far above ask.
+    AI_STEAL = {
+        "damage_found": False,
+        "weird_logo_found": False,
+        "looks_good": True,
+        "summary": "navy cashmere crewneck, no damage or third-party logos visible",
+        "estimated_retail_price": 1495,
+        "estimated_resale_value": 900,
+        "price_confidence": "high",
+        "fabric_from_tag": "100% cashmere",
+        "fabric_confidence": "high",
+        "liquidity": "fast",
+        "peter_millar_back_crown_visible": None,
+    }
+
+    def _patch(self, name, value):
+        patcher = mock.patch.object(m, name, value)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return value
+
+    def setUp(self):
+        self.tmpdir = pathlib.Path(tempfile.mkdtemp())
+        self.alerts = []       # send_alert() calls, instead of a real push
+        self.ai_calls = []     # listings check_photos_with_gemini() saw
+
+        self._patch("DB_PATH", str(self.tmpdir / "seen.db"))
+        self._patch("ALERTS_LOG_PATH", self.tmpdir / "alerts_log.jsonl")
+        self._patch("EBAY_RATE_LIMIT_STATE_PATH", self.tmpdir / "rate_limit_state.json")
+        # Fast and deterministic: no inter-call backoff, no config drift on
+        # the AI budget, no auction lane unless a test asks for one.
+        self._patch("GEMINI_INTER_CALL_SLEEP_SECONDS", 0)
+        self._patch("GEMINI_CALL_LIMIT", 3)
+        self._patch("EBAY_AUCTION_SEARCHES", [])
+
+        # Every external edge. Anything left unpatched here is a real
+        # network call, which is what makes this suite safe to run anywhere.
+        self._patch("get_ebay_token", lambda: "fake-oauth-token")
+        self._patch("get_ebay_rate_limit_remaining", lambda token: (5000, 5000))
+        self._patch("fetch_gap_report", lambda: None)
+        self._patch("fetch_ebay_item_description", lambda token, item_id: None)
+        self._patch("fetch_vinted_item_description", lambda url: None)
+        self._patch("prefetch_marketplaces", lambda now: {})
+        self._patch("search_ebay_ending_soon_auctions", lambda token, search: ([], None))
+        self._patch("notify_bot_down", lambda message: None)
+        self._patch("send_alert", self.alerts.append)
+        self._patch("check_photos_with_gemini", self._fake_ai)
+
+        self.ai_result = dict(self.AI_STEAL)
+
+    def _fake_ai(self, listing, category="other", current_month_name=None):
+        self.ai_calls.append(listing.get("itemId"))
+        return self.ai_result
+
+    def _serve(self, saved_search, listings, total_listings=42):
+        """Point the (single, so rotation is a no-op) saved search at a
+        fixed set of listings. search_ebay() returns a (listings, total)
+        tuple - the same shape run() unpacks."""
+        self._patch("SAVED_SEARCHES", [saved_search])
+        self._patch("search_ebay", lambda token, search: (list(listings), total_listings))
+
+    def _alert_log_records(self):
+        path = m.ALERTS_LOG_PATH
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def _db(self):
+        """Fresh connection to the run's DB file - run() closes its own, and
+        anything not committed by then is genuinely gone (see
+        test_mark_ai_pending_actually_commits)."""
+        conn = sqlite3.connect(m.DB_PATH)
+        self.addCleanup(conn.close)
+        return conn
+
+    def test_run_completes_without_error_on_realistic_input(self):
+        # The smoke test that would have caught bug (b): run() is called
+        # end-to-end with candidates that actually reach PASS 2's sort and
+        # PASS 3's spend loop, which is where the dict-iterated-as-a-list
+        # AttributeError lived. A crash there kills the whole run, so
+        # "completed AND every listing reached a disposition" is the assertion.
+        listings = [
+            self._ebay_item("v1|364512889011|0",
+                            "Loro Piana Cashmere Crewneck Sweater Mens Medium Navy", 180.0),
+            self._ebay_item("v1|297183440152|0",
+                            "Loro Piana Merino Sweater Mens Medium - moth holes on sleeve",
+                            95.0, seller="atticfinds77"),
+            self._ebay_item("v1|156004112938|0",
+                            "Brunello Cucinelli Cashmere Sweater Mens Large Grey",
+                            250.0, seller="milanoresale", shipping=8.0),
+        ]
+        self._serve({"query": "loro piana sweater", "max_price": 400,
+                     "category_id": "11484", "enabled": True, "profile": "fast"},
+                    listings)
+
+        m.run()
+
+        logged = {r["item_id"]: r for r in self._alert_log_records()}
+        self.assertEqual(len(logged), 3, "every listing must reach a real disposition")
+        # The moth-hole listing hard-fails in score_listing() before any AI
+        # call; the other two are REVIEW candidates that reach PASS 3.
+        self.assertEqual(logged["v1|297183440152|0"]["verdict"], "PASS")
+        self.assertEqual(len(self.ai_calls), 2, "both REVIEW candidates get an AI check")
+        self.assertFalse(m.is_new(self._db(), "v1|297183440152|0"),
+                         "a hard-failed listing is a final disposition - mark it seen")
+
+    def test_knitwear_candidate_needing_ai_is_also_not_discarded(self):
+        # Sibling of the test below, deliberately routed through a DIFFERENT
+        # gate bar. "loro piana sweater" hits the loro piana/cucinelli bar,
+        # which is checked BEFORE the knitwear bar - so that test alone
+        # leaves the knitwear path completely unguarded. Proven by mutation
+        # testing: deleting the knitwear fix left the whole suite green,
+        # while deleting the loro piana fix correctly failed it. Both bars
+        # had the identical defect and both need their own regression.
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        item_id = "v1|364512889022|0"
+        self._serve({"query": "johnstons elgin cashmere", "max_price": 400,
+                     "category_id": "11484", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Johnstons of Elgin Cashmere Sweater Mens Large Grey",
+                                     120.0)])
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [], "budget was zero - no AI call should have happened")
+        conn = self._db()
+        self.assertTrue(
+            m.is_new(conn, item_id),
+            "a knitwear candidate that never got its AI check must NOT be marked "
+            "seen - that discards it forever after zero evaluation",
+        )
+        self.assertIn(
+            item_id, m.get_ai_pending_minutes(conn, [item_id]),
+            "it must be parked in the ai_pending backlog to win an AI slot later",
+        )
+
+    def test_candidate_needing_ai_is_not_discarded_before_being_checked(self):
+        # Regression for bug (a). With the AI budget at zero, a Loro Piana
+        # knitwear candidate gets NO photo check this run - and must
+        # therefore stay retryable, not be thrown away permanently. The bug
+        # was the gate returning a permanent "deal_rating 'None' below
+        # Steal" for the not-checked-yet state, which PASS 3's pre-AI skip
+        # then acted on: verdict PASS, mark_seen, gone forever. Every
+        # Loro Piana / Cucinelli / knitwear search could never alert at all.
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        item_id = "v1|364512889011|0"
+        self._serve({"query": "loro piana sweater", "max_price": 400,
+                     "category_id": "11484", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Loro Piana Cashmere Crewneck Sweater Mens Medium Navy",
+                                     180.0)])
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [], "budget was zero - no AI call should have happened")
+        conn = self._db()
+        self.assertTrue(
+            m.is_new(conn, item_id),
+            "a candidate that never got its AI check must NOT be marked seen - "
+            "marking it seen discards it forever after zero evaluation",
+        )
+        self.assertIn(
+            item_id, m.get_ai_pending_minutes(conn, [item_id]),
+            "it must be parked in the ai_pending backlog so PASS 2 can age it "
+            "up and win it an AI slot on a later run",
+        )
+        # And it left a diagnosable trace with the retry-eligible marker,
+        # not a permanent rejection reason.
+        (record,) = self._alert_log_records()
+        self.assertIn("no AI price", record["reason"])
+
+    def test_alert_requires_a_real_ai_check(self):
+        # "every alert must be AI-vetted" - a failed/abstaining AI call
+        # (None) is not a vetted check, so even a grab_on_sight-tier
+        # candidate that would otherwise blind-trust straight through the
+        # gate must not alert. Real report behind the rule: 10 of 15 suit
+        # alerts in one flood had deal_rating None - zero price evidence,
+        # alerted purely on brand tier.
+        self.ai_result = None
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                                     200.0)])
+
+        m.run()
+
+        self.assertEqual(len(self.ai_calls), 1, "the AI check must actually be attempted")
+        self.assertEqual(self.alerts, [], "no AI verdict means no alert, brand tier notwithstanding")
+        (record,) = self._alert_log_records()
+        self.assertIn("no AI price", record["reason"])
+
+    def test_alert_fires_when_ai_confirms_a_steal(self):
+        # The other side of the same gate: a real AI check that confirms a
+        # steal (900 resale vs a 212 landed cost, high confidence, no
+        # damage) must actually reach send_alert - exactly once.
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                                     200.0)])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1, "an AI-confirmed steal must alert exactly once")
+        alerted = self.alerts[0]
+        self.assertEqual(alerted["deal_rating"], "Steal")
+        self.assertEqual(alerted["listing"]["itemId"], item_id)
+        self.assertFalse(m.is_new(self._db(), item_id), "an alerted item is seen")
