@@ -1867,6 +1867,34 @@ def notify_bot_down(message):
         logger.exception("Failed to send bot-down notification")
 
 
+def _sane_ai_price(value):
+    """Coerce a price field from the AI's JSON into a positive float, or
+    None if it isn't one.
+
+    The model is instructed to return a number, but nothing enforced it.
+    Accepts the common near-miss formats it actually produces ("$1,200",
+    "1200 USD") rather than discarding them, since the number is real and
+    only the formatting is off. Rejects zero and negatives outright: a
+    non-positive resale value is never meaningful here, and a negative one
+    silently inverts compute_deal_rating()'s arithmetic into a fake
+    high-confidence "Steal"."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        cleaned = re.sub(r"[^\d.]", "", str(value))
+        if not cleaned or cleaned.count(".") > 1:
+            return None
+        try:
+            number = float(cleaned)
+        except ValueError:
+            return None
+    if number <= 0 or number != number or number == float("inf"):
+        return None
+    return number
+
+
 def compute_deal_rating(price, estimated_resale_value):
     if not price or not estimated_resale_value:
         return None, None
@@ -3675,8 +3703,21 @@ def run():
             ai_result.get("estimated_retail_price") is not None
             or ai_result.get("estimated_resale_value") is not None
         ):
-            result["estimated_retail_price"] = ai_result.get("estimated_retail_price")
-            result["estimated_resale_value"] = ai_result.get("estimated_resale_value")
+            # Sanitize before storing. These come straight from a language
+            # model's JSON and were previously trusted as-is, which is two
+            # separate real risks:
+            #   1. A string ("$1,200", "1200 USD") flows into
+            #      clamp_watch_resale_estimate()'s numeric comparison and
+            #      raises TypeError - killing the ENTIRE run, not just this
+            #      candidate, since nothing here catches it.
+            #   2. A negative resale value inverts compute_deal_rating()'s
+            #      math: (-100 - 50) / -100 = +1.5, fabricating a 150%
+            #      "Steal" out of a nonsense number.
+            # Anything unparseable or non-positive is treated as "no
+            # estimate" (None), which the gate already handles correctly
+            # as needing a real check rather than as a good deal.
+            result["estimated_retail_price"] = _sane_ai_price(ai_result.get("estimated_retail_price"))
+            result["estimated_resale_value"] = _sane_ai_price(ai_result.get("estimated_resale_value"))
             result["price_confidence"] = ai_result.get("price_confidence")
 
             if category == "watches" and result["estimated_resale_value"] is not None:
@@ -3686,7 +3727,16 @@ def run():
                 # WATCH_PRICE_BANDS in config.json and
                 # clamp_watch_resale_estimate() for why this is ceiling-
                 # only, never a floor.
-                band = watch_price_band(title)
+                # listing.get("title"), NOT the bare `title` local. Real
+                # bug: `title` is assigned inside the PASS 1 loop and this
+                # runs in PASS 3, so it held whatever the LAST listing of
+                # PASS 1 happened to be - across all searches. Every watch
+                # was therefore clamped against some unrelated item's
+                # brand band, or none at all. That silently defeated the
+                # whole point of this clamp, which exists because 3 real
+                # Movado listings alerted off AI resale guesses of
+                # $595-795 against real comps of $150-550.
+                band = watch_price_band(listing.get("title", ""))
                 if band is not None:
                     _low, _avg, high = band
                     original = result["estimated_resale_value"]
