@@ -3129,6 +3129,19 @@ def run():
             # already caps it at a handful per run.
             if not listing.get("is_ending_soon_auction") and not is_new(conn, item_id):
                 continue
+            # Already alerted on this auction? Drop it HERE, before any
+            # expensive work. The same check exists at the send point as
+            # the authoritative guard, but reaching it costs a scarce
+            # Gemini call first: an already-alerted auction re-enters via
+            # the is_new bypass above, sorts FIRST in the AI queue (it's
+            # ending-soon), burns one of the 3 calls a run gets, and only
+            # then gets discarded - displacing a fresh candidate that
+            # actually needed the check. Reachable whenever a bid
+            # retraction drops the price >5% and clears the fingerprint
+            # tolerance. The key is written before the alert is sent, so
+            # consulting it this early is safe.
+            if listing.get("is_ending_soon_auction") and not is_new(conn, f"auction-alerted:{item_id}"):
+                continue
 
             price_value = (listing.get("price") or {}).get("value", 999999)
             item_price = float(999999 if price_value is None else price_value)
@@ -3359,6 +3372,28 @@ def run():
                 existing = review_candidates.get(item_id)
                 if existing is not None and not listing.get("is_ending_soon_auction"):
                     continue
+                if existing is not None and listing.get("is_ending_soon_auction"):
+                    # Merge the copy being replaced rather than dropping it
+                    # outright. The auction copy comes from
+                    # search_ebay_ending_soon_auctions() - a bare eBay item
+                    # summary - while the copy found via a regular brand
+                    # search may carry real enrichments that only exist in
+                    # that search's context: sold_comp_median/count (stamped
+                    # from a Grailed listing in the SAME search's results,
+                    # so the auction searches - "watch"/"cardholder"/"suit",
+                    # none of which is a saved-search query - can never have
+                    # them) and a fetched description.
+                    #
+                    # Without this the dedupe actively destroys price
+                    # evidence: a Hickey Freeman suit auction would lose the
+                    # $180 sold-comp median from the regular search, so the
+                    # "comps override a weak AI estimate" path can't fire,
+                    # and a real steal gets a Marginal rating and is
+                    # gate-blocked. Exactly the case comps exist to rescue.
+                    old_listing = existing["listing"]
+                    for enrichment in ("sold_comp_median", "sold_comp_count", "description"):
+                        if listing.get(enrichment) is None and old_listing.get(enrichment) is not None:
+                            listing[enrichment] = old_listing[enrichment]
                 review_candidates[item_id] = {
                     "item_id": item_id,
                     "listing": listing,
