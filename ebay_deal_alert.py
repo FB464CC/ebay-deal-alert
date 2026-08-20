@@ -1063,6 +1063,18 @@ SOLD_COMP_HIGH_CONFIDENCE = 10
 # well under this (82-401 for typical brand/category queries); a search
 # clearing 500 is a real outlier, not just a popular brand.
 MARKET_SATURATION_LISTINGS_THRESHOLD = 500
+# Landed price above which a suit can no longer alert on brand tier alone
+# (see the suit bar's blind-trust branch in
+# is_blocked_by_steal_quality_gate()). Set from the user's own stated
+# comfort zone: "i would also rather purchase suits for like $80-150
+# tops, but i can always negotiate higher ones, i just dont wanna filter
+# out steal of lifetimes if they come by." So the SEARCH cap stays at
+# $200 (visibility - a lifetime steal must still be findable), while
+# anything above $150 has to actually prove it's a steal with a real AI
+# price check rather than riding on brand recognition. Deliberately two
+# different numbers doing two different jobs: max_price decides what the
+# bot can SEE, this decides what it can alert on without evidence.
+SUIT_BLIND_TRUST_MAX_PRICE = 150
 
 
 def get_shipping_cost(listing):
@@ -2099,15 +2111,36 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             # the AI has no real ground truth for an obscure/unknown brand,
             # so its retail number alone shouldn't be trusted to override a
             # weak resale signal the way it can for a brand like Zegna.
+            # ...AND you're not paying meaningfully MORE than the thing is
+            # worth used. Real user report after the suit caps were raised
+            # to $200: a flood of alerts like "$212 landed vs $130 resale"
+            # (-63%), "$175 vs $75" (-134%) - all rated Marginal, all
+            # correctly identified as bad by the AI, all alerted anyway.
+            # Cause: luxury suit RETAIL is essentially always $1200-2500
+            # while the used market is $75-300, so "70% off retail" is
+            # trivially true for literally any listing in range - the check
+            # was a rubber stamp, not a filter. User's words: "its
+            # literally saying its a bad deal and stuff right?"
+            #
+            # discount_pct >= 0 (price at or below AI resale) preserves the
+            # exact case this path was built for - the Zegna Roma at $200
+            # ask / $200 resale / $2500 retail, rated Marginal at 0%
+            # discount but 92% off retail, which the user genuinely wanted
+            # because a suit is bought to be WORN, not flipped. Break-even
+            # against resale is fine for a wear-it purchase; paying double
+            # resale is not, no matter how big the retail number is.
             retail_ok = (
                 retail_discount_pct is not None
                 and retail_discount_pct >= 70
                 and brand_tier is not None
+                and discount_pct is not None
+                and discount_pct >= 0
             )
             if not (resale_ok or retail_ok):
                 return (
                     f"suit bar: deal_rating '{deal_rating}' below Good Deal "
-                    f"and retail discount ({retail_discount_pct}) below 70%"
+                    f"and retail-discount path not met (retail discount "
+                    f"{retail_discount_pct}, resale discount {discount_pct})"
                 )
             if price_confidence == "low":
                 return "suit bar: AI price estimate confidence too low to trust"
@@ -2118,6 +2151,26 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         # case whenever the AI budget doesn't reach a suit candidate).
         if brand_tier != "grab_on_sight":
             return "suit bar: no AI price estimate and brand not grab_on_sight-tier"
+        # ...but blind-trust does NOT scale with price. Real user report:
+        # raising the suit caps from $90 to $200 produced 25 alerts at once,
+        # 10 of which had deal_rating None - zero price evidence, alerted
+        # purely because Hickey Freeman / Corneliani / Brooks Brothers
+        # Golden Fleece are grab_on_sight-tier, at $126-$206 each. With
+        # GEMINI_CALL_LIMIT at 3/run, the overwhelming majority of suit
+        # candidates never get an AI check, so a higher cap directly
+        # multiplied the no-evidence alerts rather than finding better
+        # deals. Blind-trusting a $90 grab_on_sight suit is a reasonable
+        # bet; blind-trusting a $200 one is just spending money on brand
+        # recognition alone. Above this, a real AI check is required -
+        # retry-eligible via the shared "no AI price" substring, so the
+        # candidate keeps competing for an AI slot on later runs instead
+        # of being thrown away.
+        item_landed_price = result.get("price")
+        if item_landed_price is not None and item_landed_price > SUIT_BLIND_TRUST_MAX_PRICE:
+            return (
+                f"suit bar: no AI price estimate and ${item_landed_price:.0f} is above the "
+                f"${SUIT_BLIND_TRUST_MAX_PRICE} blind-trust ceiling - needs a real AI check"
+            )
         return None
 
     if category == "watches":
