@@ -704,6 +704,125 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("corporate logo", result["reason"])
 
+    # ---- EMPTY-PACKAGING HARD FAIL (real miss: a "literal box" alerted) ----
+
+    def test_packaging_only_listings_hard_fail(self):
+        for title in (
+            "Rolex Box Only No Watch",
+            "Empty Box",
+            "Just The Box",
+            "Box And Dust Bag Only",
+            "Dust Bag Only",
+            "Packaging Only",
+            "Authenticity Card Only",
+            "Receipt Only",
+            "No Item Included",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertEqual(result["verdict"], "PASS", title)
+            self.assertIn("packaging", result["reason"])
+
+    def test_bag_only_with_box_or_dust_wording_hard_fails(self):
+        # "bag only" is packaging-only evidence only when box/dust wording
+        # is also present ("box and bag only", "dust bag + bag only") -
+        # bare "bag only" is a real handbag, not an empty accessory.
+        result = m.score_listing(self._listing("Box And Bag Only No Watch"), gap_report=None)
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("packaging", result["reason"])
+
+    def test_included_packaging_mention_is_not_blocked(self):
+        # A genuine item that merely MENTIONS included packaging is a
+        # POSITIVE signal ("comes with box and papers", "with dust bag"),
+        # not packaging-only - these must all still reach REVIEW.
+        for title in (
+            "Goyard Card Holder With Original Box And Papers",
+            "Goyard Card Holder Includes Original Box",
+            "Goyard Card Holder With Dust Bag",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertNotEqual(result["verdict"], "PASS", title)
+            self.assertNotIn("packaging", result.get("reason", ""))
+
+    # ---- STRENGTHENED DAMAGE DETECTION (real miss: "heavily damaged" LV wallet) ----
+
+    def test_heavily_damaged_terms_hard_fail(self):
+        for title in (
+            "Heavily Damaged LV Wallet",
+            "Goyard Wallet As-Is Damage",
+            "Torn Lining Goyard Card Holder",
+            "Ripped Leather Wallet",
+            "Cracked Leather Goyard Wallet",
+            "Peeling Leather Wallet",
+            "Water Damage Goyard Card Holder",
+            "Mold On Leather Wallet",
+            "Mildew Goyard Wallet",
+            "Restoration Project Goyard Wallet",
+            "Parts Only Goyard Wallet",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertEqual(result["verdict"], "PASS", title)
+            self.assertIn("condition hard-fail keyword", result["reason"])
+
+    def test_ambiguous_damage_terms_flag_but_do_not_block(self):
+        # "smells" (could be "smells like new") and "heavily worn" (could be
+        # desirable patina) are CONDITION_FLAG_KEYWORDS, not hard-fails -
+        # they must surface as a flag without blocking the listing.
+        for title in (
+            "Goyard Wallet Heavily Worn",
+            "Goyard Card Holder Smells Like Smoke",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertNotEqual(result["verdict"], "PASS", title)
+            self.assertIn("condition keyword flagged", " ".join(result.get("flags") or []))
+
+    def test_normal_wear_and_patina_are_not_blocked(self):
+        # Honest wear descriptions must keep passing - "minor wear" and
+        # "light patina" are normal secondhand condition language, not
+        # "heavily damaged".
+        for title in (
+            "Goyard Card Holder Minor Wear",
+            "Goyard Wallet Light Patina",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertNotEqual(result["verdict"], "PASS", title)
+
+    # ---- COUNTERFEIT SIGNALS (real miss: a "fake goyard wallet" alerted) ----
+
+    def test_replica_language_hard_fails(self):
+        for title in (
+            "Goyard Replica Card Holder",
+            "Card Holder Inspired By Goyard",
+            "Goyard Mirror Quality Wallet",
+            "Goyard 1:1 Wallet",
+            "Unauthenticated Goyard Card Holder",
+            "Not Authentic Goyard Wallet",
+            "No Guarantee Of Authenticity Goyard Wallet",
+            "AAA Quality Goyard Wallet",
+            "Faux Designer Goyard Wallet",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertEqual(result["verdict"], "PASS", title)
+            self.assertIn("counterfeit/replica", result["reason"])
+
+    def test_honest_authenticity_hedging_is_not_blocked(self):
+        # Honest hedging a real reseller uses - a judgment call for the
+        # buyer, not a seller openly advertising a fake. These must still
+        # reach REVIEW (not hard-fail as counterfeit).
+        cases = (
+            ("Goyard Card Holder Guaranteed Authentic", None),
+            ("Goyard Card Holder Please Authenticate Yourself", None),
+            ("Goyard Card Holder", "authenticity not verified by me but purchased from authorized retailer"),
+        )
+        for title, description in cases:
+            result = m.score_listing(self._listing(title, description=description), gap_report=None)
+            self.assertNotEqual(result["verdict"], "PASS", title)
+            self.assertNotIn("counterfeit", result.get("reason", ""))
+
+    def test_faux_leather_is_not_blocked_as_counterfeit(self):
+        # "faux leather" is a legitimate material (synthetic), not a
+        # counterfeit claim - only the "faux designer" phrase is blocked.
+        self.assertFalse(m.COUNTERFEIT_SIGNALS.search("faux leather card holder"))
+
 
 class StealQualityGate(unittest.TestCase):
     def test_narrow_category_grab_on_sight_searches_never_blind_trust(self):
