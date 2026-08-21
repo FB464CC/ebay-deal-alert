@@ -1162,7 +1162,7 @@
         "42"
       ],
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -1182,7 +1182,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -1192,7 +1192,7 @@
         "42"
       ],
       "max_price": 350,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "3001"
     },
@@ -1223,7 +1223,7 @@
         "XL"
       ],
       "max_price": 40,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -1233,7 +1233,7 @@
         "XL"
       ],
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -1243,7 +1243,7 @@
         "XL"
       ],
       "max_price": 30,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
