@@ -388,7 +388,7 @@
         "XL"
       ],
       "max_price": 65,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "57988"
     },
@@ -408,7 +408,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -418,7 +418,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -428,7 +428,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -458,7 +458,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -833,7 +833,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -843,7 +843,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -853,7 +853,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -907,7 +907,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -965,7 +965,7 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "3001"
     },
@@ -1026,7 +1026,7 @@
       "size": null,
       "max_price": 400,
       "enabled": true,
-      "profile": "slow",
+      "profile": "fast",
       "category_id": "31387"
     },
     {
@@ -1425,13 +1425,24 @@
     "case only",
     "for parts",
     "for repair",
+    "parts only",
+    "restoration project",
+    "heavily damaged",
+    "as-is damage",
+    "as is damage",
+    "torn",
+    "ripped",
+    "cracked leather",
+    "peeling",
+    "water damage",
+    "mold",
+    "mildew",
     "left only",
     "right only",
     "left shoe only",
     "right shoe only",
     "single shoe",
     "watch box",
-    "box only",
     "presentation box",
     "display case",
     "watch case only",
@@ -1449,8 +1460,6 @@
     "watch movement",
     "watch parts",
     "dustproof envelope",
-    "dust bag",
-    "dustbag",
     "dial only",
     "case and band only",
     "pamphlet",
@@ -1470,7 +1479,9 @@
     "stain",
     "pilling",
     "repair",
-    "tear"
+    "tear",
+    "smells",
+    "heavily worn"
   ],
   "FABRIC_GOOD_KEYWORDS": [
     "merino",

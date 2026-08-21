@@ -122,6 +122,47 @@ PET_PRODUCT_SIGNALS = re.compile(
     r"\b(dog|puppy|kitten|pet\s*bed|pet\s*carrier|pet\s*harness|dog\s*leash)\b",
     re.IGNORECASE,
 )
+# Real live miss: a listing for JUST the packaging - a "literal box" -
+# alerted as if it were the item itself (an empty watch box / dust bag /
+# authenticity card sold with no actual item). Hard-fails at the same
+# "what is this item actually" tier as gender/pet above, before brand or
+# AI ever sees it. Deliberately anchored on the "only"/"empty"/"just"/
+# "no item included" wording - a genuine listing that merely MENTIONS
+# included packaging ("comes with box and papers", "includes original box",
+# "with dust bag") is a POSITIVE signal on a real item and must NOT match;
+# the "only" wording is what separates "this is just the box" from "this
+# includes the box". "bag only" is only treated as packaging-only evidence
+# when box/dust-bag wording also appears nearby ("box and bag only",
+# "dust bag + bag only") - bare "bag only" is a real handbag, not an empty
+# accessory. (The bare "box only"/"dust bag" keywords this replaces lived in
+# CONDITION_HARD_FAIL_KEYWORDS, where whole-word matching couldn't tell
+# "dust bag only" from "with dust bag" - that over-blocked genuine listings.)
+EMPTY_PACKAGING_SIGNALS = re.compile(
+    r"\b(box\s+only|empty\s+box|just\s+the\s+box|box\s+and\s+dust\s+bag\s+only|"
+    r"dust\s+bag\s+only|packaging\s+only|authenticity\s+card\s+only|receipt\s+only|"
+    r"no\s+item\s+included)\b"
+    r"|\b(box|dust\s*bag)\b[^.]{0,60}\bbag\s+only\b"
+    r"|\bbag\s+only\b[^.]{0,60}\b(box|dust\s*bag)\b",
+    re.IGNORECASE,
+)
+# Real live miss: a "fake goyard wallet" (counterfeit, plainly spelled
+# "Goyard") alerted as a genuine deal - a seller openly advertising a
+# replica in replica-marketing vocabulary, which the obfuscated-brand check
+# above can't catch because the brand name isn't split up at all. Hard-fails
+# before brand-tier/AI, same tier as the obfuscated-brand check. Deliberately
+# blocks ONLY the clear replica-marketing terms; the honest hedging a real
+# reseller uses is NOT blocked ("guaranteed authentic", "authenticity not
+# verified by me but purchased from...", "please authenticate yourself" all
+# still pass) - those are judgment calls for the buyer, not a seller openly
+# selling a fake. "faux designer" is scoped to that exact phrase (bare "faux"
+# is legitimate on "faux leather" goods), and "not authentic" is the phrase,
+# not bare "authentic", so "guaranteed authentic" is untouched.
+COUNTERFEIT_SIGNALS = re.compile(
+    r"\b(replica|inspired\s+by|mirror\s+quality|unauthenticated|not\s+authentic|"
+    r"no\s+guarantee\s+of\s+authenticity|aaa\s+quality|faux\s+designer)\b|"
+    r"\b1\s*:\s*1\b",
+    re.IGNORECASE,
+)
 # Live miss: "Brunello Cuccinelli Water-Resistant Jacket | Size 46 (US 10)"
 # alerted as a 59% "Great Deal" - no gender word anywhere in the title, so
 # GENDER_EXCLUDE_KEYWORDS had nothing to match, but "US 10" is a women's
@@ -1135,6 +1176,11 @@ MARKET_SATURATION_LISTINGS_THRESHOLD = 500
 # different numbers doing two different jobs: max_price decides what the
 # bot can SEE, this decides what it can alert on without evidence.
 SUIT_BLIND_TRUST_MAX_PRICE = 150
+# Landed price under which a Peter Millar Gamecocks piece alerts on ANY
+# deal rating - per explicit user instruction, at this level he views and
+# negotiates himself and the pieces move fast even at asking price, so a
+# margin bar just loses them. Damage/logo checks still apply.
+GAMECOCKS_GRAB_UNDER_PRICE = 50
 
 
 def get_shipping_cost(listing):
@@ -1591,6 +1637,10 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
         return {"verdict": "PASS", "reason": "women's size cross-reference in title/description", "listing": listing}
     if PET_PRODUCT_SIGNALS.search(haystack):
         return {"verdict": "PASS", "reason": "pet product, not menswear", "listing": listing}
+    if EMPTY_PACKAGING_SIGNALS.search(haystack):
+        return {"verdict": "PASS", "reason": "packaging/accessory-only listing, not the item", "listing": listing}
+    if COUNTERFEIT_SIGNALS.search(haystack):
+        return {"verdict": "PASS", "reason": "counterfeit/replica listing language in title/description", "listing": listing}
     obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
     if obfuscation_hit:
         return {
@@ -2037,7 +2087,14 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # that search) ever ran. Scoped to the same garment types the AI prompt
     # actually checks, so a jacket/blazer/shirt/pant candidate skips this
     # gate entirely and falls through to its normal category-specific bar.
-    if brand_in(listing_title_lower, ("peter millar",)) and PETER_MILLAR_TOP_SIGNALS.search(listing_title_lower):
+    # Gamecocks fan apparel is exempt: the back-crown rule exists because
+    # a crownless Peter Millar piece is just a mid-tier polo, but school
+    # gear is bought to REPRESENT, not to signal the brand - per the
+    # standing "if theres a steal for my school, gotta buy it" rule and
+    # the explicit "any peter millar gamecocks at all below $50."
+    if (brand_in(listing_title_lower, ("peter millar",))
+            and PETER_MILLAR_TOP_SIGNALS.search(listing_title_lower)
+            and not brand_in(listing_title_lower, ("gamecocks",))):
         if result.get("peter_millar_back_crown_visible") is not True:
             if result.get("deal_rating") is None:
                 return "peter millar back-crown requirement: no AI price estimate - crown visibility unconfirmed"
@@ -2075,6 +2132,17 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     if gamecocks_query and gamecocks_title:
         if deal_rating is None:
             return "gamecocks bar: no AI price estimate and brand not grab_on_sight-tier" if brand_tier != "grab_on_sight" else None
+        # Explicit user instruction: "Any peter millar gamecocks at all
+        # below $50 too (i can view/negotiate) - it usually goes pretty
+        # fast even at asking price tho at those levels." Below that price
+        # the deal-quality question is moot: he'll buy or negotiate on
+        # sight, and hesitating loses it. The AI check above still had to
+        # run and clear damage/corporate-logo detection - that part is NOT
+        # relaxed, since bad logo'd Peter Millar alerts were a real
+        # complaint - only the price/margin bar is.
+        landed = result.get("price")
+        if landed is not None and landed < GAMECOCKS_GRAB_UNDER_PRICE:
+            return None
         if deal_rating not in ("Steal", "Great Deal", "Good Deal"):
             return f"gamecocks bar: deal_rating '{deal_rating}' below Good Deal"
         if discount_pct is None or discount_pct <= 0:
