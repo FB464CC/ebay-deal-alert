@@ -726,7 +726,7 @@
         "XL"
       ],
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "57988"
     },
@@ -1253,7 +1253,7 @@
         "XL"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "57988"
     },
@@ -1264,7 +1264,7 @@
         "XL"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "57988"
     },
