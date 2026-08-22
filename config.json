@@ -29,7 +29,7 @@
         "XL"
       ],
       "max_price": 20,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -39,7 +39,7 @@
         "XL"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "11484"
     },
@@ -50,7 +50,7 @@
         "XL"
       ],
       "max_price": 25,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -60,7 +60,7 @@
         "XL"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -205,7 +205,7 @@
         "XL"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -215,7 +215,7 @@
         "XL"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -668,7 +668,7 @@
         "XL"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -679,7 +679,7 @@
         "XL"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -1065,7 +1065,7 @@
       "query": "seiko 6309 -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
       "size": null,
       "max_price": 300,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "31387"
     },
