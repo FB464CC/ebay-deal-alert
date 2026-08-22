@@ -134,6 +134,21 @@ def _dig(obj, path):
     return current
 
 
+def _dget(obj, key, default=None):
+    """dict.get() that tolerates a non-dict receiver instead of raising.
+
+    Several chained accesses here were written as ``(x or {}).get(k)``, which
+    guards against absent/falsy values but NOT a truthy scalar - if an API
+    ever returns a number or string where a dict is expected, ``or {}`` keeps
+    the scalar and the ``.get`` raises AttributeError. _fetch_marketplace()
+    swallows that, so the whole platform silently returns zero listings for
+    the run. Route every chained-get through here so a scalar degrades to
+    ``default`` exactly like a missing key."""
+    if not isinstance(obj, dict):
+        return default
+    return obj.get(key, default)
+
+
 def _to_float(value):
     """Coerce the many price shapes these APIs use ('$42.00', 4200, '42.5')."""
     if value is None:
@@ -379,20 +394,20 @@ def _grailed_hit_to_listing(hit, sold_median, sold_count):
     single-search and batched adapters below so there's exactly one place
     that knows Grailed's hit shape, not two copies that can drift."""
     object_id = hit.get("objectID")
-    cover = (hit.get("cover_photo") or {}).get("url")
+    cover = _dget(_dget(hit, "cover_photo"), "url")
     if cover:
         # Full-res covers are ~2.2MB; the resized form is ~160KB and
         # plenty for vision. Matters because every byte is downloaded
         # inside the job's 60-second billing window.
         cover += ("&" if "?" in cover else "?") + "w=800&fit=clip"
-    user = hit.get("user") or {}
+    user = _dget(hit, "user") or {}
     # Confirmed live: each hit carries a real per-listing "shipping.us"
     # block (amount + enabled) - a $50 item with $7.99 US shipping
     # enabled was showing as a flat $50 item with make_listing's 0.0
     # shipping default. enabled:false means the seller's price already
     # includes shipping (free-shipping listing), so 0.0 is correct there.
-    us_shipping = ((hit.get("shipping") or {}).get("us") or {})
-    shipping_cost = us_shipping.get("amount") or 0.0 if us_shipping.get("enabled") else 0.0
+    us_shipping = _dget(_dget(hit, "shipping"), "us") or {}
+    shipping_cost = (_dget(us_shipping, "amount") or 0.0) if _dget(us_shipping, "enabled") else 0.0
     listing = make_listing(
         "grailed",
         object_id,
@@ -401,7 +416,7 @@ def _grailed_hit_to_listing(hit, sold_median, sold_count):
         f"https://www.grailed.com/listings/{object_id}",
         image_url=cover,
         size=hit.get("size"),
-        seller=user.get("username"),
+        seller=_dget(user, "username"),
         shipping=shipping_cost,
     )
     if listing:
@@ -410,10 +425,10 @@ def _grailed_hit_to_listing(hit, sold_median, sold_count):
         if sold_median is not None:
             listing["sold_comp_median"] = sold_median
             listing["sold_comp_count"] = sold_count
-        seller_score = user.get("seller_score") or {}
-        listing["seller_trusted"] = bool(user.get("trusted_seller"))
-        listing["seller_rating"] = seller_score.get("rating_average")
-        listing["seller_total_sales"] = user.get("total_bought_and_sold")
+        seller_score = _dget(user, "seller_score") or {}
+        listing["seller_trusted"] = bool(_dget(user, "trusted_seller"))
+        listing["seller_rating"] = _dget(seller_score, "rating_average")
+        listing["seller_total_sales"] = _dget(user, "total_bought_and_sold")
     return listing
 
 
@@ -460,19 +475,37 @@ def _algolia_multi_query(sub_requests):
     for i in range(0, len(sub_requests), ALGOLIA_MAX_BATCH):
         chunk = sub_requests[i:i + ALGOLIA_MAX_BATCH]
         _pace("grailed")
-        try:
-            resp = requests.post(
-                ALGOLIA_MULTI_QUERY_URL,
-                json={"requests": chunk},
-                headers={
-                    "User-Agent": USER_AGENT, "Accept": "application/json",
-                    "X-Algolia-Application-Id": GRAILED_APP_ID,
-                    "X-Algolia-API-Key": GRAILED_SEARCH_KEY,
-                },
-                timeout=HTTP_TIMEOUT,
+        # One short retry on a 429, mirroring search_ebay(): a single retry
+        # after a brief sleep costs little and can save up to ALGOLIA_MAX_BATCH
+        # sub-queries at once if a transient burst trips Algolia's limit.
+        for attempt in range(2):
+            try:
+                resp = requests.post(
+                    ALGOLIA_MULTI_QUERY_URL,
+                    json={"requests": chunk},
+                    headers={
+                        "User-Agent": USER_AGENT, "Accept": "application/json",
+                        "X-Algolia-Application-Id": GRAILED_APP_ID,
+                        "X-Algolia-API-Key": GRAILED_SEARCH_KEY,
+                    },
+                    timeout=HTTP_TIMEOUT,
+                )
+            except requests.RequestException as exc:
+                logger.warning("grailed batch request failed: %s", exc)
+                resp = None
+                break
+            if resp.status_code == 429 and attempt == 0:
+                time.sleep(2)
+                continue
+            break
+        if resp is None:
+            results.extend([None] * len(chunk))
+            continue
+        if resp.status_code == 429:
+            logger.warning(
+                "grailed batch rate limited (429) after retry, dropping %s sub-queries: %s",
+                len(chunk), resp.text[:300],
             )
-        except requests.RequestException as exc:
-            logger.warning("grailed batch request failed: %s", exc)
             results.extend([None] * len(chunk))
             continue
         if not resp.ok:
@@ -607,7 +640,7 @@ def search_poshmark(saved_search):
         title = post.get("title") or ""
         if not post_id or not title:
             continue
-        price = (post.get("price_amount") or {}).get("val", post.get("price"))
+        price = _dget(_dget(post, "price_amount"), "val", _dget(post, "price"))
         # Field name bug, confirmed live: the real key is "cover_shot"
         # (underscore) - "covershot" doesn't exist on the actual response,
         # so image_url has been None for EVERY Poshmark listing until now.
@@ -619,8 +652,8 @@ def search_poshmark(saved_search):
         # gallery array sitting right there in the same response
         # (confirmed live: 6 real photos on a sample item) that was never
         # read at all.
-        cover = post.get("cover_shot") or {}
-        picture = cover.get("url") or cover.get("url_small") or post.get("picture_url")
+        cover = _dget(post, "cover_shot")
+        picture = _dget(cover, "url") or _dget(cover, "url_small") or _dget(post, "picture_url")
         # Confirmed live: entries are dicts with a "url" key, not plain
         # strings - an isinstance(p, str) filter here silently drops every
         # single one, which is exactly what shipped first and was caught
@@ -631,7 +664,7 @@ def search_poshmark(saved_search):
             for p in all_pictures
         ]
         extra_images = [u for u in extra_images if u and u != picture]
-        size = (post.get("inventory") or {}).get("size_obj", {}).get("display")
+        size = _dget(_dget(_dget(post, "inventory"), "size_obj"), "display")
         listings.append(
             make_listing(
                 "poshmark",
@@ -734,7 +767,7 @@ def search_shopgoodwill(saved_search):
         body = resp.json()
     except ValueError:
         return [], None
-    results = (body.get("searchResults") or {}).get("items") or []
+    results = _dget(_dget(body, "searchResults"), "items") or []
     listings = []
     skipped_too_early = 0
     for item in results:
@@ -776,7 +809,7 @@ def search_shopgoodwill(saved_search):
             "(>%s min uncontested, >%s min with bids already on it)",
             skipped_too_early, SHOPGOODWILL_CLOSING_SOON_MINUTES, SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES,
         )
-    return [x for x in listings if x], (body.get("searchResults") or {}).get("itemCount")
+    return [x for x in listings if x], _dget(_dget(body, "searchResults"), "itemCount")
 
 
 # ---------------------------------------------------------------------------
@@ -784,6 +817,14 @@ def search_shopgoodwill(saved_search):
 # requesting the homepage; the API 401s without it. That is ordinary session
 # handling, not an auth bypass.
 # ---------------------------------------------------------------------------
+
+# Vinted resolves real shipping only at checkout against the buyer's address,
+# so no catalog field exists to read (checked live) - same situation that made
+# SHOPGOODWILL_ASSUMED_SHIPPING necessary. Vinted US buyer-paid shipping tiers
+# run ~$3.99 (small) to ~$7.99 (large); the trad-menswear this bot hunts
+# (blazers, knitwear, shoes) lands mostly in the medium tier, so $5.99 is the
+# defensible midpoint. Assumed ON TOP of the buyer-protection fee below.
+VINTED_ASSUMED_SHIPPING = 5.99
 
 _vinted_session = None
 _vinted_lock = threading.Lock()
@@ -841,24 +882,26 @@ def search_vinted(saved_search):
         # Vinted only resolves that at checkout against the buyer's address.
         # But "total_item_price" IS present and real (confirmed live): it's
         # price + Vinted's mandatory buyer-protection service_fee, an extra
-        # cost every buyer definitely pays on top of the listed price. Using
-        # that delta beats treating shipping as $0, even though it still
-        # understates true landed cost by whatever shipping ends up being.
-        item_price = _to_float((item.get("price") or {}).get("amount")) or 0.0
-        total_price = _to_float((item.get("total_item_price") or {}).get("amount"))
+        # cost every buyer definitely pays on top of the listed price. That
+        # delta alone still understates true landed cost by whatever shipping
+        # ends up being (~$5-10 real), which made Vinted listings win deal
+        # comparisons against Poshmark/ShopGoodwill's honest flat shipping.
+        # So add VINTED_ASSUMED_SHIPPING on top, mirroring the other two.
+        item_price = _to_float(_dget(_dget(item, "price"), "amount")) or 0.0
+        total_price = _to_float(_dget(_dget(item, "total_item_price"), "amount"))
         service_fee = (total_price - item_price) if total_price is not None else 0.0
         listings.append(
             make_listing(
                 "vinted",
                 item.get("id"),
                 item.get("title"),
-                (item.get("price") or {}).get("amount"),
+                _dget(_dget(item, "price"), "amount"),
                 item.get("url"),
-                image_url=(item.get("photo") or {}).get("url"),
+                image_url=_dget(_dget(item, "photo"), "url"),
                 extra_images=extra_images,
                 size=item.get("size_title"),
-                seller=(item.get("user") or {}).get("login"),
-                shipping=service_fee,
+                seller=_dget(_dget(item, "user"), "login"),
+                shipping=service_fee + VINTED_ASSUMED_SHIPPING,
             )
         )
     return [x for x in listings if x], None
