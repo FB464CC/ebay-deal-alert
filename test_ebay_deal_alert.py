@@ -1893,17 +1893,20 @@ class CircuitBreakerResilience(unittest.TestCase):
             self.path.write_text(bad, encoding="utf-8")
             self.assertTrue(m.ebay_circuit_breaker_allows_calls("tok"), bad)
 
-    def test_absurd_lockout_is_clamped_not_permanent(self):
+    def test_absurd_lockout_does_not_block(self):
+        # This test previously asserted the OPPOSITE (that the first run
+        # stays blocked) and so encoded the bug: the old clamp blocked for
+        # a fresh full backoff on EVERY run without persisting anything,
+        # which is a permanent lockout. An impossible timestamp is corrupt
+        # data, not a real cooldown, so the correct behavior is to clear
+        # it and allow calls. See CircuitBreakerCorruptTimestampSelfHeals
+        # for the repeated-run coverage that would have caught it.
         far_future = time.time() + 10 * 365 * 24 * 3600
         self.path.write_text(
             json.dumps({"blocked_until_ts": far_future, "consecutive_429_streak": 1}),
             encoding="utf-8",
         )
-        # Still blocked right now...
-        self.assertFalse(m.ebay_circuit_breaker_allows_calls("tok"))
-        # ...but recovery is bounded by the configured max backoff, not years.
-        state = m._read_ebay_rate_limit_state()
-        self.assertGreater(state["blocked_until_ts"], time.time())
+        self.assertTrue(m.ebay_circuit_breaker_allows_calls("tok"))
 
     def test_normal_expired_lockout_allows_calls_again(self):
         self.path.write_text(
@@ -2386,3 +2389,75 @@ class AlertLogPriceSemantics(unittest.TestCase):
         record = self._write_and_read(result)
         self.assertEqual(record["price"], 100.0)
         self.assertEqual(record["item_price"], 80.0)
+
+
+class CircuitBreakerCorruptTimestampSelfHeals(unittest.TestCase):
+    """The clamp added to stop a permanent lockout CAUSED one. It clamped
+    an impossible blocked_until_ts to now+max_backoff but never persisted
+    it, so every later run re-read the same stale far-future value and
+    re-clamped it to another full window - blocking eBay forever while
+    logging a reassuring '~120 more min' each time. Worse than no clamp,
+    which at least self-heals once real time passes.
+
+    The original test only asserted the FIRST run was blocked, so it
+    passed while the bug was live. This one runs the check repeatedly,
+    which is the only thing that could have caught it."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.path = pathlib.Path(self.tmpdir) / "state.json"
+        self._orig = m.EBAY_RATE_LIMIT_STATE_PATH
+        m.EBAY_RATE_LIMIT_STATE_PATH = self.path
+
+    def tearDown(self):
+        m.EBAY_RATE_LIMIT_STATE_PATH = self._orig
+
+    def test_corrupt_far_future_timestamp_does_not_block_forever(self):
+        # Milliseconds written where seconds were expected - one of the
+        # real triggers named in the code comment.
+        self.path.write_text(
+            json.dumps({"blocked_until_ts": 1750000000000, "consecutive_429_streak": 1}),
+            encoding="utf-8",
+        )
+        # Must not block on ANY run, including repeated ones.
+        for attempt in range(3):
+            self.assertTrue(
+                m.ebay_circuit_breaker_allows_calls("tok"),
+                f"run {attempt + 1}: a corrupt timestamp must not lock eBay out",
+            )
+
+    def test_corrupt_state_is_cleared_so_it_cannot_recur(self):
+        self.path.write_text(
+            json.dumps({"blocked_until_ts": 1750000000000, "consecutive_429_streak": 4}),
+            encoding="utf-8",
+        )
+        m.ebay_circuit_breaker_allows_calls("tok")
+        state = m._read_ebay_rate_limit_state()
+        self.assertEqual(state.get("blocked_until_ts"), 0)
+        self.assertEqual(state.get("consecutive_429_streak"), 0)
+
+    def test_a_genuine_backoff_is_still_respected(self):
+        # A real, in-range cooldown must still block - the fix must not
+        # have disabled the breaker outright.
+        self.path.write_text(
+            json.dumps({"blocked_until_ts": time.time() + 600, "consecutive_429_streak": 1}),
+            encoding="utf-8",
+        )
+        self.assertFalse(m.ebay_circuit_breaker_allows_calls("tok"))
+
+
+class SaneAiPriceNegativeStrings(unittest.TestCase):
+    """_sane_ai_price stripped non-digits with re.sub(r"[^\d.]"), which
+    ate the minus sign - so the STRING "-100" became 100.0, silently
+    reintroducing the exact fabricated-"Steal" bug the function was
+    written to prevent. Only the string path had the hole; the numeric
+    branch was already correct, which is why the original tests (which
+    only passed a numeric -100) missed it."""
+
+    def test_negative_strings_are_rejected(self):
+        for bad in ("-100", "-$1,200", "-0.5", "  -75 USD"):
+            self.assertIsNone(m._sane_ai_price(bad), bad)
+
+    def test_positive_strings_still_parse(self):
+        self.assertEqual(m._sane_ai_price("$1,200"), 1200.0)
+        self.assertEqual(m._sane_ai_price("1200 USD"), 1200.0)

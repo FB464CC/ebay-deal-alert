@@ -773,12 +773,24 @@ def ebay_circuit_breaker_allows_calls(token):
         raw_blocked_until = 0
     max_reasonable = now_ts + EBAY_BACKOFF_MAX_MINUTES * 60
     if raw_blocked_until > max_reasonable:
+        # Treat an impossible value as CORRUPT and clear it, rather than
+        # clamping to a fresh window. Clamping was the original fix and it
+        # inverted its own purpose: the clamped value was never persisted,
+        # so every subsequent run re-read the same stale far-future
+        # timestamp and re-clamped it to another full backoff - blocking
+        # eBay forever while logging a reassuring "~120 more min" each
+        # time. For a moderately-future value it was strictly WORSE than
+        # no clamp at all, which at least self-heals when the real time
+        # passes. A timestamp beyond any backoff this code can produce is
+        # not a real cooldown; it is a bad write, a unit error or clock
+        # skew, and the safe reading is "no active lockout".
         logger.warning(
             "eBay circuit breaker blocked_until_ts was %s (beyond the %s-min max backoff) - "
-            "clamping rather than staying locked out indefinitely",
+            "treating as corrupt and clearing, not clamping",
             raw_blocked_until, EBAY_BACKOFF_MAX_MINUTES,
         )
-        raw_blocked_until = max_reasonable
+        _write_ebay_rate_limit_state({"blocked_until_ts": 0, "consecutive_429_streak": 0})
+        return True
     blocked_until_ts = raw_blocked_until
 
     if now_ts < blocked_until_ts:
@@ -1985,7 +1997,17 @@ def _sane_ai_price(value):
     if isinstance(value, (int, float)):
         number = float(value)
     else:
-        cleaned = re.sub(r"[^\d.]", "", str(value))
+        # Keep a leading minus: re.sub(r"[^\d.]") stripped it, so the
+        # string "-100" became 100.0 - silently reintroducing the exact
+        # fabricated-"Steal" bug this function exists to prevent, for any
+        # model output that returned a negative as a string rather than a
+        # number. The numeric branch above was already correct; only the
+        # string path had the hole.
+        raw = str(value).strip()
+        negative = raw.startswith("-")
+        cleaned = re.sub(r"[^\d.]", "", raw)
+        if negative:
+            cleaned = "-" + cleaned if cleaned else ""
         if not cleaned or cleaned.count(".") > 1:
             return None
         try:
