@@ -291,6 +291,21 @@ GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
 # the old 5s inter-call sleep wasn't buying RPM safety, just wall-clock -
 # which matters given GitHub bills Actions minutes rounded up per job.
 GEMINI_INTER_CALL_SLEEP_SECONDS = float(_CONFIG.get("GEMINI_INTER_CALL_SLEEP_SECONDS", 2))
+# Every alert now requires a real AI check, and GEMINI_CALL_LIMIT paces that
+# to a handful per run so the daily Gemini quota lasts the whole day (see
+# GEMINI_CALL_LIMIT's comment). Ending-soon auctions sort FIRST in the AI
+# queue (see _ai_check_priority), so the only way one loses the budget race
+# is when MORE auctions are closing than GEMINI_CALL_LIMIT slots - and an
+# auction deferred that way is mark_ai_pending()'d to a "next run" that, for
+# something closing in under 5 minutes, never arrives. The one thing the
+# auction lane exists to catch is silently lost. This reserves ONE extra AI
+# call per run, beyond GEMINI_CALL_LIMIT, usable ONLY by an ending-soon
+# auction once the normal budget is spent - so at least one closing auction
+# always gets its check. Capped at 1 on purpose: many simultaneous auctions
+# must not be allowed to eat the whole (paced-to-last-all-day) budget; the
+# rest are deferred but now logged as a lost miss (see run()'s PASS 3
+# "Losing ending-soon auction" warning) instead of dropping silently.
+AUCTION_AI_RESERVED_CALLS = 1
 # eBay's "Wristwatches" leaf category (under the "Watches, Parts &
 # Accessories" tree, 260324) - a separate top-level tree from Men's Clothing
 # (260012), used for the deliberately narrow watch searches. Counterfeiting
@@ -3118,6 +3133,7 @@ def run():
             + EBAY_SLOW_SEARCHES_PER_RUN
             + len([s for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)])
             + GEMINI_CALL_LIMIT  # fetch_ebay_item_description(), one per AI check
+            + AUCTION_AI_RESERVED_CALLS  # the reserved auction slot may fetch a description too
         )
         if remaining is not None:
             logger.info("eBay Browse API quota: %s/%s remaining today", remaining, quota_limit)
@@ -3181,6 +3197,12 @@ def run():
                 except requests.exceptions.HTTPError as exc:
                     if exc.response is not None and exc.response.status_code == 429:
                         _trip_ebay_circuit_breaker()
+                        # A mid-run trip must stop this auction search's
+                        # siblings too, not just future regular searches -
+                        # the loop re-checks ebay_circuit_closed each
+                        # iteration (same stale-flag bug as the regular
+                        # branch below, fixed the same way).
+                        ebay_circuit_closed = False
                         logger.warning("eBay 429 on auction-snipe search %r", saved_search["query"])
                     else:
                         logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
@@ -3199,12 +3221,18 @@ def run():
                     # Abandon the rest of THIS run's eBay calls too - no
                     # point hammering a limit we just hit. Clearing the
                     # rotation set makes every later iteration in this same
-                    # loop skip eBay via the membership check above.
+                    # loop skip eBay via the membership check above, and
+                    # flipping ebay_circuit_closed makes the always-on
+                    # auction branch below skip as well - it reads THAT
+                    # flag, not ebay_this_run, so clearing the set alone
+                    # left it firing up to 3 more calls into the lockout
+                    # that was just declared (real bug, now fixed).
                     logger.warning(
                         "eBay 429 mid-run on %r, abandoning remaining eBay calls this run",
                         saved_search["query"],
                     )
                     ebay_this_run = set()
+                    ebay_circuit_closed = False
                 else:
                     logger.exception("eBay search failed for query: %s", saved_search["query"])
                 listings, search_total_listings = [], None
@@ -3684,6 +3712,7 @@ def run():
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
     # then alert (cap-gated), in priority order.
     gemini_calls = 0
+    auction_reserved_calls = 0
     gemini_budget_logged = False
     for candidate in review_candidates:
         item_id = candidate["item_id"]
@@ -3713,10 +3742,22 @@ def run():
             continue
 
         ai_result = None
-        if gemini_calls < GEMINI_CALL_LIMIT:
+        # Once the normal Gemini budget is spent, one extra call is still
+        # granted to an ending-soon auction so a closing auction can't be
+        # starved out by the cap - see AUCTION_AI_RESERVED_CALLS for the
+        # full tradeoff and the cap that keeps many simultaneous auctions
+        # from eating the whole day's budget.
+        use_reserved_auction_slot = (
+            gemini_calls >= GEMINI_CALL_LIMIT
+            and bool(result.get("is_ending_soon_auction"))
+            and auction_reserved_calls < AUCTION_AI_RESERVED_CALLS
+        )
+        if gemini_calls < GEMINI_CALL_LIMIT or use_reserved_auction_slot:
             if gemini_calls > 0:
                 time.sleep(GEMINI_INTER_CALL_SLEEP_SECONDS)
             gemini_calls += 1
+            if use_reserved_auction_slot:
+                auction_reserved_calls += 1
             # eBay's item_summary/search (search_ebay()) never returns a
             # description - only this separate per-item call does.
             # Poshmark/ShopGoodwill already carry it for free (see
@@ -4035,6 +4076,20 @@ def run():
                 # letting it lose to pricier newcomers forever - see that
                 # function's comment for the real 4-hour-starvation bug
                 # this closes.
+                #
+                # An ending-soon auction deferred here is a PERMANENT miss,
+                # not a "try again in 5 min" - the next run arrives after it
+                # already closed. Log it so the loss is diagnosable rather
+                # than silent (AUCTION_AI_RESERVED_CALLS still leaves some
+                # auctions here when more than the reserved slot are closing
+                # at once).
+                minutes_left = result.get("auction_minutes_remaining")
+                if result.get("is_ending_soon_auction") and minutes_left is not None and minutes_left < 5:
+                    logger.warning(
+                        "Losing ending-soon auction %s (%.1f min to close, "
+                        "next ~5-min run arrives too late): deferred with no AI check",
+                        item_id, minutes_left,
+                    )
                 mark_ai_pending(conn, item_id)
             continue
 

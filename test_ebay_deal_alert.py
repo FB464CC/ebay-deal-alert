@@ -1962,6 +1962,16 @@ class RunIntegration(unittest.TestCase):
             ],
         })
 
+    def _auction_item(self, item_id, title, price, minutes_remaining, bid_count=0):
+        """A Browse API item_summary as search_ebay_ending_soon_auctions()
+        returns it: a normal eBay item plus the closing-window tags run()
+        reads to route it through the auction lane."""
+        item = self._ebay_item(item_id, title, price)
+        item["is_ending_soon_auction"] = True
+        item["auction_minutes_remaining"] = minutes_remaining
+        item["bid_count"] = bid_count
+        return item
+
     # What check_photos_with_gemini() returns on a clean, well-priced item:
     # no damage, no third-party logo, and a resale estimate far above ask.
     AI_STEAL = {
@@ -2174,6 +2184,90 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(alerted["deal_rating"], "Steal")
         self.assertEqual(alerted["listing"]["itemId"], item_id)
         self.assertFalse(m.is_new(self._db(), item_id), "an alerted item is seen")
+
+    def test_mid_run_429_also_stops_the_auction_lane(self):
+        # ebay_circuit_closed is computed ONCE before PASS 1. A real 429 on
+        # a regular search mid-loop trips the breaker and clears
+        # ebay_this_run (stopping further REGULAR searches), but the local
+        # ebay_circuit_closed flag was never updated - so the always-on
+        # auction branch, which checks THAT flag, kept firing up to 3 more
+        # eBay calls into the lockout that had just been declared.
+        auction_calls = []
+        self._patch("search_ebay_ending_soon_auctions",
+                    lambda token, search: auction_calls.append(search["query"]) or ([], None))
+        self._patch("EBAY_AUCTION_SEARCHES",
+                    [{"query": "canali suit", "category_id": "11484",
+                      "max_price": 400, "enabled": True}])
+        self._patch("SAVED_SEARCHES",
+                    [{"query": "canali suit", "max_price": 400,
+                      "category_id": "11484", "enabled": True, "profile": "fast"}])
+
+        def _raise_429(token, search):
+            resp = mock.Mock()
+            resp.status_code = 429
+            raise requests.exceptions.HTTPError(response=resp)
+
+        self._patch("search_ebay", _raise_429)
+
+        m.run()
+
+        self.assertEqual(auction_calls, [],
+                         "a mid-run 429 must also stop the auction lane, not just the regular rotation")
+
+    def test_ending_soon_auction_gets_a_reserved_ai_slot(self):
+        # Every alert needs a real AI check, and GEMINI_CALL_LIMIT paces
+        # that to a handful per run. An auction closing in minutes that
+        # loses that budget race is mark_ai_pending()'d to a "next run"
+        # that, for something closing in under 5 minutes, never arrives -
+        # the one thing the auction lane exists to catch, silently lost.
+        # The reserved slot guarantees at least one AI call still reaches an
+        # ending-soon auction even once the normal budget is spent.
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("SAVED_SEARCHES", [])
+        self._patch("EBAY_AUCTION_SEARCHES",
+                    [{"query": "canali suit", "category_id": "11484",
+                      "max_price": 400, "enabled": True}])
+        self._patch("search_ebay_ending_soon_auctions",
+                    lambda token, search: (
+                        [self._auction_item("v1|1|0", "Canali Suit 42R", 200.0, 3)], None
+                    ))
+
+        m.run()
+
+        self.assertEqual(len(self.ai_calls), 1,
+                         "a closing auction must get an AI check even when the normal budget is zero")
+        self.assertEqual(len(self.alerts), 1, "an AI-confirmed closing auction must alert")
+
+    def test_reserved_auction_slot_is_capped_and_lost_auctions_logged(self):
+        # The reservation must NOT let auctions eat the whole AI budget when
+        # several are closing at once - it's capped at AUCTION_AI_RESERVED_CALLS,
+        # and the auctions that still get deferred past their closing time
+        # are logged (a permanent miss, not a silent drop).
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("SAVED_SEARCHES", [])
+        self._patch("EBAY_AUCTION_SEARCHES",
+                    [{"query": "canali suit", "category_id": "11484",
+                      "max_price": 400, "enabled": True}])
+        self._patch("search_ebay_ending_soon_auctions",
+                    lambda token, search: (
+                        [
+                            self._auction_item("v1|1|0", "Canali Suit 42R", 200.0, 1),
+                            self._auction_item("v1|2|0", "Canali Suit 42R", 200.0, 2),
+                            self._auction_item("v1|3|0", "Canali Suit 42R", 200.0, 3),
+                        ], None
+                    ))
+
+        with self.assertLogs("ebay_deal_alert", level="WARNING") as cm:
+            m.run()
+
+        self.assertEqual(len(self.ai_calls), 1,
+                         "the reserved slot is capped at one - many auctions must not eat the whole budget")
+        self.assertEqual(self.ai_calls, ["v1|1|0"],
+                         "only the soonest-closing auction gets the reserved check")
+        self.assertTrue(
+            any("Losing ending-soon auction" in line for line in cm.output),
+            "an auction deferred past its closing time must be logged, not silently dropped",
+        )
 
 
 class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
