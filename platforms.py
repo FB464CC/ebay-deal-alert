@@ -911,3 +911,10 @@ def search_vinted(saved_search):
             # confirming an empty page 2 exists.
             break
     return [x for x in listings if x], None
+
+
+# facebook_marketplace lives in its own module (Playwright is a heavy dep this
+# requests-only file must not import at module level). Imported here at the
+# bottom so the @batch_adapter("facebook") decorator inside it registers
+# against a fully-initialized platforms module - avoids a circular import.
+import facebook_marketplace  # noqa: E402,F401
