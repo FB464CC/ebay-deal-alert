@@ -991,7 +991,19 @@ def init_db():
     return conn
 
 
-SEEN_RETENTION_DAYS = 60
+# Age-based retention alone was useless and let the bot die. The DB was
+# only ~2 weeks old, so a 60-day cutoff deleted NOTHING while the table
+# grew past 264k rows - seen_items.db hit 100.09 MB, crossed GitHub's
+# 100 MB HARD limit, and every push was rejected with GH001. That fails
+# the "Commit seen item updates" step, so EVERY run failed for hours and
+# the bot was completely dead. Age is the wrong primary control for a
+# table whose growth rate, not its age, is the problem.
+SEEN_RETENTION_DAYS = 21
+# The real guard: a hard row cap, enforced regardless of age. ~150k rows
+# keeps the file comfortably under the limit with room for the fingerprint
+# table, while still remembering every listing seen for weeks - far longer
+# than any listing stays live.
+MAX_SEEN_ROWS = 150_000
 
 
 def prune_old_seen_entries(conn):
@@ -1016,13 +1028,29 @@ def prune_old_seen_entries(conn):
     VACUUM rebuilds the whole file, so this is gated by the caller to run
     once/day, not every 5-minute run."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=SEEN_RETENTION_DAYS)).isoformat()
+    # Row cap FIRST - it is the guard that actually holds when the table is
+    # young but growing fast, which is exactly the case that killed the bot.
+    over = conn.execute("SELECT COUNT(*) FROM seen").fetchone()[0] - MAX_SEEN_ROWS
+    if over > 0:
+        conn.execute(
+            "DELETE FROM seen WHERE item_id IN "
+            "(SELECT item_id FROM seen ORDER BY seen_at ASC LIMIT ?)", (over,)
+        )
+        logger.info("Pruned %s oldest seen rows to hold the %s cap", over, MAX_SEEN_ROWS)
     seen_deleted = conn.execute("DELETE FROM seen WHERE seen_at < ?", (cutoff,)).rowcount
     fp_deleted = conn.execute("DELETE FROM fingerprints WHERE seen_at < ?", (cutoff,)).rowcount
     conn.commit()
-    if seen_deleted or fp_deleted:
+    # VACUUM must run if EITHER prune removed anything. Counting only the
+    # age-based deletes was the trap: on the young-but-huge table that
+    # actually broke the bot, the age prune removes 0 rows while the row
+    # cap removes 100k+ - so without `over` in this condition the file is
+    # never rebuilt, stays over 100 MB, and the push keeps failing even
+    # though the rows are gone. DELETE alone does not shrink a SQLite file.
+    total_deleted = max(over, 0) + seen_deleted + fp_deleted
+    if total_deleted:
         logger.info(
-            "Pruned %s seen + %s fingerprint rows older than %s days, reclaiming disk space",
-            seen_deleted, fp_deleted, SEEN_RETENTION_DAYS,
+            "Pruned %s over-cap + %s aged seen + %s fingerprint rows; VACUUMing to reclaim disk",
+            max(over, 0), seen_deleted, fp_deleted,
         )
         conn.execute("VACUUM")
     return seen_deleted, fp_deleted
@@ -3061,7 +3089,14 @@ def run():
     # 15-minute window once daily is fine; this one has no other
     # significance.
     now_utc = datetime.now(timezone.utc)
-    if now_utc.hour == 7 and now_utc.minute < 15:
+    # Size-triggered, not clock-triggered. The old "once a day at 07:00"
+    # gate meant that when the table blew past the cap at 03:00 the bot
+    # stayed broken for four more hours - and since the push failure
+    # aborted the job, the prune could never run at all. Check the cheap
+    # row count every run and prune the moment it is over.
+    _seen_rows = conn.execute("SELECT COUNT(*) FROM seen").fetchone()[0]
+    if _seen_rows > MAX_SEEN_ROWS or (now_utc.hour == 7 and now_utc.minute < 15):
+        logger.info("Pruning seen table (%s rows, cap %s)", _seen_rows, MAX_SEEN_ROWS)
         prune_old_seen_entries(conn)
     try:
         token = get_ebay_token()
