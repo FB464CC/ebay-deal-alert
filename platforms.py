@@ -846,62 +846,68 @@ def _get_vinted_session():
         return session
 
 
+def _vinted_item_to_listing(item):
+    # The search response carries a full "photos" gallery array, not
+    # just the single cover "photo" - confirmed live (4 real photos on
+    # a sample item). Missed entirely until now: the AI damage check
+    # was only ever seeing one angle per Vinted listing, which is
+    # exactly how a real hole/damage on a different angle got past it.
+    all_photos = item.get("photos") or []
+    extra_images = [p.get("url") for p in all_photos if not p.get("is_main") and p.get("url")]
+    # Real actual shipping cost isn't in the catalog response at all -
+    # Vinted only resolves that at checkout against the buyer's address.
+    # But "total_item_price" IS present and real (confirmed live): it's
+    # price + Vinted's mandatory buyer-protection service_fee, an extra
+    # cost every buyer definitely pays on top of the listed price. That
+    # delta alone still understates true landed cost by whatever shipping
+    # ends up being (~$5-10 real), which made Vinted listings win deal
+    # comparisons against Poshmark/ShopGoodwill's honest flat shipping.
+    # So add VINTED_ASSUMED_SHIPPING on top, mirroring the other two.
+    item_price = _to_float(_dget(_dget(item, "price"), "amount")) or 0.0
+    total_price = _to_float(_dget(_dget(item, "total_item_price"), "amount"))
+    service_fee = (total_price - item_price) if total_price is not None else 0.0
+    return make_listing(
+        "vinted",
+        item.get("id"),
+        item.get("title"),
+        _dget(_dget(item, "price"), "amount"),
+        item.get("url"),
+        image_url=_dget(_dget(item, "photo"), "url"),
+        extra_images=extra_images,
+        size=item.get("size_title"),
+        seller=_dget(_dget(item, "user"), "login"),
+        shipping=service_fee + VINTED_ASSUMED_SHIPPING,
+    )
+
+
 @adapter("vinted")
 def search_vinted(saved_search):
     session = _get_vinted_session()
     if session is None:
         return [], None
-    body = get_json(
-        "vinted",
-        "https://www.vinted.com/api/v2/catalog/items",
-        params={
-            "search_text": split_query_exclusions(saved_search["query"])[0],
-            "order": "newest_first",
-            # Confirmed live: Vinted's real cap is 96 (100 gets silently
-            # clamped down to 96) - same single API call either way, ~5x
-            # more coverage per search for free. User observation: Vinted
-            # sellers are systematically underinformed/underpriced compared
-            # to the other platforms, worth hounding harder specifically here.
-            "per_page": 96,
-            "page": 1,
-        },
-        session=session,
-    )
-    if not body:
-        return [], None
+    query_text = split_query_exclusions(saved_search["query"])[0]
     listings = []
-    for item in body.get("items", []):
-        # The search response carries a full "photos" gallery array, not
-        # just the single cover "photo" - confirmed live (4 real photos on
-        # a sample item). Missed entirely until now: the AI damage check
-        # was only ever seeing one angle per Vinted listing, which is
-        # exactly how a real hole/damage on a different angle got past it.
-        all_photos = item.get("photos") or []
-        extra_images = [p.get("url") for p in all_photos if not p.get("is_main") and p.get("url")]
-        # Real actual shipping cost isn't in the catalog response at all -
-        # Vinted only resolves that at checkout against the buyer's address.
-        # But "total_item_price" IS present and real (confirmed live): it's
-        # price + Vinted's mandatory buyer-protection service_fee, an extra
-        # cost every buyer definitely pays on top of the listed price. That
-        # delta alone still understates true landed cost by whatever shipping
-        # ends up being (~$5-10 real), which made Vinted listings win deal
-        # comparisons against Poshmark/ShopGoodwill's honest flat shipping.
-        # So add VINTED_ASSUMED_SHIPPING on top, mirroring the other two.
-        item_price = _to_float(_dget(_dget(item, "price"), "amount")) or 0.0
-        total_price = _to_float(_dget(_dget(item, "total_item_price"), "amount"))
-        service_fee = (total_price - item_price) if total_price is not None else 0.0
-        listings.append(
-            make_listing(
-                "vinted",
-                item.get("id"),
-                item.get("title"),
-                _dget(_dget(item, "price"), "amount"),
-                item.get("url"),
-                image_url=_dget(_dget(item, "photo"), "url"),
-                extra_images=extra_images,
-                size=item.get("size_title"),
-                seller=_dget(_dget(item, "user"), "login"),
-                shipping=service_fee + VINTED_ASSUMED_SHIPPING,
-            )
+    # Confirmed live: Vinted's real per-page cap is 96 (100 gets silently
+    # clamped down to 96). Two pages = ~192 results per search for one
+    # extra HTTP call. User observation: Vinted sellers are systematically
+    # underinformed/underpriced compared to the other platforms, worth
+    # hounding harder specifically here - this is that "harder".
+    for page in (1, 2):
+        body = get_json(
+            "vinted",
+            "https://www.vinted.com/api/v2/catalog/items",
+            params={
+                "search_text": query_text,
+                "order": "newest_first",
+                "per_page": 96,
+                "page": page,
+            },
+            session=session,
         )
+        items = (body or {}).get("items", [])
+        listings.extend(_vinted_item_to_listing(item) for item in items)
+        if len(items) < 96:
+            # A short page means there's nothing left - don't waste a call
+            # confirming an empty page 2 exists.
+            break
     return [x for x in listings if x], None
