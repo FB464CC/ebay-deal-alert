@@ -1003,7 +1003,20 @@ SEEN_RETENTION_DAYS = 21
 # keeps the file comfortably under the limit with room for the fingerprint
 # table, while still remembering every listing seen for weeks - far longer
 # than any listing stays live.
-MAX_SEEN_ROWS = 150_000
+MAX_SEEN_ROWS = 100_000
+# Direct file-size failsafe, independent of row count. GitHub HARD-rejects
+# any file over 100 MB - that rejection fails the workflow's push step,
+# which fails the whole job, which means the prune can never run and the
+# bot stays dead until a human intervenes. That exact death spiral already
+# happened once at 100.09 MB. Trip well before the cliff so there is always
+# room to recover on the next run.
+#
+# Sized against a REAL measurement, not a guess: the live DB was 67.73 MB
+# at 150k rows (~0.45 KB/row), so a 150k cap would have sat ABOVE a 60 MB
+# threshold and re-triggered an expensive VACUUM every single run forever.
+# MAX_SEEN_ROWS is therefore 100k (~45 MB steady state), leaving real
+# headroom under this failsafe so it only fires on a genuine anomaly.
+SEEN_DB_EMERGENCY_MB = 60
 
 
 def prune_old_seen_entries(conn):
@@ -3095,7 +3108,23 @@ def run():
     # aborted the job, the prune could never run at all. Check the cheap
     # row count every run and prune the moment it is over.
     _seen_rows = conn.execute("SELECT COUNT(*) FROM seen").fetchone()[0]
-    if _seen_rows > MAX_SEEN_ROWS or (now_utc.hour == 7 and now_utc.minute < 15):
+    # Row count is only a PROXY for what actually kills the bot, which is
+    # the file's size on disk against GitHub's 100 MB hard limit. If rows
+    # ever get fatter (a longer item_id scheme, another column), the row
+    # cap could still be satisfied while the file crosses the line and
+    # every push starts getting rejected again. Measure the real thing too.
+    try:
+        _db_mb = DB_PATH.stat().st_size / (1024 * 1024) if hasattr(DB_PATH, "stat") else os.path.getsize(DB_PATH) / (1024 * 1024)
+    except OSError:
+        _db_mb = 0
+    if _db_mb >= SEEN_DB_EMERGENCY_MB:
+        logger.warning(
+            "seen_items.db is %.1f MB, at/over the %s MB emergency threshold "
+            "(GitHub hard-rejects files over 100 MB, which fails the push and "
+            "kills every run) - pruning hard regardless of row count",
+            _db_mb, SEEN_DB_EMERGENCY_MB,
+        )
+    if _seen_rows > MAX_SEEN_ROWS or _db_mb >= SEEN_DB_EMERGENCY_MB or (now_utc.hour == 7 and now_utc.minute < 15):
         logger.info("Pruning seen table (%s rows, cap %s)", _seen_rows, MAX_SEEN_ROWS)
         prune_old_seen_entries(conn)
     try:
