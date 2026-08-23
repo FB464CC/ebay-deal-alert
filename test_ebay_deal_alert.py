@@ -1801,6 +1801,9 @@ class GrailedBatching(unittest.TestCase):
 
         orig_batch, orig_adapters = dict(p.BATCH_ADAPTERS), dict(p.ADAPTERS)
         orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE marketplace_counts (platform TEXT, run_ts TEXT, count INTEGER)")
+        conn.execute("CREATE TABLE marketplace_anomaly_notified (platform TEXT PRIMARY KEY, last_notified_ts TEXT)")
         try:
             p.BATCH_ADAPTERS.clear()
             p.BATCH_ADAPTERS["grailed"] = fake_grailed_batch
@@ -1814,8 +1817,9 @@ class GrailedBatching(unittest.TestCase):
                 {"query": "canali suit", "enabled": True, "platforms": ["grailed", "poshmark"]},
                 {"query": "zegna sweater", "enabled": True, "platforms": ["grailed", "poshmark"]},
             ]
-            result = m.prefetch_marketplaces(datetime.now(timezone.utc))
+            result = m.prefetch_marketplaces(datetime.now(timezone.utc), conn)
         finally:
+            conn.close()
             p.BATCH_ADAPTERS.clear()
             p.BATCH_ADAPTERS.update(orig_batch)
             p.ADAPTERS.clear()
@@ -1828,6 +1832,94 @@ class GrailedBatching(unittest.TestCase):
             ids = {l["itemId"] for l in result.get(query, [])}
             self.assertIn(f"grailed:{query}", ids)
             self.assertIn(f"poshmark:{query}", ids)
+
+
+class MarketplaceAnomalyDetection(unittest.TestCase):
+    """The bot has gone completely silent before: a scraper's JSON shape
+    drifted (a renamed field), it returned 0 listings for hours, and nobody
+    noticed until a manual check. prefetch_marketplaces() records per-run
+    counts per platform and must ntfy-alert on a real collapse - exactly
+    once, only once there's history, only if it hasn't already notified
+    recently, and never on a healthy run."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.conn = sqlite3.connect(f"{self.tmpdir}/test.db")
+        self.conn.execute("CREATE TABLE marketplace_counts (platform TEXT, run_ts TEXT, count INTEGER)")
+        self.conn.execute("CREATE TABLE marketplace_anomaly_notified (platform TEXT PRIMARY KEY, last_notified_ts TEXT)")
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _seed_history(self, platform, counts):
+        """Insert prior-run rows for a platform, newest last, all strictly
+        before 'now' so they count as history for the current run."""
+        base = datetime.now(timezone.utc) - timedelta(minutes=10)
+        for i, c in enumerate(counts):
+            ts = (base - timedelta(minutes=i * 5)).isoformat()
+            self.conn.execute(
+                "INSERT INTO marketplace_counts (platform, run_ts, count) VALUES (?, ?, ?)",
+                (platform, ts, c),
+            )
+        self.conn.commit()
+
+    def _run_prefetch(self, platform, listings_per_search):
+        """Drive a real prefetch_marketplaces() for one platform that returns
+        exactly `listings_per_search` listings per search; returns the mocked
+        notify_bot_down for assertions."""
+        now = datetime.now(timezone.utc)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS[platform] = lambda s: (
+                [{"itemId": f"{platform}:{i}", "title": "test item", "seller": {}} for i in range(listings_per_search)],
+                listings_per_search,
+            )
+            m.MARKETPLACES_ENABLED = [platform]
+            m.SAVED_SEARCHES = [
+                {"query": "test watch", "enabled": True, "platforms": [platform]}
+            ]
+            with mock.patch.object(m, "notify_bot_down") as mock_notify:
+                m.prefetch_marketplaces(now, self.conn)
+            return mock_notify
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+    def test_zero_count_drop_with_history_notifies_once(self):
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        mock_notify = self._run_prefetch("poshmark", 0)
+        mock_notify.assert_called_once()
+        msg = mock_notify.call_args[0][0]
+        self.assertIn("poshmark", msg)
+        self.assertIn("0 listings", msg)
+        self.assertIn("baseline ~45", msg)
+
+    def test_not_enough_history_never_notifies_even_on_zero(self):
+        self._seed_history("poshmark", [45, 48, 47])  # only 3 prior rows < 5
+        mock_notify = self._run_prefetch("poshmark", 0)
+        mock_notify.assert_not_called()
+
+    def test_already_notified_within_6h_does_not_notify_again(self):
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        self.conn.execute(
+            "INSERT INTO marketplace_anomaly_notified (platform, last_notified_ts) VALUES (?, ?)",
+            ("poshmark", (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()),
+        )
+        self.conn.commit()
+        mock_notify = self._run_prefetch("poshmark", 0)
+        mock_notify.assert_not_called()
+
+    def test_normal_run_in_line_with_baseline_never_notifies(self):
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        mock_notify = self._run_prefetch("poshmark", 45)
+        mock_notify.assert_not_called()
 
 
 if __name__ == "__main__":
@@ -2018,7 +2110,7 @@ class RunIntegration(unittest.TestCase):
         self._patch("fetch_gap_report", lambda: None)
         self._patch("fetch_ebay_item_description", lambda token, item_id: None)
         self._patch("fetch_vinted_item_description", lambda url: None)
-        self._patch("prefetch_marketplaces", lambda now: {})
+        self._patch("prefetch_marketplaces", lambda now, conn: {})
         self._patch("search_ebay_ending_soon_auctions", lambda token, search: ([], None))
         self._patch("notify_bot_down", lambda message: None)
         self._patch("send_alert", self.alerts.append)

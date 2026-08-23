@@ -997,6 +997,20 @@ def init_db():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)"
     )
+    # Silent-scraper-breakage detection (see prefetch_marketplaces): one row
+    # per (platform, run) recording how many listings that platform's scrape
+    # returned, so a sudden drop to zero - a scraper's JSON shape drifted -
+    # can be caught and alerted on instead of the bot going silently dead.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS marketplace_counts "
+        "(platform TEXT, run_ts TEXT, count INTEGER)"
+    )
+    # Last time we alerted on a given platform, to dedupe ntfy spam (the run
+    # loop fires every ~5 minutes; once notified, stay quiet for 6 hours).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS marketplace_anomaly_notified "
+        "(platform TEXT PRIMARY KEY, last_notified_ts TEXT)"
+    )
     conn.commit()
     return conn
 
@@ -3253,7 +3267,62 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
         return platform_name, saved_search["query"], []
 
 
-def prefetch_marketplaces(now):
+def _check_marketplace_anomalies(conn, now, active, counts):
+    """Alert when a marketplace scraper silently stops returning listings.
+
+    Real live failure this guards: a scraper's JSON shape drifted (a renamed
+    field), every query for a platform came back empty, and the bot went
+    completely silent for hours before anyone manually checked. Each run
+    records how many listings each active platform returned; if a platform's
+    count collapses versus its trailing baseline, push an ntfy alert via
+    notify_bot_down()."""
+    for platform in active:
+        today = counts.get(platform, 0)
+        conn.execute(
+            "INSERT INTO marketplace_counts (platform, run_ts, count) VALUES (?, ?, ?)",
+            (platform, now.isoformat(), today),
+        )
+        conn.commit()
+        prior = [
+            row[0]
+            for row in conn.execute(
+                "SELECT count FROM marketplace_counts "
+                "WHERE platform = ? AND run_ts < ? "
+                "ORDER BY run_ts DESC LIMIT 20",
+                (platform, now.isoformat()),
+            ).fetchall()
+        ]
+        # Fewer than 5 prior runs = not enough history. A newly-added
+        # platform has no baseline yet and must not false-alarm on its
+        # first few runs.
+        if len(prior) < 5:
+            continue
+        baseline = sum(prior) / len(prior)
+        if not ((today == 0 and baseline >= 5) or (baseline > 0 and today < baseline / 10)):
+            continue
+        row = conn.execute(
+            "SELECT last_notified_ts FROM marketplace_anomaly_notified WHERE platform = ?",
+            (platform,),
+        ).fetchone()
+        if row and now - datetime.fromisoformat(row[0]) < timedelta(hours=6):
+            continue  # already alerted within the last 6h; don't spam every 5-min run
+        notify_bot_down(
+            f"{platform} returned {today} listings this run "
+            f"(baseline ~{round(baseline)}/run over last {len(prior)} runs) "
+            "- scraper may be broken"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO marketplace_anomaly_notified (platform, last_notified_ts) "
+            "VALUES (?, ?)",
+            (platform, now.isoformat()),
+        )
+        conn.commit()
+    cutoff = (now - timedelta(days=30)).isoformat()
+    conn.execute("DELETE FROM marketplace_counts WHERE run_ts < ?", (cutoff,))
+    conn.commit()
+
+
+def prefetch_marketplaces(now, conn):
     """Fetch every enabled non-eBay marketplace for every enabled saved search,
     in parallel, inside a fixed wall-clock budget. Returns {query: [listings]}."""
     active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.ADAPTERS]
@@ -3359,6 +3428,12 @@ def prefetch_marketplaces(now):
         w.join(timeout=max(0.0, hard_stop - time.monotonic()))
     if any(w.is_alive() for w in workers):
         logger.warning("Marketplace prefetch hit its hard deadline; using partial results")
+    try:
+        _check_marketplace_anomalies(conn, now, active, counts)
+    except Exception:
+        # A bug in anomaly detection itself must never break the marketplace
+        # fetch or crash the run - log and move on.
+        logger.exception("Marketplace anomaly detection failed; continuing")
     logger.info("Marketplace prefetch: %s", counts or "nothing returned")
     return found
 
@@ -3417,7 +3492,7 @@ def run():
     current_month = current_utc.month
     current_month_name = current_utc.strftime("%B")
 
-    marketplace_listings = prefetch_marketplaces(current_utc)
+    marketplace_listings = prefetch_marketplaces(current_utc, conn)
 
     # Same rotation trick as prefetch_marketplaces(): without it, the AI
     # budget and any future collect-time truncation would always bias
