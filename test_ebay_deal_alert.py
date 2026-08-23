@@ -2499,3 +2499,17 @@ class GluedSizeDefeatsJacketOnlyFilter(unittest.TestCase):
             self.assertFalse(
                 m.is_jacket_only_suit_listing(title, "kiton suit"), title
             )
+
+
+class PhotoCheckProviderFallback(unittest.TestCase):
+    def test_gemini_primary_falls_back_to_deepseek_on_failure(self):
+        deepseek_result = {"damage_found": False, "looks_good": True}
+        with mock.patch.object(m, "AI_PHOTO_PROVIDER", "gemini"), \
+             mock.patch.object(m, "_call_gemini_json",
+                               side_effect=requests.exceptions.RequestException("gemini down")) as gemini_mock, \
+             mock.patch.object(m, "_call_deepseek_json", return_value=deepseek_result) as deepseek_mock:
+            result = m._call_photo_check("prompt", [(b"img-bytes", "image/jpeg")], timeout=10)
+
+        self.assertIs(result, deepseek_result)
+        gemini_mock.assert_called_once()
+        deepseek_mock.assert_called_once()

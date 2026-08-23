@@ -49,6 +49,7 @@ jobs:
           WARDROBE_OS_SECRET: ${{ secrets.WARDROBE_OS_SECRET }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python ebay_deal_alert.py
 
       - name: Commit seen item updates
