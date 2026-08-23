@@ -970,7 +970,7 @@
     {
       "query": "\"patek philippe\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
       "size": null,
-      "max_price": 250,
+      "max_price": 1500,
       "enabled": true,
       "profile": "fast",
       "category_id": "31387"
@@ -978,7 +978,7 @@
     {
       "query": "\"audemars piguet\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
       "size": null,
-      "max_price": 250,
+      "max_price": 1500,
       "enabled": true,
       "profile": "fast",
       "category_id": "31387"
@@ -986,7 +986,7 @@
     {
       "query": "\"vacheron constantin\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
       "size": null,
-      "max_price": 250,
+      "max_price": 1200,
       "enabled": true,
       "profile": "fast",
       "category_id": "31387"
@@ -1362,6 +1362,94 @@
         "shopgoodwill",
         "facebook"
       ]
+    },
+    {
+      "query": "oris watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "sinn watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "nomos watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "piaget watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -perfume -cologne -necklace -bracelet -ring -pen",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"girard perregaux\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"ulysse nardin\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "blancpain watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 500,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "breguet watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 500,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"glashutte original\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"a lange sohne\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 1500,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
+    },
+    {
+      "query": "\"h moser\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
+      "size": null,
+      "max_price": 1200,
+      "enabled": true,
+      "profile": "fast",
+      "category_id": "31387"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -1625,6 +1713,66 @@
       500,
       3000,
       7000
+    ],
+    "oris": [
+      300,
+      900,
+      3000
+    ],
+    "sinn": [
+      600,
+      1500,
+      3500
+    ],
+    "nomos": [
+      400,
+      1200,
+      3500
+    ],
+    "piaget": [
+      1500,
+      5000,
+      15000
+    ],
+    "ulysse nardin": [
+      1500,
+      5000,
+      15000
+    ],
+    "blancpain": [
+      2000,
+      7000,
+      20000
+    ],
+    "breguet": [
+      2500,
+      8000,
+      25000
+    ],
+    "lange": [
+      12000,
+      26000,
+      85000
+    ],
+    "moser": [
+      9000,
+      18000,
+      50000
+    ],
+    "perregaux": [
+      1500,
+      5000,
+      15000
+    ],
+    "glashutte": [
+      2000,
+      6000,
+      18000
+    ],
+    "glashuette": [
+      2000,
+      6000,
+      18000
     ]
   },
   "CORPORATE_LOGO_KEYWORDS": [
