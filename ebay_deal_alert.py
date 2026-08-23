@@ -1966,11 +1966,14 @@ def _call_deepseek_json(prompt, images, timeout=30):
 
 
 def _call_photo_check(prompt, images, timeout=20):
-    # Provider router for the vision check. DeepSeek is primary (cheap, no
-    # free-tier 429 ceiling); Gemini is the automatic fallback whenever
-    # DeepSeek is unconfigured or errors. This is what keeps the "every alert
-    # must be AI-vetted" rule intact through a DeepSeek outage - the check
-    # degrades to Gemini, never to a blind trust.
+    # Provider router for the vision check. The provider named by
+    # AI_PHOTO_PROVIDER is primary (DeepSeek is cheap, no free-tier 429
+    # ceiling); the other provider is the automatic fallback whenever the
+    # primary is unconfigured, errors, or returns no result. This is what
+    # keeps the "every alert must be AI-vetted" rule intact through a
+    # provider outage - the check degrades to the backup, never to a blind
+    # trust.
+    gemini_parts = [_make_gemini_inline_part(content, mime_type) for content, mime_type in images]
     if AI_PHOTO_PROVIDER == "deepseek":
         try:
             result = _call_deepseek_json(prompt, images, timeout=timeout)
@@ -1979,9 +1982,21 @@ def _call_photo_check(prompt, images, timeout=20):
             logger.warning("DeepSeek photo check returned no result; falling back to Gemini")
         except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
             logger.warning("DeepSeek photo check failed (%s); falling back to Gemini", exc)
-    gemini_parts = [_make_gemini_inline_part(content, mime_type) for content, mime_type in images]
+        try:
+            return _call_gemini_json(prompt, gemini_parts, timeout=timeout)
+        except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
+            logger.warning("Photo check failed (both providers); proceeding without AI result: %s", exc)
+            return None
+    # Gemini is primary: try it first, then fall back to DeepSeek.
     try:
-        return _call_gemini_json(prompt, gemini_parts, timeout=timeout)
+        result = _call_gemini_json(prompt, gemini_parts, timeout=timeout)
+        if result is not None:
+            return result
+        logger.warning("Gemini photo check returned no result; falling back to DeepSeek")
+    except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
+        logger.warning("Gemini photo check failed (%s); falling back to DeepSeek", exc)
+    try:
+        return _call_deepseek_json(prompt, images, timeout=timeout)
     except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
         logger.warning("Photo check failed (both providers); proceeding without AI result: %s", exc)
         return None
