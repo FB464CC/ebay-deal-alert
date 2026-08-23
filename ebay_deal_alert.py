@@ -1568,10 +1568,10 @@ def is_jacket_only_suit_listing(title, query=None, description=None):
     # miss: "Brioni Roma Wool Palatino Blazer42R Italy 3 Button Flaws"
     # ALERTED as a Steal despite being a blazer with no pants - the
     # standing no-standalone-jackets rule. SUIT_JACKET_ONLY_SIGNALS uses
-    # blazer, and the trailing  cannot match when a digit is glued
+    # \bblazer\b, and the trailing \b cannot match when a digit is glued
     # directly to the word ("4" is a word character, so there is no
     # boundary). Sellers run the size onto the garment word constantly.
-    # Exactly the same defect class as the old 42-vs-"42R" size bug,
+    # Exactly the same defect class as the old \b42\b-vs-"42R" size bug,
     # and it defeats every one of the jacket-only patterns at once.
     title = re.sub(r"([A-Za-z])(\d)", r"\1 \2", title or "")
     haystack_title = title
