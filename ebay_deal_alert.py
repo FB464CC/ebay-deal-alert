@@ -1965,6 +1965,85 @@ def _call_deepseek_json(prompt, images, timeout=30):
     return json.loads(_strip_json_code_fence(text))
 
 
+def _call_deepseek_text_json(prompt, timeout=15):
+    # Text-only sibling of _call_deepseek_json: same constants, same
+    # OpenAI-compatible /chat/completions JSON-mode pattern, but no images.
+    # Used by _deepseek_alert_sanity_check() so the final pre-alert pass
+    # stays cheap - a few hundred tokens of text, not base64 photos.
+    deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not deepseek_api_key:
+        logger.warning("Skipping DeepSeek sanity check: DEEPSEEK_API_KEY is not configured")
+        return None
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        # DeepSeek JSON mode guarantees valid JSON but requires the literal
+        # word "json" in the prompt - the sanity prompt says "JSON".
+        "response_format": {"type": "json_object"},
+        "max_tokens": 1024,
+    }
+    url = f"{DEEPSEEK_BASE_URL}/chat/completions"
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {deepseek_api_key}"},
+        json=payload,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"]
+    return json.loads(_strip_json_code_fence(text))
+
+
+def _deepseek_alert_sanity_check(listing, ai_result, category):
+    # Final cheap sanity pass right before an alert fires. The vision photo
+    # check can pass while the listing is still junk it never discloses: a
+    # watch strap or crystal instead of the whole watch, packaging/box only,
+    # a jacket with no trousers, a size/gender mismatch the title hides.
+    # This re-reads the title + description + the vision AI's own summary as
+    # plain text (never the images again) and returns whether the listing is
+    # a complete item. ANY failure - no key, timeout, bad JSON - returns a
+    # fail-open verdict, so an API hiccup can never be the reason a real
+    # steal gets suppressed. This is a bonus filter, not a required gate.
+    title = listing.get("title", "")
+    description = listing.get("description") or ""
+    ai_summary = ai_result.get("summary") if ai_result else ""
+    ai_looks_good = ai_result.get("looks_good") if ai_result else None
+    ai_damage_found = ai_result.get("damage_found") if ai_result else None
+    prompt = (
+        "You are the final sanity filter for a deal bot. The vision AI photo check "
+        "already passed; your job is to catch the junk it can miss. Respond ONLY in "
+        "JSON with exactly these keys: {\"is_complete_item\": bool, "
+        "\"is_part_or_accessory\": bool, \"reason\": str}. is_complete_item is true "
+        "only if this listing is a whole, complete, wearable/usable item. "
+        "is_part_or_accessory is true if it is only a part, strap, crystal, "
+        "accessory, packaging/box, a garment without its matching pair, or has an "
+        "obvious size/gender mismatch. "
+        f"Category: {category}\n"
+        f"Title: {title}\n"
+        f"Description: {description}\n"
+        f"Vision AI photo summary: {ai_summary}\n"
+        f"Vision AI looks_good: {ai_looks_good}\n"
+        f"Vision AI damage_found: {ai_damage_found}"
+    )
+    try:
+        data = _call_deepseek_text_json(prompt)
+    except Exception as exc:
+        logger.warning("DeepSeek sanity check failed (%s); failing open", exc)
+        return {"is_complete_item": True, "is_part_or_accessory": False,
+                "reason": "sanity check failed, failing open"}
+    if not isinstance(data, dict):
+        logger.warning("DeepSeek sanity check returned no usable result; failing open")
+        return {"is_complete_item": True, "is_part_or_accessory": False,
+                "reason": "sanity check returned no usable result, failing open"}
+    # A missing/null field is NOT evidence of junk - only an explicit false
+    # on is_complete_item or true on is_part_or_accessory suppresses.
+    return {
+        "is_complete_item": data.get("is_complete_item") is not False,
+        "is_part_or_accessory": data.get("is_part_or_accessory") is True,
+        "reason": data.get("reason") or "",
+    }
+
+
 def _call_photo_check(prompt, images, timeout=20):
     # Provider router for the vision check. The provider named by
     # AI_PHOTO_PROVIDER is primary (DeepSeek is cheap, no free-tier 429
@@ -4334,6 +4413,23 @@ def run():
         auction_alert_key = f"auction-alerted:{item_id}"
         if result.get("is_ending_soon_auction") and not is_new(conn, auction_alert_key):
             logger.info("Skipping %s: already sent an ending-soon alert for this auction", item_id)
+            mark_seen(conn, item_id, fingerprint, total_price)
+            continue
+
+        # Cheap text-only DeepSeek sanity pass, right before the alert fires.
+        # The vision AI check above can pass while the listing is still junk
+        # the photos don't disclose - a watch strap/crystal instead of the
+        # watch, packaging/box only, a jacket with no trousers, a size/gender
+        # mismatch the title never says. Same suppression pattern as the
+        # gender/pet re-checks: verdict PASS, logged, marked seen, no alert.
+        # Any failure fails OPEN (alert proceeds) - bonus filter, not a gate.
+        sanity = _deepseek_alert_sanity_check(listing, ai_result, category)
+        if sanity["is_part_or_accessory"] or not sanity["is_complete_item"]:
+            sanity_reason = sanity.get("reason") or "part/accessory or incomplete item"
+            logger.info("Suppressing %s: DeepSeek sanity check - %s", item_id, sanity_reason)
+            result["verdict"] = "PASS"
+            result["reason"] = f"DeepSeek sanity check: {sanity_reason}"
+            append_alert_log(result)
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
