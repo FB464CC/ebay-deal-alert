@@ -1059,13 +1059,42 @@ def prune_old_seen_entries(conn):
     # cap removes 100k+ - so without `over` in this condition the file is
     # never rebuilt, stays over 100 MB, and the push keeps failing even
     # though the rows are gone. DELETE alone does not shrink a SQLite file.
+    # If the FILE is over the emergency size we must reclaim space even
+    # when no rows were deleted this pass. Real live state that exposed
+    # this: rows sat exactly AT the cap (so `over` was 0) while the file
+    # was still 61 MB, so nothing was deleted, VACUUM was skipped, and the
+    # run just re-warned every 5 minutes forever without ever shrinking.
+    # Harmless at 61 MB; fatal at 99 MB, where the file could never
+    # recover and every push would keep being rejected - the exact death
+    # spiral this failsafe exists to prevent. A VACUUM alone reclaims
+    # whatever the previous runs' deletes left behind.
+    try:
+        over_size = os.path.getsize(DB_PATH) / (1024 * 1024) >= SEEN_DB_EMERGENCY_MB
+    except OSError:
+        over_size = False
     total_deleted = max(over, 0) + seen_deleted + fp_deleted
+    if over_size and not total_deleted:
+        logger.warning("Over the emergency size with nothing to delete - VACUUMing to reclaim free pages")
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.Error as exc:
+            # A wedged VACUUM must not abort the run: the alerting path
+            # still works, and failing here would take the whole bot down
+            # over a housekeeping step.
+            logger.error("VACUUM failed while over the emergency size: %s", exc)
     if total_deleted:
         logger.info(
             "Pruned %s over-cap + %s aged seen + %s fingerprint rows; VACUUMing to reclaim disk",
             max(over, 0), seen_deleted, fp_deleted,
         )
-        conn.execute("VACUUM")
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.Error as exc:
+            # Deletes are already committed; a failed rebuild just means
+            # the file stays big until next run. Never fatal - aborting
+            # here would kill every run over housekeeping, which is how
+            # the 100 MB outage became a total outage in the first place.
+            logger.error("VACUUM failed after pruning: %s", exc)
     return seen_deleted, fp_deleted
 
 
