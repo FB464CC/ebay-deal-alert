@@ -2461,3 +2461,41 @@ class SaneAiPriceNegativeStrings(unittest.TestCase):
     def test_positive_strings_still_parse(self):
         self.assertEqual(m._sane_ai_price("$1,200"), 1200.0)
         self.assertEqual(m._sane_ai_price("1200 USD"), 1200.0)
+
+
+class GluedSizeDefeatsJacketOnlyFilter(unittest.TestCase):
+    """Real live miss, reported by the user: "Brioni Roma Wool Palatino
+    Blazer42R Italy 3 Button Flaws" ALERTED as a Steal despite being a
+    blazer with no pants - a standing no-standalone-jackets violation.
+
+    Cause: SUIT_JACKET_ONLY_SIGNALS matches \bblazer\b, and the trailing
+    word boundary cannot match when a digit is glued straight onto the
+    word ("4" is a word character, so there is no boundary there).
+    Sellers run the size onto the garment word constantly. This defeated
+    EVERY jacket-only pattern at once, and is the same defect class as
+    the old \b42\b-vs-"42R" size-matching bug."""
+
+    def test_glued_size_no_longer_hides_a_jacket_only_listing(self):
+        for title in (
+            "Brioni Roma Wool Palatino Blazer42R Italy 3 Button Flaws",
+            "Zegna Sport Coat42R Wool",
+            "Kiton SuitJacket42R",
+        ):
+            self.assertTrue(
+                m.is_jacket_only_suit_listing(title, "brioni suit"), title
+            )
+
+    def test_spaced_size_still_blocked(self):
+        self.assertTrue(
+            m.is_jacket_only_suit_listing("Canali Blazer 42R Navy", "canali suit")
+        )
+
+    def test_real_two_piece_suits_still_pass_with_glued_sizes(self):
+        for title in (
+            "Brioni Suit42R Wool Two Piece with Pants",
+            "Loro Piana Suit42R pants included",
+            "Kiton Suit 42R Jacket and Trousers",
+        ):
+            self.assertFalse(
+                m.is_jacket_only_suit_listing(title, "kiton suit"), title
+            )
