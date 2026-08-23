@@ -1716,7 +1716,7 @@
   ],
   "GEMINI_CALL_LIMIT": 3,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
-  "AI_PHOTO_PROVIDER": "deepseek",
+  "AI_PHOTO_PROVIDER": "gemini",
   "DEEPSEEK_MODEL": "deepseek-v4-flash-vision-exp",
   "EBAY_SEARCHES_PER_RUN_LIMIT": 12,
   "EBAY_FAST_SEARCHES_PER_RUN": 8,
