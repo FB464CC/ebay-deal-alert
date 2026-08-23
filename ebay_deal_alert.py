@@ -1564,7 +1564,17 @@ def is_jacket_only_suit_listing(title, query=None, description=None):
     (fetched there). eBay's description costs a separate per-item call
     that's deliberately budget-gated to PASS 3, so eBay listings get
     re-checked there once it's available - see the second call site."""
-    haystack_title = title or ""
+    # Normalize "Blazer42R" -> "Blazer 42R" before matching. Real live
+    # miss: "Brioni Roma Wool Palatino Blazer42R Italy 3 Button Flaws"
+    # ALERTED as a Steal despite being a blazer with no pants - the
+    # standing no-standalone-jackets rule. SUIT_JACKET_ONLY_SIGNALS uses
+    # blazer, and the trailing  cannot match when a digit is glued
+    # directly to the word ("4" is a word character, so there is no
+    # boundary). Sellers run the size onto the garment word constantly.
+    # Exactly the same defect class as the old 42-vs-"42R" size bug,
+    # and it defeats every one of the jacket-only patterns at once.
+    title = re.sub(r"([A-Za-z])(\d)", r"\1 \2", title or "")
+    haystack_title = title
     description = description or ""
     if JACKET_ONLY_DISCLAIMER_SIGNALS.search(description):
         return True
