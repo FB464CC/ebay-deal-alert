@@ -359,7 +359,14 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "peter millar gamecocks quarter zip",
@@ -369,7 +376,14 @@
       ],
       "max_price": 50,
       "enabled": true,
-      "profile": "fast"
+      "profile": "fast",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "peter millar gamecocks jacket",
@@ -379,7 +393,14 @@
       ],
       "max_price": 50,
       "enabled": false,
-      "profile": "fast"
+      "profile": "fast",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "barbour jacket",
@@ -567,7 +588,14 @@
       ],
       "max_price": 25,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "\"peter millar\" gamecocks quarter zip",
@@ -577,7 +605,14 @@
       ],
       "max_price": 50,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "j press blazer",
@@ -688,7 +723,14 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -joan -rivers -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
@@ -696,7 +738,14 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "trafalgar belt -square -tours -battle -london",
@@ -763,7 +812,14 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "\"universal geneve\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
@@ -949,7 +1005,14 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ]
     },
     {
       "query": "\"grand seiko\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
@@ -1277,6 +1340,28 @@
       "enabled": true,
       "profile": "slow",
       "category_id": "53120"
+    },
+    {
+      "query": "golf club set -junior -youth -kids -ladies -womens -\"only\"",
+      "size": null,
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "complete golf iron set -junior -youth -kids -ladies -womens",
+      "size": null,
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -1667,7 +1752,8 @@
     "grailed",
     "poshmark",
     "shopgoodwill",
-    "vinted"
+    "vinted",
+    "facebook"
   ],
   "MARKETPLACE_FETCH_BUDGET_SECONDS": 90,
   "MAX_ALERTS_PER_RUN": 8,

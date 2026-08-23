@@ -91,6 +91,59 @@ class CategoryClassification(unittest.TestCase):
         self.assertEqual(m.classify_search_category("rolex watch"), "watches")
         self.assertEqual(m.classify_search_category("zegna sweater"), "knitwear")
 
+    def test_golf_clubs_not_swallowed_by_apparel_golf_branch(self):
+        # Regression risk: the apparel branch matches any query containing
+        # "golf" (e.g. "peter millar golf polo"), which would swallow a
+        # real clubs/equipment query into the clothing category+prompt+gate
+        # if checked first.
+        self.assertEqual(m.classify_search_category("golf club set"), "golf-equipment")
+        self.assertEqual(m.classify_search_category("complete golf iron set"), "golf-equipment")
+        self.assertEqual(m.classify_search_category("peter millar golf polo"), "golf")
+
+
+class GolfEquipmentGate(unittest.TestCase):
+    def _result(self, price=200, **golf_fields):
+        result = {"price": price, "search_query": "golf club set", "listing": {"title": "Golf Set"}}
+        result.update(golf_fields)
+        return result
+
+    def test_no_ai_check_yet_is_retry_eligible(self):
+        reason = m.is_blocked_by_steal_quality_gate(self._result(), category="golf-equipment")
+        self.assertIn("no AI price", reason)
+
+    def test_over_price_cap_is_permanently_blocked(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(price=300, golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False),
+            category="golf-equipment",
+        )
+        self.assertIsNotNone(reason)
+        self.assertNotIn("no AI price", reason)  # permanent, not retry-eligible
+
+    def test_starter_kit_is_blocked(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=True, damage_found=False),
+            category="golf-equipment",
+        )
+        self.assertIsNotNone(reason)
+
+    def test_incomplete_set_is_blocked(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_complete_set=False,
+                          golf_is_starter_kit=False, damage_found=False),
+            category="golf-equipment",
+        )
+        self.assertIsNotNone(reason)
+
+    def test_complete_quality_set_under_cap_clears_the_gate(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(price=250, golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
 
 class JacketOnlySuitListing(unittest.TestCase):
     def test_tuxedo_jacket_with_no_pants_is_blocked(self):
@@ -1019,12 +1072,29 @@ class StealQualityGate(unittest.TestCase):
     def test_suit_bar_resale_path_unaffected_by_brand_recognition(self):
         # The retail-discount path is only ONE of two ways to clear the
         # bar - a genuinely good resale-based deal_rating must still pass
-        # regardless of brand_tier, unrecognized brand included.
+        # regardless of brand_tier, unrecognized brand included - as long
+        # as the listing's own title actually names the brand searched for.
         result = {
             "deal_rating": "Good Deal", "discount_pct": 40, "price_confidence": "medium",
             "brand_tier": None, "search_query": "huntsman suit -hunter",
+            "listing": {"title": "Huntsman Savile Row Suit 42R"},
         }
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="tailoring"))
+
+    def test_suit_bar_blocks_title_brand_mismatch_from_search(self):
+        # Real live miss: "Jones New York...Black Pinstripe Cashmere Wool
+        # Suit" ($14.99) cleared the resale path via eBay's own loose
+        # search matching on a real target-brand query - discount math off
+        # a near-zero price trivially clears 30%+ for ANY suit, brand
+        # irrelevant, once nothing checks that the searched brand and the
+        # actual listing agree.
+        result = {
+            "deal_rating": "Good Deal", "discount_pct": 60, "price_confidence": "medium",
+            "brand_tier": None, "search_query": "gieves & hawkes suit",
+            "listing": {"title": "Jones New York Black Pinstripe Suit 42R"},
+        }
+        reason = m.is_blocked_by_steal_quality_gate(result, category="tailoring")
+        self.assertIsNotNone(reason)
 
     def test_knitwear_requires_grab_on_sight_and_steal(self):
         result = {"deal_rating": "Steal", "discount_pct": 75, "brand_tier": "standard"}
