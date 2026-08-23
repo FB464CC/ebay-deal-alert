@@ -2044,6 +2044,54 @@ def _deepseek_alert_sanity_check(listing, ai_result, category):
     }
 
 
+def _deepseek_second_opinion(listing, ai_result, category):
+    # Independent text-only re-estimate of resale value for a borderline-
+    # confidence vision result. The vision model's medium/low-confidence
+    # resale guess is the single weakest link in the alert path (of 97
+    # alerts ever sent, 56 rested on a medium-confidence guess - see the
+    # sold-comps comment in run()), so when it's hedged the bot asks a
+    # second, much cheaper model to re-estimate from the same title +
+    # description + the vision AI's own price evidence. Returns
+    # {estimated_resale_value: float|None, reasoning: str}. ANY failure -
+    # no key, timeout, bad JSON, unusable number - comes back as
+    # estimated_resale_value None so the caller can fail open: this is a
+    # hedge on a guess, never a required gate and never a blocker.
+    title = listing.get("title", "")
+    description = listing.get("description") or ""
+    ai_estimate = ai_result.get("estimated_resale_value")
+    ai_confidence = ai_result.get("price_confidence")
+    ai_brand_evidence = ai_result.get("visible_brand_evidence")
+    prompt = (
+        "You are an independent resale appraiser for a secondhand menswear "
+        "flipping bot. A vision AI already looked at the listing's photos and "
+        "produced a resale estimate at low/medium confidence; give a second "
+        "opinion from the TEXT alone. Respond ONLY in JSON with exactly these "
+        "keys: {\"estimated_resale_value\": number|null, \"reasoning\": string}. "
+        "estimated_resale_value is the item's typical resale/secondhand market "
+        "value in USD as a positive number, or null if the text evidence is too "
+        "thin to estimate it. reasoning is one short sentence justifying the "
+        "number.\n"
+        f"Category: {category}\n"
+        f"Title: {title}\n"
+        f"Description: {description}\n"
+        f"Vision AI resale estimate: {ai_estimate}\n"
+        f"Vision AI confidence: {ai_confidence}\n"
+        f"Vision AI brand evidence: {ai_brand_evidence}"
+    )
+    try:
+        data = _call_deepseek_text_json(prompt)
+    except Exception as exc:
+        logger.warning("DeepSeek second opinion failed (%s); keeping original estimate", exc)
+        return {"estimated_resale_value": None, "reasoning": f"second opinion failed: {exc}"}
+    if not isinstance(data, dict):
+        logger.warning("DeepSeek second opinion returned no usable result; keeping original estimate")
+        return {"estimated_resale_value": None, "reasoning": "no usable result"}
+    return {
+        "estimated_resale_value": _sane_ai_price(data.get("estimated_resale_value")),
+        "reasoning": data.get("reasoning") or "",
+    }
+
+
 def _call_photo_check(prompt, images, timeout=20):
     # Provider router for the vision check. The provider named by
     # AI_PHOTO_PROVIDER is primary (DeepSeek is cheap, no free-tier 429
@@ -4236,6 +4284,42 @@ def run():
                             "Clamping %s AI resale estimate $%s -> $%s (ceiling $%s)",
                             item_id, original, clamped, high,
                         )
+
+            # Cheap text-only second opinion on a borderline-confidence
+            # vision result. The vision model's medium/low-confidence resale
+            # guess is the single weakest link in the alert path (of 97
+            # alerts ever sent, 56 rested on a medium-confidence guess and
+            # only 13 on a high-confidence one - see the sold-comps comment
+            # below). When it's hedged AND real sold comps won't already
+            # override it, ask DeepSeek to re-estimate the resale from the
+            # same text evidence and keep the MORE CONSERVATIVE (lower)
+            # number. Always fails open: any error or unusable answer leaves
+            # the estimate untouched - this is a hedge on a guess, never a
+            # required gate and never something that delays a real steal.
+            if (
+                result["estimated_resale_value"] is not None
+                and (result.get("price_confidence") or "").lower() in ("low", "medium")
+                and not (
+                    listing.get("sold_comp_median") is not None
+                    and category != "watches"
+                    and (listing.get("sold_comp_count") or 0) >= SOLD_COMP_MIN_TO_OVERRIDE_AI
+                )
+            ):
+                second_opinion = _deepseek_second_opinion(listing, ai_result, category)
+                ds_estimate = second_opinion.get("estimated_resale_value")
+                if ds_estimate is not None and ds_estimate < result["estimated_resale_value"]:
+                    original = result["estimated_resale_value"]
+                    result["estimated_resale_value"] = ds_estimate
+                    ai_result["estimated_resale_value"] = ds_estimate
+                    result.setdefault("flags", []).append(
+                        f"DeepSeek second opinion: ${ds_estimate} resale "
+                        f"(vs Gemini ${original})"
+                    )
+                    logger.info(
+                        "DeepSeek second opinion adjusted %s resale estimate "
+                        "$%s -> $%s (%s)",
+                        item_id, original, ds_estimate, second_opinion.get("reasoning"),
+                    )
 
             rating_label, discount_pct = compute_deal_rating(
                 result.get("price"),  # total landed cost: item + shipping

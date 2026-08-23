@@ -2258,6 +2258,108 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(self.alerts), 1, "a failed sanity check fails OPEN - the alert still fires")
         self.assertEqual(self.alerts[0]["listing"]["itemId"], item_id)
 
+    def test_deepseek_second_opinion_lowers_medium_confidence_estimate(self):
+        # The vision AI's medium-confidence resale guess is the weakest link
+        # in the alert path, so a text-only DeepSeek second opinion re-
+        # estimates from the same evidence. When DeepSeek's number is more
+        # conservative, it must win and drive the deal rating.
+        self.ai_result = dict(self.AI_STEAL)
+        self.ai_result["price_confidence"] = "medium"
+        self.ai_result["estimated_resale_value"] = 900
+        self.ai_result["visible_brand_evidence"] = "Leather insole stamps 'Alden'"
+
+        def _dispatch(prompt):
+            if "estimated_resale_value" in prompt:
+                return {"estimated_resale_value": 600, "reasoning": "text evidence suggests lower"}
+            return {"is_complete_item": True, "is_part_or_accessory": False, "reason": "ok"}
+        self._patch("_call_deepseek_text_json", _dispatch)
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                                     200.0)])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(self.alerts[0]["estimated_resale_value"], 600,
+                         "the more conservative second-opinion estimate must win")
+        self.assertEqual(self.alerts[0]["deal_rating"], "Great Deal",
+                         "600 resale vs 200 ask is a 66% discount - Great Deal, not the old Steal")
+        self.assertTrue(
+            any("second opinion" in (f or "").lower() for f in self.alerts[0].get("flags", [])),
+            "the adjustment must leave a trace in the alert flags",
+        )
+
+    def test_deepseek_second_opinion_skipped_for_high_confidence(self):
+        # A high-confidence vision result is not "borderline" - the second
+        # opinion must not run at all, and the estimate passes through
+        # untouched.
+        second_opinion = self._patch("_deepseek_second_opinion", mock.Mock())
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                                     200.0)])
+
+        m.run()
+
+        second_opinion.assert_not_called()
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(self.alerts[0]["estimated_resale_value"], 900)
+        self.assertEqual(self.alerts[0]["deal_rating"], "Steal")
+
+    def test_deepseek_second_opinion_skipped_when_comp_overrides(self):
+        # Real Grailed sold comps (median 700, n=6) already override a
+        # medium-confidence AI guess before the rating is computed - a second
+        # opinion on a number that's about to be replaced is wasted, so it
+        # must not be called at all.
+        self.ai_result = dict(self.AI_STEAL)
+        self.ai_result["price_confidence"] = "medium"
+        self.ai_result["estimated_resale_value"] = 900
+        second_opinion = self._patch("_deepseek_second_opinion", mock.Mock())
+        item_id = "v1|375288104417|0"
+        item = self._ebay_item(item_id,
+                               "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                               200.0)
+        item["sold_comp_median"] = 700.0
+        item["sold_comp_count"] = 6
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [item])
+
+        m.run()
+
+        second_opinion.assert_not_called()
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(self.alerts[0]["estimated_resale_value"], 700,
+                         "the real sold-comp median must win over the AI guess")
+
+    def test_deepseek_second_opinion_exception_fails_open(self):
+        # A DeepSeek API hiccup (timeout/5xx/bad JSON) must never change the
+        # estimate or block an alert - the second opinion fails OPEN, exactly
+        # like the sanity pass.
+        self.ai_result = dict(self.AI_STEAL)
+        self.ai_result["price_confidence"] = "medium"
+        self.ai_result["estimated_resale_value"] = 900
+        self._patch("_call_deepseek_text_json",
+                    mock.Mock(side_effect=requests.exceptions.Timeout("deepseek down")))
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                                     200.0)])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1, "a failed second opinion fails OPEN - the alert still fires")
+        self.assertEqual(self.alerts[0]["estimated_resale_value"], 900,
+                         "the original estimate must be untouched")
+        self.assertEqual(self.alerts[0]["deal_rating"], "Steal")
+
     def test_mid_run_429_also_stops_the_auction_lane(self):
         # ebay_circuit_closed is computed ONCE before PASS 1. A real 429 on
         # a regular search mid-loop trips the breaker and clears
