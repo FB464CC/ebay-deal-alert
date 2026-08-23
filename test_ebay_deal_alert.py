@@ -2023,6 +2023,14 @@ class RunIntegration(unittest.TestCase):
         self._patch("notify_bot_down", lambda message: None)
         self._patch("send_alert", self.alerts.append)
         self._patch("check_photos_with_gemini", self._fake_ai)
+        # The new pre-alert DeepSeek sanity pass runs against every alerting
+        # candidate. Patch its text-only call so no existing run test makes a
+        # real network call; the default verdict is "complete item", so the
+        # pass is a no-op unless an individual test overrides it.
+        self._patch("_call_deepseek_text_json",
+                    lambda prompt: {"is_complete_item": True,
+                                    "is_part_or_accessory": False,
+                                    "reason": "test default: complete item"})
 
         self.ai_result = dict(self.AI_STEAL)
 
@@ -2187,6 +2195,68 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(alerted["deal_rating"], "Steal")
         self.assertEqual(alerted["listing"]["itemId"], item_id)
         self.assertFalse(m.is_new(self._db(), item_id), "an alerted item is seen")
+
+    def test_deepseek_sanity_suppresses_part_accessory_only(self):
+        # The vision AI check passed (self.ai_result is AI_STEAL), but the
+        # cheap text-only DeepSeek pass catches what the photos don't
+        # disclose - here a watch strap sold as if it were the watch. The
+        # alert must be suppressed, logged as PASS, and the item marked seen.
+        sanity_calls = []
+        self._patch("_call_deepseek_text_json",
+                    lambda prompt: sanity_calls.append(prompt) or {
+                        "is_complete_item": False,
+                        "is_part_or_accessory": True,
+                        "reason": "listing is a watch strap only, not the watch",
+                    })
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Shoe Strap - Accessory Only",
+                                     200.0)])
+
+        m.run()
+
+        self.assertEqual(self.alerts, [], "a part/accessory-only listing must not alert")
+        self.assertEqual(len(sanity_calls), 1,
+                         "the sanity check must run on a candidate that reached the alert point")
+        (record,) = self._alert_log_records()
+        self.assertEqual(record["verdict"], "PASS")
+        self.assertIn("DeepSeek sanity check", record["reason"])
+        self.assertFalse(m.is_new(self._db(), item_id), "a suppressed listing is marked seen")
+
+    def test_deepseek_sanity_passes_complete_item_still_alerts(self):
+        # A complete, wearable item clears the sanity pass and alerts
+        # exactly as before - the pass is a filter, not a new gate.
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                                     200.0)])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1, "a complete item still alerts normally")
+        self.assertEqual(self.alerts[0]["listing"]["itemId"], item_id)
+
+    def test_deepseek_sanity_exception_fails_open(self):
+        # A DeepSeek API hiccup must never be the reason a real steal gets
+        # suppressed - this is a bonus filter, not a required gate. The text
+        # call raising (timeout, 5xx, bad JSON) still lets the alert fire.
+        self._patch("_call_deepseek_text_json",
+                    mock.Mock(side_effect=requests.exceptions.Timeout("deepseek down")))
+        item_id = "v1|375288104417|0"
+        self._serve({"query": "alden shoes", "max_price": 400,
+                     "category_id": "24087", "enabled": True, "profile": "fast"},
+                    [self._ebay_item(item_id,
+                                     "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                                     200.0)])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1, "a failed sanity check fails OPEN - the alert still fires")
+        self.assertEqual(self.alerts[0]["listing"]["itemId"], item_id)
 
     def test_mid_run_429_also_stops_the_auction_lane(self):
         # ebay_circuit_closed is computed ONCE before PASS 1. A real 429 on
