@@ -2248,6 +2248,7 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "{\"clubs_identified\": string, \"identified_brand\": string, "
             "\"is_complete_set\": bool, \"is_starter_kit_quality\": bool, "
             "\"damage_found\": bool, \"damage_desc\": string, \"looks_good\": bool, "
+            "\"counterfeit_suspected\": bool, \"counterfeit_reason\": string, "
             "\"summary\": string, \"estimated_resale_value\": number|null, "
             "\"price_confidence\": string}. "
             "clubs_identified should list what's visible (e.g. \"driver, 3 fairway "
@@ -2271,7 +2272,14 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "typical secondhand value for this exact set in USD if you can reasonably "
             "estimate it (nice to have, not required), or null if you can't - it is "
             "NOT the deciding factor here, just useful context. price_confidence must "
-            "be one of \"high\", \"medium\", or \"low\"."
+            "be one of \"high\", \"medium\", or \"low\". counterfeit_suspected is true "
+            "if anything about the listing suggests these are counterfeit/replica club "
+            "heads rather than genuine manufacturer clubs: brand markings that look "
+            "off (wrong font, wrong logo placement, misspelled brand name), multiple "
+            "identical or near-identical sets shown together like inventory rather "
+            "than one owner's used set, or a price far too low for genuine clubs from "
+            "that brand combined with generic/stock-looking photos. Explain briefly in "
+            "counterfeit_reason, or leave it empty if not suspected."
         )
         return _call_photo_check(golf_prompt, images, timeout=20)
 
@@ -2304,6 +2312,7 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "{\"damage_found\": bool, \"damage_desc\": string, \"looks_good\": bool, "
             "\"summary\": string, \"visible_brand_evidence\": string, "
             "\"brand_mismatch\": bool, \"strap_or_bracelet\": string, "
+            "\"counterfeit_suspected\": bool, \"counterfeit_reason\": string, "
             "\"pricing_basis\": string, \"estimated_retail_price\": number|null, "
             "\"estimated_resale_value\": number|null, \"price_confidence\": string, "
             "\"liquidity\": string}. "
@@ -2333,7 +2342,16 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "cannot reasonably estimate it. estimated_retail_price is the item's "
             "approximate original retail/MSRP price when new, or null. "
             "price_confidence must be one of \"high\", \"medium\", or \"low\". "
-            "liquidity must be one of \"fast\", \"medium\", or \"slow\"."
+            "liquidity must be one of \"fast\", \"medium\", or \"slow\". "
+            "counterfeit_suspected is true if anything suggests this specific watch is "
+            "a counterfeit/replica rather than genuine, DISTINCT from brand_mismatch "
+            "(which is about a mislabeled but still-genuine watch): case/dial "
+            "printing or engraving quality that looks off for the claimed brand, "
+            "multiple identical or near-identical watches shown together like "
+            "inventory rather than one owner's watch, or a price far too low for a "
+            "genuine example combined with generic/stock-looking photos or boxes. "
+            "Explain briefly in counterfeit_reason, or leave it empty if not "
+            "suspected."
         )
         return _call_photo_check(watch_prompt, images, timeout=20)
 
@@ -2353,6 +2371,7 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
         "estimating resale value. Report strict JSON only, with no markdown fences, using "
         "this exact shape: {\"damage_found\": bool, \"damage_desc\": string, "
         "\"weird_logo_found\": bool, \"logo_desc\": string, \"looks_good\": bool, "
+        "\"counterfeit_suspected\": bool, \"counterfeit_reason\": string, "
         "\"summary\": string, \"visible_brand_evidence\": string, "
         "\"peter_millar_back_crown_visible\": bool|null, "
         "\"pricing_basis\": string, \"estimated_retail_price\": number|null, "
@@ -2410,7 +2429,18 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
         "it, false if you can see that area clearly and it is NOT there, or "
         "null if no photo shows that area clearly enough to tell either way. "
         "For any non-Peter-Millar item, peter_millar_back_crown_visible must "
-        "always be null."
+        "always be null. "
+        "counterfeit_suspected is true if anything about the listing suggests "
+        "these are counterfeit/replica goods rather than genuine designer items: "
+        "hardware, stitching, font, or logo placement that looks off for the "
+        "claimed brand; multiple identical or near-identical items shown together "
+        "like inventory/stock rather than one owner's used item; or a price far "
+        "too low for a genuine item from that brand combined with generic/stock-"
+        "looking photos, boxes, or dust bags. A single used item at a below-"
+        "market price is normal secondhand pricing, not evidence of counterfeit "
+        "on its own - it's the COMBINATION with multiples/inventory-style staging "
+        "or visibly wrong branding details that matters. Explain briefly in "
+        "counterfeit_reason, or leave it empty if not suspected."
     )
 
     return _call_photo_check(prompt, images, timeout=20)
@@ -2578,6 +2608,23 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     price_confidence = (result.get("price_confidence") or "").lower() or None
     liquidity = (result.get("liquidity") or "").lower() or None
     brand_tier = result.get("brand_tier")
+
+    # COUNTERFEIT/REPLICA - checked before every category-specific bar,
+    # applies universally regardless of category. Real live miss: "Card
+    # Holder Wallets Designer" alerted as an 89%-off "Steal" on 4 Goyard
+    # card holders shown in one photo at $40 - the vision model's own
+    # free-text summary already said "Appears to be replica/counterfeit
+    # items given the low listing price ($40) and presentation", but
+    # nothing structured ever read that signal, so it never blocked
+    # anything. The sold-comps override then replaced the AI's own
+    # skeptical $25 estimate with a $375 median sourced from GENUINE
+    # single card holders, manufacturing a "Steal" rating for an item the
+    # AI itself had already called fake. Permanent block (a real AI check
+    # ran and flagged it) - never retry-eligible, since a re-check next
+    # run won't un-see a counterfeit.
+    if result.get("counterfeit_suspected"):
+        reason = result.get("counterfeit_reason") or "AI flagged likely counterfeit/replica"
+        return f"counterfeit/replica suspected: {reason}"
 
     # These two scoped bars run BEFORE the category checks below on
     # purpose - "peter millar gamecocks quarter zip" triggers the knitwear
@@ -4567,6 +4614,13 @@ def run():
             liquidity = ai_result.get("liquidity")
             if liquidity in ("fast", "medium", "slow"):
                 result["liquidity"] = liquidity
+            # Unconditional on category - all three vision prompts (golf,
+            # watches, generic) now share this field. Checked at the very
+            # top of is_blocked_by_steal_quality_gate(), before any
+            # category bar or the sold-comps override can substitute a
+            # confident-looking price for the AI's own counterfeit call.
+            result["counterfeit_suspected"] = bool(ai_result.get("counterfeit_suspected"))
+            result["counterfeit_reason"] = ai_result.get("counterfeit_reason") or None
 
         if ai_result is not None and (
             ai_result.get("damage_found") is True
