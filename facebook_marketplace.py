@@ -30,6 +30,21 @@ logger = logging.getLogger("facebook_marketplace")
 # resource type that isn't the page HTML itself.
 _BLOCKED_RESOURCE_TYPES = ("image", "media", "font", "stylesheet")
 
+# Per explicit user instruction: results must be local, "roughly 20 miles
+# from Columbia SC" - without this, search_facebook_batch() had no location
+# parameter at all, so results were effectively nationwide (whatever the
+# residential proxy's own IP geolocation happened to default to, unscoped
+# and unpredictable run to run). latitude/longitude/radius are Facebook
+# Marketplace's own documented search-URL parameters (radius in miles).
+# NOT independently verified live from this environment - Facebook blocks
+# unauthenticated fetches outside the real Playwright+proxy path this
+# module already uses, and that path can't be exercised locally (Playwright
+# browser install is CI/Linux-only, see poll.yml). Check the next few real
+# Facebook alerts actually land local before trusting this fully.
+FACEBOOK_SEARCH_LATITUDE = 34.0007
+FACEBOOK_SEARCH_LONGITUDE = -81.0348
+FACEBOOK_SEARCH_RADIUS_MILES = 20
+
 # Listing data lives inside <script type="application/json"> tags. Facebook's
 # tag carries other attributes around the type, so match the type anywhere in
 # the tag. ponytail: regex, not an HTML parser - fine while the JSON blocks
@@ -148,9 +163,12 @@ def search_facebook_batch(saved_searches):
                 query = saved_search["query"]
                 out.setdefault(query, [])
                 clean_query, _ = split_query_exclusions(query)
-                url = "https://www.facebook.com/marketplace/search/?" + urlencode(
-                    {"query": clean_query}
-                )
+                url = "https://www.facebook.com/marketplace/search/?" + urlencode({
+                    "query": clean_query,
+                    "latitude": FACEBOOK_SEARCH_LATITUDE,
+                    "longitude": FACEBOOK_SEARCH_LONGITUDE,
+                    "radius": FACEBOOK_SEARCH_RADIUS_MILES,
+                })
                 try:
                     page = context.new_page()
                     try:

@@ -20,6 +20,7 @@ import sys
 import types
 import unittest
 from unittest import mock
+from urllib.parse import parse_qsl, urlsplit
 
 import facebook_marketplace
 
@@ -74,8 +75,11 @@ def _install_fake_playwright(page_behaviors):
 
     `page_behaviors` is one dict per expected context.new_page() call; each
     may set 'html' (page.content() return value) and 'goto_raises' (exception
-    for page.goto()). Returns (patcher, sync_playwright_mock, browser_mock).
-    """
+    for page.goto()). Returns (patcher, sync_playwright_mock, browser_mock,
+    pages) - `pages` is the list of page mocks themselves, in call order,
+    for tests that need to inspect what a specific page.goto() was called
+    with (context.new_page.side_effect gets consumed into an iterator once
+    the real code calls it, so it can't be read back after the fact)."""
     pages = []
     for behavior in page_behaviors:
         page = mock.MagicMock()
@@ -101,7 +105,7 @@ def _install_fake_playwright(page_behaviors):
         "playwright": fake_playwright,
         "playwright.sync_api": fake_sync_api,
     })
-    return patcher, sync_playwright, browser
+    return patcher, sync_playwright, browser, pages
 
 
 def _proxy_env():
@@ -126,7 +130,7 @@ class NodeParsing(unittest.TestCase):
 
 class NoProxySkip(unittest.TestCase):
     def test_unset_proxy_returns_empty_dict_without_launching(self):
-        patcher, sync_playwright, _browser = _install_fake_playwright([])
+        patcher, sync_playwright, _browser, _pages = _install_fake_playwright([])
         with mock.patch.dict("os.environ", {}, clear=True), patcher:
             result = facebook_marketplace.search_facebook_batch([{"query": "rolex watch"}])
         self.assertEqual(result, {})
@@ -135,7 +139,7 @@ class NoProxySkip(unittest.TestCase):
 
 class PerQueryIsolation(unittest.TestCase):
     def test_one_query_error_does_not_lose_others(self):
-        patcher, _sync, _browser = _install_fake_playwright([
+        patcher, _sync, _browser, _pages = _install_fake_playwright([
             {"goto_raises": Exception("navigation timeout")},
             {"html": HTML_WITH_LISTING},
         ])
@@ -154,12 +158,31 @@ class PerQueryIsolation(unittest.TestCase):
 
 class EmptyResult(unittest.TestCase):
     def test_no_listing_nodes_returns_empty_list_not_crash(self):
-        patcher, _sync, _browser = _install_fake_playwright([
+        patcher, _sync, _browser, _pages = _install_fake_playwright([
             {"html": HTML_WITHOUT_LISTING},
         ])
         with mock.patch.dict(os.environ, _proxy_env()), patcher:
             result = facebook_marketplace.search_facebook_batch([{"query": "cartier watch"}])
         self.assertEqual(result, {"cartier watch": []})
+
+
+class LocationScoping(unittest.TestCase):
+    def test_search_url_includes_latitude_longitude_radius(self):
+        # Real user report: results weren't scoped to any location at all -
+        # "i need the facebook marketplace ones to be around where i am.
+        # roughly 20 miles from columbia sc." Without these params the
+        # search was effectively nationwide.
+        patcher, _sync, _browser, _pages = _install_fake_playwright([
+            {"html": HTML_WITHOUT_LISTING},
+        ])
+        with mock.patch.dict(os.environ, _proxy_env()), patcher:
+            facebook_marketplace.search_facebook_batch([{"query": "cartier watch"}])
+
+        called_url = _pages[0].goto.call_args[0][0]
+        params = dict(parse_qsl(urlsplit(called_url).query))
+        self.assertEqual(float(params["latitude"]), facebook_marketplace.FACEBOOK_SEARCH_LATITUDE)
+        self.assertEqual(float(params["longitude"]), facebook_marketplace.FACEBOOK_SEARCH_LONGITUDE)
+        self.assertEqual(int(params["radius"]), facebook_marketplace.FACEBOOK_SEARCH_RADIUS_MILES)
 
 
 if __name__ == "__main__":
