@@ -2676,7 +2676,19 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # CORPORATE_LOGO_KEYWORDS can't see a logo that's only in the photos,
     # which is the whole reason the AI photo check exists.
     gamecocks_query = "peter millar" in search_query_lower and "gamecocks" in search_query_lower
-    gamecocks_title = brand_in((result.get("listing") or {}).get("title", "").lower(), ("gamecocks",))
+    # brand_in(..., ("peter millar",)) too, not just "gamecocks" - this bar
+    # enforced "peter millar" at the SEARCH-QUERY level only, the exact
+    # title-mismatch gap already fixed today for the suit bar, loro piana/
+    # cucinelli bar, and watch bar, just missed on this one. Real failure:
+    # relevance only requires "peter"/"millar" as a whole word (gamecocks/
+    # polo/quarter/zip are all stopwords), so "Millar Gamecocks Golf Polo"
+    # - the unrelated "Millar" golf-knitwear brand - would pass both the
+    # relevance check and this bar's title check on "gamecocks" alone,
+    # getting the Peter Millar collegiate line's loosened bar for a
+    # different brand entirely.
+    gamecocks_title = brand_in(
+        listing_title_lower, ("gamecocks",)
+    ) and brand_in(listing_title_lower, ("peter millar",))
     if gamecocks_query and gamecocks_title:
         if deal_rating is None:
             return "gamecocks bar: no AI price estimate and brand not grab_on_sight-tier" if brand_tier != "grab_on_sight" else None
