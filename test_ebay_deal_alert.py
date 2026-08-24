@@ -694,6 +694,26 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertFalse(m.WOMENS_SIZE_CROSSREF_SIGNAL.search("alden cap toe boot us 10 d"))
         self.assertFalse(m.WOMENS_SIZE_CROSSREF_SIGNAL.search("allen edmonds park avenue size 10 us"))
 
+    def test_uk_shoe_brand_size_crossref_does_not_false_positive(self):
+        # Real false-positive risk: English shoemakers (Edward Green,
+        # Crockett & Jones, Church's, Cheaney, Alfred Sargent, Gaziano &
+        # Girling) write their own genuine men's UK-to-US size cross-
+        # reference the exact same shape as the EU/IT women's convention -
+        # "Edward Green Chelsea Boot UK 9 (US 10)" - which must not block.
+        for title in (
+            "Edward Green Chelsea Boot UK 9 (US 10)",
+            "Church's Oxford UK 9 (US 10)",
+            "Cheaney Brogue UK 8.5 (US 9.5)",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertNotEqual(result["verdict"], "PASS", title)
+        # The original EU/IT-size live miss must still block.
+        result = m.score_listing(
+            self._listing("Brunello Cuccinelli Water-Resistant Jacket | Size 46 (US 10)"), gap_report=None
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("women's size", result["reason"])
+
     def test_pass_brand_blocks(self):
         # "travismathew" is a real PASS_BRANDS entry (mall-tier golf brand).
         result = m.score_listing(self._listing("TravisMathew Golf Polo Shirt M"), gap_report=None)
