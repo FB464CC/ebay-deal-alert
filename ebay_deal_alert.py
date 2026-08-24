@@ -2567,8 +2567,16 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     """
     deal_rating = result.get("deal_rating")
     discount_pct = result.get("discount_pct")
-    price_confidence = result.get("price_confidence")
-    liquidity = result.get("liquidity")
+    # .lower(), not the raw AI value - every gate check below compares with
+    # exact `== "low"`/`== "slow"`, but _deepseek_second_opinion() and the
+    # sold-comp override already normalize with .lower() before use (real
+    # evidence the casing was expected to vary). A vision response of
+    # "Low"/"LOW" instead of "low" would silently skip every "confidence
+    # too low to trust" block below and let an unreliable Steal/Great Deal
+    # alert. Normalized once here rather than at each of the 6 comparison
+    # sites.
+    price_confidence = (result.get("price_confidence") or "").lower() or None
+    liquidity = (result.get("liquidity") or "").lower() or None
     brand_tier = result.get("brand_tier")
 
     # These two scoped bars run BEFORE the category checks below on
