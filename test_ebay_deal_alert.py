@@ -232,6 +232,27 @@ class JacketOnlySuitListing(unittest.TestCase):
             )
 
 
+class EmptyPackagingSignals(unittest.TestCase):
+    def test_single_word_dustbag_only_is_caught(self):
+        # Regression: dust\s+bag (requires a space) never matched the
+        # extremely common single-word "Dustbag" spelling at all - only
+        # the spaced "dust bag only" phrasing did. Real risk: a listing
+        # like "Louis Vuitton Dustbag Only" (packaging, not the actual
+        # bag) alerting as if it were the genuine item.
+        self.assertTrue(m.EMPTY_PACKAGING_SIGNALS.search("Louis Vuitton Dustbag Only"))
+        self.assertTrue(m.EMPTY_PACKAGING_SIGNALS.search("Authentic LV Dustbag Only, No Item"))
+        self.assertTrue(m.EMPTY_PACKAGING_SIGNALS.search("Gucci dust bag only"))
+
+    def test_genuine_item_with_dustbag_included_survives(self):
+        # A real item that happens to come WITH its dust bag as an
+        # accessory must never false-positive - only "only" phrasing means
+        # the packaging is all that's for sale.
+        self.assertFalse(m.EMPTY_PACKAGING_SIGNALS.search(
+            "Louis Vuitton Neverfull with box and dustbag"))
+        self.assertFalse(m.EMPTY_PACKAGING_SIGNALS.search(
+            "Genuine LV bag with original dustbag included"))
+
+
 class WatchAuthenticityRedFlags(unittest.TestCase):
     def test_fashion_watch_is_flagged(self):
         # Regression: "Cartier Fashion Watch" ($125 landed) alerted as a
