@@ -11,15 +11,20 @@ Uses the `scrapling` package's lightweight Fetcher (plain HTTP, no browser/
 JS rendering - confirmed live that eBay's search results are server-rendered
 HTML, itm links and prices are directly in the response body).
 
-Confirmed live: this intermittently gets a 403 (~1-in-10 from a single IP
-with no proxy). This module does NOT do any proxy rotation itself - see
-FACEBOOK_PROXY_URL in facebook_marketplace.py for the established pattern
-this project uses elsewhere if that's ever wanted here. On a 403, or any
-parse failure, this returns an empty list and logs a warning. It never
-raises - a scrape failure must never take down the run.
+Confirmed live: a single residential IP with no proxy gets a 403 on ~1-in-10
+calls from a home connection - and, measured directly against a real GitHub
+Actions run, 100% of calls from GH Actions' shared runner IP range (eBay
+blocks that range far harder than a residential IP). EBAY_SCRAPE_PROXY_URL
+(same env-var pattern as FACEBOOK_PROXY_URL in facebook_marketplace.py) routes
+every call through a real residential proxy instead - confirmed live to
+return real listing data - and is optional: unset, this just calls eBay
+directly (same behavior as before, still works fine from a non-CI IP). On a
+403/other failure, or any parse failure, this returns an empty list and logs
+a warning. It never raises - a scrape failure must never take down the run.
 """
 
 import logging
+import os
 import re
 from urllib.parse import urlencode
 
@@ -103,17 +108,19 @@ def search_ebay_scraped(query, max_price=None, category_id=None):
         params["_sacat"] = category_id
     url = f"{EBAY_SEARCH_URL}?{urlencode(params)}"
 
+    proxy_url = os.environ.get("EBAY_SCRAPE_PROXY_URL")
     try:
-        response = Fetcher.get(url, timeout=15)
+        response = Fetcher.get(url, timeout=15, proxy=proxy_url) if proxy_url else Fetcher.get(url, timeout=15)
     except Exception as exc:
         logger.warning("eBay scrape request failed for %r: %s", query, exc)
         return []
 
     if response.status != 200:
         logger.warning(
-            "eBay scrape got non-200 status %s for %r (likely a 403 - no proxy configured)",
+            "eBay scrape got non-200 status %s for %r%s",
             response.status,
             query,
+            "" if proxy_url else " (no EBAY_SCRAPE_PROXY_URL configured - likely a 403 from this IP)",
         )
         return []
 
