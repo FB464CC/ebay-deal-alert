@@ -62,7 +62,13 @@ def test_listing_shape_matches_make_listing_output():
         results = search_ebay_scraped("rolex")
 
     rolex = next(r for r in results if "Rolex" in r["title"])
-    assert rolex["itemId"] == "ebay_scraped:123456789012"
+    # itemId is deliberately reformatted to eBay's own bare "v1|<id>|0"
+    # convention (NOT make_listing()'s default "platform:id" namespacing) -
+    # see the override's comment in ebay_scrape.py. This is what lets this
+    # scraped lane dedupe correctly against the official Browse API's own
+    # itemId for the exact same physical listing, instead of looking like
+    # two different items and potentially double-alerting.
+    assert rolex["itemId"] == "v1|123456789012|0"
     assert rolex["itemWebUrl"] == "https://www.ebay.com/itm/123456789012"
     assert rolex["platform"] == "ebay_scraped"
     assert rolex["image"]["imageUrl"] == "https://i.ebayimg.com/images/g/aaa/s-l500.webp"

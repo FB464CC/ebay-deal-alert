@@ -36,6 +36,7 @@ from urllib.parse import quote_plus
 # ---------------------------------------------------------------------------
 
 import platforms as marketplaces
+import ebay_scrape
 
 CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
 
@@ -245,6 +246,15 @@ EBAY_SLOW_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_SLOW_SEARCHES_PER_RUN", 4))
 BRAND_TITLE_WINDOW_CHARS = int(_CONFIG.get("BRAND_TITLE_WINDOW_CHARS", 60))
 # Non-eBay marketplaces to poll. eBay is always polled and is not listed here.
 MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
+# Supplementary, quota-free eBay lane via ebay_scrape.py (HTML scraping, no
+# Browse API call spent) - see that module's docstring. Additive only: runs
+# for the SAME queries the official search_ebay() already covers this run
+# (never expands scrape volume beyond the existing rotation), and its
+# results merge into the identical scoring/gate/alert path. Defaults on;
+# flip to false in config.json if it ever proves net-negative (e.g.
+# sustained blocking from GitHub Actions' shared runner IPs - untested from
+# there, only verified working from a residential IP so far).
+EBAY_SCRAPE_ENABLED = bool(_CONFIG.get("EBAY_SCRAPE_ENABLED", True))
 # Hard wall-clock cap on the parallel marketplace fetch. Was 30s back when
 # the repo was private and GitHub billed Actions minutes rounded up per job -
 # the repo is public now (unlimited free Actions minutes), and per_page went
@@ -4011,6 +4021,31 @@ def run():
             except Exception:
                 logger.exception("eBay search failed for query: %s", saved_search["query"])
                 listings, search_total_listings = [], None
+            if EBAY_SCRAPE_ENABLED:
+                # Supplementary, quota-free lane - only for a query the
+                # official API is ALREADY covering this run (ebay_this_run
+                # membership, checked by the elif above), never expanding
+                # scrape volume beyond the existing rotation. Wrapped here
+                # too even though ebay_scrape.py already never raises
+                # internally - defense in depth, a scrape hiccup must never
+                # take down a real run. itemId is reformatted to eBay's own
+                # bare "v1|<id>|0" convention (see ebay_scrape.py) so it
+                # dedupes correctly against the SAME listing if search_ebay()
+                # above already returned it, rather than double-counting.
+                try:
+                    scraped = ebay_scrape.search_ebay_scraped(
+                        saved_search["query"],
+                        max_price=saved_search.get("max_price"),
+                        category_id=saved_search.get("category_id"),
+                    )
+                    if scraped:
+                        logger.info(
+                            "eBay scrape lane: %s extra listing(s) for %r",
+                            len(scraped), saved_search["query"],
+                        )
+                        listings = list(listings) + scraped
+                except Exception:
+                    logger.exception("eBay scrape lane failed for query: %s", saved_search["query"])
         else:
             logger.debug("Skipping eBay call this run (rotation): %s", saved_search["query"])
             listings, search_total_listings = [], None

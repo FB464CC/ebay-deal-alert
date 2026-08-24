@@ -1923,6 +1923,7 @@
     "vinted",
     "facebook"
   ],
+  "EBAY_SCRAPE_ENABLED": true,
   "MARKETPLACE_FETCH_BUDGET_SECONDS": 90,
   "MAX_ALERTS_PER_RUN": 8,
   "MARKETPLACE_QUERY_STOPWORDS": [

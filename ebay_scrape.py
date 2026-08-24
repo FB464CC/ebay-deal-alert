@@ -71,6 +71,19 @@ def _parse_listings(html):
             image_url=image_match.group(1) if image_match else None,
         )
         if listing:
+            # DEDUP FIX: make_listing() namespaces every itemId as
+            # "platform:id" (see its own docstring) so seen_items.db can't
+            # collide across marketplaces - but the official eBay Browse
+            # API (search_ebay() in ebay_deal_alert.py) does NOT go through
+            # make_listing() at all and keeps its itemId BARE, in eBay's own
+            # "v1|<numeric id>|0" format (confirmed live against real
+            # alerts_log.jsonl entries). Without this override, the exact
+            # same physical eBay listing reached via this scraped lane vs
+            # the official API would look like two different items to the
+            # dedup table and could alert twice. Reformatting to eBay's own
+            # bare id convention here makes both lanes collide correctly on
+            # the same real listing.
+            listing["itemId"] = f"v1|{item_id}|0"
             listings.append(listing)
     return listings
 

@@ -2424,9 +2424,19 @@ class RunIntegration(unittest.TestCase):
     def _serve(self, saved_search, listings, total_listings=42):
         """Point the (single, so rotation is a no-op) saved search at a
         fixed set of listings. search_ebay() returns a (listings, total)
-        tuple - the same shape run() unpacks."""
+        tuple - the same shape run() unpacks.
+
+        EBAY_SCRAPE_ENABLED off by default here: the scraped lane hits the
+        live network (real regression - a first version of this fixture
+        left it on and every RunIntegration test made a real HTTP call to
+        eBay, pulling in dozens of uncontrolled real listings on top of the
+        fixture's 3 and making assertions like "exactly 3 listings reached
+        a disposition" fail nondeterministically). Tests that specifically
+        want to exercise the scraped-lane wiring mock
+        ebay_scrape.search_ebay_scraped directly and flip this back on."""
         self._patch("SAVED_SEARCHES", [saved_search])
         self._patch("search_ebay", lambda token, search: (list(listings), total_listings))
+        self._patch("EBAY_SCRAPE_ENABLED", False)
 
     def _alert_log_records(self):
         path = m.ALERTS_LOG_PATH
@@ -2472,6 +2482,39 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(self.ai_calls), 2, "both REVIEW candidates get an AI check")
         self.assertFalse(m.is_new(self._db(), "v1|297183440152|0"),
                          "a hard-failed listing is a final disposition - mark it seen")
+
+    def test_ebay_scrape_lane_merges_and_dedupes_against_official_api(self):
+        # Covers the run()-loop WIRING specifically (mutation-tested:
+        # commenting out the merge line makes this fail): the scraped
+        # lane's results must actually reach the same pipeline as the
+        # official API's, and an item sharing an itemId with one already
+        # returned by search_ebay() must not get double-processed (that
+        # part is the pipeline's existing item_id-keyed dedup doing its
+        # normal job once both lanes present the same id - separately,
+        # test_ebay_scrape.py's test_listing_shape_matches_make_listing_
+        # output mutation-tests THAT ebay_scrape.py actually reformats a
+        # scraped id into eBay's own "v1|<id>|0" convention in the first
+        # place, which is what makes two lanes' ids collide at all).
+        official_listings = [
+            self._ebay_item("v1|364512889011|0",
+                            "Loro Piana Cashmere Crewneck Sweater Mens Medium Navy", 180.0),
+        ]
+        self._serve({"query": "loro piana sweater", "max_price": 400,
+                     "category_id": "11484", "enabled": True, "profile": "fast"},
+                    official_listings)
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        scraped_dup = self._ebay_item("v1|364512889011|0",
+            "Loro Piana Cashmere Crewneck Sweater Mens Medium Navy", 180.0)
+        scraped_new = self._ebay_item("v1|999888777000|0",
+            "Loro Piana Cashmere Sweater Mens Small Charcoal", 165.0)
+        with mock.patch.object(m.ebay_scrape, "search_ebay_scraped",
+                                lambda query, max_price=None, category_id=None: [scraped_dup, scraped_new]):
+            m.run()
+
+        logged = {r["item_id"]: r for r in self._alert_log_records()}
+        self.assertIn("v1|999888777000|0", logged, "genuinely new scraped listing must be processed")
+        self.assertEqual(len(self.ai_calls), 2,
+            "2 distinct listings get an AI check - the scraped duplicate must NOT double-spend a check")
 
     def test_knitwear_candidate_needing_ai_is_also_not_discarded(self):
         # Sibling of the test below, deliberately routed through a DIFFERENT
