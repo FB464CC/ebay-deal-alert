@@ -252,6 +252,26 @@ class EmptyPackagingSignals(unittest.TestCase):
         self.assertFalse(m.EMPTY_PACKAGING_SIGNALS.search(
             "Genuine LV bag with original dustbag included"))
 
+    def test_no_watch_disclaimer_is_caught(self):
+        # Real live miss: "Shinola Detroit Wooden box and accessories - no
+        # watch" alerted as a "Great Deal" - the title says outright the
+        # actual watch isn't included, just its box, but nothing read a
+        # bare "no watch" negation before this.
+        self.assertTrue(m.EMPTY_PACKAGING_SIGNALS.search(
+            "Shinola Detroit Wooden box and accessories - no watch"))
+        self.assertTrue(m.EMPTY_PACKAGING_SIGNALS.search(
+            "Shinola watch box, no watch included"))
+
+    def test_no_watch_disclaimer_does_not_false_positive_on_a_real_watch(self):
+        # "no watch strap" (missing its original strap, watch itself is
+        # fine) and "no watch box" (missing box, watch itself is fine) are
+        # both genuine used watches worth alerting on, not empty listings -
+        # clause-boundary anchoring must not catch these.
+        self.assertFalse(m.EMPTY_PACKAGING_SIGNALS.search(
+            "Rolex Submariner, no watch strap included, watch runs great"))
+        self.assertFalse(m.EMPTY_PACKAGING_SIGNALS.search(
+            "Vintage watch runs great, no watch box"))
+
 
 class WatchAuthenticityRedFlags(unittest.TestCase):
     def test_fashion_watch_is_flagged(self):
