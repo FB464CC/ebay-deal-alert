@@ -3026,7 +3026,9 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         # a big enough apparent gap to survive scrutiny even in a
         # saturated market; "Great Deal" is exactly the borderline case
         # where an inflated guess does the most damage.
-        has_real_comps = any("sold comps" in (f or "").lower() for f in (result.get("flags") or []))
+        has_real_comps = result.get("has_sold_comps") or any(
+            "sold comps" in (f or "").lower() for f in (result.get("flags") or [])
+        )
         search_total_listings = result.get("search_total_listings")
         if (
             not has_real_comps
@@ -4729,6 +4731,15 @@ def run():
         # a hedged guess, so it wins when both exist.
         comp_median = listing.get("sold_comp_median")
         comp_count = listing.get("sold_comp_count") or 0
+        # Stamped unconditionally (not just when comps end up overriding the
+        # AI estimate below) so is_blocked_by_steal_quality_gate()'s market-
+        # saturation check can see real comps exist even when the AI already
+        # gave a high-confidence rating and the override branch never runs -
+        # otherwise a well-evidenced Great Deal with real sold comps was
+        # getting the "no real comps" saturation block meant for an
+        # unbacked AI guess.
+        if comp_median is not None and category != "watches":
+            result["has_sold_comps"] = True
         ai_confidence = (result.get("price_confidence") or "").lower()
         comp_overrides_weak_ai = (
             result.get("deal_rating") is not None
