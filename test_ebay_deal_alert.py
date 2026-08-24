@@ -1041,11 +1041,15 @@ class StealQualityGate(unittest.TestCase):
             reason = m.is_blocked_by_steal_quality_gate(result, category=category)
             if reason is None or "no AI price" in reason:
                 continue
-            # The ONE legitimate exception: a permanent block an AI check
+            # The legitimate exceptions: a permanent block an AI check
             # could never resolve, because it doesn't depend on price at
-            # all. brand_tier is fixed before the AI ever runs.
-            self.assertIn(
-                "brand not grab_on_sight-tier", reason,
+            # all. brand_tier is fixed before the AI ever runs, and so is
+            # whether the listing's own title names the brand that was
+            # searched for (the generic "Test Item L" fixture here never
+            # names loro piana/cucinelli, so that query legitimately hits
+            # the title-mismatch bar added after a real live miss).
+            self.assertTrue(
+                "brand not grab_on_sight-tier" in reason or "title names neither brand" in reason,
                 f"{category}/{tier}/{query} is permanently discarded before any AI check: {reason}",
             )
 
@@ -1216,15 +1220,38 @@ class StealQualityGate(unittest.TestCase):
         # brands' searches specifically, not the whole knitwear category -
         # "brunello cucinelli jacket" doesn't trigger the knitwear
         # classifier at all.
-        result = {"deal_rating": "Great Deal", "discount_pct": 59, "price_confidence": "high", "search_query": "brunello cucinelli jacket"}
+        result = {
+            "deal_rating": "Great Deal", "discount_pct": 59, "price_confidence": "high",
+            "search_query": "brunello cucinelli jacket",
+            "listing": {"title": "Brunello Cucinelli Cashmere Jacket 52"},
+        }
         reason = m.is_blocked_by_steal_quality_gate(result, category="other")
         self.assertIsNotNone(reason)
         self.assertIn("below Steal", reason)
         result["deal_rating"] = "Steal"
         result["discount_pct"] = 72
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
-        result2 = {"deal_rating": "Steal", "discount_pct": 75, "price_confidence": "high", "search_query": "loro piana suit"}
+        result2 = {
+            "deal_rating": "Steal", "discount_pct": 75, "price_confidence": "high",
+            "search_query": "loro piana suit",
+            "listing": {"title": "Loro Piana Wool Suit 42R"},
+        }
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result2, category="other"))
+
+    def test_loro_piana_cucinelli_bar_blocks_title_brand_mismatch_from_search(self):
+        # Same gap class as the suit bar's title-mismatch fix: a real Jones
+        # New York suit cleared the suit bar via eBay's loose search
+        # matching on a real target-brand query. This bar had the identical
+        # hole - only the SEARCH query was ever checked, never the listing's
+        # own title.
+        result = {
+            "deal_rating": "Steal", "discount_pct": 80, "price_confidence": "high",
+            "search_query": "loro piana sweater",
+            "listing": {"title": "Random Unbranded Cashmere Sweater L"},
+        }
+        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+        self.assertIsNotNone(reason)
+        self.assertNotIn("no AI price", reason)
 
     def test_default_category_no_ai_data_blind_trusts_grab_on_sight_only(self):
         result = {"deal_rating": None, "brand_tier": "grab_on_sight"}

@@ -2676,6 +2676,20 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # cucinelli jacket" search doesn't trigger the knitwear category
     # classifier at all - only sweater/cashmere/merino/quarter-zip do).
     if "loro piana" in search_query_lower or "cucinelli" in search_query_lower:
+        # Same gap class as the suit bar's title-mismatch fix and the
+        # watches bar's brand_mismatch fix (both from a real live Jones
+        # New York suit / mislabeled Oris watch miss) - this bar only ever
+        # checked the SEARCH query, never the listing's own title, so an
+        # eBay/Vinted/Poshmark fuzzy-match on "loro piana sweater" could
+        # hand some unrelated brand's item this bar's steal-tier-only pass
+        # without ever confirming it's actually Loro Piana or Cucinelli.
+        # Checked BEFORE spending any AI budget - title text doesn't need
+        # a photo check, and a mismatch here can never be fixed by one.
+        if not brand_in(listing_title_lower, ("loro piana", "cucinelli")):
+            return (
+                "loro piana/cucinelli bar: listing title names neither brand "
+                "- likely a search-relevance mismatch, not the searched item"
+            )
         # deal_rating None means the AI hasn't run YET, which is now the
         # normal pre-check state (the gate is called before the AI to
         # decide whether spending a call is worthwhile). It must return
