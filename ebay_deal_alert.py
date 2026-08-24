@@ -4252,6 +4252,29 @@ def run():
                     for enrichment in ("sold_comp_median", "sold_comp_count", "description"):
                         if listing.get(enrichment) is None and old_listing.get(enrichment) is not None:
                             listing[enrichment] = old_listing[enrichment]
+                    # Same real-evidence-destruction bug as the enrichments
+                    # above, for a different field: result["search_query"]
+                    # (set from saved_search["query"] a few lines up) gets
+                    # silently replaced with the AUCTION lane's generic,
+                    # brand-agnostic query ("cardholder", "watch") -
+                    # auction searches aren't saved-search entries, they're
+                    # a handful of broad category terms. Several
+                    # is_blocked_by_steal_quality_gate bars key off this
+                    # exact string (loro piana/cucinelli's Steal-tier-only
+                    # rule, the suit title-brand-match check) to identify
+                    # which brand-specific bar should apply. Losing it
+                    # means e.g. a Loro Piana cardholder that arrives via
+                    # both "loro piana cardholder" and the generic
+                    # "cardholder" auction search silently drops out of
+                    # the Steal-only bar and alerts on a mere Great Deal -
+                    # exactly the rule the user asked for and exactly the
+                    # auction lane, the highest-signal path, where a gate
+                    # regression matters most. Old (brand-specific) search
+                    # context wins whenever it differs from the new one.
+                    old_search_query = existing["result"].get("search_query")
+                    if old_search_query and old_search_query != result.get("search_query"):
+                        result["search_query"] = old_search_query
+                        saved_search = existing["saved_search"]
                 review_candidates[item_id] = {
                     "item_id": item_id,
                     "listing": listing,
@@ -4421,8 +4444,6 @@ def run():
             if gemini_calls > 0:
                 time.sleep(GEMINI_INTER_CALL_SLEEP_SECONDS)
             gemini_calls += 1
-            if use_reserved_auction_slot:
-                auction_reserved_calls += 1
             # eBay's item_summary/search (search_ebay()) never returns a
             # description - only this separate per-item call does.
             # Poshmark/ShopGoodwill already carry it for free (see
@@ -4461,6 +4482,18 @@ def run():
                 category=category,
                 current_month_name=current_month_name,
             )
+            # Moved here from right after the budget check above (real live
+            # bug): the reserved slot exists to guarantee "at least one
+            # closing auction always gets its vision check", so it must
+            # only count once that check actually happens. It used to be
+            # marked spent the moment the slot was CLAIMED - before the
+            # jacket-only re-check above, which can `continue` on title
+            # alone with no AI call ever made. A jacket-only auction
+            # candidate could burn the one reserved slot for the whole run
+            # without a single vision check happening, silently voiding
+            # the guarantee for every other ending-soon auction that run.
+            if use_reserved_auction_slot:
+                auction_reserved_calls += 1
         elif not gemini_budget_logged:
             logger.info(
                 "Gemini call budget exhausted for this run, skipping AI check for remaining listings"
