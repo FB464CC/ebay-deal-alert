@@ -1735,8 +1735,16 @@ def is_relevant_marketplace_listing(listing, query):
     if required_phrases and not all(phrase in title for phrase in required_phrases):
         return False
     for item_type, synonyms in REQUIRED_ITEM_TYPE_SYNONYMS.items():
+        # \b...\b, not a bare substring test - every other check in this
+        # function was deliberately moved to whole-word matching, but this
+        # one was missed. Real live gap: the "hat" synonym set contains
+        # short words ("hat", "cap", "fitted") that collide with ordinary
+        # text - "maison margiela fitted blazer" passes via "fitted" in
+        # title, "maison margiela cape" passes via "cap" in "cape", even a
+        # title containing "what" would pass via "hat" in "what". Enabled
+        # search: `"maison margiela" hat`.
         if re.search(rf"\b{re.escape(item_type)}\b", positive_query) and not any(
-            syn in title for syn in synonyms
+            re.search(rf"\b{re.escape(syn)}\b", title) for syn in synonyms
         ):
             return False
 

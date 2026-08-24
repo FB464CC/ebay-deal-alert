@@ -1535,6 +1535,20 @@ class MarketplaceRelevanceTokenMatching(unittest.TestCase):
         listing = {"platform": "poshmark", "title": "Tom James Custom Merino Wool Sweater"}
         self.assertTrue(m.is_relevant_marketplace_listing(listing, "tom james merino"))
 
+    def test_hat_synonym_check_is_whole_word_not_substring(self):
+        # Real live bug: REQUIRED_ITEM_TYPE_SYNONYMS' "hat" set (hat/cap/
+        # beanie/snapback/bucket hat/fitted) was checked with a bare `in`
+        # substring test, the one spot in this function that missed the
+        # \b whole-word fix everything else got. "cap" matched inside
+        # "cape". Enabled search: `"maison margiela" hat`. NOTE: "fitted"
+        # itself remains a genuine (if ambiguous - fitted cap vs fitted
+        # blazer) whole-word synonym in this list; that ambiguity is
+        # separate from and not fixed by this whole-word change.
+        self.assertFalse(m.is_relevant_marketplace_listing(
+            {"platform": "poshmark", "title": "Maison Margiela Cape"}, '"maison margiela" hat'))
+        self.assertTrue(m.is_relevant_marketplace_listing(
+            {"platform": "poshmark", "title": "Maison Margiela Wool Beanie Hat"}, '"maison margiela" hat'))
+
 
 class MarketplaceQueryExclusions(unittest.TestCase):
     def test_exclusions_stripped_from_search_query(self):
