@@ -12,6 +12,12 @@ the same HTTP call that rot as soon as an endpoint moves, and the whole
 GitHub Actions job has to finish inside the 60-second billing rounding
 boundary (private repo = metered minutes, rounded UP per job).
 
+OfferUp and Depop have no public JSON search API - their listing data is
+embedded in the rendered search page (a __NEXT_DATA__ blob and a Next.js
+RSC flight stream respectively), so those two adapters fetch the HTML via
+scrapling's plain-HTTP Fetcher (TLS-fingerprint spoofing, no browser)
+instead of `requests`. Same listing shape, same never-raise contract.
+
 READ-ONLY. These adapters only ever fetch public search results. Nothing
 here logs in, creates accounts, bids, buys, offers, or messages.
 """
@@ -43,6 +49,7 @@ HTTP_TIMEOUT = 8
 _MIN_INTERVAL = {
     "grailed": 0.35,
     "depop": 0.35,
+    "offerup": 0.50,
     # Tightened again from 0.35, live-tested this time rather than
     # inherited from Grailed's number: 55 real back-to-back requests
     # against the actual endpoint, explicit sleep intervals stepped down
@@ -56,11 +63,9 @@ _MIN_INTERVAL = {
     # (4x that natural floor) rather than the tested edge, same
     # trust-but-verify margin this file already uses elsewhere - not
     # maximum-observed-safe, real headroom below it.
-    # ponytail: no adaptive backoff on repeated 429s yet for Vinted
-    # specifically - get_json() already logs+returns None per failed
-    # call, so a real throttling event degrades gracefully rather than
-    # cascading, but if 429s start showing up in the logs for real, add
-    # exponential backoff here rather than re-loosening this number.
+    # UPDATE: 429s did start showing up in the logs for real (43-62/run
+    # measured live) - exponential backoff added (_register_rate_limit,
+    # _backoff_multiplier below), this base number is untouched.
     "vinted": 0.15,
     "poshmark": 0.60,
     "mercari": 0.60,
@@ -71,16 +76,40 @@ _DEFAULT_MIN_INTERVAL = 0.5
 
 _rate_lock = threading.Lock()
 _last_call = {}
+# Real live pattern this exists for: Vinted alone measured 43-62 429s per
+# run out of ~86 calls (checked against 4 real GitHub Actions runs) at the
+# fixed 0.15s pace tuned for a clean, uncontested single-threaded burst test
+# - real production load is dozens of searches firing concurrently across
+# threads, a condition that tuning number was never tested against. Was a
+# known, explicitly named ceiling (see the "ponytail: no adaptive backoff
+# on repeated 429s yet" comment on _MIN_INTERVAL above) until the 429s
+# actually showed up in the logs for real. Doubling the effective pace on
+# every 429 (capped at _MAX_BACKOFF_MULTIPLIER) means a run backs off for
+# real instead of continuing to hammer the same wall at the same rate for
+# every remaining call to that platform. Resets naturally every run - this
+# module-level dict doesn't survive past one process, and each GH Actions
+# run is a fresh process, so there's no cross-run decay logic needed.
+_backoff_multiplier = {}
+_MAX_BACKOFF_MULTIPLIER = 32
+
+
+def _register_rate_limit(platform):
+    with _rate_lock:
+        current = _backoff_multiplier.get(platform, 1)
+        _backoff_multiplier[platform] = min(current * 2, _MAX_BACKOFF_MULTIPLIER)
+        return _backoff_multiplier[platform]
 
 
 def _pace(platform):
-    """Block until this platform's minimum inter-request interval has passed."""
+    """Block until this platform's minimum inter-request interval - scaled
+    up by any live backoff multiplier from a recent 429 - has passed."""
     interval = _MIN_INTERVAL.get(platform, _DEFAULT_MIN_INTERVAL)
     while True:
         with _rate_lock:
+            effective_interval = interval * _backoff_multiplier.get(platform, 1)
             now = time.monotonic()
             previous = _last_call.get(platform, 0.0)
-            wait = interval - (now - previous)
+            wait = effective_interval - (now - previous)
             if wait <= 0:
                 _last_call[platform] = now
                 return
@@ -104,7 +133,12 @@ def get_json(platform, url, params=None, headers=None, session=None, timeout=HTT
         logger.warning("%s request failed: %s", platform, exc)
         return None
     if resp.status_code == 429:
-        logger.warning("%s rate limited (429), backing off for this run", platform)
+        multiplier = _register_rate_limit(platform)
+        logger.warning(
+            "%s rate limited (429) - backing off, next calls to this platform "
+            "paced %sx slower for the rest of this run",
+            platform, multiplier,
+        )
         return None
     if not resp.ok:
         logger.warning("%s returned HTTP %s", platform, resp.status_code)
@@ -929,6 +963,287 @@ def search_vinted(saved_search):
             # confirming an empty page 2 exists.
             break
     return [x for x in listings if x], None
+
+
+# ---------------------------------------------------------------------------
+# OfferUp / Depop - HTML-page adapters via scrapling's Fetcher.
+#
+# OfferUp and Depop have no public JSON search API - their listing data is
+# embedded in the rendered search page: OfferUp in a <script id="__NEXT_DATA__">
+# JSON blob, Depop in Next.js App Router's RSC flight stream (repeated
+# self.__next_f.push([1,"<escaped string>"]) calls carrying a dehydrated React
+# Query cache). Both are fetched with scrapling's plain-HTTP Fetcher
+# (TLS-fingerprint spoofing, no browser), then parsed here. Same listing
+# shape, same never-raise contract as every other adapter.
+# ---------------------------------------------------------------------------
+
+_OFFERUP_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
+)
+_FLIGHT_PUSH_RE = re.compile(
+    r'self\.__next_f\.push\(\[1,"((?:\\.|[^"\\])*)"\]\)', re.DOTALL
+)
+
+
+def _fetch_page(platform, url):
+    """Fetch an HTML page via scrapling's TLS-spoofing Fetcher, or None."""
+    try:
+        from scrapling.fetchers import Fetcher
+    except ImportError:
+        logger.warning("%s skipped: scrapling is not installed", platform)
+        return None
+    _pace(platform)
+    try:
+        resp = Fetcher.get(url, timeout=15)
+    except Exception as exc:
+        logger.warning("%s request failed: %s", platform, exc)
+        return None
+    if resp.status == 429:
+        multiplier = _register_rate_limit(platform)
+        logger.warning(
+            "%s rate limited (429) - backing off, next calls to this platform "
+            "paced %sx slower for the rest of this run",
+            platform, multiplier,
+        )
+        return None
+    if resp.status != 200:
+        logger.warning("%s returned HTTP %s", platform, resp.status)
+        return None
+    body = resp.body
+    if isinstance(body, bytes):
+        return body.decode(resp.encoding or "utf-8", errors="replace")
+    return body
+
+
+# --- OfferUp ----------------------------------------------------------------
+
+def _offerup_listings(html):
+    """OfferUp listing dicts from the page's __NEXT_DATA__ blob. [] on failure."""
+    m = _OFFERUP_NEXT_DATA_RE.search(html)
+    if not m:
+        logger.warning("offerup: __NEXT_DATA__ tag not found")
+        return []
+    try:
+        data = json.loads(m.group(1))
+    except ValueError:
+        logger.warning("offerup: __NEXT_DATA__ JSON parse failed")
+        return []
+    tiles = _dig(data, "props.pageProps.searchFeedResponse.looseTiles")
+    if tiles is None:
+        logger.warning("offerup: searchFeedResponse.looseTiles missing")
+        return []
+    return [
+        tile["listing"] for tile in tiles
+        if isinstance(tile, dict)
+        and tile.get("__typename") == "ModularFeedTileListing"
+        and isinstance(tile.get("listing"), dict)
+    ]
+
+
+def _offerup_to_listing(listing):
+    image = listing.get("image")
+    image_url = image.get("url") if isinstance(image, dict) else None
+    return make_listing(
+        "offerup",
+        listing.get("listingId"),
+        (listing.get("title") or "").strip(),
+        listing.get("price"),
+        f"https://offerup.com/item/detail/{listing.get('listingId')}",
+        image_url=image_url,
+    )
+
+
+@batch_adapter("offerup")
+def search_offerup(saved_searches):
+    """Real bug caught in review before this ever shipped: this was built
+    single-search (saved_search -> [listings]), but prefetch_marketplaces()'s
+    batch_worker calls every BATCH_ADAPTERS entry with the FULL list of
+    matching searches and expects {query: [listings]} back (see
+    search_grailed_batch above, the pattern this must match) - confirmed
+    live, calling this the way batch_worker actually does raised
+    "TypeError: list indices must be integers or slices, not str" every
+    time. Dormant only because no saved search currently lists "offerup" in
+    its own platforms array (MARKETPLACES_ENABLED alone isn't enough to
+    reach it - see batch_worker's `relevant` filter), so nothing had
+    exercised the real call path yet. One HTTP call per query (no combined
+    multi-query API like Grailed's Algolia endpoint exists for OfferUp)."""
+    result = {}
+    for saved_search in saved_searches:
+        query = split_query_exclusions(saved_search["query"])[0]
+        url = "https://offerup.com/search?" + urlencode({"q": query})
+        html = _fetch_page("offerup", url)
+        if html is None:
+            continue
+        listings = [x for x in (_offerup_to_listing(l) for l in _offerup_listings(html)) if x]
+        if listings:
+            result[saved_search["query"]] = listings
+    return result
+
+
+# --- Depop ------------------------------------------------------------------
+
+def _flight_payload_strings(html):
+    """Decode each self.__next_f.push([1,"..."]) payload string, in order."""
+    for m in _FLIGHT_PUSH_RE.finditer(html):
+        try:
+            yield json.loads('"' + m.group(1) + '"')
+        except ValueError:
+            continue
+
+
+def _depop_rows(html):
+    """Parse every flight row ("<id>:<json>", newline-joined) into {id: json}.
+
+    The pushes are chunks of one stream, so they are concatenated before
+    splitting - a single row can span multiple pushes, and the client itself
+    joins them before decoding.
+    """
+    full = "".join(_flight_payload_strings(html))
+    rows = {}
+    for line in full.split("\n"):
+        if not line or ":" not in line:
+            continue
+        rid, _, body = line.partition(":")
+        try:
+            rows[rid] = json.loads(body)
+        except ValueError:
+            continue
+    return rows
+
+
+def _product_search_entry(obj):
+    """Recursively find the React Query cache entry named 'product_search'."""
+    if isinstance(obj, dict):
+        qk = obj.get("queryKey")
+        if (isinstance(qk, list) and qk and qk[0] == "product_search") or (
+            isinstance(qk, str) and "product_search" in qk
+        ):
+            return obj
+        for value in obj.values():
+            found = _product_search_entry(value)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _product_search_entry(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _resolve_flight_ref(ref, rows):
+    """Best-effort resolution of a React Flight reference ("$40:props:...").
+
+    A component row is ["$", id, props, children]; the pointed-to payload
+    lives in element [3] and reference paths start from it with a "props:"
+    prefix. Only reached when a query's state.data is stored by reference
+    instead of inline - the live page had it inline, this is belt-and-
+    suspenders. ponytail: not a full Flight decoder; if Depop moves to deeply
+    nested cross-row references this returns None and the adapter degrades to
+    an empty result rather than crash.
+    """
+    if not isinstance(ref, str) or not ref.startswith("$"):
+        return None
+    rid, _, path = ref[1:].partition(":")
+    row = rows.get(rid)
+    if row is None:
+        return None
+    obj = row
+    for seg in path.split(":"):
+        if obj is None:
+            return None
+        if isinstance(obj, list):
+            if seg == "props" and len(obj) >= 4:
+                obj = obj[3]
+            else:
+                try:
+                    obj = obj[int(seg)]
+                except (ValueError, IndexError):
+                    return None
+        elif isinstance(obj, dict):
+            if ":" in seg:
+                key, _, idx = seg.partition(":")
+                obj = obj.get(key)
+                if not isinstance(obj, list):
+                    return None
+                try:
+                    obj = obj[int(idx)]
+                except (ValueError, IndexError):
+                    return None
+            else:
+                obj = obj.get(seg)
+        else:
+            return None
+    return obj
+
+
+def _depop_objects(html):
+    """Depop search-result listing dicts from the RSC flight stream. [] on failure."""
+    rows = _depop_rows(html)
+    if not rows:
+        logger.warning("depop: no flight rows parsed from page HTML")
+        return []
+    objects = []
+    found_entry = False
+    for row in rows.values():
+        entry = _product_search_entry(row)
+        if entry is None:
+            continue
+        found_entry = True
+        state = entry.get("state") or {}
+        data = state.get("data")
+        if isinstance(data, str):
+            data = _resolve_flight_ref(data, rows)
+        if not isinstance(data, dict):
+            continue
+        for page in data.get("pages") or []:
+            page_data = page.get("data") if isinstance(page, dict) else None
+            page_objects = page_data.get("objects") if isinstance(page_data, dict) else None
+            if page_objects:
+                objects.extend(o for o in page_objects if isinstance(o, dict))
+    if not found_entry:
+        logger.warning("depop: product_search query cache not found in flight stream")
+    return objects
+
+
+def _depop_to_listing(obj):
+    pictures = obj.get("pictures") or []
+    image_url = None
+    if pictures and isinstance(pictures[0], dict):
+        formats = pictures[0].get("formats")
+        p0 = formats.get("P0") if isinstance(formats, dict) else None
+        image_url = p0.get("url") if isinstance(p0, dict) else None
+    pricing = obj.get("pricing")
+    current = pricing.get("current_price") if isinstance(pricing, dict) else None
+    price = current.get("total_price") if isinstance(current, dict) else None
+    slug = obj.get("slug")
+    item_id = obj.get("id")
+    return make_listing(
+        "depop",
+        str(item_id) if item_id is not None else None,
+        obj.get("description"),
+        price,
+        f"https://www.depop.com/products/{slug}/" if slug else None,
+        image_url=image_url,
+    )
+
+
+@batch_adapter("depop")
+def search_depop(saved_searches):
+    """Same real contract fix as search_offerup above - was single-search,
+    prefetch_marketplaces()'s batch_worker needs (list-in) -> {query:
+    [listings]}. One HTTP call per query (no combined multi-query API)."""
+    result = {}
+    for saved_search in saved_searches:
+        query = split_query_exclusions(saved_search["query"])[0]
+        url = "https://www.depop.com/search/?" + urlencode({"q": query})
+        html = _fetch_page("depop", url)
+        if html is None:
+            continue
+        listings = [x for x in (_depop_to_listing(o) for o in _depop_objects(html)) if x]
+        if listings:
+            result[saved_search["query"]] = listings
+    return result
 
 
 # facebook_marketplace lives in its own module (Playwright is a heavy dep this
