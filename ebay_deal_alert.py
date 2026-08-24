@@ -1414,7 +1414,19 @@ SUIT_JACKET_ONLY_SIGNALS = re.compile(
 # ("no pants pockets", "pants pictured are not included in other listings")
 # shouldn't over-block, but "pants not included" always means what it says.
 JACKET_ONLY_DISCLAIMER_SIGNALS = re.compile(
-    r"\b(jacket\s*only|blazer\s*only|coat\s*only|top\s*only|"
+    # "jacket only" etc. must END a clause, same reasoning as the "no
+    # pants" anchoring just below - a bare \b let it match real complete-
+    # suit condition notes like "the jacket only shows light wear on the
+    # cuffs, pants are excellent" or "jacket only needs a light press" -
+    # per-piece CONDITION talk on a genuine 2-piece suit, not a disclaimer
+    # that only the jacket is included. Confirmed live: this ran BEFORE
+    # SUIT_TWO_PIECE_SIGNALS could ever allow the listing back in, so a
+    # real complete suit describing its jacket's condition first was
+    # blocked outright. Clause-boundary anchoring (real disclaimers end in
+    # a period/comma/dash/exclamation/end-of-string: "jacket only, no
+    # pants", "jacket only.", "jacket only!") keeps every genuine
+    # disclaimer matching while rejecting the false positive.
+    r"\b((?:jacket|blazer|coat|top)\s*only(?=\s*[.,;!)-]|\s*$)|"
     r"(?:pants?|trousers?|bottoms?)\s*(?:are\s*)?not\s*included|"
     # "no pants" must END a clause or be explicitly "...included" - a bare
     # \b let it match "No pants POCKETS damage" on a genuine complete suit
@@ -3474,7 +3486,11 @@ def _check_marketplace_anomalies(conn, now, active, counts):
     completely silent for hours before anyone manually checked. Each run
     records how many listings each active platform returned; if a platform's
     count collapses versus its trailing baseline, push an ntfy alert via
-    notify_bot_down()."""
+    notify_bot_down(). Called with MARKETPLACES_ENABLED (every configured
+    platform), not the ADAPTERS-filtered `active` local in
+    prefetch_marketplaces() - a batch-only platform like facebook has no
+    ADAPTERS entry and would otherwise never be watched at all, even though
+    its count is populated the same as every other platform."""
     for platform in active:
         today = counts.get(platform, 0)
         conn.execute(
@@ -3632,7 +3648,10 @@ def prefetch_marketplaces(now, conn):
     if any(w.is_alive() for w in workers):
         logger.warning("Marketplace prefetch hit its hard deadline; using partial results")
     try:
-        _check_marketplace_anomalies(conn, now, active, counts)
+        # Every enabled platform, not just `active` (ADAPTERS-only): a
+        # batch-only platform like facebook has no ADAPTERS entry, so it was
+        # never watched even though counts[facebook] is populated above.
+        _check_marketplace_anomalies(conn, now, MARKETPLACES_ENABLED, counts)
     except Exception:
         # A bug in anomaly detection itself must never break the marketplace
         # fetch or crash the run - log and move on.

@@ -2038,6 +2038,41 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         mock_notify = self._run_prefetch("poshmark", 45)
         mock_notify.assert_not_called()
 
+    def test_batch_only_platform_zero_drop_notifies(self):
+        """facebook lives only in BATCH_ADAPTERS, so `active` (filtered to
+        ADAPTERS) used to exclude it from anomaly checks - a zero-count
+        collapse went unnoticed even though counts[facebook] is populated.
+        The check must cover every enabled platform, not just the
+        per-search-queue ones."""
+        self._seed_history("facebook", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        now = datetime.now(timezone.utc)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS["poshmark"] = lambda s: (
+                [{"itemId": "poshmark:1", "title": "test item", "seller": {}} for _ in range(45)],
+                45,
+            )
+            p.BATCH_ADAPTERS["facebook"] = lambda searches: {}  # silent collapse
+            m.MARKETPLACES_ENABLED = ["poshmark", "facebook"]
+            m.SAVED_SEARCHES = [
+                {"query": "test watch", "enabled": True, "platforms": ["poshmark", "facebook"]}
+            ]
+            with mock.patch.object(m, "notify_bot_down") as mock_notify:
+                m.prefetch_marketplaces(now, self.conn)
+            mock_notify.assert_called_once()
+            self.assertIn("facebook", mock_notify.call_args[0][0])
+            self.assertIn("0 listings", mock_notify.call_args[0][0])
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
