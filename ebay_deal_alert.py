@@ -191,6 +191,19 @@ COUNTERFEIT_SIGNALS = re.compile(
 WOMENS_SIZE_CROSSREF_SIGNAL = re.compile(
     r"\(us\s*(?:0|2|4|6|8|10|12|14|16|18|20)\)", re.IGNORECASE
 )
+# Real false-positive risk in the signal above: English shoemakers (Edward
+# Green, Crockett & Jones, Church's, Cheaney, Alfred Sargent, Gaziano &
+# Girling) write their own genuine men's UK-to-US size cross-reference the
+# exact same way - "Edward Green Chelsea Boot UK 9 (US 10)" - which is
+# these brands' own standard notation, not the EU/IT women's ready-to-wear
+# convention the signal above exists to catch. Scoped narrowly: only
+# exempts a "(US N)" that's immediately preceded by "UK <size>", the
+# specific shape of the false positive - doesn't touch the EU/IT case at
+# all (that never has "UK" anywhere in the title).
+UK_SIZE_CROSSREF_EXCEPTION = re.compile(
+    r"\buk\s*\d+(?:\.\d+)?\s*\(us\s*(?:0|2|4|6|8|10|12|14|16|18|20)\)",
+    re.IGNORECASE,
+)
 FABRIC_POLY_KEYWORD = _CONFIG["FABRIC_POLY_KEYWORD"]
 PIT_TO_PIT_CAP_INCHES = _CONFIG["PIT_TO_PIT_CAP_INCHES"]
 # Generic category/material words stripped out when checking whether a
@@ -1813,7 +1826,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
     # through eBay's own "-term" matching.
     if brand_in(haystack, GENDER_EXCLUDE_KEYWORDS):
         return {"verdict": "PASS", "reason": "excluded gender keyword in title/description", "listing": listing}
-    if WOMENS_SIZE_CROSSREF_SIGNAL.search(haystack):
+    if WOMENS_SIZE_CROSSREF_SIGNAL.search(haystack) and not UK_SIZE_CROSSREF_EXCEPTION.search(haystack):
         return {"verdict": "PASS", "reason": "women's size cross-reference in title/description", "listing": listing}
     if PET_PRODUCT_SIGNALS.search(haystack):
         return {"verdict": "PASS", "reason": "pet product, not menswear", "listing": listing}
