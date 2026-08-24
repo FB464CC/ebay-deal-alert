@@ -147,7 +147,16 @@ EMPTY_PACKAGING_SIGNALS = re.compile(
     r"dust\s*bag\s+only|packaging\s+only|authenticity\s+card\s+only|receipt\s+only|"
     r"no\s+item\s+included)\b"
     r"|\b(box|dust\s*bag)\b[^.]{0,60}\bbag\s+only\b"
-    r"|\bbag\s+only\b[^.]{0,60}\b(box|dust\s*bag)\b",
+    r"|\bbag\s+only\b[^.]{0,60}\b(box|dust\s*bag)\b"
+    # Real live miss: "Shinola Detroit Wooden box and accessories - no
+    # watch" alerted as a "Great Deal" - the title says outright the
+    # actual item isn't included, just its box/accessories, but nothing
+    # before this read a bare "no <item>" negation. Anchored to a clause
+    # boundary (matches the JACKET_ONLY_DISCLAIMER_SIGNALS pattern below)
+    # so "no watch strap included, watch runs great" - a real watch just
+    # missing its original strap - does NOT false-positive; only a "no
+    # watch" standing alone as its own clause does.
+    r"|\bno\s+watch\b(?:\s+included)?(?=\s*[.,;!)-]|\s*$)",
     re.IGNORECASE,
 )
 # Real live miss: a "fake goyard wallet" (counterfeit, plainly spelled
