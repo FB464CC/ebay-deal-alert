@@ -942,6 +942,26 @@ class StealQualityGate(unittest.TestCase):
         result["deal_rating"] = "Great Deal"
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="watches"))
 
+    def test_watch_brand_mismatch_blocks_even_with_a_great_deal_rating(self):
+        # Real live miss: a genuine Oris was listed with its own eBay
+        # item-specifics metadata mislabeled as "Seiko". A real AI check
+        # confirmed the mismatch - must block regardless of how good the
+        # price otherwise looks, and permanently (not retry-eligible).
+        result = {
+            "deal_rating": "Steal", "discount_pct": 80, "brand_tier": "grab_on_sight",
+            "watch_brand_mismatch": True,
+        }
+        reason = m.is_blocked_by_steal_quality_gate(result, category="watches")
+        self.assertIsNotNone(reason)
+        self.assertNotIn("no AI price", reason)
+
+    def test_watch_without_brand_mismatch_unaffected(self):
+        result = {
+            "deal_rating": "Steal", "discount_pct": 80, "brand_tier": "grab_on_sight",
+            "watch_brand_mismatch": False,
+        }
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="watches"))
+
     def test_suit_bar_retail_discount_path_requires_recognized_brand(self):
         # Live bug: 5 "Hunter Haig" suits (brand_tier None - totally
         # unrecognized, an eBay fuzzy-match on the "huntsman suit" query,
