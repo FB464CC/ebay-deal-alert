@@ -1971,7 +1971,7 @@
     "london",
     "hat"
   ],
-  "GEMINI_CALL_LIMIT": 6,
+  "GEMINI_CALL_LIMIT": 12,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
   "AI_PHOTO_PROVIDER": "gemini",
   "DEEPSEEK_MODEL": "deepseek-v4-flash-vision-exp",
