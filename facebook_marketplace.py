@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import re
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import unquote, urlencode, urlsplit
 
 from platforms import _dget, batch_adapter, make_listing, split_query_exclusions
 
@@ -121,11 +121,21 @@ def search_facebook_batch(saved_searches):
         logger.warning("Skipping Facebook Marketplace: playwright is not installed")
         return {}
 
+    # urlsplit's .username/.password are NOT percent-decoded (confirmed:
+    # "p%40ss" stays literally "p%40ss", never becomes "p@ss") - a proxy
+    # password containing @, :, %, /, or # (common in residential-proxy
+    # session strings) got handed to Playwright as the literal encoded
+    # text, causing silent 407s on every request (each page.goto burns its
+    # full timeout, logged as an ordinary "search failed", indistinguishable
+    # from zero real matches). .port is also None with no explicit port,
+    # which previously produced the literal string "host:None" - default
+    # to the scheme's standard port instead of crashing chromium.launch().
     parsed = urlsplit(proxy_url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     proxy = {
-        "server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
-        "username": parsed.username,
-        "password": parsed.password,
+        "server": f"{parsed.scheme}://{parsed.hostname}:{port}",
+        "username": unquote(parsed.username) if parsed.username else parsed.username,
+        "password": unquote(parsed.password) if parsed.password else parsed.password,
     }
 
     out = {}

@@ -136,5 +136,36 @@ class DefensiveParsing(unittest.TestCase):
         self.assertFalse(listing["seller_trusted"])
 
 
+class ShopGoodwillClosingSoon(unittest.TestCase):
+    def test_seconds_only_remaining_is_not_unparseable(self):
+        # Real live bug: confirmed live remainingTime values include bare
+        # "46s" - with no seconds capture this had no d/h/m to match,
+        # returned None, and got thrown out as "unparseable, don't trust
+        # it" - silently dropping every auction in its final minute, the
+        # exact down-to-the-wire case the closing-soon filter exists for.
+        self.assertEqual(p._parse_shopgoodwill_remaining("46s"), 0)
+        self.assertEqual(p._parse_shopgoodwill_remaining("1m46s"), 1)
+        self.assertIsNone(p._parse_shopgoodwill_remaining(""))
+        self.assertIsNone(p._parse_shopgoodwill_remaining(None))
+
+    def test_string_numbids_does_not_crash_the_whole_search(self):
+        # Real live bug: numBids compared with `> 0` while every other
+        # numeric field in this response goes through _to_float first.
+        # ShopGoodwill's own request payload is all-strings ("pageSize":
+        # "40" etc.), so a stringly-typed numBids in the response is
+        # plausible - `"3" > 0` raises TypeError, uncaught here, which
+        # _fetch_marketplace's blanket except turns into a silently empty
+        # result for the ENTIRE search, not just this one item.
+        body = {"searchResults": {"items": [{
+            "itemId": "1", "title": "Test Item", "currentPrice": "10.00",
+            "remainingTime": "5m", "numBids": "3", "assetsUrl": "http://x",
+        }]}}
+        with mock.patch.object(p, "get_json", return_value=None), \
+                mock.patch("platforms.requests.post") as post_mock:
+            post_mock.return_value = _FakeResp(200, body)
+            listings, _ = p.search_shopgoodwill({"query": "test"})
+        self.assertEqual(len(listings), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

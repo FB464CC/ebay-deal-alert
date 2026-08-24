@@ -705,15 +705,25 @@ SHOPGOODWILL_ASSUMED_SHIPPING = 13.50
 
 
 def _parse_shopgoodwill_remaining(remaining_str):
-    """Parse ShopGoodwill's human-readable "2d 19h" / "45m" countdown into
-    total minutes. Returns None if unparseable - callers should treat that
-    as "unknown, don't trust it" rather than assuming it's safe."""
+    """Parse ShopGoodwill's human-readable "2d 19h" / "45m" / "46s" countdown
+    into total minutes (rounded down - a sub-minute remainder still counts
+    as "0 minutes left", the most urgent case, not "unparseable"). Returns
+    None if unparseable - callers should treat that as "unknown, don't
+    trust it" rather than assuming it's safe.
+
+    Real live bug: confirmed live values include bare "46s" with no d/h/m
+    unit at all - with no seconds capture, that returned None and got
+    thrown out as unparseable, silently dropping every auction in its
+    final minute. That's exactly the down-to-the-wire case the closing-
+    soon filter exists to catch; "1m46s" survived only because the minutes
+    regex still found an "m" to match."""
     if not remaining_str:
         return None
     days_match = re.search(r"(\d+)\s*d", remaining_str)
     hours_match = re.search(r"(\d+)\s*h", remaining_str)
     minutes_match = re.search(r"(\d+)\s*m", remaining_str)
-    if not (days_match or hours_match or minutes_match):
+    seconds_match = re.search(r"(\d+)\s*s", remaining_str)
+    if not (days_match or hours_match or minutes_match or seconds_match):
         return None
     days = int(days_match.group(1)) if days_match else 0
     hours = int(hours_match.group(1)) if hours_match else 0
@@ -780,7 +790,15 @@ def search_shopgoodwill(saved_search):
         # current bid is close to being the FINAL price - same logic a
         # human sniper uses (watch it, don't bid until the last hour).
         remaining_minutes = _parse_shopgoodwill_remaining(item.get("remainingTime"))
-        num_bids = item.get("numBids") or 0
+        # _to_float, not a raw `or 0` - every other numeric field from this
+        # response is routed through it before comparison (this request's
+        # own payload is all-strings, e.g. "pageSize": "40", so a stringly-
+        # typed "numBids" in the response is plausible). A raw string
+        # compared with `> 0` raises TypeError, which propagates out of
+        # this function uncaught and gets caught by _fetch_marketplace's
+        # blanket except - silently discarding EVERY ShopGoodwill result
+        # for the whole search, not just this one item.
+        num_bids = _to_float(item.get("numBids")) or 0
         threshold = SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES if num_bids > 0 else SHOPGOODWILL_CLOSING_SOON_MINUTES
         if remaining_minutes is None or remaining_minutes > threshold:
             skipped_too_early += 1
