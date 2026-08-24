@@ -15,6 +15,7 @@ Pure stdlib unittest + mock, matching the repo's "no scraper framework"
 philosophy. Run with:
     python -m unittest test_platforms
 """
+import json
 import unittest
 from unittest import mock
 
@@ -103,6 +104,71 @@ class GrailedBatch429(unittest.TestCase):
         self.assertIn("rate limited", joined)
 
 
+class VintedAdaptiveBackoff(unittest.TestCase):
+    """Real live pattern: measured against 4 actual GitHub Actions runs,
+    Vinted was hitting 43-62 429s out of ~86 calls PER RUN - the fixed
+    0.15s pace (tuned from a clean, uncontested single-threaded burst test)
+    keeps hammering at the same rate for the rest of the run even after
+    Vinted starts rejecting calls. This was a known, explicitly named
+    ceiling (a `ponytail:` comment on _MIN_INTERVAL) until the 429s
+    actually showed up in the logs for real."""
+
+    def setUp(self):
+        # Module-level dicts persist across tests in the same process -
+        # isolate every test from whatever an earlier one left behind.
+        p._backoff_multiplier.clear()
+        p._last_call.clear()
+
+    def test_register_rate_limit_doubles_and_caps(self):
+        self.assertEqual(p._register_rate_limit("vinted"), 2)
+        self.assertEqual(p._register_rate_limit("vinted"), 4)
+        self.assertEqual(p._register_rate_limit("vinted"), 8)
+        for _ in range(10):
+            p._register_rate_limit("vinted")
+        self.assertEqual(p._backoff_multiplier["vinted"], p._MAX_BACKOFF_MULTIPLIER)
+
+    def test_backoff_is_per_platform_not_global(self):
+        p._register_rate_limit("vinted")
+        p._register_rate_limit("vinted")
+        self.assertEqual(p._backoff_multiplier.get("poshmark", 1), 1)
+
+    def test_pace_actually_scales_with_backoff_multiplier(self):
+        # Mutation-catchable: proves _pace() reads the multiplier, not just
+        # that _register_rate_limit tracks a number nobody consults. First
+        # monotonic() call computes the wait (triggers one sleep); every
+        # call after that returns a value far enough past the scaled
+        # interval to let the loop exit on its next check, whatever the
+        # exact call count turns out to be.
+        p._last_call["vinted"] = 100.0  # "just called"
+        p._backoff_multiplier["vinted"] = 4
+        with mock.patch("platforms.time.monotonic", side_effect=[100.0] + [1000.0] * 10), \
+             mock.patch("platforms.time.sleep") as sleep_mock:
+            p._pace("vinted")
+        sleep_mock.assert_called_once()
+        waited = sleep_mock.call_args[0][0]
+        self.assertAlmostEqual(waited, 0.15 * 4, places=3)
+
+    def test_get_json_429_registers_backoff(self):
+        with mock.patch("platforms.requests.get", return_value=_FakeResp(429)), \
+             mock.patch.object(p, "_pace"):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.get_json("vinted", "https://vinted.example/api")
+        self.assertIsNone(result)
+        self.assertEqual(p._backoff_multiplier.get("vinted"), 2)
+        self.assertIn("backing off", " ".join(cm.output))
+
+    def test_fetch_page_429_registers_backoff(self):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.get.return_value = mock.MagicMock(status=429)
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}), \
+             mock.patch.object(p, "_pace"):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p._fetch_page("offerup", "https://offerup.com/search?q=x")
+        self.assertIsNone(result)
+        self.assertEqual(p._backoff_multiplier.get("offerup"), 2)
+        self.assertIn("backing off", " ".join(cm.output))
+
+
 class DefensiveParsing(unittest.TestCase):
     def test_dget_scalar_receiver_returns_default(self):
         # Regression: (x or {}).get(k) raised AttributeError on a truthy
@@ -165,6 +231,148 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
             post_mock.return_value = _FakeResp(200, body)
             listings, _ = p.search_shopgoodwill({"query": "test"})
         self.assertEqual(len(listings), 1)
+
+
+_OFFERUP_HTML = (
+    '<html><body><script id="__NEXT_DATA__" type="application/json">'
+    '{"props":{"pageProps":{"searchFeedResponse":{"looseTiles":['
+    '{"__typename":"ModularFeedTileGoogleDisplayAd"},'
+    '{"__typename":"ModularFeedTileListing","listing":{'
+    '"listingId":"97415bd5-6ba9-3c3c-b357-b06f9301dd75",'
+    '"title":"Rolex Watches ","price":"2000",'
+    '"image":{"__typename":"ModularFeedImage",'
+    '"url":"https://images.offerup.com/abc.jpg","width":250,"height":250},'
+    '"locationName":"Columbia, SC","conditionText":null}}'
+    ']}}}}'
+    '</script></body></html>'
+)
+
+
+def _depop_html(payload):
+    """Build a realistic Depop RSC flight page from a query-cache payload.
+
+    The real page is self.__next_f.push([1, "<escaped JS string>"]) where the
+    string is JSON text prefixed with a row id ("12:..."). json.dumps of the
+    string literal reproduces the exact escaping the wire format uses.
+    """
+    row = json.dumps(["$", "$L48", None, payload])
+    return "<html><body><script>self.__next_f.push([1," + json.dumps("12:" + row) + "]);</script></body></html>"
+
+
+_DEPOP_PAYLOAD = {
+    "state": {
+        "mutations": [],
+        "queries": [{
+            "queryKey": ["product_search", {"params": {"q": "rolex watch"}}],
+            "state": {
+                "data": {
+                    "pages": [{
+                        "data": {
+                            "objects": [{
+                                "id": 879421273,
+                                "description": "Moissanite Rose Gold Luxury Watch",
+                                "pictures": [{"formats": {"P0": {"url": "https://media-photos.depop.com/P0.jpg"}}}],
+                                "pricing": {"current_price": {"total_price": "105.00"}},
+                                "location": "Garden Grove, United States",
+                                "attributes": {"brand": "unbranded", "condition": "brand_new"},
+                                "slug": "jayusfinds-moissanite-rose-gold-luxury-watch-d1ca",
+                            }]
+                        }
+                    }]
+                }
+            }
+        }]
+    }
+}
+
+
+class OfferUpAdapter(unittest.TestCase):
+    # search_offerup/search_depop are @batch_adapter entries - real bug
+    # caught in review before this ever shipped: they were first built
+    # single-search (saved_search -> [listings]), but
+    # prefetch_marketplaces()'s batch_worker calls every BATCH_ADAPTERS
+    # entry with a LIST of matching searches and expects {query:
+    # [listings]} back (see search_grailed_batch's own contract/tests) -
+    # confirmed live, the single-search version raised TypeError the
+    # moment it was called the way batch_worker actually calls it. Every
+    # test below exercises the REAL list-in/dict-out contract, not the
+    # function in isolation with an untested calling convention.
+    def test_extracts_real_listing_from_fixture(self):
+        with mock.patch.object(p, "_fetch_page", return_value=_OFFERUP_HTML):
+            result = p.search_offerup([{"query": "rolex watch"}])
+
+        self.assertIn("rolex watch", result)
+        listings = result["rolex watch"]
+        self.assertEqual(len(listings), 1)
+        l = listings[0]
+        self.assertEqual(l["itemId"], "offerup:97415bd5-6ba9-3c3c-b357-b06f9301dd75")
+        self.assertEqual(l["title"], "Rolex Watches")
+        self.assertEqual(l["price"], {"value": 2000.0, "currency": "USD"})
+        self.assertEqual(l["itemWebUrl"], "https://offerup.com/item/detail/97415bd5-6ba9-3c3c-b357-b06f9301dd75")
+        self.assertEqual(l["image"]["imageUrl"], "https://images.offerup.com/abc.jpg")
+
+    def test_missing_next_data_returns_empty_dict(self):
+        with mock.patch.object(p, "_fetch_page", return_value="<html><body>no data</body></html>"):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_offerup([{"query": "rolex watch"}])
+
+        self.assertEqual(result, {})
+        self.assertIn("__NEXT_DATA__", " ".join(cm.output))
+
+    def test_query_exclusions_stripped_before_building_url(self):
+        with mock.patch.object(p, "_fetch_page", return_value="<html></html>") as fetch:
+            p.search_offerup([{"query": "rolex watch -canteen -mug"}])
+        self.assertEqual(fetch.call_args[0][1], "https://offerup.com/search?q=rolex+watch")
+
+    def test_multiple_searches_each_get_their_own_key(self):
+        # The real bug class this bare-list contract exists to prevent:
+        # every enabled search sharing this platform must get its OWN
+        # results under its OWN (raw, unstripped) query key, not silently
+        # merged or only the last one surviving.
+        with mock.patch.object(p, "_fetch_page", return_value=_OFFERUP_HTML):
+            result = p.search_offerup([{"query": "rolex watch"}, {"query": "omega watch -parts"}])
+        self.assertEqual(set(result.keys()), {"rolex watch", "omega watch -parts"})
+
+
+class DepopAdapter(unittest.TestCase):
+    def test_extracts_real_listing_from_fixture(self):
+        with mock.patch.object(p, "_fetch_page", return_value=_depop_html(_DEPOP_PAYLOAD)):
+            result = p.search_depop([{"query": "rolex watch"}])
+
+        self.assertIn("rolex watch", result)
+        listings = result["rolex watch"]
+        self.assertEqual(len(listings), 1)
+        l = listings[0]
+        self.assertEqual(l["itemId"], "depop:879421273")
+        self.assertEqual(l["title"], "Moissanite Rose Gold Luxury Watch")
+        self.assertEqual(l["price"], {"value": 105.0, "currency": "USD"})
+        self.assertEqual(l["itemWebUrl"], "https://www.depop.com/products/jayusfinds-moissanite-rose-gold-luxury-watch-d1ca/")
+        self.assertEqual(l["image"]["imageUrl"], "https://media-photos.depop.com/P0.jpg")
+
+    def test_missing_product_search_cache_returns_empty_dict(self):
+        payload = {"state": {"queries": [{"queryKey": ["some_other_query", {}], "state": {"data": {"pages": []}}}]}}
+        with mock.patch.object(p, "_fetch_page", return_value=_depop_html(payload)):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_depop([{"query": "rolex watch"}])
+
+        self.assertEqual(result, {})
+        self.assertIn("product_search", " ".join(cm.output))
+
+    def test_query_exclusions_stripped_before_building_url(self):
+        with mock.patch.object(p, "_fetch_page", return_value="<html></html>") as fetch:
+            p.search_depop([{"query": "rolex watch -canteen"}])
+        self.assertEqual(fetch.call_args[0][1], "https://www.depop.com/search/?q=rolex+watch")
+
+    def test_real_batch_worker_call_shape_does_not_raise(self):
+        # Mutation-catchable regression test for the exact bug found in
+        # review: simulates prefetch_marketplaces().batch_worker's real
+        # call convention end to end (list-in) instead of testing the
+        # function in isolation with an assumed signature.
+        relevant = [{"query": "rolex watch", "max_price": 500, "category_id": "281", "enabled": True}]
+        with mock.patch.object(p, "_fetch_page", return_value=_depop_html(_DEPOP_PAYLOAD)):
+            result = p.BATCH_ADAPTERS["depop"](relevant)
+        self.assertIsInstance(result, dict)
+        self.assertIn("rolex watch", result)
 
 
 if __name__ == "__main__":
