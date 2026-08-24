@@ -144,6 +144,45 @@ class GolfEquipmentGate(unittest.TestCase):
         )
         self.assertIsNone(reason)
 
+    def test_price_over_ai_resale_estimate_is_blocked_even_under_the_cap(self):
+        # Real live miss: "Mens Golf Set - TaylorMade R9 Driver, Top-Flite
+        # Irons..." - $159 landed, well under the price cap, complete real-
+        # brand set, no damage - but the AI's own resale estimate was $120.
+        # Alerted with deal_rating "Marginal" / discount_pct -32% (paying
+        # 32% OVER what the AI itself said it's worth) because this category
+        # deliberately never checked deal_rating/discount_pct at all.
+        # "Personal use, not a flip" never meant price doesn't matter.
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(price=159, golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          estimated_resale_value=120.0),
+            category="golf-equipment",
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("resale estimate", reason)
+        self.assertNotIn("no AI price", reason)  # a real check ran, this is permanent
+
+    def test_price_at_or_under_resale_estimate_still_clears(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(price=100, golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          estimated_resale_value=120.0),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
+    def test_no_resale_estimate_does_not_block(self):
+        # Original design intent preserved: golf may never get a reliable
+        # resale estimate at all - absence of one must not strand every
+        # candidate, only an ACTUAL price-over-estimate should block.
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(price=250, golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          estimated_resale_value=None),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
 
 class JacketOnlySuitListing(unittest.TestCase):
     def test_tuxedo_jacket_with_no_pants_is_blocked(self):

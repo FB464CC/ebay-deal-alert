@@ -2686,19 +2686,33 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     listing_title_lower = (result.get("listing") or {}).get("title", "").lower()
 
     # GOLF EQUIPMENT - personal-use golf club set (his first ever), not a
-    # resale flip, so this does NOT key off deal_rating/discount_pct at all
-    # (compute_deal_rating requires estimated_resale_value, which this
-    # category may never reliably have - keying off it would strand every
-    # golf candidate in permanent "no AI price" retry limbo). Checked first
-    # and returns unconditionally either way since "golf-equipment" is a
-    # fully separate category from every apparel/watch bar below - no
-    # ordering interaction possible.
+    # resale flip, so this does NOT key off deal_rating/discount_pct's
+    # tiered bar at all (compute_deal_rating requires estimated_resale_
+    # value, which this category may never reliably have - keying off the
+    # tiered rating would strand every golf candidate in permanent
+    # "no AI price" retry limbo). It DOES still block paying more than the
+    # AI's own resale estimate when one exists - real live miss: a $150
+    # mixed-brand set ($159 landed) alerted with the AI's own resale
+    # estimate at $120, an 89% "Marginal"/-32% discount, i.e. paying OVER
+    # what the AI itself says it's worth. "Personal use, not a flip" never
+    # meant "price doesn't matter" - it meant the STEAL-TIER bar (70%+
+    # discount) is too strict for a keeper set, not that a real resale
+    # ceiling should be ignored entirely. Checked first and returns
+    # unconditionally either way since "golf-equipment" is a fully separate
+    # category from every apparel/watch bar below - no ordering interaction
+    # possible.
     if category == "golf-equipment":
         if not result.get("golf_ai_checked"):
             return "golf-equipment bar: no AI price estimate yet - needs a real AI check"
         landed = result.get("price")
         if landed is not None and landed > GOLF_EQUIPMENT_MAX_PRICE:
             return f"golf-equipment bar: price ${landed} exceeds ${GOLF_EQUIPMENT_MAX_PRICE} personal-use cap"
+        resale = result.get("estimated_resale_value")
+        if landed is not None and resale is not None and landed > resale:
+            return (
+                f"golf-equipment bar: price ${landed} exceeds the AI's own "
+                f"${resale} resale estimate - not worth it even for personal use"
+            )
         if not result.get("golf_is_complete_set"):
             return "golf-equipment bar: AI did not confirm a complete, usable set"
         if result.get("golf_is_starter_kit"):
