@@ -1234,6 +1234,20 @@ class StealQualityGate(unittest.TestCase):
             self.assertIsNotNone(reason)
             self.assertNotIn("gamecocks bar", reason, f"{title!r} must not get the loose gamecocks bar")
 
+    def test_gamecocks_bar_requires_peter_millar_in_the_title_too(self):
+        # Real gap: this bar enforced "peter millar" at the SEARCH-QUERY
+        # level only, and "gamecocks" at the listing-title level - never
+        # required the TITLE to actually say "peter millar". Same class of
+        # miss as the suit/loro-piana/watch title-mismatch fixes. "Millar
+        # Gamecocks Golf Polo" - the unrelated "Millar" golf-knitwear
+        # brand - would pass relevance on "millar" alone and this bar on
+        # "gamecocks" alone, getting the Peter Millar collegiate line's
+        # loosened bar for a different brand entirely.
+        result = self._gamecocks_result("Millar Gamecocks Golf Polo", deal_rating=None, brand_tier="standard")
+        reason = m.is_blocked_by_steal_quality_gate(result, category="knitwear")
+        self.assertIsNotNone(reason)
+        self.assertNotIn("gamecocks bar", reason)
+
     def test_loro_piana_cucinelli_bar_requires_steal_tier(self):
         # Live miss: a $200 Brunello Cucinelli jacket alerted as a
         # well-evidenced 59% "Great Deal" (real Grailed sold comps) - not
