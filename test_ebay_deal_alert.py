@@ -562,6 +562,9 @@ class SeenTablePruning(unittest.TestCase):
         self.conn.execute(
             "CREATE TABLE fingerprints (fingerprint TEXT PRIMARY KEY, best_price REAL, seen_at TEXT)"
         )
+        self.conn.execute(
+            "CREATE TABLE ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)"
+        )
 
     def tearDown(self):
         self.conn.close()
@@ -586,6 +589,24 @@ class SeenTablePruning(unittest.TestCase):
         self.conn.execute("INSERT INTO seen VALUES ('recent-item', ?)", (recent,))
         self.conn.commit()
         self.assertEqual(m.prune_old_seen_entries(self.conn), (0, 0))
+
+    def test_stale_ai_pending_rows_pruned_recent_kept(self):
+        """Real bug: ai_pending rows are only ever deleted by mark_seen() on
+        final disposition. A candidate that keeps losing the AI-slot
+        priority race and then simply stops appearing in search results
+        (sold/delisted) never reaches final disposition, so its row was
+        orphaned forever - unlike seen/fingerprints (row cap + age here)
+        and marketplace_counts (its own age prune), ai_pending had no
+        retention policy at all."""
+        old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        self.conn.execute("INSERT INTO ai_pending VALUES ('old-item', ?)", (old,))
+        self.conn.execute("INSERT INTO ai_pending VALUES ('recent-item', ?)", (recent,))
+        self.conn.commit()
+        m.prune_old_seen_entries(self.conn)
+        pending = m.get_ai_pending_minutes(self.conn, ["old-item", "recent-item"])
+        self.assertNotIn("old-item", pending)
+        self.assertIn("recent-item", pending)
 
 
 class ScoreListingHardFails(unittest.TestCase):
