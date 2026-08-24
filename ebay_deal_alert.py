@@ -1087,7 +1087,9 @@ def prune_old_seen_entries(conn):
     A listing gone this many days is never coming back as "new" in any
     way that matters - real relist/undercut detection uses the separate
     `fingerprints` table (price-keyed), not raw seen-item membership,
-    and both get the same retention window here.
+    and both get the same retention window here. `ai_pending` (see
+    mark_ai_pending()) shares the window too - it's otherwise never
+    cleaned up by age, only by an item reaching final disposition.
 
     VACUUM rebuilds the whole file, so this is gated by the caller to run
     once/day, not every 5-minute run."""
@@ -1103,6 +1105,20 @@ def prune_old_seen_entries(conn):
         logger.info("Pruned %s oldest seen rows to hold the %s cap", over, MAX_SEEN_ROWS)
     seen_deleted = conn.execute("DELETE FROM seen WHERE seen_at < ?", (cutoff,)).rowcount
     fp_deleted = conn.execute("DELETE FROM fingerprints WHERE seen_at < ?", (cutoff,)).rowcount
+    # ai_pending rows are only ever deleted by mark_seen() on final
+    # disposition (see that function). A candidate that gets stuck losing
+    # the AI-slot priority race every run and then simply stops appearing
+    # in search results (sold/delisted) never reaches a final disposition,
+    # so its row was orphaned forever - the one table of the five this
+    # module owns with NO retention policy at all, unlike `seen`/
+    # `fingerprints` (this same age+row-cap prune) and `marketplace_counts`
+    # (its own 30-day age prune in check_marketplace_health). Same cutoff
+    # as seen/fingerprints: 21+ days stuck is stale by any measure, and
+    # mark_ai_pending()'s INSERT OR IGNORE means a still-live candidate just
+    # gets a fresh first_seen_at next run rather than being lost.
+    ai_pending_deleted = conn.execute(
+        "DELETE FROM ai_pending WHERE first_seen_at < ?", (cutoff,)
+    ).rowcount
     conn.commit()
     # VACUUM must run if EITHER prune removed anything. Counting only the
     # age-based deletes was the trap: on the young-but-huge table that
@@ -1123,7 +1139,7 @@ def prune_old_seen_entries(conn):
         over_size = os.path.getsize(DB_PATH) / (1024 * 1024) >= SEEN_DB_EMERGENCY_MB
     except OSError:
         over_size = False
-    total_deleted = max(over, 0) + seen_deleted + fp_deleted
+    total_deleted = max(over, 0) + seen_deleted + fp_deleted + ai_pending_deleted
     if over_size and not total_deleted:
         logger.warning("Over the emergency size with nothing to delete - VACUUMing to reclaim free pages")
         try:
@@ -1135,8 +1151,8 @@ def prune_old_seen_entries(conn):
             logger.error("VACUUM failed while over the emergency size: %s", exc)
     if total_deleted:
         logger.info(
-            "Pruned %s over-cap + %s aged seen + %s fingerprint rows; VACUUMing to reclaim disk",
-            max(over, 0), seen_deleted, fp_deleted,
+            "Pruned %s over-cap + %s aged seen + %s fingerprint + %s ai_pending rows; VACUUMing to reclaim disk",
+            max(over, 0), seen_deleted, fp_deleted, ai_pending_deleted,
         )
         try:
             conn.execute("VACUUM")
