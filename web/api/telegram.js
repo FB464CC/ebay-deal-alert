@@ -398,7 +398,13 @@ module.exports = async (req, res) => {
 
   const message = update?.message;
   const chatId = message?.chat?.id;
-  const text = message?.text;
+  // Real bug: a photo message's text lives in `caption`, not `text` - a
+  // reply sent with a photo (with or without a caption) always had
+  // message.text === undefined, so the very next check below fired the
+  // generic "send me a link" bounce before isFollowUpReply() ever got a
+  // chance to run. Confirmed by the user directly: "not letting me send
+  // pics and info back to it... just responds send a link."
+  const text = message?.text || message?.caption;
   const replyTo = message?.message_id;
 
   if (!chatId) {
@@ -407,6 +413,15 @@ module.exports = async (req, res) => {
   const reply = (txt) => telegramSend(chatId, txt, replyTo);
 
   if (!text) {
+    if (isFollowUpReply(message) && message.photo?.length) {
+      // ponytail: a reply with a photo but no caption text still isn't
+      // deep-analyzed (new follow-up photos aren't vision-checked yet,
+      // same limitation as before) - but it must NOT silently bounce to
+      // the generic "send a link" message either. Upgrade path: re-run
+      // DeepSeek vision on the new photo(s) here instead of just noting it.
+      await reply("Got the photo, but I can't look at new photos in a follow-up yet - add a text note about what you want me to check and I'll answer based on that.");
+      return sendJson(res, 200, { ok: true });
+    }
     await reply("Send me a marketplace listing link and I'll analyze it.");
     return sendJson(res, 200, { ok: true });
   }
@@ -415,7 +430,8 @@ module.exports = async (req, res) => {
   if (!url) {
     if (isFollowUpReply(message)) {
       try {
-        const answer = await callDeepSeek(followUpPrompt(message.reply_to_message.text, text), [], false);
+        const priorText = message.reply_to_message.text || message.reply_to_message.caption || "";
+        const answer = await callDeepSeek(followUpPrompt(priorText, text), [], false);
         await reply(answer.slice(0, 4000));
       } catch (error) {
         await reply(`Sorry, I couldn't answer that (${error.message}).`);
