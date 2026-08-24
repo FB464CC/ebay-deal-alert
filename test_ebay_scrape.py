@@ -93,6 +93,30 @@ def test_non_200_response_returns_empty_list():
     assert results == []
 
 
+def test_proxy_env_var_gets_passed_to_fetcher():
+    # Real fix: eBay 403s 100% of calls from GitHub Actions' shared runner
+    # IP range (confirmed live against a real GH Actions run), vs ~1-in-10
+    # from a residential IP. EBAY_SCRAPE_PROXY_URL routes through a real
+    # residential proxy instead - must reach Fetcher.get's proxy kwarg.
+    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+         patch.dict("os.environ", {"EBAY_SCRAPE_PROXY_URL": "http://user:pass@proxy.example:8888"}):
+        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+        search_ebay_scraped("rolex")
+
+    assert mock_fetcher.get.call_args.kwargs.get("proxy") == "http://user:pass@proxy.example:8888"
+
+
+def test_no_proxy_configured_calls_fetcher_without_proxy_kwarg():
+    # Optional by design - unset, this must still work exactly as before
+    # (direct call, no proxy kwarg at all), not pass proxy=None.
+    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+         patch.dict("os.environ", {}, clear=True):
+        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+        search_ebay_scraped("rolex")
+
+    assert "proxy" not in mock_fetcher.get.call_args.kwargs
+
+
 def test_malformed_or_empty_html_returns_empty_list():
     assert _parse_listings("") == []
     assert _parse_listings("<html><body>not eBay markup at all</body></html>") == []
