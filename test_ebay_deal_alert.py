@@ -983,6 +983,35 @@ class StealQualityGate(unittest.TestCase):
         }
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="watches"))
 
+    def test_counterfeit_suspected_blocks_regardless_of_category_or_price(self):
+        # Real live miss: "Card Holder Wallets Designer" - 4 Goyard card
+        # holders shown in one photo at $40 - alerted as an 89%-off "Steal"
+        # because the sold-comps override replaced the AI's own skeptical
+        # $25 estimate with a $375 median sourced from GENUINE single card
+        # holders. The vision model's own free-text summary already said
+        # "Appears to be replica/counterfeit items given the low listing
+        # price ($40) and presentation" but nothing structured read it.
+        # Must block regardless of category and regardless of how good the
+        # (comps-inflated) price looks, and permanently - a re-check next
+        # run won't un-see a counterfeit.
+        for category in ("other", "watches", "golf-equipment"):
+            result = {
+                "deal_rating": "Steal", "discount_pct": 89, "brand_tier": "grab_on_sight",
+                "counterfeit_suspected": True,
+                "counterfeit_reason": "4 identical card holders shown together, generic packaging",
+            }
+            reason = m.is_blocked_by_steal_quality_gate(result, category=category)
+            self.assertIsNotNone(reason, category)
+            self.assertIn("counterfeit", reason)
+            self.assertNotIn("no AI price", reason)
+
+    def test_counterfeit_not_suspected_unaffected(self):
+        result = {
+            "deal_rating": "Steal", "discount_pct": 80, "brand_tier": "grab_on_sight",
+            "counterfeit_suspected": False,
+        }
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+
     def test_suit_bar_retail_discount_path_requires_recognized_brand(self):
         # Live bug: 5 "Hunter Haig" suits (brand_tier None - totally
         # unrecognized, an eBay fuzzy-match on the "huntsman suit" query,
