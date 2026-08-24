@@ -138,8 +138,13 @@ PET_PRODUCT_SIGNALS = re.compile(
 # CONDITION_HARD_FAIL_KEYWORDS, where whole-word matching couldn't tell
 # "dust bag only" from "with dust bag" - that over-blocked genuine listings.)
 EMPTY_PACKAGING_SIGNALS = re.compile(
-    r"\b(box\s+only|empty\s+box|just\s+the\s+box|box\s+and\s+dust\s+bag\s+only|"
-    r"dust\s+bag\s+only|packaging\s+only|authenticity\s+card\s+only|receipt\s+only|"
+    # dust\s*bag (zero-or-more), not dust\s+bag - "Dustbag Only" (single
+    # word, no space) is the common real-world spelling on eBay/luxury
+    # resale and the \s+ version silently never matched it at all, only
+    # the spaced "dust bag only" did. The secondary branches below already
+    # used \s* for this same reason; the primary branch was inconsistent.
+    r"\b(box\s+only|empty\s+box|just\s+the\s+box|box\s+and\s+dust\s*bag\s+only|"
+    r"dust\s*bag\s+only|packaging\s+only|authenticity\s+card\s+only|receipt\s+only|"
     r"no\s+item\s+included)\b"
     r"|\b(box|dust\s*bag)\b[^.]{0,60}\bbag\s+only\b"
     r"|\bbag\s+only\b[^.]{0,60}\b(box|dust\s*bag)\b",
