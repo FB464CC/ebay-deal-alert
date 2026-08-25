@@ -133,3 +133,103 @@ def test_network_exception_returns_empty_list_never_raises():
         results = search_ebay_scraped("rolex")
 
     assert results == []
+
+
+# Real live bug: even after classify_stray_auction_listing() fixed the
+# official Browse API lane, the user kept getting alerted on eBay auctions
+# with days left. Root cause found live: THIS scrape lane's price regex
+# also matches a live auction card's price span - which is just the
+# CURRENT BID, not a real price - and _parse_listings() never extracted
+# any buyingOptions/bidCount/end-date data at all, so every scraped
+# auction sailed through as if it were fixed-price. Confirmed live against
+# eBay's real search HTML: an auction card - and ONLY an auction card -
+# carries a `s-card__time-left` span ("2d 23h", "2h 9m", "35s"), right by
+# a "N bids" span; a fixed-price card has neither. Fix stamps
+# buyingOptions=["AUCTION"]/bidCount/a synthesized itemEndDate onto these
+# listings in the exact field shape classify_stray_auction_listing()
+# already expects, so that ONE shared gate (not new threshold logic here)
+# now protects both lanes.
+AUCTION_CARD_HTML = """
+<ul class="srp-results srp-grid clearfix">
+<li class="s-card s-card--vertical" data-listingid="555566667777">
+<div class="su-card-container"><a class="s-card__link" href="https://www.ebay.com/itm/555566667777?hash=ghi">
+<img class="s-card__image" loading="eager" src="https://i.ebayimg.com/images/g/ccc/s-l500.webp">
+</a><div class="s-card__title"><span class="su-styled-text primary default">Vintage Omega Speedmaster Auction</span><span class="clipped">New Listing</span></div>
+<span class="su-styled-text primary bold large-1 s-card__price">$3,554.00</span>
+<span class="su-styled-text secondary large">2 bids</span><span class="s-card__time "><span class="clipped">Time left</span><span class="s-card__time-left">2d 23h</span></span>
+</div></li>
+<li class="s-card s-card--vertical" data-listingid="888899990000">
+<div class="su-card-container"><a class="s-card__link" href="https://www.ebay.com/itm/888899990000?hash=jkl">
+<img class="s-card__image" loading="eager" src="https://i.ebayimg.com/images/g/ddd/s-l500.webp">
+</a><div class="s-card__title"><span class="su-styled-text primary default">Fixed Price Casio Watch</span><span class="clipped">New Listing</span></div>
+<span class="su-styled-text primary bold large-1 s-card__price">$45.00</span>
+</div></li>
+<li class="s-card s-card--vertical" data-listingid="111122223333">
+<div class="su-card-container"><a class="s-card__link" href="https://www.ebay.com/itm/111122223333?hash=mno">
+<img class="s-card__image" loading="eager" src="https://i.ebayimg.com/images/g/eee/s-l500.webp">
+</a><div class="s-card__title"><span class="su-styled-text primary default">Auction Ending Soon Watch</span><span class="clipped">New Listing</span></div>
+<span class="su-styled-text primary bold large-1 s-card__price">$210.00</span>
+<span class="su-styled-text secondary large">0 bids</span><span class="s-card__time "><span class="clipped">Time left</span><span class="s-card__time-left">9m</span></span>
+</div></li>
+</ul>
+"""
+
+
+def test_auction_card_gets_tagged_with_buying_options_and_bid_count():
+    with patch("ebay_scrape.Fetcher") as mock_fetcher:
+        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+        results = search_ebay_scraped("omega")
+
+    auction = next(r for r in results if "Speedmaster" in r["title"])
+    assert auction["buyingOptions"] == ["AUCTION"]
+    assert auction["bidCount"] == 2
+    assert "itemEndDate" in auction
+
+
+def test_auction_card_synthesized_end_date_is_far_out_days_from_now():
+    with patch("ebay_scrape.Fetcher") as mock_fetcher:
+        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+        results = search_ebay_scraped("omega")
+
+    from datetime import datetime, timezone
+    auction = next(r for r in results if "Speedmaster" in r["title"])
+    end = datetime.fromisoformat(auction["itemEndDate"].replace("Z", "+00:00"))
+    minutes_out = (end - datetime.now(timezone.utc)).total_seconds() / 60
+    # "2d 23h" -> roughly 4260 minutes, nowhere near the 15-min closing
+    # window - this is the exact listing classify_stray_auction_listing()
+    # must skip rather than alert on at its current-bid price.
+    assert 4000 < minutes_out < 4400
+
+
+def test_fixed_price_card_gets_no_auction_fields():
+    with patch("ebay_scrape.Fetcher") as mock_fetcher:
+        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+        results = search_ebay_scraped("omega")
+
+    fixed = next(r for r in results if "Casio" in r["title"])
+    assert "buyingOptions" not in fixed
+    assert "itemEndDate" not in fixed
+
+
+def test_ending_soon_auction_card_end_date_is_within_minutes():
+    with patch("ebay_scrape.Fetcher") as mock_fetcher:
+        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+        results = search_ebay_scraped("omega")
+
+    from datetime import datetime, timezone
+    ending_soon = next(r for r in results if "Ending Soon" in r["title"])
+    assert ending_soon["bidCount"] == 0
+    end = datetime.fromisoformat(ending_soon["itemEndDate"].replace("Z", "+00:00"))
+    minutes_out = (end - datetime.now(timezone.utc)).total_seconds() / 60
+    assert 7 < minutes_out < 11
+
+
+def test_parse_time_left_minutes_handles_all_observed_formats():
+    from ebay_scrape import _parse_time_left_minutes
+    assert _parse_time_left_minutes("2d 23h") == 2 * 1440 + 23 * 60
+    assert _parse_time_left_minutes("2h 9m") == 2 * 60 + 9
+    assert _parse_time_left_minutes("35s") == 35 / 60
+    assert _parse_time_left_minutes("9m") == 9
+    assert _parse_time_left_minutes("") is None
+    assert _parse_time_left_minutes(None) is None
+    assert _parse_time_left_minutes("garbage") is None

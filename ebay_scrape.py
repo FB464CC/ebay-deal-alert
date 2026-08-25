@@ -26,6 +26,7 @@ a warning. It never raises - a scrape failure must never take down the run.
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from scrapling.fetchers import Fetcher
@@ -45,6 +46,33 @@ _LISTING_ID_RE = re.compile(r'data-listingid="(\d+)"')
 _TITLE_RE = re.compile(r'class="s-card__title">\s*<span[^>]*>([^<]+)</span>')
 _PRICE_RE = re.compile(r'class="[^"]*\bs-card__price\b[^"]*">\$([\d,]+\.\d{2})')
 _IMAGE_RE = re.compile(r'<img\b[^>]*?class="s-card__image"[^>]*?\bsrc="([^"]+)"')
+
+# A live AUCTION card - and ONLY an auction card, confirmed live: a plain
+# fixed-price search never carries this span at all - shows a real
+# server-rendered countdown here, e.g. "2d 23h", "2h 9m", "35s". Without
+# this, the price scraped above is the CURRENT BID for these cards, not a
+# real purchasable price (same trap the official Browse API lane had -
+# see classify_stray_auction_listing() in ebay_deal_alert.py). This HTML
+# lane can't produce a real end-DATE the way the JSON API does, so it
+# synthesizes one (now + parsed minutes) in the exact field shape
+# classify_stray_auction_listing() already expects (buyingOptions/
+# itemEndDate/bidCount) - that shared function then applies the identical
+# closing-window gate to these listings too, no duplicated threshold
+# logic needed here.
+_TIME_LEFT_RE = re.compile(r'class="s-card__time-left">([^<]+)</span>')
+_BID_COUNT_RE = re.compile(r'(\d+)\s*bids?\b', re.I)
+_TIME_COMPONENT_RE = re.compile(r'(\d+)\s*(d|h|m|s)\b')
+_TIME_UNIT_MINUTES = {"d": 1440, "h": 60, "m": 1, "s": 1 / 60}
+
+
+def _parse_time_left_minutes(text):
+    """"2d 23h" / "2h 9m" / "35s" -> total minutes remaining, or None."""
+    if not text:
+        return None
+    components = _TIME_COMPONENT_RE.findall(text)
+    if not components:
+        return None
+    return sum(int(value) * _TIME_UNIT_MINUTES[unit] for value, unit in components)
 
 
 def _parse_listings(html):
@@ -89,6 +117,15 @@ def _parse_listings(html):
             # bare id convention here makes both lanes collide correctly on
             # the same real listing.
             listing["itemId"] = f"v1|{item_id}|0"
+            time_left_match = _TIME_LEFT_RE.search(chunk)
+            if time_left_match:
+                minutes_remaining = _parse_time_left_minutes(time_left_match.group(1))
+                if minutes_remaining is not None:
+                    bid_match = _BID_COUNT_RE.search(chunk)
+                    end_date = datetime.now(timezone.utc) + timedelta(minutes=minutes_remaining)
+                    listing["buyingOptions"] = ["AUCTION"]
+                    listing["bidCount"] = int(bid_match.group(1)) if bid_match else 0
+                    listing["itemEndDate"] = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
             listings.append(listing)
     return listings
 
