@@ -233,6 +233,45 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
         self.assertEqual(len(listings), 1)
 
 
+class ShopGoodwillProxyScoping(unittest.TestCase):
+    # Real live bug: ShopGoodwill's WAF returns HTTP 403 for every GitHub
+    # Actions runner IP. Fix routes search_shopgoodwill's own requests.post
+    # through SHOPGOODWILL_PROXY_URL - scoped to ONLY this platform, since
+    # every other adapter (get_json-based or its own requests call) must
+    # keep hitting the origin site directly and be unaffected.
+    def _run(self, env):
+        body = {"searchResults": {"items": [], "itemCount": 0}}
+        with mock.patch.dict("os.environ", env, clear=True), \
+                mock.patch("platforms.requests.post") as post_mock:
+            post_mock.return_value = _FakeResp(200, body)
+            p.search_shopgoodwill({"query": "test"})
+        return post_mock
+
+    def test_proxy_url_set_is_passed_to_requests_post(self):
+        post_mock = self._run({"SHOPGOODWILL_PROXY_URL": "http://user:pass@proxy.example.com:8888"})
+        _, kwargs = post_mock.call_args
+        self.assertEqual(
+            kwargs["proxies"],
+            {"http": "http://user:pass@proxy.example.com:8888", "https": "http://user:pass@proxy.example.com:8888"},
+        )
+
+    def test_proxy_url_unset_passes_none(self):
+        post_mock = self._run({})
+        _, kwargs = post_mock.call_args
+        self.assertIsNone(kwargs["proxies"])
+
+    def test_proxy_scoping_does_not_leak_into_get_json(self):
+        # Regression guard: the proxy must be read directly inside
+        # search_shopgoodwill, never threaded into get_json() - any other
+        # platform calling get_json() must never pick up this proxy.
+        with mock.patch.dict("os.environ", {"SHOPGOODWILL_PROXY_URL": "http://proxy.example.com:8888"}, clear=True), \
+                mock.patch("platforms.requests.get") as get_mock:
+            get_mock.return_value = _FakeResp(200, {"ok": True})
+            p.get_json("poshmark", "https://example.com")
+        _, kwargs = get_mock.call_args
+        self.assertNotIn("proxies", kwargs)
+
+
 _OFFERUP_HTML = (
     '<html><body><script id="__NEXT_DATA__" type="application/json">'
     '{"props":{"pageProps":{"searchFeedResponse":{"looseTiles":['
