@@ -255,6 +255,30 @@ MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
 # sustained blocking from GitHub Actions' shared runner IPs - untested from
 # there, only verified working from a residential IP so far).
 EBAY_SCRAPE_ENABLED = bool(_CONFIG.get("EBAY_SCRAPE_ENABLED", True))
+# Separate, tiny AI-check budget for the eBay scrape lane, counted against
+# its OWN counter (ebay_scrape_ai_calls in run()'s PASS 3) instead of the
+# shared GEMINI_CALL_LIMIT pool. Real production regression this exists
+# for: when the scrape lane was last enabled it added up to ~500 extra
+# listings/run, and every one of those competed for the SAME fixed
+# GEMINI_CALL_LIMIT as the official-API lane, starving watch AI-checks
+# (measured live: 209 blocked in one run). EBAY_SCRAPE_ENABLED was flipped
+# to false in config.json over exactly this. Capping the lane at 1 check/run
+# of its own means a scrape flood can never eat the main pipeline's budget
+# again - the lane just surfaces MORE candidates for the same queries, and
+# the best one can still get a real AI check without taking one away from a
+# candidate the official API found.
+#
+# Dollar ceiling, per explicit user instruction ("ideally $0 or less a
+# month, IF this works as perfectly intended"): the lane can spend at most
+# 1 check/run, at ~300 runs/day (measured real GH Actions cadence) that's
+# ~9,000 checks/month worst case, a full 4-photo DeepSeek fallback check
+# costs ~$0.0008 (~$0.0002/photo x 4, the image cap) -> ~$7/month ABSOLUTE
+# worst case, and only if Gemini's free tier failed every single time. Real
+# expected cost is ~$0: AI_PHOTO_PROVIDER is Gemini-primary with DeepSeek as
+# automatic fallback, and one extra call/run is trivially inside Gemini's
+# free-tier headroom (the same headroom the main GEMINI_CALL_LIMIT is paced
+# to spread across), so the paid fallback should almost never fire.
+EBAY_SCRAPE_AI_CHECK_LIMIT = int(_CONFIG.get("EBAY_SCRAPE_AI_CHECK_LIMIT", 1))
 # Hard wall-clock cap on the parallel marketplace fetch. Was 30s back when
 # the repo was private and GitHub billed Actions minutes rounded up per job -
 # the repo is public now (unlimited free Actions minutes), and per_page went
@@ -4057,6 +4081,19 @@ def run():
                             "eBay scrape lane: %s extra listing(s) for %r",
                             len(scraped), saved_search["query"],
                         )
+                        for _scraped_listing in scraped:
+                            # Internal marker only: makes PASS 3's budget
+                            # branch route this listing against the scrape
+                            # lane's OWN tiny AI-check budget
+                            # (EBAY_SCRAPE_AI_CHECK_LIMIT) instead of the
+                            # shared GEMINI_CALL_LIMIT pool. Leading
+                            # underscore so make_listing()/score_listing()/
+                            # every downstream consumer never looks at it.
+                            # Rides the listing dict itself (not the itemId,
+                            # which is deliberately indistinguishable from
+                            # the official API's for dedup) all the way into
+                            # review_candidates, where PASS 3 reads it.
+                            _scraped_listing["_from_scrape_lane"] = True
                         listings = list(listings) + scraped
                 except Exception:
                     logger.exception("eBay scrape lane failed for query: %s", saved_search["query"])
@@ -4556,8 +4593,10 @@ def run():
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
     # then alert (cap-gated), in priority order.
     gemini_calls = 0
+    ebay_scrape_ai_calls = 0
     auction_reserved_calls = 0
     gemini_budget_logged = False
+    ebay_scrape_budget_logged = False
     for candidate in review_candidates:
         item_id = candidate["item_id"]
         listing = candidate["listing"]
@@ -4586,20 +4625,38 @@ def run():
             continue
 
         ai_result = None
+        is_scrape_lane = bool(listing.get("_from_scrape_lane"))
         # Once the normal Gemini budget is spent, one extra call is still
         # granted to an ending-soon auction so a closing auction can't be
         # starved out by the cap - see AUCTION_AI_RESERVED_CALLS for the
         # full tradeoff and the cap that keeps many simultaneous auctions
-        # from eating the whole day's budget.
+        # from eating the whole day's budget. Scrape-lane candidates never
+        # qualify - they have their own budget below and must not touch the
+        # shared pool (including its reserved auction slot).
         use_reserved_auction_slot = (
-            gemini_calls >= GEMINI_CALL_LIMIT
+            not is_scrape_lane
+            and gemini_calls >= GEMINI_CALL_LIMIT
             and bool(result.get("is_ending_soon_auction"))
             and auction_reserved_calls < AUCTION_AI_RESERVED_CALLS
         )
-        if gemini_calls < GEMINI_CALL_LIMIT or use_reserved_auction_slot:
-            if gemini_calls > 0:
-                time.sleep(GEMINI_INTER_CALL_SLEEP_SECONDS)
-            gemini_calls += 1
+        # Scrape-lane candidates draw from their OWN tiny budget
+        # (EBAY_SCRAPE_AI_CHECK_LIMIT), never the shared GEMINI_CALL_LIMIT
+        # pool that the official-API and auction lanes live on - a scrape
+        # flood must not starve them. The AI check itself, and everything
+        # after it, is identical; only which counter gates it changes.
+        if is_scrape_lane:
+            budget_granted = ebay_scrape_ai_calls < EBAY_SCRAPE_AI_CHECK_LIMIT
+        else:
+            budget_granted = (
+                gemini_calls < GEMINI_CALL_LIMIT or use_reserved_auction_slot
+            )
+        if budget_granted:
+            if is_scrape_lane:
+                ebay_scrape_ai_calls += 1
+            else:
+                if gemini_calls > 0:
+                    time.sleep(GEMINI_INTER_CALL_SLEEP_SECONDS)
+                gemini_calls += 1
             # eBay's item_summary/search (search_ebay()) never returns a
             # description - only this separate per-item call does.
             # Poshmark/ShopGoodwill already carry it for free (see
@@ -4650,6 +4707,13 @@ def run():
             # the guarantee for every other ending-soon auction that run.
             if use_reserved_auction_slot:
                 auction_reserved_calls += 1
+        elif is_scrape_lane:
+            if not ebay_scrape_budget_logged:
+                logger.info(
+                    "eBay scrape-lane AI-check budget exhausted for this run, "
+                    "skipping AI check for remaining scrape-lane listings"
+                )
+                ebay_scrape_budget_logged = True
         elif not gemini_budget_logged:
             logger.info(
                 "Gemini call budget exhausted for this run, skipping AI check for remaining listings"

@@ -2555,6 +2555,96 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(self.ai_calls), 2,
             "2 distinct listings get an AI check - the scraped duplicate must NOT double-spend a check")
 
+    def test_scrape_lane_ai_check_spends_own_budget_not_gemini_calls(self):
+        # The core fix, mutation-tested. A scrape-lane candidate must draw
+        # from its OWN EBAY_SCRAPE_AI_CHECK_LIMIT counter, never the shared
+        # GEMINI_CALL_LIMIT pool. GEMINI_CALL_LIMIT=0 here is the probe: the
+        # AI check that happens could ONLY have been granted by the separate
+        # scrape budget - if the branch fell through to the shared counter
+        # the check would be blocked and this test would fail.
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 1)
+        item_id = "v1|999888777111|0"
+        self._serve({"query": "loro piana sweater", "max_price": 400,
+                     "category_id": "11484", "enabled": True, "profile": "fast"},
+                    [])
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        scraped = self._ebay_item(item_id,
+            "Loro Piana Cashmere Sweater Mens Small Charcoal", 165.0)
+        with mock.patch.object(m.ebay_scrape, "search_ebay_scraped",
+                                lambda query, max_price=None, category_id=None: [scraped]):
+            m.run()
+
+        self.assertEqual(self.ai_calls, [item_id],
+            "scrape-lane candidate gets its AI check from the separate budget "
+            "even with GEMINI_CALL_LIMIT=0")
+
+    def test_official_api_candidates_ignore_scrape_budget(self):
+        # EBAY_SCRAPE_AI_CHECK_LIMIT being exhausted must NOT leak into the
+        # main pipeline: an official-API candidate still gets its check
+        # against GEMINI_CALL_LIMIT as usual, while a scrape-lane candidate
+        # sharing the same run is deferred instead of stealing a main-budget
+        # slot.
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 0)
+        self._patch("GEMINI_CALL_LIMIT", 1)
+        official_id = "v1|364512889011|0"
+        scrape_id = "v1|999888777222|0"
+        official = self._ebay_item(official_id,
+            "Loro Piana Cashmere Crewneck Sweater Mens Medium Navy", 180.0)
+        self._serve({"query": "loro piana sweater", "max_price": 400,
+                     "category_id": "11484", "enabled": True, "profile": "fast"},
+                    [official])
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        scraped = self._ebay_item(scrape_id,
+            "Loro Piana Cashmere Sweater Mens Small Charcoal", 165.0)
+        with mock.patch.object(m.ebay_scrape, "search_ebay_scraped",
+                                lambda query, max_price=None, category_id=None: [scraped]):
+            m.run()
+
+        self.assertIn(official_id, self.ai_calls,
+            "official-API candidate is checked against GEMINI_CALL_LIMIT normally, "
+            "unaffected by the exhausted scrape budget")
+        self.assertNotIn(scrape_id, self.ai_calls,
+            "scrape-lane candidate must NOT consume the main budget as a fallback")
+        self.assertTrue(m.is_new(self._db(), scrape_id),
+            "scrape-lane candidate starved of its own budget is left retry-eligible, not discarded")
+
+    def test_scrape_lane_budget_exhaustion_defers_later_scrape_candidates(self):
+        # Once EBAY_SCRAPE_AI_CHECK_LIMIT checks are used up in a run,
+        # further scrape-lane candidates get the shared retry-eligible
+        # "no AI price" marker (same contract as every other starved
+        # candidate) rather than being silently dropped OR falling through
+        # to the main budget. GEMINI_CALL_LIMIT is left HIGH here
+        # specifically to prove no fallback happens - 3 free main-budget
+        # slots go unused while the second scrape-lane candidate is deferred.
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 1)
+        self._patch("GEMINI_CALL_LIMIT", 3)
+        checked_id = "v1|999888777333|0"
+        deferred_id = "v1|999888777444|0"
+        self._serve({"query": "loro piana sweater", "max_price": 400,
+                     "category_id": "11484", "enabled": True, "profile": "fast"},
+                    [])
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        checked = self._ebay_item(checked_id,
+            "Loro Piana Cashmere Sweater Mens Medium Grey", 185.0)
+        deferred = self._ebay_item(deferred_id,
+            "Loro Piana Cashmere Sweater Mens Small Charcoal", 165.0)
+        with mock.patch.object(m.ebay_scrape, "search_ebay_scraped",
+                                lambda query, max_price=None, category_id=None: [checked, deferred]):
+            m.run()
+
+        self.assertEqual(len(self.ai_calls), 1,
+            "exactly ONE scrape-lane AI check for two scrape candidates - the "
+            "second must NOT fall through to the free main budget")
+        self.assertIn(checked_id, self.ai_calls,
+            "the priority-first scrape candidate gets the run's single scrape check")
+        conn = self._db()
+        self.assertTrue(m.is_new(conn, deferred_id),
+            "starved scrape-lane candidate is retry-eligible, not marked seen")
+        logged = {r["item_id"]: r for r in self._alert_log_records()}
+        self.assertIn("no AI price", logged[deferred_id]["reason"],
+            "deferred scrape-lane candidate carries the shared 'no AI price' retry marker")
+
     def test_knitwear_candidate_needing_ai_is_also_not_discarded(self):
         # Sibling of the test below, deliberately routed through a DIFFERENT
         # gate bar. "loro piana sweater" hits the loro piana/cucinelli bar,
