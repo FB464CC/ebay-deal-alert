@@ -31,19 +31,16 @@ logger = logging.getLogger("facebook_marketplace")
 _BLOCKED_RESOURCE_TYPES = ("image", "media", "font", "stylesheet")
 
 # Per explicit user instruction: results must be local, "roughly 20 miles
-# from Columbia SC" - without this, search_facebook_batch() had no location
-# parameter at all, so results were effectively nationwide (whatever the
-# residential proxy's own IP geolocation happened to default to, unscoped
-# and unpredictable run to run). latitude/longitude/radius are Facebook
-# Marketplace's own documented search-URL parameters (radius in miles).
-# NOT independently verified live from this environment - Facebook blocks
-# unauthenticated fetches outside the real Playwright+proxy path this
-# module already uses, and that path can't be exercised locally (Playwright
-# browser install is CI/Linux-only, see poll.yml). Check the next few real
-# Facebook alerts actually land local before trusting this fully.
-FACEBOOK_SEARCH_LATITUDE = 34.0007
-FACEBOOK_SEARCH_LONGITUDE = -81.0348
-FACEBOOK_SEARCH_RADIUS_MILES = 20
+# from Columbia SC". First attempt added latitude/longitude/radius query
+# params to the search URL - confirmed WRONG by a real live miss (a golf
+# club alert from California). Logged-out Marketplace (no account, no
+# location cookie) doesn't appear to honor those params at all - it scopes
+# by the PROXY's own IP location instead. Real fix: FACEBOOK_PROXY_URL now
+# points at a Columbia-SC-targeted residential proxy (ByteProxies city
+# targeting, not the old nationwide-rotating one) rather than anything in
+# the URL. See the city/state log line in the loop below for ongoing
+# verification - check it against real alerts if a mis-located one shows
+# up again.
 
 # Listing data lives inside <script type="application/json"> tags. Facebook's
 # tag carries other attributes around the type, so match the type anywhere in
@@ -165,9 +162,6 @@ def search_facebook_batch(saved_searches):
                 clean_query, _ = split_query_exclusions(query)
                 url = "https://www.facebook.com/marketplace/search/?" + urlencode({
                     "query": clean_query,
-                    "latitude": FACEBOOK_SEARCH_LATITUDE,
-                    "longitude": FACEBOOK_SEARCH_LONGITUDE,
-                    "radius": FACEBOOK_SEARCH_RADIUS_MILES,
                 })
                 try:
                     page = context.new_page()
@@ -177,10 +171,19 @@ def search_facebook_batch(saved_searches):
                         html = page.content()
                     finally:
                         page.close()
+                    locations = set()
                     for node in _extract_listing_nodes(html):
                         listing = _node_to_listing(node)
                         if listing:
                             out[query].append(listing)
+                            if listing.get("description"):
+                                locations.add(listing["description"])
+                    if locations:
+                        # Real verification hook for the proxy-location fix -
+                        # a mis-located result shows up here immediately
+                        # instead of only surfacing when a bad alert reaches
+                        # the user days later.
+                        logger.info("facebook locations seen for %r: %s", query, sorted(locations))
                 except Exception as exc:
                     logger.warning("facebook search failed for query %r: %s", query, exc)
         finally:

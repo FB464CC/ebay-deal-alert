@@ -167,22 +167,37 @@ class EmptyResult(unittest.TestCase):
 
 
 class LocationScoping(unittest.TestCase):
-    def test_search_url_includes_latitude_longitude_radius(self):
-        # Real user report: results weren't scoped to any location at all -
-        # "i need the facebook marketplace ones to be around where i am.
-        # roughly 20 miles from columbia sc." Without these params the
-        # search was effectively nationwide.
+    # Real live miss: a first attempt added latitude/longitude/radius query
+    # params to the search URL, confirmed WRONG by a real golf-club alert
+    # from California - logged-out Marketplace doesn't honor those params,
+    # it scopes by the PROXY's own IP location instead (FACEBOOK_PROXY_URL
+    # now points at a Columbia-SC-targeted residential proxy). This test
+    # locks in the real verification mechanism instead: every listing's
+    # location is logged so a mis-located result surfaces in the logs
+    # immediately rather than only when a bad alert reaches the user.
+    def test_listing_locations_are_logged_for_verification(self):
+        patcher, _sync, _browser, _pages = _install_fake_playwright([
+            {"html": HTML_WITH_LISTING},
+        ])
+        with mock.patch.dict(os.environ, _proxy_env()), patcher:
+            with self.assertLogs("facebook_marketplace", level="INFO") as cm:
+                facebook_marketplace.search_facebook_batch([{"query": "cartier watch"}])
+        joined = " ".join(cm.output)
+        self.assertIn("facebook locations seen", joined)
+        self.assertIn("San Francisco, CA", joined)
+
+    def test_search_url_no_longer_carries_unverified_location_params(self):
+        # Regression guard: don't silently reintroduce the wrong fix.
         patcher, _sync, _browser, _pages = _install_fake_playwright([
             {"html": HTML_WITHOUT_LISTING},
         ])
         with mock.patch.dict(os.environ, _proxy_env()), patcher:
             facebook_marketplace.search_facebook_batch([{"query": "cartier watch"}])
-
         called_url = _pages[0].goto.call_args[0][0]
         params = dict(parse_qsl(urlsplit(called_url).query))
-        self.assertEqual(float(params["latitude"]), facebook_marketplace.FACEBOOK_SEARCH_LATITUDE)
-        self.assertEqual(float(params["longitude"]), facebook_marketplace.FACEBOOK_SEARCH_LONGITUDE)
-        self.assertEqual(int(params["radius"]), facebook_marketplace.FACEBOOK_SEARCH_RADIUS_MILES)
+        self.assertNotIn("latitude", params)
+        self.assertNotIn("longitude", params)
+        self.assertNotIn("radius", params)
 
 
 if __name__ == "__main__":
