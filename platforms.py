@@ -24,6 +24,7 @@ here logs in, creates accounts, bids, buys, offers, or messages.
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -794,12 +795,20 @@ def search_shopgoodwill(saved_search):
         "categoryLevelNo": "1", "categoryLevel": 1, "categoryId": 0, "partNumber": "",
     }
     _pace("shopgoodwill")
+    # ShopGoodwill's WAF blocks GitHub Actions' shared runner IPs outright
+    # (confirmed live: HTTP 403 on every run, not a rate limit) - route
+    # through a residential proxy exactly like the eBay scrape lane, keyed
+    # off its OWN env var so this can never bleed onto any other platform's
+    # requests.post/get_json calls.
+    proxy_url = os.environ.get("SHOPGOODWILL_PROXY_URL")
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
     try:
         resp = requests.post(
             "https://buyerapi.shopgoodwill.com/api/Search/ItemListing",
             json=payload,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
             timeout=HTTP_TIMEOUT,
+            proxies=proxies,
         )
     except requests.RequestException as exc:
         logger.warning("shopgoodwill request failed: %s", exc)
