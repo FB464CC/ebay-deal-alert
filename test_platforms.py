@@ -40,6 +40,20 @@ class _FakeResp:
         return self._body
 
 
+class _FakeScraplingResp:
+    """Minimal stand-in for a scrapling Fetcher response - .status not
+    .status_code, and no .ok property, unlike requests.Response."""
+
+    def __init__(self, status, body=None):
+        self.status = status
+        self._body = body
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("no JSON body")
+        return self._body
+
+
 class VintedLandedCost(unittest.TestCase):
     def test_assumed_shipping_constant_is_positive(self):
         self.assertGreater(p.VINTED_ASSUMED_SHIPPING, 0)
@@ -226,39 +240,43 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
             "itemId": "1", "title": "Test Item", "currentPrice": "10.00",
             "remainingTime": "5m", "numBids": "3", "assetsUrl": "http://x",
         }]}}
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.return_value = _FakeScraplingResp(200, body)
         with mock.patch.object(p, "get_json", return_value=None), \
-                mock.patch("platforms.requests.post") as post_mock:
-            post_mock.return_value = _FakeResp(200, body)
+                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             listings, _ = p.search_shopgoodwill({"query": "test"})
         self.assertEqual(len(listings), 1)
 
 
 class ShopGoodwillProxyScoping(unittest.TestCase):
-    # Real live bug: ShopGoodwill's WAF returns HTTP 403 for every GitHub
-    # Actions runner IP. Fix routes search_shopgoodwill's own requests.post
-    # through SHOPGOODWILL_PROXY_URL - scoped to ONLY this platform, since
-    # every other adapter (get_json-based or its own requests call) must
-    # keep hitting the origin site directly and be unaffected.
+    # Real live bug (two-part): ShopGoodwill's WAF blocks plain `requests`
+    # regardless of source IP - a residential proxy alone only got ~10%
+    # of calls through (confirmed live: 23/29 still 403'd even proxied).
+    # It's a TLS/HTTP client fingerprint check, same class of WAF that made
+    # OfferUp/Depop need scrapling instead of plain requests - confirmed
+    # live that scrapling's Fetcher (curl_cffi impersonation) through the
+    # SAME proxy gets a clean 200 every time. Fix routes search_shopgoodwill
+    # through scrapling's Fetcher.post with SHOPGOODWILL_PROXY_URL - scoped
+    # to ONLY this platform, since every other adapter (get_json-based or
+    # scrapling-based) must keep hitting its own origin directly, unaffected.
     def _run(self, env):
         body = {"searchResults": {"items": [], "itemCount": 0}}
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.return_value = _FakeScraplingResp(200, body)
         with mock.patch.dict("os.environ", env, clear=True), \
-                mock.patch("platforms.requests.post") as post_mock:
-            post_mock.return_value = _FakeResp(200, body)
+                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             p.search_shopgoodwill({"query": "test"})
-        return post_mock
+        return fake_fetcher.post
 
-    def test_proxy_url_set_is_passed_to_requests_post(self):
+    def test_proxy_url_set_is_passed_to_fetcher_post(self):
         post_mock = self._run({"SHOPGOODWILL_PROXY_URL": "http://user:pass@proxy.example.com:8888"})
         _, kwargs = post_mock.call_args
-        self.assertEqual(
-            kwargs["proxies"],
-            {"http": "http://user:pass@proxy.example.com:8888", "https": "http://user:pass@proxy.example.com:8888"},
-        )
+        self.assertEqual(kwargs["proxy"], "http://user:pass@proxy.example.com:8888")
 
     def test_proxy_url_unset_passes_none(self):
         post_mock = self._run({})
         _, kwargs = post_mock.call_args
-        self.assertIsNone(kwargs["proxies"])
+        self.assertIsNone(kwargs["proxy"])
 
     def test_proxy_scoping_does_not_leak_into_get_json(self):
         # Regression guard: the proxy must be read directly inside
@@ -270,6 +288,15 @@ class ShopGoodwillProxyScoping(unittest.TestCase):
             p.get_json("poshmark", "https://example.com")
         _, kwargs = get_mock.call_args
         self.assertNotIn("proxies", kwargs)
+        self.assertNotIn("proxy", kwargs)
+
+    def test_scrapling_not_installed_returns_empty_not_a_crash(self):
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": None}):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                listings, count = p.search_shopgoodwill({"query": "test"})
+        self.assertEqual(listings, [])
+        self.assertIsNone(count)
+        self.assertIn("scrapling is not installed", " ".join(cm.output))
 
 
 _OFFERUP_HTML = (

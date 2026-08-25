@@ -795,30 +795,46 @@ def search_shopgoodwill(saved_search):
         "categoryLevelNo": "1", "categoryLevel": 1, "categoryId": 0, "partNumber": "",
     }
     _pace("shopgoodwill")
-    # ShopGoodwill's WAF blocks GitHub Actions' shared runner IPs outright
-    # (confirmed live: HTTP 403 on every run, not a rate limit) - route
-    # through a residential proxy exactly like the eBay scrape lane, keyed
-    # off its OWN env var so this can never bleed onto any other platform's
-    # requests.post/get_json calls.
-    proxy_url = os.environ.get("SHOPGOODWILL_PROXY_URL")
-    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+    # ShopGoodwill's WAF blocks plain `requests` outright, independent of
+    # source IP - confirmed live: routing plain requests.post through a
+    # residential proxy (SHOPGOODWILL_PROXY_URL) still got HTTP 403 on ~90%
+    # of calls (23/29 in one run), because it isn't just IP reputation, it's
+    # a TLS/HTTP client fingerprint check (same class of WAF that made
+    # OfferUp/Depop need scrapling instead of plain requests). Confirmed
+    # live the fix: scrapling's Fetcher (curl_cffi TLS-impersonation) through
+    # the SAME proxy gets a clean 200 every time. Lazy-imported, matching
+    # _fetch_page()'s ImportError guard, so a missing scrapling install can't
+    # crash the whole run - just this one platform.
     try:
-        resp = requests.post(
+        from scrapling.fetchers import Fetcher
+    except ImportError:
+        logger.warning("shopgoodwill skipped: scrapling is not installed")
+        return [], None
+    proxy_url = os.environ.get("SHOPGOODWILL_PROXY_URL")
+    try:
+        resp = Fetcher.post(
             "https://buyerapi.shopgoodwill.com/api/Search/ItemListing",
             json=payload,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
             timeout=HTTP_TIMEOUT,
-            proxies=proxies,
+            proxy=proxy_url,
         )
-    except requests.RequestException as exc:
+    except Exception as exc:
         logger.warning("shopgoodwill request failed: %s", exc)
         return [], None
-    if not resp.ok:
-        logger.warning("shopgoodwill returned HTTP %s", resp.status_code)
+    if resp.status == 429:
+        multiplier = _register_rate_limit("shopgoodwill")
+        logger.warning(
+            "shopgoodwill rate limited (429) - backing off, next calls to "
+            "this platform paced %sx slower for the rest of this run",
+            multiplier,
+        )
+        return [], None
+    if resp.status != 200:
+        logger.warning("shopgoodwill returned HTTP %s", resp.status)
         return [], None
     try:
         body = resp.json()
-    except ValueError:
+    except Exception:
         return [], None
     results = _dget(_dget(body, "searchResults"), "items") or []
     listings = []
