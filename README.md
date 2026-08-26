@@ -24,6 +24,16 @@ The workflow already requests `contents: write` permission so it can commit `see
 
 Alerts are sent to `https://ntfy.sh/<NTFY_TOPIC>`.
 
+## AI Cost Guard
+
+Paid AI calls are guarded by a persistent monthly ledger in `seen_items.db`.
+The default ceiling is $18/month, leaving headroom below the $20 target. Each
+DeepSeek vision or text request reserves a conservative configured amount
+before the HTTP call; when the ceiling is reached, paid calls stop and the bot
+continues with free-provider results. The relevant settings are
+`AI_PAID_MONTHLY_BUDGET_USD`, `AI_PAID_VISION_RESERVATION_USD`, and
+`AI_PAID_TEXT_RESERVATION_USD` in `config.json`.
+
 ## Test Locally
 
 Install dependencies:

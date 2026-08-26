@@ -362,6 +362,19 @@ GEMINI_INTER_CALL_SLEEP_SECONDS = float(_CONFIG.get("GEMINI_INTER_CALL_SLEEP_SEC
 AI_PHOTO_PROVIDER = _CONFIG.get("AI_PHOTO_PROVIDER", "deepseek")  # "deepseek" | "gemini"
 DEEPSEEK_MODEL = _CONFIG.get("DEEPSEEK_MODEL", "deepseek-v4-flash-vision-exp")
 DEEPSEEK_BASE_URL = _CONFIG.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+# Paid-provider safety valve. Per-run call caps are throughput controls, not
+# spend controls: at a five-minute cadence even a cheap fallback can run tens
+# of thousands of times in a month. Reserve a deliberately conservative
+# amount before every DeepSeek request and persist it in seen_items.db. Failed
+# requests remain charged in the local ledger; that biases toward stopping
+# early, which is the safe failure mode for a hard personal budget.
+AI_PAID_MONTHLY_BUDGET_USD = float(_CONFIG.get("AI_PAID_MONTHLY_BUDGET_USD", 18.0))
+AI_PAID_VISION_RESERVATION_USD = float(
+    _CONFIG.get("AI_PAID_VISION_RESERVATION_USD", 0.005)
+)
+AI_PAID_TEXT_RESERVATION_USD = float(
+    _CONFIG.get("AI_PAID_TEXT_RESERVATION_USD", 0.001)
+)
 # Every alert now requires a real AI check, and GEMINI_CALL_LIMIT paces that
 # to a handful per run so the daily Gemini quota lasts the whole day (see
 # GEMINI_CALL_LIMIT's comment). Ending-soon auctions sort FIRST in the AI
@@ -1119,6 +1132,10 @@ def init_db():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS marketplace_anomaly_notified "
         "(platform TEXT PRIMARY KEY, last_notified_ts TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ai_paid_spend "
+        "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
     )
     conn.commit()
     return conn
@@ -2111,10 +2128,61 @@ def _make_deepseek_image_block(content, mime_type):
     }
 
 
+def _reserve_paid_ai_spend(amount_usd):
+    """Atomically reserve estimated paid-AI spend for the current UTC month.
+
+    Uses a separate short-lived connection so provider helpers remain usable
+    outside run() and concurrent/manual invocations cannot both pass the cap.
+    Returns False on a full ledger or any ledger error: paid AI is optional,
+    while accidentally failing open on cost control is not.
+    """
+    if amount_usd <= 0 or AI_PAID_MONTHLY_BUDGET_USD <= 0:
+        return False
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS ai_paid_spend "
+            "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
+        )
+        row = conn.execute(
+            "SELECT reserved_usd FROM ai_paid_spend WHERE month = ?", (month,)
+        ).fetchone()
+        already_reserved = float(row[0]) if row else 0.0
+        if already_reserved + amount_usd > AI_PAID_MONTHLY_BUDGET_USD + 1e-9:
+            conn.rollback()
+            logger.warning(
+                "Paid AI monthly cap reached ($%.2f reserved of $%.2f); skipping paid call",
+                already_reserved,
+                AI_PAID_MONTHLY_BUDGET_USD,
+            )
+            return False
+        conn.execute(
+            "INSERT INTO ai_paid_spend(month, reserved_usd, calls) VALUES (?, ?, 1) "
+            "ON CONFLICT(month) DO UPDATE SET "
+            "reserved_usd = reserved_usd + excluded.reserved_usd, calls = calls + 1",
+            (month, amount_usd),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error as exc:
+        if conn is not None:
+            conn.rollback()
+        logger.error("Paid AI spend ledger unavailable; skipping paid call: %s", exc)
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _call_deepseek_json(prompt, images, timeout=30):
     deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not deepseek_api_key:
         logger.warning("Skipping DeepSeek photo check: DEEPSEEK_API_KEY is not configured")
+        return None
+    if not _reserve_paid_ai_spend(AI_PAID_VISION_RESERVATION_USD):
         return None
     content = [{"type": "text", "text": prompt}]
     for content_bytes, mime_type in images:
@@ -2147,6 +2215,8 @@ def _call_deepseek_text_json(prompt, timeout=15):
     deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not deepseek_api_key:
         logger.warning("Skipping DeepSeek sanity check: DEEPSEEK_API_KEY is not configured")
+        return None
+    if not _reserve_paid_ai_spend(AI_PAID_TEXT_RESERVATION_USD):
         return None
     payload = {
         "model": DEEPSEEK_MODEL,
