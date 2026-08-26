@@ -32,7 +32,12 @@ const readBody = async (req) => {
 };
 
 const requireEnv = () => {
-  const missing = ["TELEGRAM_BOT_TOKEN", "DEEPSEEK_API_KEY"].filter((key) => !process.env[key]);
+  const missing = [
+    "TELEGRAM_BOT_TOKEN",
+    "DEEPSEEK_API_KEY",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "TELEGRAM_ALLOWED_CHAT_ID"
+  ].filter((key) => !process.env[key]);
   if (missing.length) {
     return `Missing required env vars: ${missing.join(", ")}`;
   }
@@ -375,17 +380,10 @@ module.exports = async (req, res) => {
     return sendJson(res, 405, { error: "Method not allowed" });
   }
 
-  // This URL is public - anyone who finds it could POST a fake Update and
-  // burn DeepSeek API calls for free. Telegram's setWebhook accepts a
-  // secret_token that it echoes back on every real webhook call as this
-  // header - reject anything that doesn't match. Only enforced when the
-  // env var is actually set, so this doesn't hard-block before the
-  // one-time setWebhook call that establishes the secret in the first
-  // place.
-  if (
-    process.env.TELEGRAM_WEBHOOK_SECRET &&
-    req.headers["x-telegram-bot-api-secret-token"] !== process.env.TELEGRAM_WEBHOOK_SECRET
-  ) {
+  // This endpoint can spend paid-AI money. Require Telegram's webhook
+  // signature and restrict it to the owner's chat; deployment mistakes
+  // fail closed instead of exposing a public DeepSeek proxy.
+  if (req.headers["x-telegram-bot-api-secret-token"] !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     return sendJson(res, 401, { error: "Unauthorized" });
   }
 
@@ -398,6 +396,9 @@ module.exports = async (req, res) => {
 
   const message = update?.message;
   const chatId = message?.chat?.id;
+  if (chatId != null && String(chatId) !== String(process.env.TELEGRAM_ALLOWED_CHAT_ID)) {
+    return sendJson(res, 403, { error: "Chat not allowed" });
+  }
   // Real bug: a photo message's text lives in `caption`, not `text` - a
   // reply sent with a photo (with or without a caption) always had
   // message.text === undefined, so the very next check below fired the

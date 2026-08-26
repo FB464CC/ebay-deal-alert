@@ -102,9 +102,13 @@ jobs:
       # account issues, runner outage) that the bot's own self-reporting
       # can't, since that fails when the whole process can't run at all.
       - name: Ping healthchecks.io (success)
-        if: success()
+        if: success() && env.HEALTHCHECKS_PING_URL != ''
+        env:
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
         run: curl -fsS -m 10 --retry 5 "${{ secrets.HEALTHCHECKS_PING_URL }}"
 
       - name: Ping healthchecks.io (failure)
-        if: failure()
+        if: failure() && env.HEALTHCHECKS_PING_URL != ''
+        env:
+          HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
         run: curl -fsS -m 10 --retry 5 "${{ secrets.HEALTHCHECKS_PING_URL }}/fail"

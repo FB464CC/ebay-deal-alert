@@ -16,6 +16,8 @@ Pure stdlib unittest, mirroring test_ebay_deal_alert.py's conventions. Run:
     python -m unittest test_photo_provider -v
 """
 import base64
+import pathlib
+import tempfile
 import unittest
 from unittest import mock
 
@@ -48,6 +50,13 @@ class MakeDeepseekImageBlock(unittest.TestCase):
 
 
 class CallDeepseekJson(unittest.TestCase):
+    def setUp(self):
+        self.spend_patch = mock.patch.object(m, "_reserve_paid_ai_spend", return_value=True)
+        self.spend_patch.start()
+
+    def tearDown(self):
+        self.spend_patch.stop()
+
     def test_no_key_returns_none(self):
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertIsNone(m._call_deepseek_json("prompt", []))
@@ -74,6 +83,32 @@ class CallDeepseekJson(unittest.TestCase):
         with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": "k"}):
             with mock.patch("requests.post", return_value=fake_resp):
                 self.assertEqual(m._call_deepseek_json("prompt JSON", []), {"b": 2})
+
+
+class PaidAiSpendGuard(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_patch = mock.patch.object(m, "DB_PATH", pathlib.Path(self.tmpdir.name) / "spend.db")
+        self.budget_patch = mock.patch.object(m, "AI_PAID_MONTHLY_BUDGET_USD", 0.01)
+        self.db_patch.start()
+        self.budget_patch.start()
+
+    def tearDown(self):
+        self.budget_patch.stop()
+        self.db_patch.stop()
+        self.tmpdir.cleanup()
+
+    def test_reservations_stop_at_monthly_cap(self):
+        self.assertTrue(m._reserve_paid_ai_spend(0.005))
+        self.assertTrue(m._reserve_paid_ai_spend(0.005))
+        self.assertFalse(m._reserve_paid_ai_spend(0.001))
+
+    def test_paid_provider_is_not_called_when_cap_is_full(self):
+        self.assertTrue(m._reserve_paid_ai_spend(0.01))
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": "k"}), \
+             mock.patch("requests.post") as post:
+            self.assertIsNone(m._call_deepseek_json("prompt JSON", []))
+        post.assert_not_called()
 
 
 class CallPhotoCheckRouting(unittest.TestCase):
