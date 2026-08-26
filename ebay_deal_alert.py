@@ -783,6 +783,54 @@ def search_ebay_ending_soon_auctions(token, auction_search):
     return listings, body.get("total")
 
 
+def classify_stray_auction_listing(listing):
+    """Handle a live AUCTION listing that reached the regular per-search
+    loop untagged - i.e. NOT via search_ebay_ending_soon_auctions().
+
+    search_ebay() has no buyingOptions filter, so a plain brand search
+    returns AUCTION-format listings too, and their "price" field is only
+    the current bid, not a real purchasable price, until the auction is
+    genuinely closing (same trap search_shopgoodwill() gates on with
+    remaining time). Mutates `listing` in place to tag it exactly like
+    search_ebay_ending_soon_auctions() does (is_ending_soon_auction/
+    auction_minutes_remaining/bid_count) when it's closing soon.
+
+    Returns True if `listing` should proceed through the rest of the
+    per-listing loop (not an auction at all, already tagged by the
+    dedicated lane, or genuinely closing soon), False if it should be
+    skipped this run (a live auction with an unparseable/missing end
+    date, already ended, or still days out - the dedicated auction lane
+    will pick the same listing back up once it's actually inside the
+    closing window)."""
+    if listing.get("is_ending_soon_auction"):
+        return True
+    if "AUCTION" not in (listing.get("buyingOptions") or []):
+        return True
+    end_date_str = listing.get("itemEndDate")
+    end_date = None
+    if end_date_str:
+        try:
+            end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+        except ValueError:
+            end_date = None
+    if end_date is None:
+        return False  # can't confirm it's closing soon - skip, don't guess
+    minutes_remaining = (end_date - datetime.now(timezone.utc)).total_seconds() / 60
+    if minutes_remaining < 0:
+        return False  # already ended, listing search just hasn't caught up yet
+    bid_count = listing.get("bidCount") or 0
+    threshold = (
+        EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES if bid_count > 0
+        else EBAY_AUCTION_CLOSING_SOON_MINUTES
+    )
+    if minutes_remaining > threshold:
+        return False  # days left - the current bid isn't a real price yet
+    listing["is_ending_soon_auction"] = True
+    listing["auction_minutes_remaining"] = minutes_remaining
+    listing["bid_count"] = bid_count
+    return True
+
+
 def _read_ebay_rate_limit_state():
     if not EBAY_RATE_LIMIT_STATE_PATH.exists():
         return {}
@@ -4161,6 +4209,20 @@ def run():
             if not item_id:
                 logger.info("Skipping listing without itemId: %s", listing.get("title", "untitled"))
                 continue
+            # search_ebay() has no buyingOptions filter (see the comment a
+            # few lines down), so a plain brand search returns live AUCTION
+            # listings too - their "price" field is the CURRENT BID, not a
+            # real purchasable price, same trap search_shopgoodwill() gates
+            # on with remaining time. Real live bug: got alerted on an eBay
+            # auction with DAYS left at its current-bid price, nowhere near
+            # what it'll actually sell for. classify_stray_auction_listing()
+            # routes any un-tagged AUCTION listing (regardless of which lane
+            # found it) through the exact same closing-window check
+            # search_ebay_ending_soon_auctions() already uses, instead of
+            # only applying it to the 3 curated EBAY_AUCTION_SEARCHES
+            # queries.
+            if not classify_stray_auction_listing(listing):
+                continue  # not tagged, not closing soon, or unparseable end date - skip
             # An auction inside its final minutes is genuinely NEW
             # information about an item that may have been seen days ago
             # at a totally different price and urgency, so the seen-dedupe

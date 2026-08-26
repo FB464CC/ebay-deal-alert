@@ -1867,6 +1867,70 @@ class EbayEndingSoonAuctions(unittest.TestCase):
         self.assertAlmostEqual(listings[0]["auction_minutes_remaining"], 12, delta=1)
 
 
+class StrayAuctionListing(unittest.TestCase):
+    """Real live bug: search_ebay() (the regular per-search lane) has no
+    buyingOptions filter, so a plain brand search returns live AUCTION
+    listings too - user got alerted on an eBay auction with DAYS left at
+    its current-bid price, nowhere near what it'll actually sell for.
+    classify_stray_auction_listing() must catch these wherever they slip
+    into the regular loop, same closing-window logic as the dedicated
+    auction lane above."""
+
+    def _item(self, minutes_from_now=None, bid_count=0, buying_options=("AUCTION",)):
+        item = {
+            "itemId": "v1|1|0", "title": "Rolex Datejust",
+            "price": {"value": 200.0, "currency": "USD"},
+            "buyingOptions": list(buying_options),
+            "bidCount": bid_count,
+        }
+        if minutes_from_now is not None:
+            end = datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)
+            item["itemEndDate"] = end.isoformat().replace("+00:00", "Z")
+        return item
+
+    def test_fixed_price_listing_passes_through_untouched(self):
+        listing = self._item(minutes_from_now=None, buying_options=("FIXED_PRICE",))
+        self.assertTrue(m.classify_stray_auction_listing(listing))
+        self.assertNotIn("is_ending_soon_auction", listing)
+
+    def test_already_tagged_by_dedicated_lane_passes_through(self):
+        listing = self._item(minutes_from_now=10)
+        listing["is_ending_soon_auction"] = True
+        listing["bid_count"] = 0
+        self.assertTrue(m.classify_stray_auction_listing(listing))
+
+    def test_auction_days_out_is_skipped_not_alerted(self):
+        # The exact reported bug: days left, price is only the current bid.
+        listing = self._item(minutes_from_now=60 * 24 * 3, bid_count=2)
+        self.assertFalse(m.classify_stray_auction_listing(listing))
+        self.assertNotIn("is_ending_soon_auction", listing)
+
+    def test_auction_closing_soon_gets_tagged_and_proceeds(self):
+        listing = self._item(minutes_from_now=10, bid_count=0)
+        self.assertTrue(m.classify_stray_auction_listing(listing))
+        self.assertTrue(listing["is_ending_soon_auction"])
+        self.assertAlmostEqual(listing["auction_minutes_remaining"], 10, delta=1)
+
+    def test_contested_auction_uses_tighter_window(self):
+        # 10 min out clears the 15-min uncontested bar but not the 6-min
+        # contested one - matches EbayEndingSoonAuctions' own asymmetry.
+        listing = self._item(minutes_from_now=10, bid_count=3)
+        self.assertFalse(m.classify_stray_auction_listing(listing))
+
+    def test_missing_end_date_is_skipped_not_guessed(self):
+        listing = self._item(minutes_from_now=None)
+        self.assertFalse(m.classify_stray_auction_listing(listing))
+
+    def test_unparseable_end_date_is_skipped_not_crashed(self):
+        listing = self._item(minutes_from_now=10)
+        listing["itemEndDate"] = "not-a-date"
+        self.assertFalse(m.classify_stray_auction_listing(listing))
+
+    def test_already_ended_is_skipped(self):
+        listing = self._item(minutes_from_now=-5)
+        self.assertFalse(m.classify_stray_auction_listing(listing))
+
+
 class VintedItemDescription(unittest.TestCase):
     """search_vinted()'s catalog API never returns a description (confirmed
     live) - only the item's public page does, via its og:description meta
@@ -2046,8 +2110,12 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
     window - a bid war is the strongest signal the price isn't done moving."""
 
     def _fake_response(self, items):
+        # search_shopgoodwill goes through scrapling's Fetcher.post (TLS-
+        # impersonation, to get past ShopGoodwill's WAF fingerprint check -
+        # see platforms.ShopGoodwillProxyScoping), not plain requests.post -
+        # .status not .status_code/.ok, matching scrapling's Response shape.
         resp = mock.Mock()
-        resp.ok = True
+        resp.status = 200
         resp.json.return_value = {"searchResults": {"items": items, "itemCount": len(items)}}
         return resp
 
@@ -2065,7 +2133,9 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
             self._item(3, "20m", num_bids=3),   # too early once contested (>15)
             self._item(4, "10m", num_bids=3),   # in window, contested
         ]
-        with mock.patch.object(p.requests, "post", return_value=self._fake_response(items)):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.return_value = self._fake_response(items)
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             listings, _count = p.search_shopgoodwill({"query": "test watch"})
         surfaced_ids = {int(l["itemId"].split(":")[1]) for l in listings}
         self.assertEqual(surfaced_ids, {2, 4})
