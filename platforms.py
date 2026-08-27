@@ -24,6 +24,7 @@ here logs in, creates accounts, bids, buys, offers, or messages.
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -188,13 +189,17 @@ def _to_float(value):
     """Coerce the many price shapes these APIs use ('$42.00', 4200, '42.5')."""
     if value is None:
         return None
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     cleaned = re.sub(r"[^\d.]", "", str(value))
     if not cleaned or cleaned.count(".") > 1:
         return None
     try:
-        return float(cleaned)
+        number = float(cleaned)
+        return number if math.isfinite(number) else None
     except ValueError:
         return None
 
@@ -221,7 +226,7 @@ def make_listing(
     scored and alerted on incomplete data.
     """
     price = _to_float(price)
-    if not item_id or not title or price is None or not url:
+    if not item_id or not title or price is None or price <= 0 or not url:
         return None
 
     # NOTE: itemId is namespaced "platform:id" so seen_items.db cannot collide
@@ -241,7 +246,7 @@ def make_listing(
     if additional:
         listing["additionalImages"] = additional
     shipping_value = _to_float(shipping)
-    if shipping_value:
+    if shipping_value is not None and shipping_value > 0:
         listing["shippingOptions"] = [{"shippingCost": {"value": shipping_value}}]
     if seller:
         listing["seller"] = {"username": f"{platform}:{seller}"}
