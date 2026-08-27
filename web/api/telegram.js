@@ -4,9 +4,17 @@
 // check_photos_with_gemini in ebay_deal_alert.py), and replies with a readable
 // analysis in the same chat.
 
+const crypto = require("crypto");
+const dns = require("dns").promises;
+const net = require("net");
+
 const DEEPSEEK_MODEL = "deepseek-v4-flash-vision-exp";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const MAX_IMAGES = 4;
+const MAX_REDIRECTS = 3;
+const MAX_HTML_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const FETCH_TIMEOUT_MS = 12000;
 
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
@@ -75,6 +83,83 @@ const hostOf = (url) => {
   }
 };
 
+const isPrivateIp = (address) => {
+  const normalized = address.toLowerCase().split("%")[0];
+  if (net.isIPv4(normalized)) {
+    const [a, b] = normalized.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 ||
+      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 192 && (b === 0 || b === 168)) ||
+      (a === 198 && (b === 18 || b === 19 || b === 51)) ||
+      (a === 203 && b === 0) || a >= 224;
+  }
+  if (net.isIPv6(normalized)) {
+    return normalized === "::" || normalized === "::1" ||
+      normalized.startsWith("fc") || normalized.startsWith("fd") ||
+      /^fe[89ab]/.test(normalized) || normalized.startsWith("ff") ||
+      normalized.startsWith("::ffff:");
+  }
+  return true;
+};
+
+const assertPublicUrl = async (rawUrl) => {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("invalid listing URL");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) {
+    throw new Error("only public HTTP(S) URLs are allowed");
+  }
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const addresses = net.isIP(hostname)
+    ? [{ address: hostname }]
+    : await dns.lookup(hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(({ address }) => isPrivateIp(address))) {
+    throw new Error("listing URL resolves to a private or reserved address");
+  }
+  return parsed;
+};
+
+const readLimited = async (resp, maxBytes) => {
+  const declared = Number(resp.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error("remote response is too large");
+  }
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of resp.body) {
+    const buffer = Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBytes) {
+      throw new Error("remote response is too large");
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+};
+
+const safeFetch = async (rawUrl, options, maxBytes) => {
+  let current = await assertPublicUrl(rawUrl);
+  for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
+    const resp = await fetch(current, {
+      ...options,
+      redirect: "manual",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    });
+    if ([301, 302, 303, 307, 308].includes(resp.status)) {
+      const location = resp.headers.get("location");
+      if (!location || redirects === MAX_REDIRECTS) throw new Error("too many redirects");
+      current = await assertPublicUrl(new URL(location, current).toString());
+      continue;
+    }
+    return { resp, body: await readLimited(resp, maxBytes), finalUrl: current };
+  }
+  throw new Error("too many redirects");
+};
+
 const decodeEntities = (s) =>
   s
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
@@ -123,19 +208,22 @@ const classify = (text) => {
 // Vinted (server-rendered). JS-only marketplaces (Facebook Marketplace) return
 // no og tags -> add per-platform scrapers if those matter.
 const fetchListingHtml = async (url) => {
-  const resp = await fetch(url, {
-    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
-    redirect: "follow"
-  });
+  const { resp, body } = await safeFetch(url, {
+    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" }
+  }, MAX_HTML_BYTES);
   if (!resp.ok) {
     throw new Error(`page returned ${resp.status}`);
   }
-  return resp.text();
+  const mime = (resp.headers.get("content-type") || "").toLowerCase();
+  if (mime && !mime.includes("text/html") && !mime.includes("application/xhtml+xml")) {
+    throw new Error("listing URL did not return HTML");
+  }
+  return body.toString("utf8");
 };
 
 const fetchImage = async (url) => {
   try {
-    const resp = await fetch(url, { headers: { "User-Agent": UA } });
+    const { resp, body } = await safeFetch(url, { headers: { "User-Agent": UA } }, MAX_IMAGE_BYTES);
     if (!resp.ok) {
       return null;
     }
@@ -143,14 +231,20 @@ const fetchImage = async (url) => {
     if (!mime.startsWith("image/")) {
       return null;
     }
-    const buf = Buffer.from(await resp.arrayBuffer());
-    return { data: buf.toString("base64"), mime };
+    return { data: body.toString("base64"), mime };
   } catch {
     return null;
   }
 };
 
 const stripFence = (text) => text.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
+
+const secretMatches = (provided, expected) => {
+  if (typeof provided !== "string" || typeof expected !== "string") return false;
+  const actual = Buffer.from(provided);
+  const wanted = Buffer.from(expected);
+  return actual.length === wanted.length && crypto.timingSafeEqual(actual, wanted);
+};
 
 // jsonMode=false is used for follow-up Q&A replies, which want a short
 // plain-text answer instead of the structured analysis shape.
@@ -383,7 +477,7 @@ module.exports = async (req, res) => {
   // This endpoint can spend paid-AI money. Require Telegram's webhook
   // signature and restrict it to the owner's chat; deployment mistakes
   // fail closed instead of exposing a public DeepSeek proxy.
-  if (req.headers["x-telegram-bot-api-secret-token"] !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+  if (!secretMatches(req.headers["x-telegram-bot-api-secret-token"], process.env.TELEGRAM_WEBHOOK_SECRET)) {
     return sendJson(res, 401, { error: "Unauthorized" });
   }
 
@@ -449,7 +543,9 @@ module.exports = async (req, res) => {
     const meta = metas(html);
     const title = firstMeta(meta, "og:title") || hostOf(url);
     const description = firstMeta(meta, "og:description") || "";
-    const imageUrls = allMeta(meta, "og:image").slice(0, MAX_IMAGES);
+    const imageUrls = allMeta(meta, "og:image").slice(0, MAX_IMAGES).map((imageUrl) => {
+      try { return new URL(imageUrl, url).toString(); } catch { return null; }
+    }).filter(Boolean);
     // product:price:amount is the clean source when a site sets it, but most
     // marketplaces don't (checked live: eBay/Poshmark/Grailed frequently
     // omit it) - fall back to a "$1,234.56"-style match in the title/
@@ -494,3 +590,5 @@ module.exports = async (req, res) => {
     return sendJson(res, 200, { ok: true });
   }
 };
+
+module.exports._test = { isPrivateIp, assertPublicUrl, readLimited, secretMatches };

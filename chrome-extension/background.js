@@ -1,3 +1,5 @@
+importScripts("url-utils.js");
+
 const ALARM_NAME = "deal-scout-scan";
 const DEFAULT_TARGETS = [{
   label: "Golf club sets — Columbia, SC",
@@ -42,9 +44,11 @@ function waitForTab(tabId, timeoutMs = 30000) {
 }
 
 async function scanTarget(target) {
+  if (!target || typeof target !== "object" || typeof target.searchUrl !== "string") throw new Error("Invalid watch target");
+  const targetUrl = DealScoutUrls.normalizeUrl(target.searchUrl);
   let tab;
   try {
-    tab = await chrome.tabs.create({ url: target.searchUrl, active: false });
+    tab = await chrome.tabs.create({ url: targetUrl, active: false });
     await waitForTab(tab.id);
     await sleep(2500);
     const file = target.parser === "generic-og"
@@ -60,7 +64,8 @@ async function scanTarget(target) {
 
 async function postListings(endpointUrl, secret, listings) {
   if (!listings.length) return { accepted: 0, dropped: 0 };
-  const response = await fetch(endpointUrl, {
+  const endpoint = DealScoutUrls.normalizeUrl(endpointUrl, { requireHttps: true });
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-scout-secret": secret },
     body: JSON.stringify({ listings })
@@ -73,9 +78,10 @@ async function postListings(endpointUrl, secret, listings) {
 async function runScan() {
   if (lastRunStatus.running) return lastRunStatus;
   lastRunStatus = { startedAt: new Date().toISOString(), finishedAt: null, running: true, targets: {} };
-  const [{ watchTargets = DEFAULT_TARGETS }, { ingestEndpoint = "", scoutSecret = "" }] = await Promise.all([
+  const [{ watchTargets: storedTargets }, { ingestEndpoint = "", scoutSecret = "" }] = await Promise.all([
     syncGet(["watchTargets"]), localGet(["ingestEndpoint", "scoutSecret"])
   ]);
+  const watchTargets = Array.isArray(storedTargets) ? storedTargets : DEFAULT_TARGETS;
   if (!ingestEndpoint || !scoutSecret) {
     lastRunStatus.running = false;
     lastRunStatus.finishedAt = new Date().toISOString();
@@ -84,8 +90,12 @@ async function runScan() {
   }
 
   for (const [index, target] of watchTargets.entries()) {
+    if (!target || typeof target !== "object") {
+      lastRunStatus.targets[`${index}:Invalid target`] = { ok: false, error: "Stored watch target is invalid" };
+      continue;
+    }
     if (!target.enabled) continue;
-    const key = `${index}:${target.label}`;
+    const key = `${index}:${target.label || "Unnamed target"}`;
     try {
       const listings = await scanTarget(target);
       const ingest = await postListings(ingestEndpoint, scoutSecret, listings);
