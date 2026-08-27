@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 TELEGRAM_MODULE = (ROOT / "web" / "api" / "telegram.js").as_posix()
 URL_UTILS_MODULE = (ROOT / "chrome-extension" / "url-utils.js").as_posix()
+SCOUT_MODULE = (ROOT / "web" / "api" / "scout-ingest.js").as_posix()
 
 
 def run_node(expression):
@@ -52,6 +53,36 @@ class ExtensionUrlValidationTests(unittest.TestCase):
         )
         completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
         self.assertEqual(json.loads(completed.stdout), ["https://example.com/path", "http://example.com/", "rejected", "rejected", "rejected"])
+
+
+class ScoutIngestValidationTests(unittest.TestCase):
+    def test_duplicate_items_are_removed_against_queue_and_request(self):
+        script = (
+            f"const t=require({json.dumps(SCOUT_MODULE)})._test;"
+            "const a={platform:' Facebook ',itemId:' 1 ',title:'A',price:1,itemWebUrl:'https://example.com/1',imageUrl:'',description:''};"
+            "const b={...a,title:'duplicate'};const c={...a,itemId:'2'};"
+            "const old=[JSON.stringify({...a,platform:'facebook',itemId:'1'})];"
+            "process.stdout.write(JSON.stringify(t.withoutDuplicates([a,b,c],old).map(x=>x.itemId.trim())))"
+        )
+        completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(completed.stdout), ["2"])
+
+    def test_listing_urls_reject_credentials_and_non_http_schemes(self):
+        base = {"platform": "facebook", "itemId": "1", "title": "A", "price": 1, "itemWebUrl": "https://example.com/1", "imageUrl": "", "description": ""}
+        payload = json.dumps(base)
+        expression = (
+            f"(()=>{{const s=require({json.dumps(SCOUT_MODULE)})._test;const a={payload};"
+            "const good=s.validateListing(a,0);"
+            "const badScheme=s.validateListing({...a,itemWebUrl:'file:///etc/passwd'},0);"
+            "const badAuth=s.validateListing({...a,imageUrl:'https://user:pass@example.com/x'},0);"
+            "return [good,badScheme,badAuth]})()"
+        )
+        script = f"Promise.resolve({expression}).then(v=>process.stdout.write(JSON.stringify(v)))"
+        completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
+        values = json.loads(completed.stdout)
+        self.assertIsNone(values[0])
+        self.assertIn("HTTP(S)", values[1])
+        self.assertIn("HTTP(S)", values[2])
 
 
 if __name__ == "__main__":
