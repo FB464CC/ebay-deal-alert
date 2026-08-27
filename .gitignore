@@ -8,3 +8,6 @@ __pycache__/
 # since the workflow refreshes and recommits it every run. Cheap to
 # re-fetch each run instead; see poll.yml commit-back step.
 ebay_token_cache.json
+
+.vercel
+.env*
