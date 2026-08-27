@@ -2199,6 +2199,29 @@ class GrailedBatching(unittest.TestCase):
             self.assertIn(f"poshmark:{query}", ids)
 
 
+class ScoutPrefetchIntegration(unittest.TestCase):
+    def test_scout_listing_routes_to_best_matching_search_without_adapter(self):
+        from datetime import datetime, timezone
+
+        listing = p.make_listing("facebook", "123", "Titleist complete golf iron set", 175,
+                                 "https://www.facebook.com/marketplace/item/123/")
+        conn = sqlite3.connect(":memory:")
+        old_searches, old_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            m.SAVED_SEARCHES = [
+                {"query": "loro piana sweater", "enabled": True},
+                {"query": "complete golf iron set -junior", "enabled": True, "platforms": ["facebook"]},
+            ]
+            m.MARKETPLACES_ENABLED = []
+            with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[listing]), \
+                 mock.patch.object(m.scout_queue, "scout_queue_has_data", return_value=True):
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), conn)
+        finally:
+            conn.close()
+            m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
+        self.assertEqual(result, {"complete golf iron set -junior": [listing]})
+
+
 class MarketplaceAnomalyDetection(unittest.TestCase):
     """The bot has gone completely silent before: a scraper's JSON shape
     drifted (a renamed field), it returned 0 listings for hours, and nobody
@@ -2648,6 +2671,41 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.ai_calls, [item_id],
             "scrape-lane candidate gets its AI check from the separate budget "
             "even with GEMINI_CALL_LIMIT=0")
+
+    def test_scout_candidate_uses_shared_main_ai_budget(self):
+        """Scout is a bounded primary source, not the flood-prone scrape lane."""
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 5)
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast"}
+        self._serve(saved_search, [])
+        scout = p.make_listing("facebook", "scout-1",
+            "Loro Piana Cashmere Sweater Mens Medium Navy", 180,
+            "https://www.facebook.com/marketplace/item/scout-1/")
+        self._patch("prefetch_marketplaces", lambda now, conn: {saved_search["query"]: [scout]})
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [],
+            "Scout must respect GEMINI_CALL_LIMIT and must not borrow the eBay scrape reserve")
+        self.assertNotIn("_from_scrape_lane", scout)
+        self.assertTrue(m.is_new(self._db(), "facebook:scout-1"),
+            "a Scout candidate deferred by the shared budget stays retry-eligible")
+
+    def test_successful_run_clears_consumed_scout_queue(self):
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast"}
+        self._serve(saved_search, [])
+        cleared = []
+
+        def scout_prefetch(now, conn):
+            m._SCOUT_QUEUE_CONSUMED = True
+            return {}
+
+        self._patch("prefetch_marketplaces", scout_prefetch)
+        with mock.patch.object(m.scout_queue, "clear_scout_queue", side_effect=lambda: cleared.append(True)):
+            m.run()
+        self.assertEqual(cleared, [True])
 
     def test_official_api_candidates_ignore_scrape_budget(self):
         # EBAY_SCRAPE_AI_CHECK_LIMIT being exhausted must NOT leak into the

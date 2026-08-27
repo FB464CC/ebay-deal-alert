@@ -37,6 +37,7 @@ from urllib.parse import quote_plus
 
 import platforms as marketplaces
 import ebay_scrape
+import scout_queue
 
 CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
 
@@ -3826,12 +3827,13 @@ def _check_marketplace_anomalies(conn, now, active, counts):
 def prefetch_marketplaces(now, conn):
     """Fetch every enabled non-eBay marketplace for every enabled saved search,
     in parallel, inside a fixed wall-clock budget. Returns {query: [listings]}."""
-    active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.ADAPTERS]
-    if not active:
-        return {}
     searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
     if not searches:
         return {}
+    scout_listings = scout_queue.load_scout_queue()
+    global _SCOUT_QUEUE_CONSUMED
+    _SCOUT_QUEUE_CONSUMED = scout_queue.scout_queue_has_data()
+    active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.ADAPTERS]
     # Rotate the starting point each run so that when the budget truncates the
     # tail, it is a different tail every time and every search gets covered.
     offset = ((now.hour * 60 + now.minute) // 20) % len(searches)
@@ -3855,6 +3857,37 @@ def prefetch_marketplaces(now, conn):
     found = {}
     counts = {}
     results_lock = threading.Lock()
+
+    # Scout's intentionally small transport shape has no saved-search id.
+    # Route each item to exactly one compatible search using title/query
+    # overlap. This keeps it out of unrelated categories without creating a
+    # second scoring path or multiplying one item across every saved search.
+    for listing in scout_listings:
+        title_words = set(re.findall(r"[a-z0-9]+", listing.get("title", "").lower()))
+        candidates = []
+        for index, saved_search in enumerate(searches):
+            platform = listing.get("platform")
+            scoped_platforms = saved_search.get("platforms")
+            if scoped_platforms and platform not in scoped_platforms:
+                continue
+            clean_query, excluded = marketplaces.split_query_exclusions(saved_search["query"])
+            if marketplaces.title_matches_exclusion(listing.get("title"), excluded):
+                continue
+            query_words = set(re.findall(r"[a-z0-9]+", clean_query.lower()))
+            overlap = len(title_words & query_words)
+            if overlap:
+                candidates.append((overlap, -index, saved_search["query"]))
+        if not candidates:
+            logger.warning("Scout listing %s did not match an enabled saved search; skipping", listing["itemId"])
+            continue
+        _overlap, _order, query = max(candidates)
+        found.setdefault(query, []).append(listing)
+        platform = listing.get("platform", "scout")
+        counts[platform] = counts.get(platform, 0) + 1
+
+    if not active and not [p for p in MARKETPLACES_ENABLED if p in marketplaces.BATCH_ADAPTERS]:
+        logger.info("Marketplace prefetch: %s", counts or "nothing returned")
+        return found
 
     def batch_worker(platform_name):
         """Runs the platform's ONE batch call (covering every enabled
@@ -3947,6 +3980,8 @@ def prefetch_marketplaces(now, conn):
 
 
 def run():
+    global _SCOUT_QUEUE_CONSUMED
+    _SCOUT_QUEUE_CONSUMED = False
     logger.info("Starting eBay deal alert run")
     conn = init_db()
     # Once/day, not every 5-min run - VACUUM rebuilds the whole (currently
@@ -5265,12 +5300,16 @@ def run():
                     MAX_ALERTS_PER_RUN,
                 )
                 conn.close()
+                if _SCOUT_QUEUE_CONSUMED:
+                    scout_queue.clear_scout_queue()
                 return
         except Exception:
             logger.exception("Failed to send alert for %s", item_id)
 
     logger.info("Finished eBay deal alert run")
     conn.close()
+    if _SCOUT_QUEUE_CONSUMED:
+        scout_queue.clear_scout_queue()
 
 
 if __name__ == "__main__":

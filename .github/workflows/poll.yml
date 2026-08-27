@@ -65,10 +65,10 @@ jobs:
 
       - name: Commit seen item updates
         run: |
-          if [ -n "$(git status --porcelain seen_items.db alerts_log.jsonl ebay_rate_limit_state.json)" ]; then
+          if [ -n "$(git status --porcelain seen_items.db alerts_log.jsonl ebay_rate_limit_state.json scout_queue.jsonl)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json; do
+            for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json scout_queue.jsonl; do
               if [ -e "$file" ]; then
                 git add "$file"
               fi
