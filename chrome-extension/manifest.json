@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Deal Scout",
+  "version": "1.0.0",
+  "description": "Scans saved marketplace searches in your real Chrome session and queues candidates for the deal-alert bot.",
+  "permissions": ["storage", "alarms", "scripting", "activeTab"],
+  "host_permissions": ["https://*.facebook.com/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Deal Scout",
+    "default_popup": "popup.html"
+  }
+}

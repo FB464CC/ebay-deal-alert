@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Deal Scout</title>
+  <style>
+    body { font: 13px system-ui, sans-serif; width: 390px; margin: 0; padding: 14px; color: #17202a; }
+    h1 { font-size: 19px; margin: 0 0 12px; } h2 { font-size: 14px; margin: 16px 0 7px; }
+    label { display: block; margin: 7px 0 3px; } input, select { box-sizing: border-box; width: 100%; padding: 7px; }
+    button { margin-top: 10px; padding: 7px 11px; cursor: pointer; } .primary { background: #1769e0; color: white; border: 0; border-radius: 4px; }
+    .target { border: 1px solid #d7dce1; border-radius: 5px; padding: 8px; margin: 6px 0; }
+    .target label { display: flex; align-items: center; gap: 7px; margin: 0; font-weight: 600; }
+    .target input { width: auto; } .meta, #status { color: #53606d; font-size: 12px; overflow-wrap: anywhere; }
+    .danger { float: right; margin: 0; color: #a00; background: transparent; border: 0; }
+  </style>
+</head>
+<body>
+  <h1>Deal Scout</h1>
+  <button id="scanNow" class="primary">Scan Now</button>
+  <div id="status">No scan has run in this Chrome session.</div>
+
+  <h2>Watch targets</h2>
+  <div id="targets"></div>
+
+  <h2>Add target</h2>
+  <form id="targetForm">
+    <label for="label">Label</label><input id="label" required placeholder="Columbia furniture">
+    <label for="platform">Platform</label><input id="platform" required placeholder="facebook">
+    <label for="searchUrl">Search URL</label><input id="searchUrl" type="url" required placeholder="https://…">
+    <label for="parser">Parser</label>
+    <select id="parser"><option value="facebook-json">Facebook JSON</option><option value="generic-og">Generic OG</option></select>
+    <button type="submit">Add target</button>
+  </form>
+
+  <h2>Ingest setup</h2>
+  <form id="setupForm">
+    <label for="endpoint">Endpoint URL</label><input id="endpoint" type="url" required placeholder="https://your-project.vercel.app/api/scout-ingest">
+    <label for="secret">SCOUT_INGEST_SECRET</label><input id="secret" type="password" required autocomplete="new-password">
+    <button type="submit">Save setup</button>
+  </form>
+  <script src="popup.js"></script>
+</body>
+</html>

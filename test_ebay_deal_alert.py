@@ -31,6 +31,11 @@ import requests
 import ebay_deal_alert as m
 import platforms as p
 
+# Captured at module load, before any test's setUp() stubs
+# m.prefetch_marketplaces to a no-op - the Scout tagging/merge logic lives
+# INSIDE the real function, so a couple of tests need to restore it.
+_REAL_PREFETCH_MARKETPLACES = m.prefetch_marketplaces
+
 
 class ComputeDealRating(unittest.TestCase):
     def test_unclamped_discount_reports_true_magnitude(self):
@@ -2199,6 +2204,29 @@ class GrailedBatching(unittest.TestCase):
             self.assertIn(f"poshmark:{query}", ids)
 
 
+class ScoutPrefetchIntegration(unittest.TestCase):
+    def test_scout_listing_routes_to_best_matching_search_without_adapter(self):
+        from datetime import datetime, timezone
+
+        listing = p.make_listing("facebook", "123", "Titleist complete golf iron set", 175,
+                                 "https://www.facebook.com/marketplace/item/123/")
+        conn = sqlite3.connect(":memory:")
+        old_searches, old_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            m.SAVED_SEARCHES = [
+                {"query": "loro piana sweater", "enabled": True},
+                {"query": "complete golf iron set -junior", "enabled": True, "platforms": ["facebook"]},
+            ]
+            m.MARKETPLACES_ENABLED = []
+            with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[listing]), \
+                 mock.patch.object(m.scout_queue, "scout_queue_has_data", return_value=True):
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), conn)
+        finally:
+            conn.close()
+            m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
+        self.assertEqual(result, {"complete golf iron set -junior": [listing]})
+
+
 class MarketplaceAnomalyDetection(unittest.TestCase):
     """The bot has gone completely silent before: a scraper's JSON shape
     drifted (a renamed field), it returned 0 listings for hours, and nobody
@@ -2648,6 +2676,75 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.ai_calls, [item_id],
             "scrape-lane candidate gets its AI check from the separate budget "
             "even with GEMINI_CALL_LIMIT=0")
+
+    def test_scout_candidate_spends_own_budget_not_gemini_calls(self):
+        # Corrected after review: a single healthy extension scan (one
+        # Facebook search easily returns 20-60 listings) can flood far more
+        # candidates into one run than GEMINI_CALL_LIMIT could ever check -
+        # the exact eBay-scrape-lane starvation shape, just from a different
+        # source. Scout must draw from its OWN SCOUT_AI_CHECK_LIMIT counter,
+        # mutation-tested the same way as the scrape lane's own test:
+        # GEMINI_CALL_LIMIT=0 is the probe - the check below could ONLY have
+        # been granted by the separate scout budget. prefetch_marketplaces()
+        # is stubbed to a no-op by setUp() for every test in this class, but
+        # scout's merge/tagging code lives INSIDE the real function - must
+        # un-stub it here (Codex's original version of this test never did,
+        # so it silently never exercised the real tagging path at all).
+        # MARKETPLACES_ENABLED=[] keeps the real prefetch_marketplaces from
+        # attempting any live non-eBay marketplace call.
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("SCOUT_AI_CHECK_LIMIT", 1)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast"}
+        self._serve(saved_search, [])
+        scout = p.make_listing("facebook", "scout-1",
+            "Loro Piana Cashmere Sweater Mens Medium Navy", 180,
+            "https://www.facebook.com/marketplace/item/scout-1/")
+        with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[scout]):
+            m.run()
+
+        self.assertEqual(self.ai_calls, ["facebook:scout-1"],
+            "Scout candidate gets its AI check from the separate budget even with GEMINI_CALL_LIMIT=0")
+
+    def test_scout_budget_exhaustion_defers_later_scout_candidates(self):
+        self._patch("SCOUT_AI_CHECK_LIMIT", 1)
+        self._patch("GEMINI_CALL_LIMIT", 3)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast"}
+        self._serve(saved_search, [])
+        checked = p.make_listing("facebook", "scout-checked",
+            "Loro Piana Cashmere Sweater Mens Medium Grey", 185,
+            "https://www.facebook.com/marketplace/item/scout-checked/")
+        deferred = p.make_listing("facebook", "scout-deferred",
+            "Loro Piana Cashmere Sweater Mens Small Charcoal", 165,
+            "https://www.facebook.com/marketplace/item/scout-deferred/")
+        with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[checked, deferred]):
+            m.run()
+
+        self.assertIn("facebook:scout-checked", self.ai_calls)
+        self.assertNotIn("facebook:scout-deferred", self.ai_calls,
+            "second Scout candidate must be deferred, not fall through to the shared budget")
+        self.assertTrue(m.is_new(self._db(), "facebook:scout-deferred"),
+            "a Scout candidate starved of its own budget stays retry-eligible, not discarded")
+
+    def test_successful_run_clears_consumed_scout_queue(self):
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast"}
+        self._serve(saved_search, [])
+        cleared = []
+
+        def scout_prefetch(now, conn):
+            m._SCOUT_QUEUE_CONSUMED = True
+            return {}
+
+        self._patch("prefetch_marketplaces", scout_prefetch)
+        with mock.patch.object(m.scout_queue, "clear_scout_queue", side_effect=lambda: cleared.append(True)):
+            m.run()
+        self.assertEqual(cleared, [True])
 
     def test_official_api_candidates_ignore_scrape_budget(self):
         # EBAY_SCRAPE_AI_CHECK_LIMIT being exhausted must NOT leak into the
