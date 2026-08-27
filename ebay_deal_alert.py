@@ -280,6 +280,17 @@ EBAY_SCRAPE_ENABLED = bool(_CONFIG.get("EBAY_SCRAPE_ENABLED", True))
 # free-tier headroom (the same headroom the main GEMINI_CALL_LIMIT is paced
 # to spread across), so the paid fallback should almost never fire.
 EBAY_SCRAPE_AI_CHECK_LIMIT = int(_CONFIG.get("EBAY_SCRAPE_AI_CHECK_LIMIT", 1))
+# Same reasoning, same fix pattern, applied to the Scout browser-extension
+# queue: load_scout_queue() returns the WHOLE queue unbounded (it's only
+# capped at 2,000 total lines by the ingest endpoint, not per-run), and every
+# entry merges into the normal per-search candidate pool. Without its own
+# budget here, one healthy extension scan (a single Facebook search easily
+# returns 20-60 listings) would flood into the shared GEMINI_CALL_LIMIT pool
+# in the very next run and starve every other platform - the exact eBay
+# scrape-lane starvation bug (EBAY_SCRAPE_AI_CHECK_LIMIT's own comment above),
+# just with a different flooding source. Caught in review before this ever
+# shipped with live scout data.
+SCOUT_AI_CHECK_LIMIT = int(_CONFIG.get("SCOUT_AI_CHECK_LIMIT", 1))
 # Hard wall-clock cap on the parallel marketplace fetch. Was 30s back when
 # the repo was private and GitHub billed Actions minutes rounded up per job -
 # the repo is public now (unlimited free Actions minutes), and per_page went
@@ -3881,6 +3892,12 @@ def prefetch_marketplaces(now, conn):
             logger.warning("Scout listing %s did not match an enabled saved search; skipping", listing["itemId"])
             continue
         _overlap, _order, query = max(candidates)
+        # Tagged so PASS 3's budget routing (see SCOUT_AI_CHECK_LIMIT) can
+        # give these their own small AI-check budget instead of competing in
+        # the shared GEMINI_CALL_LIMIT pool with every other platform - a
+        # healthy extension scan can return far more candidates in one batch
+        # than the shared budget could ever afford to check.
+        listing["_from_scout_queue"] = True
         found.setdefault(query, []).append(listing)
         platform = listing.get("platform", "scout")
         counts[platform] = counts.get(platform, 0) + 1
@@ -4761,9 +4778,11 @@ def run():
     # then alert (cap-gated), in priority order.
     gemini_calls = 0
     ebay_scrape_ai_calls = 0
+    scout_ai_calls = 0
     auction_reserved_calls = 0
     gemini_budget_logged = False
     ebay_scrape_budget_logged = False
+    scout_budget_logged = False
     for candidate in review_candidates:
         item_id = candidate["item_id"]
         listing = candidate["listing"]
@@ -4793,26 +4812,32 @@ def run():
 
         ai_result = None
         is_scrape_lane = bool(listing.get("_from_scrape_lane"))
+        is_scout = bool(listing.get("_from_scout_queue"))
         # Once the normal Gemini budget is spent, one extra call is still
         # granted to an ending-soon auction so a closing auction can't be
         # starved out by the cap - see AUCTION_AI_RESERVED_CALLS for the
         # full tradeoff and the cap that keeps many simultaneous auctions
-        # from eating the whole day's budget. Scrape-lane candidates never
-        # qualify - they have their own budget below and must not touch the
-        # shared pool (including its reserved auction slot).
+        # from eating the whole day's budget. Scrape-lane/Scout candidates
+        # never qualify - they have their own budget below and must not
+        # touch the shared pool (including its reserved auction slot).
         use_reserved_auction_slot = (
             not is_scrape_lane
+            and not is_scout
             and gemini_calls >= GEMINI_CALL_LIMIT
             and bool(result.get("is_ending_soon_auction"))
             and auction_reserved_calls < AUCTION_AI_RESERVED_CALLS
         )
         # Scrape-lane candidates draw from their OWN tiny budget
-        # (EBAY_SCRAPE_AI_CHECK_LIMIT), never the shared GEMINI_CALL_LIMIT
-        # pool that the official-API and auction lanes live on - a scrape
-        # flood must not starve them. The AI check itself, and everything
-        # after it, is identical; only which counter gates it changes.
+        # (EBAY_SCRAPE_AI_CHECK_LIMIT), Scout candidates from theirs
+        # (SCOUT_AI_CHECK_LIMIT) - never the shared GEMINI_CALL_LIMIT pool
+        # that the official-API and auction lanes live on, so a flood from
+        # either source can't starve them. The AI check itself, and
+        # everything after it, is identical; only which counter gates it
+        # changes.
         if is_scrape_lane:
             budget_granted = ebay_scrape_ai_calls < EBAY_SCRAPE_AI_CHECK_LIMIT
+        elif is_scout:
+            budget_granted = scout_ai_calls < SCOUT_AI_CHECK_LIMIT
         else:
             budget_granted = (
                 gemini_calls < GEMINI_CALL_LIMIT or use_reserved_auction_slot
@@ -4820,6 +4845,8 @@ def run():
         if budget_granted:
             if is_scrape_lane:
                 ebay_scrape_ai_calls += 1
+            elif is_scout:
+                scout_ai_calls += 1
             else:
                 if gemini_calls > 0:
                     time.sleep(GEMINI_INTER_CALL_SLEEP_SECONDS)
@@ -4881,6 +4908,13 @@ def run():
                     "skipping AI check for remaining scrape-lane listings"
                 )
                 ebay_scrape_budget_logged = True
+        elif is_scout:
+            if not scout_budget_logged:
+                logger.info(
+                    "Scout AI-check budget exhausted for this run, "
+                    "skipping AI check for remaining Scout listings"
+                )
+                scout_budget_logged = True
         elif not gemini_budget_logged:
             logger.info(
                 "Gemini call budget exhausted for this run, skipping AI check for remaining listings"
