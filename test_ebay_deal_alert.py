@@ -103,6 +103,8 @@ class CategoryClassification(unittest.TestCase):
         # if checked first.
         self.assertEqual(m.classify_search_category("golf club set"), "golf-equipment")
         self.assertEqual(m.classify_search_category("complete golf iron set"), "golf-equipment")
+        self.assertEqual(m.classify_search_category("golf bag clubs"), "golf-equipment")
+        self.assertEqual(m.classify_search_category("callaway strata golf set"), "golf-equipment")
         self.assertEqual(m.classify_search_category("peter millar golf polo"), "golf")
 
 
@@ -118,58 +120,62 @@ class GolfEquipmentGate(unittest.TestCase):
 
     def test_over_price_cap_is_permanently_blocked(self):
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(price=300, golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(price=300.01, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False),
             category="golf-equipment",
         )
         self.assertIsNotNone(reason)
         self.assertNotIn("no AI price", reason)  # permanent, not retry-eligible
 
-    def test_starter_kit_is_blocked(self):
+    def test_price_at_hard_cap_clears(self):
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(price=300, golf_ai_checked=True, golf_is_playable_first_set=True,
+                         golf_is_starter_kit=False, damage_found=False),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
+    def test_playable_starter_kit_is_allowed(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=True, damage_found=False),
             category="golf-equipment",
         )
-        self.assertIsNotNone(reason)
+        self.assertIsNone(reason)
 
-    def test_incomplete_set_is_blocked(self):
+    def test_unplayable_collection_is_blocked(self):
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(golf_ai_checked=True, golf_is_complete_set=False,
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=False,
                           golf_is_starter_kit=False, damage_found=False),
             category="golf-equipment",
         )
         self.assertIsNotNone(reason)
 
-    def test_complete_quality_set_under_cap_clears_the_gate(self):
+    def test_playable_partial_set_under_cap_clears_the_gate(self):
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(price=250, golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(price=250, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False),
             category="golf-equipment",
         )
         self.assertIsNone(reason)
 
     def test_price_over_ai_resale_estimate_is_blocked_even_under_the_cap(self):
-        # Real live miss: "Mens Golf Set - TaylorMade R9 Driver, Top-Flite
-        # Irons..." - $159 landed, well under the price cap, complete real-
-        # brand set, no damage - but the AI's own resale estimate was $120.
-        # Alerted with deal_rating "Marginal" / discount_pct -32% (paying
-        # 32% OVER what the AI itself said it's worth) because this category
-        # deliberately never checked deal_rating/discount_pct at all.
-        # "Personal use, not a flip" never meant price doesn't matter.
+        # Loosening golf relaxed COMPLETENESS and brand tier, NOT price
+        # discipline - the goal is still "a fire deal on a set". Paying over
+        # the AI's own resale estimate is a bad buy even for a playable,
+        # right-handed, under-cap set.
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(price=159, golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(price=159, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           estimated_resale_value=120.0),
             category="golf-equipment",
         )
         self.assertIsNotNone(reason)
         self.assertIn("resale estimate", reason)
-        self.assertNotIn("no AI price", reason)  # a real check ran, this is permanent
 
     def test_price_at_or_under_resale_estimate_still_clears(self):
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(price=100, golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(price=100, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           estimated_resale_value=120.0),
             category="golf-equipment",
@@ -177,11 +183,10 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertIsNone(reason)
 
     def test_no_resale_estimate_does_not_block(self):
-        # Original design intent preserved: golf may never get a reliable
-        # resale estimate at all - absence of one must not strand every
-        # candidate, only an ACTUAL price-over-estimate should block.
+        # Golf may never get a reliable resale estimate at all; absence of
+        # one must not strand a playable personal-use candidate.
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(price=250, golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(price=250, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           estimated_resale_value=None),
             category="golf-equipment",
@@ -192,7 +197,7 @@ class GolfEquipmentGate(unittest.TestCase):
         # Real live miss: right-handed buyer, AI now identifies handedness
         # from the photos as a backstop to the query-level "-lefty" exclude.
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           golf_is_left_handed=True),
             category="golf-equipment",
@@ -202,7 +207,7 @@ class GolfEquipmentGate(unittest.TestCase):
 
     def test_right_handed_clubs_clear_the_handedness_check(self):
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(price=250, golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(price=250, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           golf_is_left_handed=False),
             category="golf-equipment",
@@ -211,13 +216,124 @@ class GolfEquipmentGate(unittest.TestCase):
 
     def test_counterfeit_suspected_is_blocked(self):
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(golf_ai_checked=True, golf_is_complete_set=True,
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           golf_counterfeit_suspected=True),
             category="golf-equipment",
         )
         self.assertIsNotNone(reason)
         self.assertIn("counterfeit", reason)
+
+    def test_golf_club_title_bypasses_apparel_corporate_logo_filter(self):
+        listing = {
+            "title": "Mens Right Hand Golf Club Set Bag 5 Irons Putter",
+            "description": "Local pickup",
+            "price": {"value": 250},
+        }
+        result = m.score_listing(listing, gap_report=None, category="golf-equipment")
+        self.assertEqual(result["verdict"], "REVIEW")
+
+    def test_golf_still_hard_blocks_youth_title(self):
+        listing = {
+            "title": "Youth Golf Club Set",
+            "description": "",
+            "price": {"value": 50},
+        }
+        result = m.score_listing(listing, gap_report=None, category="golf-equipment")
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("excluded gender", result["reason"])
+
+
+class GolfRampConfiguration(unittest.TestCase):
+    def test_no_box_set_brand_golf_searches_remain(self):
+        # The buyer rejects box-set brands outright, so hunting them wastes the
+        # capped AI budget on candidates that are disqualified by definition.
+        for search in m.SAVED_SEARCHES:
+            query = search["query"].lower()
+            if "golf" not in query:
+                continue
+            for brand in ("strata", "wilson", "top flite", "topflite"):
+                self.assertNotIn(brand, query, f"box-set brand hunt still present: {search['query']}")
+
+    def test_irons_are_hunted_by_model_under_the_component_budget(self):
+        # Irons are the only piece worth real money - the rest of the bag is
+        # cheap to source separately, so they get their own model-level hunts.
+        by_clean = {
+            p.split_query_exclusions(s["query"])[0].lower(): s for s in m.SAVED_SEARCHES
+        }
+        for q in ("taylormade m2 irons", "callaway rogue irons", "ping g400 irons"):
+            self.assertIn(q, by_clean, f"missing iron hunt: {q}")
+            self.assertLessEqual(by_clean[q]["max_price"], 220)
+            self.assertIs(by_clean[q]["enabled"], True)
+
+    def test_requested_golf_searches_have_exact_neighbor_schema_and_exclusions(self):
+        expected_clean_queries = {
+            "golf clubs",
+            "golf set",
+            "mens golf clubs",
+            "golf irons set",
+            "golf bag clubs",
+            "complete golf set",
+            # NOTE: no strata/wilson/top-flite hunts here on purpose - those are
+            # box-set brands on the buyer's own reject list, so searching for them
+            # only burns the capped AI budget on candidates that can never pass.
+            "adams golf set",
+            "cobra golf set",
+            "ping golf set",
+            "taylormade golf set",
+        }
+        searches_by_clean_query = {
+            p.split_query_exclusions(search["query"])[0]: search
+            for search in m.SAVED_SEARCHES
+        }
+        self.assertTrue(expected_clean_queries <= searches_by_clean_query.keys())
+        for clean_query in expected_clean_queries:
+            search = searches_by_clean_query[clean_query]
+            self.assertEqual(
+                set(search),
+                {"query", "size", "max_price", "enabled", "profile", "platforms"},
+            )
+            self.assertIsNone(search["size"])
+            self.assertEqual(search["max_price"], 300)
+            self.assertIs(search["enabled"], True)
+            self.assertEqual(search["profile"], "fast")
+            self.assertEqual(search["platforms"], ["shopgoodwill", "facebook"])
+            for exclusion in (
+                "-junior", "-youth", "-kids", "-ladies", "-womens",
+                '-"left hand"', "-lefty", '-"left handed"', "-scarf",
+            ):
+                self.assertIn(exclusion, search["query"])
+
+    def test_every_added_query_routes_to_golf_equipment(self):
+        for search in m.SAVED_SEARCHES:
+            clean_query = p.split_query_exclusions(search["query"])[0]
+            if clean_query in {
+                "golf clubs", "golf set", "mens golf clubs", "golf irons set",
+                "golf bag clubs", "complete golf set", "callaway strata golf set",
+                "wilson golf set", "top flite golf set", "adams golf set",
+                "cobra golf set", "ping golf set", "taylormade golf set",
+            }:
+                self.assertEqual(m.classify_search_category(search["query"]), "golf-equipment")
+
+
+class GolfSanityCheck(unittest.TestCase):
+    def test_partial_set_rule_reaches_final_sanity_prompt(self):
+        prompts = []
+        response = {"is_complete_item": True, "is_part_or_accessory": False, "reason": "playable"}
+        with mock.patch.object(
+            m,
+            "_call_deepseek_text_json",
+            lambda prompt: prompts.append(prompt) or response,
+        ):
+            result = m._deepseek_alert_sanity_check(
+                {"title": "Golf bag with 4 irons and putter", "description": "right handed"},
+                {"summary": "usable irons and putter", "looks_good": True, "damage_found": False},
+                "golf-equipment",
+            )
+
+        self.assertEqual(result, response)
+        self.assertIn("irons-only/partial iron set can qualify", prompts[0])
+        self.assertIn("Do not call clubs a part/accessory", prompts[0])
 
 
 class JacketOnlySuitListing(unittest.TestCase):
@@ -2879,6 +2995,63 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.ai_calls, [item_id],
             "scrape-lane candidate gets its AI check from the separate budget "
             "even with GEMINI_CALL_LIMIT=0")
+
+    def test_facebook_golf_queue_row_reaches_golf_gate_and_alerts(self):
+        # Exercise the real queue loader, Scout router, run loop, golf merge,
+        # golf gate, and alert path together. Only network/provider edges are
+        # replaced; no function in that chain is mocked.
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("SCOUT_AI_CHECK_LIMIT", 1)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
+        saved_search = {
+            "query": "golf club set -junior -youth -kids -ladies -womens "
+                     "-\"left hand\" -lefty -\"left handed\" -scarf",
+            "size": None,
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+            "platforms": ["shopgoodwill", "facebook"],
+        }
+        self._serve(saved_search, [])
+        self.ai_result = {
+            "clubs_identified": "bag, putter, 5 mixed-brand irons",
+            "identified_brand": "Wilson / Top Flite mixed set",
+            "is_playable_first_set": True,
+            "is_starter_kit_quality": True,
+            "is_left_handed": False,
+            "damage_found": False,
+            "damage_desc": "",
+            "looks_good": True,
+            "counterfeit_suspected": False,
+            "counterfeit_reason": "",
+            "summary": "right-handed adult bag with five usable irons and a putter",
+            "estimated_resale_value": 320,
+            "price_confidence": "medium",
+        }
+        queue_path = self.tmpdir / "scout_queue.jsonl"
+        queue_path.write_text(json.dumps({
+            "platform": "facebook",
+            "itemId": "fb-golf-1",
+            "title": "Mens Right Hand Golf Club Set Bag 5 Irons Putter",
+            "price": 150,
+            "itemWebUrl": "https://www.facebook.com/marketplace/item/fb-golf-1/",
+            "imageUrl": "https://example.test/golf.jpg",
+            "description": "Local pickup in Columbia, SC",
+            "scoutSearchQuery": "golf club set",
+            "scoutSearchLabel": "Golf club sets - Columbia, SC",
+        }) + "\n", encoding="utf-8")
+
+        with mock.patch.object(m.scout_queue, "SCOUT_QUEUE_PATH", queue_path):
+            m.run()
+
+        self.assertEqual(self.ai_calls, ["facebook:fb-golf-1"])
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(self.alerts[0]["listing"]["itemId"], "facebook:fb-golf-1")
+        self.assertNotIn("deal_rating", self.alerts[0],
+                         "golf eligibility must not be expressed as resale margin")
+        self.assertEqual(queue_path.read_text(encoding="utf-8"), "",
+                         "successfully alerted Scout row must be acknowledged")
 
     def test_scout_candidate_spends_own_budget_not_gemini_calls(self):
         # Corrected after review: a single healthy extension scan (one

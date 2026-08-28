@@ -339,7 +339,9 @@ def available_platforms():
 # Sweatshirt" ( -sweatshirt ), "Rolex Oyster Perpetual Bone China Coffee
 # Mug" ( -mug ) and a Heath/Zenith doorbell. Every one of those was named
 # explicitly in its own search's exclusion list and got through anyway.
-_QUERY_EXCLUSION_RE = re.compile(r"(?:^|\s)-([A-Za-z0-9][\w'-]*)")
+_QUERY_EXCLUSION_RE = re.compile(
+    r'(?:^|\s)-(?:"([^"]+)"|([A-Za-z0-9][\w\'-]*))'
+)
 
 
 def split_query_exclusions(query):
@@ -349,7 +351,10 @@ def split_query_exclusions(query):
     a clean set of words to actually match on) plus the lowercased terms
     themselves, so the caller can enforce them on the results instead."""
     query = query or ""
-    terms = [m.group(1).lower() for m in _QUERY_EXCLUSION_RE.finditer(query)]
+    terms = [
+        (match.group(1) or match.group(2)).lower()
+        for match in _QUERY_EXCLUSION_RE.finditer(query)
+    ]
     clean = re.sub(r"\s+", " ", _QUERY_EXCLUSION_RE.sub(" ", query)).strip()
     return clean, terms
 

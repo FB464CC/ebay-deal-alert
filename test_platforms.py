@@ -77,6 +77,17 @@ class ListingNumberValidation(unittest.TestCase):
                 self.assertNotIn("shippingOptions", listing)
 
 
+class QueryExclusions(unittest.TestCase):
+    def test_word_and_quoted_phrase_exclusions_are_removed_and_preserved(self):
+        clean, excluded = p.split_query_exclusions(
+            'golf club set -junior -"left hand" -lefty -"left handed"'
+        )
+        self.assertEqual(clean, "golf club set")
+        self.assertEqual(excluded, ["junior", "left hand", "lefty", "left handed"])
+        self.assertTrue(p.title_matches_exclusion("Mens left handed golf clubs", excluded))
+        self.assertFalse(p.title_matches_exclusion("Mens right handed golf clubs", excluded))
+
+
 class VintedLandedCost(unittest.TestCase):
     def test_assumed_shipping_constant_is_positive(self):
         self.assertGreater(p.VINTED_ASSUMED_SHIPPING, 0)
