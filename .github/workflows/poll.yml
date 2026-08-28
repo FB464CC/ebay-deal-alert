@@ -47,7 +47,11 @@ jobs:
         # needs, which apt provides here (Linux-only flag, do not run this
         # locally on Windows - the browser binary itself is separate from
         # the playwright pip package installed above).
-        run: playwright install --with-deps chromium
+        run: |
+          playwright install --with-deps chromium
+          # Scrapling's StealthySession uses Patchright's hardened browser
+          # build, which has a separate browser cache from Playwright.
+          patchright install chromium
 
       - name: Run eBay deal alert
         env:
@@ -65,10 +69,10 @@ jobs:
 
       - name: Commit seen item updates
         run: |
-          if [ -n "$(git status --porcelain seen_items.db alerts_log.jsonl ebay_rate_limit_state.json scout_queue.jsonl)" ]; then
+          if [ -n "$(git status --porcelain seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json scout_queue.jsonl)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json scout_queue.jsonl; do
+            for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json scout_queue.jsonl; do
               if [ -e "$file" ]; then
                 git add "$file"
               fi
