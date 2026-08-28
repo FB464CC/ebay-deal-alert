@@ -1342,7 +1342,7 @@
       "category_id": "53120"
     },
     {
-      "query": "golf club set -junior -youth -kids -ladies -womens -\"only\"",
+      "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\"",
       "size": null,
       "max_price": 300,
       "enabled": true,
@@ -1353,7 +1353,7 @@
       ]
     },
     {
-      "query": "complete golf iron set -junior -youth -kids -ladies -womens",
+      "query": "complete golf iron set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\"",
       "size": null,
       "max_price": 300,
       "enabled": true,

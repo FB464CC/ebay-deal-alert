@@ -2449,6 +2449,7 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "Report strict JSON only, with no markdown fences, using this exact shape: "
             "{\"clubs_identified\": string, \"identified_brand\": string, "
             "\"is_complete_set\": bool, \"is_starter_kit_quality\": bool, "
+            "\"is_left_handed\": bool, "
             "\"damage_found\": bool, \"damage_desc\": string, \"looks_good\": bool, "
             "\"counterfeit_suspected\": bool, \"counterfeit_reason\": string, "
             "\"summary\": string, \"estimated_resale_value\": number|null, "
@@ -2458,30 +2459,43 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "manufacturer marked on the clubs themselves (e.g. Titleist, TaylorMade, "
             "Callaway, Ping, Mizuno, Cobra, Cleveland) - if clubs show mixed/no-name "
             "branding or the set is a widely-known cheap all-in-one \"complete set\" "
-            "line (Confidence, Wilson Ultra, Ram, Founders Club, Precise, or similar "
-            "unbranded/off-brand box-set clubs), name that instead. is_complete_set "
-            "is true only if there's a genuinely usable set: a driver or fairway wood, "
-            "a reasonable run of irons (at minimum 5-6 iron-type clubs), and a putter "
-            "all visible - not just 2-3 loose clubs. is_starter_kit_quality is true if "
-            "this is one of those cheap all-in-one starter-kit brands/lines, or "
-            "generic unbranded clubs, REGARDLESS of is_complete_set - a complete cheap "
-            "kit is still a cheap kit. If you are unsure whether a brand is legitimate "
-            "mid/premium golf equipment or a bargain starter-kit line, err toward "
-            "is_starter_kit_quality true and explain the ambiguity in summary. "
-            "damage_found means visible rust, cracked/bent shafts, missing/torn grips, "
-            "or heavily worn club faces beyond normal light use. looks_good should be "
-            "true only when no damage is found. estimated_resale_value is a rough "
-            "typical secondhand value for this exact set in USD if you can reasonably "
-            "estimate it (nice to have, not required), or null if you can't - it is "
-            "NOT the deciding factor here, just useful context. price_confidence must "
-            "be one of \"high\", \"medium\", or \"low\". counterfeit_suspected is true "
-            "if anything about the listing suggests these are counterfeit/replica club "
-            "heads rather than genuine manufacturer clubs: brand markings that look "
-            "off (wrong font, wrong logo placement, misspelled brand name), multiple "
-            "identical or near-identical sets shown together like inventory rather "
-            "than one owner's used set, or a price far too low for genuine clubs from "
-            "that brand combined with generic/stock-looking photos. Explain briefly in "
-            "counterfeit_reason, or leave it empty if not suspected."
+            "line (examples: Big Brother, GS.1, Confidence, Wilson Ultra, Ram, Founders "
+            "Club, Precise, Tour Edge base/non-Exotics line, Intech, Dunlop, "
+            "Northwestern, Spalding, Knight, Top Flite boxed sets, Strata, Pinseeker, "
+            "Alien, MacGregor, or similar unbranded/off-brand box-set clubs), name "
+            "that instead. is_complete_set is true if the critical SCORING irons are "
+            "present and usable: at minimum a run from roughly the 6-iron through "
+            "pitching wedge (5-6 consecutive iron-type clubs covering that range) - a "
+            "missing driver, missing putter, or missing long irons/fairway woods is "
+            "FINE and does not make this false, since those are easy/cheap to source "
+            "separately. Only mark is_complete_set false if the scoring irons "
+            "themselves are missing or it's just 2-3 loose clubs. is_starter_kit_quality "
+            "is true if this is one of those cheap all-in-one starter-kit brands/lines, "
+            "or generic unbranded clubs, REGARDLESS of is_complete_set - a complete "
+            "cheap kit is still a cheap kit. If you are unsure whether a brand is "
+            "legitimate mid/premium golf equipment or a bargain starter-kit line, err "
+            "toward is_starter_kit_quality true and explain the ambiguity in summary. "
+            "is_left_handed is true only if the clubs are clearly built for a "
+            "left-handed golfer (clubhead/face mirrored the opposite way from a normal "
+            "right-handed club - compare face angle relative to the shaft/hosel across "
+            "photos) - the buyer is right-handed, so left-handed clubs are unusable to "
+            "him regardless of anything else. If handedness genuinely cannot be told "
+            "from the photos, use false and say so in summary rather than guessing "
+            "true. damage_found means visible rust, cracked/bent shafts, missing/torn "
+            "grips, or heavily worn club faces beyond normal light use. looks_good "
+            "should be true only when no damage is found. estimated_resale_value is a "
+            "rough typical secondhand value for this exact set in USD if you can "
+            "reasonably estimate it (nice to have, not required), or null if you "
+            "can't - it is NOT the deciding factor here, just useful context. "
+            "price_confidence must be one of \"high\", \"medium\", or \"low\". "
+            "counterfeit_suspected is true if anything about the listing suggests "
+            "these are counterfeit/replica club heads rather than genuine manufacturer "
+            "clubs: brand markings that look off (wrong font, wrong logo placement, "
+            "misspelled brand name), multiple identical or near-identical sets shown "
+            "together like inventory rather than one owner's used set, or a price far "
+            "too low for genuine clubs from that brand combined with generic/"
+            "stock-looking photos. Explain briefly in counterfeit_reason, or leave it "
+            "empty if not suspected."
         )
         return _call_photo_check(golf_prompt, images, timeout=20)
 
@@ -2871,6 +2885,10 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "golf-equipment bar: AI did not confirm a complete, usable set"
         if result.get("golf_is_starter_kit"):
             return "golf-equipment bar: AI flagged this as cheap starter-kit-quality equipment"
+        if result.get("golf_is_left_handed"):
+            return "golf-equipment bar: AI identified left-handed clubs (buyer is right-handed)"
+        if result.get("golf_counterfeit_suspected"):
+            return "golf-equipment bar: AI suspected counterfeit/replica club heads"
         if result.get("damage_found"):
             return "golf-equipment bar: AI found disqualifying damage"
         return None
@@ -5009,6 +5027,8 @@ def run():
             result["golf_ai_checked"] = True
             result["golf_is_complete_set"] = bool(ai_result.get("is_complete_set"))
             result["golf_is_starter_kit"] = bool(ai_result.get("is_starter_kit_quality"))
+            result["golf_is_left_handed"] = bool(ai_result.get("is_left_handed"))
+            result["golf_counterfeit_suspected"] = bool(ai_result.get("counterfeit_suspected"))
             result["golf_identified_brand"] = ai_result.get("identified_brand")
             result["damage_found"] = bool(ai_result.get("damage_found"))
         if ai_result is not None and category == "watches":
