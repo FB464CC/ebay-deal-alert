@@ -381,10 +381,12 @@ class VintedCircuitBreaker(unittest.TestCase):
         p._vinted_thread_state = threading.local()
         p._backoff_multiplier.clear()
         p._last_call.clear()
+        p._vinted_consecutive_query_failures = 0
 
     def tearDown(self):
         p.VINTED_RATE_LIMIT_STATE_PATH = self.original
         p._vinted_thread_state = threading.local()
+        p._vinted_consecutive_query_failures = 0
         shutil.rmtree(self.tmpdir)
 
     def test_persistent_blocks_escalate_30_60_120_minutes(self):
@@ -404,7 +406,12 @@ class VintedCircuitBreaker(unittest.TestCase):
             self.assertEqual(p.search_vinted({"query": "test"}), ([], None))
         bootstrap.assert_not_called()
 
-    def test_two_429s_trip_breaker_and_honor_retry_after(self):
+    def test_two_429s_on_one_query_honor_retry_after_but_dont_trip_breaker(self):
+        # A single query failing its own built-in retry is normal
+        # load-shedding noise (every healthy run sees several) - it must
+        # NOT blank the whole lane by itself. Regression test for the
+        # real outage this caused: one streak-1 trip produced six
+        # straight 0-listing runs.
         blocked = _FakeResp(429, headers={"Retry-After": "7"})
         session = mock.MagicMock()
         session.get.side_effect = [blocked, blocked]
@@ -414,8 +421,31 @@ class VintedCircuitBreaker(unittest.TestCase):
         self.assertIs(returned_session, session)
         sleep_mock.assert_called_once_with(7)
         state = p._read_vinted_rate_limit_state()
-        self.assertEqual(state["last_status"], 429)
+        self.assertEqual(state, {})
+
+    def test_breaker_trips_only_after_threshold_distinct_query_failures(self):
+        blocked = _FakeResp(429, headers={"Retry-After": "0"})
+        session = mock.MagicMock()
+        with mock.patch.object(p, "_pace"), mock.patch.object(p.time, "sleep"):
+            for i in range(p.VINTED_TRIP_THRESHOLD):
+                session.get.side_effect = [blocked, blocked]
+                body, _ = p._get_vinted_catalog_page(session, {"page": i})
+                self.assertIsNone(body)
+        state = p._read_vinted_rate_limit_state()
         self.assertEqual(state["consecutive_block_streak"], 1)
+
+    def test_success_between_failures_resets_the_failure_count(self):
+        blocked = _FakeResp(429, headers={"Retry-After": "0"})
+        ok = _FakeResp(200, {"items": []})
+        session = mock.MagicMock()
+        with mock.patch.object(p, "_pace"), mock.patch.object(p.time, "sleep"):
+            for _ in range(p.VINTED_TRIP_THRESHOLD - 1):
+                session.get.side_effect = [blocked, blocked]
+                p._get_vinted_catalog_page(session, {"page": 1})
+            session.get.side_effect = [ok]
+            p._get_vinted_catalog_page(session, {"page": 2})
+        self.assertEqual(p._vinted_consecutive_query_failures, 0)
+        self.assertEqual(p._read_vinted_rate_limit_state(), {})
 
     def test_success_after_expired_cooldown_clears_streak(self):
         self.path.write_text(json.dumps({"blocked_until_ts": 0, "consecutive_block_streak": 2}))
