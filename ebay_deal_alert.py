@@ -561,6 +561,48 @@ def _attach_seller_feedback(item):
     return item
 
 
+def _ebay_items_from_body(body, query, context):
+    """Pull itemSummaries out of a Browse API body, failing loudly on a
+    malformed one instead of returning an indistinguishable zero.
+
+    Real failure this guards: resp.raise_for_status() only checks the HTTP
+    status, so eBay answering 200 with an error envelope (bad filter, an
+    expired/rejected token field) or drifting its JSON shape turned
+    `body.get("itemSummaries", [])` into a legitimate-looking "no matches"
+    for the whole eBay lane, run after run. Worse, the caller treats a
+    returned value as success and calls
+    _clear_ebay_circuit_breaker_if_tripped(), so a persistently broken
+    response also kept resetting the breaker. Raising instead routes into
+    the caller's existing except-and-log path, which leaves the breaker
+    alone and puts a real error in the logs.
+
+    Deliberately conservative: an absent itemSummaries with no positive
+    total is still treated as a genuine zero (eBay does answer that way for
+    a real no-match), so this only fires on a contradiction it can prove.
+    """
+    if not isinstance(body, dict):
+        raise ValueError(
+            f"eBay {context} returned {type(body).__name__}, not a JSON object, for {query!r}"
+        )
+    errors = body.get("errors")
+    if errors:
+        raise ValueError(f"eBay {context} returned an error envelope for {query!r}: {str(errors)[:300]}")
+    items = body.get("itemSummaries")
+    total = body.get("total")
+    if items is None:
+        if isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0:
+            raise ValueError(
+                f"eBay {context} reported total={total} but no itemSummaries for {query!r} "
+                "- treating as a failure, not an empty result"
+            )
+        return []
+    if not isinstance(items, list):
+        raise ValueError(
+            f"eBay {context} returned itemSummaries as {type(items).__name__}, not a list, for {query!r}"
+        )
+    return items
+
+
 def search_ebay(token, saved_search):
     """One call to the Browse API for a saved search config."""
     headers = {
@@ -670,7 +712,7 @@ def search_ebay(token, saved_search):
         logger.warning("eBay 429 rate-limit headers for %r: %s | body: %s", query, rate_headers, resp.text[:300])
     resp.raise_for_status()
     body = resp.json()
-    items = body.get("itemSummaries", [])
+    items = _ebay_items_from_body(body, query, "search")
     for item in items:
         _attach_seller_feedback(item)
     return items, body.get("total")
@@ -769,7 +811,7 @@ def search_ebay_ending_soon_auctions(token, auction_search):
         logger.warning("eBay auction search 429 rate-limit headers for %r: %s | body: %s", query, rate_headers, resp.text[:300])
     resp.raise_for_status()
     body = resp.json()
-    items = body.get("itemSummaries", [])
+    items = _ebay_items_from_body(body, query, "auction search")
 
     now_utc = datetime.now(timezone.utc)
     listings = []
