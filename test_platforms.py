@@ -15,10 +15,14 @@ Pure stdlib unittest + mock, matching the repo's "no scraper framework"
 philosophy. Run with:
     python -m unittest test_platforms
 """
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 import pathlib
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -315,6 +319,117 @@ class ShopGoodwillProxyScoping(unittest.TestCase):
         self.assertEqual(listings, [])
         self.assertIsNone(count)
         self.assertIn("scrapling is not installed", " ".join(cm.output))
+
+
+class ShopGoodwillThreadConfinement(unittest.TestCase):
+    def test_concurrent_callers_route_browser_calls_to_one_worker(self):
+        body = {"searchResults": {"items": [], "itemCount": 0}}
+        browser_thread_ids = []
+        caller_thread_ids = []
+        callers_ready = threading.Barrier(3)
+
+        def get_session(_proxy_url):
+            browser_thread_ids.append(threading.get_ident())
+            return mock.sentinel.session
+
+        def post(_session, _payload):
+            browser_thread_ids.append(threading.get_ident())
+            return {"status": 200, "headers": {}, "text": json.dumps(body)}
+
+        def call_search(query):
+            caller_thread_ids.append(threading.get_ident())
+            callers_ready.wait()
+            return p.search_shopgoodwill({"query": query})
+
+        with mock.patch.object(p, "_get_shopgoodwill_session", side_effect=get_session), \
+                mock.patch.object(p, "_shopgoodwill_session_post", side_effect=post), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True), \
+                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}), \
+                ThreadPoolExecutor(max_workers=2) as callers:
+            futures = [callers.submit(call_search, query) for query in ("test one", "test two")]
+            callers_ready.wait()
+            results = [future.result(timeout=5) for future in futures]
+
+        self.assertEqual(results, [([], 0), ([], 0)])
+        self.assertEqual(len(set(caller_thread_ids)), 2)
+        self.assertEqual(len(set(browser_thread_ids)), 1)
+        self.assertNotIn(browser_thread_ids[0], caller_thread_ids)
+
+    @unittest.skipUnless(
+        os.environ.get("RUN_LIVE_SHOPGOODWILL_TEST") == "1",
+        "set RUN_LIVE_SHOPGOODWILL_TEST=1 to launch the real browser",
+    )
+    def test_real_browser_from_two_concurrent_threads(self):
+        """Real StealthySession + Playwright, with only the network local."""
+        response_body = {"searchResults": {"items": [], "itemCount": 0}}
+
+        class Handler(BaseHTTPRequestHandler):
+            posts = 0
+
+            def do_GET(self):
+                content = b"<!doctype html><html><body>ready</body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+
+            def do_POST(self):
+                type(self).posts += 1
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                content = json.dumps(response_body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        worker_thread_ids = []
+        original_get_session = p._get_shopgoodwill_session
+        original_post = p._shopgoodwill_session_post
+
+        def recording_get_session(proxy_url):
+            worker_thread_ids.append(threading.get_ident())
+            return original_get_session(proxy_url)
+
+        def recording_post(session, payload):
+            worker_thread_ids.append(threading.get_ident())
+            return original_post(session, payload)
+
+        try:
+            p._close_shopgoodwill_session()
+            with mock.patch.dict(os.environ):
+                os.environ.pop("SHOPGOODWILL_PROXY_URL", None)
+                with mock.patch.object(p, "SHOPGOODWILL_HOME_URL", origin + "/"), \
+                        mock.patch.object(p, "SHOPGOODWILL_URL", origin + "/api"), \
+                        mock.patch.object(p, "_get_shopgoodwill_session", side_effect=recording_get_session), \
+                        mock.patch.object(p, "_shopgoodwill_session_post", side_effect=recording_post), \
+                        mock.patch.object(p, "_pace"), \
+                        mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True), \
+                        ThreadPoolExecutor(max_workers=2) as callers:
+                    futures = [
+                        callers.submit(p.search_shopgoodwill, {"query": query})
+                        for query in ("browser one", "browser two")
+                    ]
+                    results = [future.result(timeout=45) for future in futures]
+        finally:
+            p._close_shopgoodwill_session()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+
+        self.assertEqual(results, [([], 0), ([], 0)])
+        self.assertEqual(Handler.posts, 2)
+        self.assertEqual(len(set(worker_thread_ids)), 1)
+        self.assertEqual(worker_thread_ids[0], p._shopgoodwill_browser_thread_id)
 
 
 class ShopGoodwillCircuitBreaker(unittest.TestCase):
