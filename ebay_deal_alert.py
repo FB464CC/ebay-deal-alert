@@ -1514,13 +1514,11 @@ SUIT_BLIND_TRUST_MAX_PRICE = 150
 # negotiates himself and the pieces move fast even at asking price, so a
 # margin bar just loses them. Damage/logo checks still apply.
 GAMECOCKS_GRAB_UNDER_PRICE = 50
-# Golf club sets are personal-use (first-ever set), not a resale flip, so
-# there's no clean "resale value" comp to run discount-percentage math
-# against - see is_blocked_by_steal_quality_gate()'s golf-equipment bar.
-# Instead: a hard price ceiling. User's exact words: "i am not willing to
-# pay more than like 275 or so." AI-confirmed completeness/brand-quality/
-# condition still gate the alert on top of this - it's a cap, not a bar.
-GOLF_EQUIPMENT_MAX_PRICE = 275
+# Golf clubs are a personal-use first purchase, not a resale flip. $275 is
+# preferred, but $300 LANDED is the actual hard ceiling; the saved searches
+# and the final golf gate both use that ceiling. See the golf prompt and
+# is_blocked_by_steal_quality_gate() for the playable-partial-set semantics.
+GOLF_EQUIPMENT_MAX_PRICE = 300
 
 
 def get_shipping_cost(listing):
@@ -1572,7 +1570,9 @@ def classify_search_category(query):
     # into the polo/quarter-zip clothing prompt and gate, which asks about
     # fabric and Peter Millar collar details, not clubs. This is personal-
     # use gear, not a resale flip - see GOLF_EQUIPMENT_MAX_PRICE.
-    if any(kw in query for kw in ("golf club", "golf clubs", "golf iron", "golf set", "iron set")):
+    if any(kw in query for kw in (
+        "golf club", "golf clubs", "golf iron", "golf set", "iron set", "golf bag"
+    )):
         return "golf-equipment"
     if any(kw in query for kw in ("polo", "golf")):
         return "golf"
@@ -2009,7 +2009,7 @@ def is_relevant_marketplace_listing(listing, query):
     return any(re.search(rf"\b{re.escape(token)}\b", title) for token in query_tokens)
 
 
-def score_listing(listing, gap_report, shipping_cost=0.0):
+def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     title = listing.get("title", "").lower()
     # Per explicit user instruction: "not all sizes etc are in the titles.
     # take the descriptions as well. those will help find massive steals,
@@ -2055,43 +2055,50 @@ def score_listing(listing, gap_report, shipping_cost=0.0):
             "listing": listing,
         }
 
-    # 1. Brand
+    # 1. Brand/fabric/fit are apparel concerns. Golf equipment previously
+    # ran through them too, which hard-rejected every normal "golf club"
+    # title because "club" is an apparel corporate-logo keyword. Golf gets
+    # its own photo-based brand/playability/condition gate later; keep the
+    # universal safety filters above and the disclosed-condition check below.
     brand_tier = None
-    if brand_in(haystack, PASS_BRANDS):
-        return {"verdict": "PASS", "reason": "brand on pass list", "listing": listing}
-    # Only count a grab_on_sight/standard match if it appears near the START
-    # of the title. Every real listing title observed this session, across
-    # every platform (eBay/Grailed/Poshmark/Vinted/ShopGoodwill), puts the
-    # actual maker/brand first - a match later in the title is far more
-    # likely to be a fabric/material credit ("...Loro Piana Wool...") or an
-    # incidental comparison, not the actual brand. Confirmed live: a
-    # Cremieux (mall-tier, PASS-listed) sport coat matched grab_on_sight
-    # purely off a "Loro Piana Wool" fabric credit mid-title and alerted
-    # with the wrong tier despite the maker being exactly what PASS_BRANDS
-    # exists to reject. PASS_BRANDS intentionally stays whole-title above -
-    # a bad-brand mention anywhere is still a legitimate reason to reject.
-    title_prefix = title[:BRAND_TITLE_WINDOW_CHARS]
-    if SWATCH_COLLAB_SIGNAL.search(title_prefix):
-        pass  # see SWATCH_COLLAB_SIGNAL's comment - never credit the collab partner's tier
-    elif brand_in(title_prefix, GRAB_ON_SIGHT_BRANDS):
-        brand_tier = "grab_on_sight"
-    elif brand_in(title_prefix, STANDARD_BRANDS):
-        brand_tier = "standard"
-    if brand_in(haystack, CORPORATE_LOGO_KEYWORDS):
-        return {"verdict": "PASS", "reason": "corporate logo keyword match", "listing": listing}
-    if brand_tier is None:
-        flags.append("brand not recognized — manual check needed")
+    if category == "golf-equipment":
+        flags.append("golf playability, handedness, and condition require photo check")
+    else:
+        if brand_in(haystack, PASS_BRANDS):
+            return {"verdict": "PASS", "reason": "brand on pass list", "listing": listing}
+        # Only count a grab_on_sight/standard match if it appears near the START
+        # of the title. Every real listing title observed this session, across
+        # every platform (eBay/Grailed/Poshmark/Vinted/ShopGoodwill), puts the
+        # actual maker/brand first - a match later in the title is far more
+        # likely to be a fabric/material credit ("...Loro Piana Wool...") or an
+        # incidental comparison, not the actual brand. Confirmed live: a
+        # Cremieux (mall-tier, PASS-listed) sport coat matched grab_on_sight
+        # purely off a "Loro Piana Wool" fabric credit mid-title and alerted
+        # with the wrong tier despite the maker being exactly what PASS_BRANDS
+        # exists to reject. PASS_BRANDS intentionally stays whole-title above -
+        # a bad-brand mention anywhere is still a legitimate reason to reject.
+        title_prefix = title[:BRAND_TITLE_WINDOW_CHARS]
+        if SWATCH_COLLAB_SIGNAL.search(title_prefix):
+            pass  # see SWATCH_COLLAB_SIGNAL's comment - never credit the collab partner's tier
+        elif brand_in(title_prefix, GRAB_ON_SIGHT_BRANDS):
+            brand_tier = "grab_on_sight"
+        elif brand_in(title_prefix, STANDARD_BRANDS):
+            brand_tier = "standard"
+        if brand_in(haystack, CORPORATE_LOGO_KEYWORDS):
+            return {"verdict": "PASS", "reason": "corporate logo keyword match", "listing": listing}
+        if brand_tier is None:
+            flags.append("brand not recognized — manual check needed")
 
-    # 2. Fabric
-    has_good_fabric = any(f in haystack for f in FABRIC_GOOD_KEYWORDS)
-    has_poly = FABRIC_POLY_KEYWORD in haystack
-    if has_poly and price > 15 and not has_good_fabric:
-        return {"verdict": "PASS", "reason": "poly over $15, no premium fabric keyword", "listing": listing}
-    if not has_good_fabric and not has_poly:
-        flags.append("fabric not stated in title/description — check listing photos")
+        # 2. Fabric
+        has_good_fabric = any(f in haystack for f in FABRIC_GOOD_KEYWORDS)
+        has_poly = FABRIC_POLY_KEYWORD in haystack
+        if has_poly and price > 15 and not has_good_fabric:
+            return {"verdict": "PASS", "reason": "poly over $15, no premium fabric keyword", "listing": listing}
+        if not has_good_fabric and not has_poly:
+            flags.append("fabric not stated in title/description — check listing photos")
 
-    # 3. Fit — can't reliably parse pit-to-pit from title/description alone
-    flags.append("fit unconfirmed — pull listing description for pit-to-pit measurement")
+        # 3. Fit — can't reliably parse pit-to-pit from title/description alone
+        flags.append("fit unconfirmed — pull listing description for pit-to-pit measurement")
 
     # 4. Condition
     hard_fail_hit = matched_keyword(haystack, CONDITION_HARD_FAIL_KEYWORDS)
@@ -2400,12 +2407,24 @@ def _deepseek_alert_sanity_check(listing, ai_result, category):
     ai_summary = ai_result.get("summary") if ai_result else ""
     ai_looks_good = ai_result.get("looks_good") if ai_result else None
     ai_damage_found = ai_result.get("damage_found") if ai_result else None
+    completeness_rule = (
+        "For golf-equipment, 'complete' means a useful, playable first purchase, "
+        "NOT a conventional full set: an irons-only/partial iron set can qualify, "
+        "and a golf bag with a few usable irons plus a putter can qualify. Do not "
+        "call clubs a part/accessory merely because a driver, putter, bag, woods, "
+        "long irons, or other clubs are missing; only reject a bag alone, a single "
+        "club, 1-2 unrelated loose clubs, or a collection that is not useful to "
+        "start playing. "
+        if category == "golf-equipment"
+        else "is_complete_item is true only if this listing is a whole, complete, "
+             "wearable/usable item. "
+    )
     prompt = (
         "You are the final sanity filter for a deal bot. The vision AI photo check "
         "already passed; your job is to catch the junk it can miss. Respond ONLY in "
         "JSON with exactly these keys: {\"is_complete_item\": bool, "
-        "\"is_part_or_accessory\": bool, \"reason\": str}. is_complete_item is true "
-        "only if this listing is a whole, complete, wearable/usable item. "
+        "\"is_part_or_accessory\": bool, \"reason\": str}. "
+        f"{completeness_rule}"
         "is_part_or_accessory is true if it is only a part, strap, crystal, "
         "accessory, packaging/box, a garment without its matching pair, or has an "
         "obvious size/gender mismatch. "
@@ -2561,20 +2580,18 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
 
     if category == "golf-equipment":
         # Entirely different prompt/JSON shape from the clothing one below -
-        # this is a personal-use golf club set (his first ever), not a
-        # resale flip, so there's no "estimated_resale_value vs price"
-        # discount math to gate on (see GOLF_EQUIPMENT_MAX_PRICE - a hard
-        # price cap does that job instead). What actually needs AI eyes:
-        # is this really a complete, usable set from a real manufacturer,
-        # not a cheap all-in-one "starter kit" (Confidence, Wilson Ultra,
-        # Ram, Founders Club, generic unbranded heads) dressed up as a
-        # real set in the listing photos. User's exact words: "i dont want
-        # just a starter set i want a nice set i can have for years."
+        # This is a personal-use first purchase, not a resale flip. It may be
+        # irons-only or partial; the decision is whether the clubs are useful
+        # for a right-handed adult beginner and fit under the landed-price cap.
+        # Resale and starter-kit status are context, never hard gates.
         golf_prompt = (
-            "Inspect these secondhand golf club set listing photos. The buyer is a "
-            "first-time golfer buying his first real set for personal long-term use, "
-            "NOT a reseller - he wants a genuinely usable, complete set from a real "
-            "manufacturer, not a cheap big-box \"complete set\" starter kit.\n\n"
+            "Inspect these secondhand golf-club listing photos. The buyer is a "
+            "right-handed adult man buying his FIRST EVER clubs to play with, NOT to "
+            "resell. A perfect or conventional complete set is NOT required. "
+            "Irons-only and partial sets are desirable at the right price; a bag with "
+            "a few usable irons and a putter can be a better first purchase than an "
+            "incomplete collector-oriented listing. Beginner boxed sets such as "
+            "Callaway Strata, Wilson, and Top Flite are acceptable.\n\n"
             "Listing photos are compressed and may downscale fine detail; if a brand "
             "marking is not clearly legible, treat it as unknown rather than inferring "
             "it.\n\n"
@@ -2583,7 +2600,7 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             f"{description_block}\n\n"
             "Report strict JSON only, with no markdown fences, using this exact shape: "
             "{\"clubs_identified\": string, \"identified_brand\": string, "
-            "\"is_complete_set\": bool, \"is_starter_kit_quality\": bool, "
+            "\"is_playable_first_set\": bool, \"is_starter_kit_quality\": bool, "
             "\"is_left_handed\": bool, "
             "\"damage_found\": bool, \"damage_desc\": string, \"looks_good\": bool, "
             "\"counterfeit_suspected\": bool, \"counterfeit_reason\": string, "
@@ -2591,25 +2608,19 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "\"price_confidence\": string}. "
             "clubs_identified should list what's visible (e.g. \"driver, 3 fairway "
             "woods, 6 irons (5-PW), 2 wedges, putter\"). identified_brand is the "
-            "manufacturer marked on the clubs themselves (e.g. Titleist, TaylorMade, "
-            "Callaway, Ping, Mizuno, Cobra, Cleveland) - if clubs show mixed/no-name "
-            "branding or the set is a widely-known cheap all-in-one \"complete set\" "
-            "line (examples: Big Brother, GS.1, Confidence, Wilson Ultra, Ram, Founders "
-            "Club, Precise, Tour Edge base/non-Exotics line, Intech, Dunlop, "
-            "Northwestern, Spalding, Knight, Top Flite boxed sets, Strata, Pinseeker, "
-            "Alien, MacGregor, or similar unbranded/off-brand box-set clubs), name "
-            "that instead. is_complete_set is true if the critical SCORING irons are "
-            "present and usable: at minimum a run from roughly the 6-iron through "
-            "pitching wedge (5-6 consecutive iron-type clubs covering that range) - a "
-            "missing driver, missing putter, or missing long irons/fairway woods is "
-            "FINE and does not make this false, since those are easy/cheap to source "
-            "separately. Only mark is_complete_set false if the scoring irons "
-            "themselves are missing or it's just 2-3 loose clubs. is_starter_kit_quality "
-            "is true if this is one of those cheap all-in-one starter-kit brands/lines, "
-            "or generic unbranded clubs, REGARDLESS of is_complete_set - a complete "
-            "cheap kit is still a cheap kit. If you are unsure whether a brand is "
-            "legitimate mid/premium golf equipment or a bargain starter-kit line, err "
-            "toward is_starter_kit_quality true and explain the ambiguity in summary. "
+            "manufacturer marked on the clubs themselves (e.g. Callaway/Strata, "
+            "Wilson, Top Flite, Adams, Cobra, Ping, TaylorMade, Titleist, Mizuno, or "
+            "Cleveland); mixed or unknown brands are acceptable and should be reported "
+            "honestly. is_playable_first_set is true when the listing is a useful first "
+            "purchase with enough usable clubs to begin learning: an irons-only group "
+            "with several useful mid/short irons can qualify, and a bag with a few "
+            "usable irons plus a putter can qualify. A missing driver, putter, bag, "
+            "woods, long irons, gaps in the iron sequence, or lack of premium branding "
+            "does NOT make it false. Mark it false for a bag alone, a single club, 1-2 "
+            "unrelated loose clubs, left-handed or junior clubs, or a collection too "
+            "damaged/incoherent to start playing. is_starter_kit_quality is informational "
+            "only: mark it true for an entry-level boxed set, but never make "
+            "is_playable_first_set false for that reason alone. "
             "is_left_handed is true only if the clubs are clearly built for a "
             "left-handed golfer (clubhead/face mirrored the opposite way from a normal "
             "right-handed club - compare face angle relative to the shaft/hosel across "
@@ -2988,38 +2999,34 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     search_query_lower = (result.get("search_query") or "").lower()
     listing_title_lower = (result.get("listing") or {}).get("title", "").lower()
 
-    # GOLF EQUIPMENT - personal-use golf club set (his first ever), not a
-    # resale flip, so this does NOT key off deal_rating/discount_pct's
-    # tiered bar at all (compute_deal_rating requires estimated_resale_
-    # value, which this category may never reliably have - keying off the
-    # tiered rating would strand every golf candidate in permanent
-    # "no AI price" retry limbo). It DOES still block paying more than the
-    # AI's own resale estimate when one exists - real live miss: a $150
-    # mixed-brand set ($159 landed) alerted with the AI's own resale
-    # estimate at $120, an 89% "Marginal"/-32% discount, i.e. paying OVER
-    # what the AI itself says it's worth. "Personal use, not a flip" never
-    # meant "price doesn't matter" - it meant the STEAL-TIER bar (70%+
-    # discount) is too strict for a keeper set, not that a real resale
-    # ceiling should be ignored entirely. Checked first and returns
-    # unconditionally either way since "golf-equipment" is a fully separate
-    # category from every apparel/watch bar below - no ordering interaction
-    # possible.
+    # GOLF EQUIPMENT - personal-use first clubs, not a resale flip. A real AI
+    # check must confirm a useful, playable first purchase, and landed price
+    # must stay at or below the hard cap. Completeness, premium branding,
+    # starter-kit status, and estimated resale margin are deliberately not
+    # gates. Right-handed/adult suitability, damage, and authenticity remain
+    # hard requirements. This returns unconditionally because golf-equipment
+    # is separate from every apparel/watch resale bar below.
     if category == "golf-equipment":
         if not result.get("golf_ai_checked"):
             return "golf-equipment bar: no AI price estimate yet - needs a real AI check"
         landed = result.get("price")
         if landed is not None and landed > GOLF_EQUIPMENT_MAX_PRICE:
             return f"golf-equipment bar: price ${landed} exceeds ${GOLF_EQUIPMENT_MAX_PRICE} personal-use cap"
+        # The goal is a BARGAIN, not merely an affordable set - user's words:
+        # "the point was to get a fire deal on a set obv". Loosening this
+        # category relaxed COMPLETENESS and brand tier, never price discipline,
+        # so paying MORE than the clubs are worth stays a hard no. Real live
+        # miss this catches: a $160 mixed-brand Big Bertha set - playable,
+        # right-handed, under the cap - whose own photo-level appraisal put it
+        # at ~$100-110 (generic filler woods, missing PW, heavy sole wear).
         resale = result.get("estimated_resale_value")
         if landed is not None and resale is not None and landed > resale:
             return (
                 f"golf-equipment bar: price ${landed} exceeds the AI's own "
-                f"${resale} resale estimate - not worth it even for personal use"
+                f"${resale} resale estimate - playable, but not a deal"
             )
-        if not result.get("golf_is_complete_set"):
-            return "golf-equipment bar: AI did not confirm a complete, usable set"
-        if result.get("golf_is_starter_kit"):
-            return "golf-equipment bar: AI flagged this as cheap starter-kit-quality equipment"
+        if not result.get("golf_is_playable_first_set"):
+            return "golf-equipment bar: AI did not confirm a playable first set or useful partial set"
         if result.get("golf_is_left_handed"):
             return "golf-equipment bar: AI identified left-handed clubs (buyer is right-handed)"
         if result.get("golf_counterfeit_suspected"):
@@ -4751,7 +4758,12 @@ def run():
                 if description:
                     listing["description"] = description
 
-            result = score_listing(listing, gap_report, shipping_cost=shipping_cost)
+            result = score_listing(
+                listing,
+                gap_report,
+                shipping_cost=shipping_cost,
+                category=category,
+            )
             result["item_price"] = item_price
             result["shipping_cost"] = shipping_cost
             result["profile"] = saved_search.get("profile", "slow")
@@ -5199,7 +5211,7 @@ def run():
             # whether it could price the set, since there's no reliable
             # resale comp for a personal-use set in the first place.
             result["golf_ai_checked"] = True
-            result["golf_is_complete_set"] = bool(ai_result.get("is_complete_set"))
+            result["golf_is_playable_first_set"] = bool(ai_result.get("is_playable_first_set"))
             result["golf_is_starter_kit"] = bool(ai_result.get("is_starter_kit_quality"))
             result["golf_is_left_handed"] = bool(ai_result.get("is_left_handed"))
             result["golf_counterfeit_suspected"] = bool(ai_result.get("counterfeit_suspected"))
@@ -5284,7 +5296,10 @@ def run():
             # the estimate untouched - this is a hedge on a guess, never a
             # required gate and never something that delays a real steal.
             if (
-                result["estimated_resale_value"] is not None
+                # Golf skips this appraisal because resale does not decide whether
+                # a playable personal-use first set under the hard cap can alert.
+                category != "golf-equipment"
+                and result["estimated_resale_value"] is not None
                 and (result.get("price_confidence") or "").lower() in ("low", "medium")
                 and not (
                     listing.get("sold_comp_median") is not None
@@ -5308,13 +5323,14 @@ def run():
                         item_id, original, ds_estimate, second_opinion.get("reasoning"),
                     )
 
-            rating_label, discount_pct = compute_deal_rating(
-                result.get("price"),  # total landed cost: item + shipping
-                result.get("estimated_resale_value"),
-            )
-            if rating_label is not None:
-                result["deal_rating"] = rating_label
-                result["discount_pct"] = discount_pct
+            if category != "golf-equipment":
+                rating_label, discount_pct = compute_deal_rating(
+                    result.get("price"),  # total landed cost: item + shipping
+                    result.get("estimated_resale_value"),
+                )
+                if rating_label is not None:
+                    result["deal_rating"] = rating_label
+                    result["discount_pct"] = discount_pct
 
         # Real sold prices beat a guess. Two cases use them:
         #   (a) nothing else produced a rating at all, or
