@@ -307,6 +307,36 @@ class JacketOnlySuitListing(unittest.TestCase):
             )
 
 
+class PantsOnlySuitListing(unittest.TestCase):
+    def test_dress_pants_with_no_jacket_are_blocked_for_suit_search(self):
+        # Real regression: "Santorelli Loro Piana 42 Dress Pants Gray Roma
+        # Flat Front Wool Straight DA14" alerted from the "loro piana suit"
+        # search even though it was just pants with no matching jacket.
+        self.assertTrue(m.is_pants_only_suit_listing(
+            "Santorelli Loro Piana 42 Dress Pants Gray Roma Flat Front Wool Straight DA14",
+            "loro piana suit",
+        ))
+        self.assertTrue(m.is_pants_only_suit_listing(
+            "Brioni Wool Trousers 34W Charcoal", "brioni suit"))
+        self.assertTrue(m.is_pants_only_suit_listing(
+            "Canali Flat Front Slacks 34x30 Navy", "canali suit"))
+
+    def test_complete_suit_indications_are_allowed(self):
+        for title in (
+            "Canali Suit Jacket and Pants 42R",
+            "Canali Blazer with Slacks 42R",
+            "Canali Wool 2 Piece Suit Trousers 34W",
+            "Canali Full Suit Pants 34W Navy",
+        ):
+            self.assertFalse(m.is_pants_only_suit_listing(title, "canali suit"), title)
+
+    def test_pants_are_allowed_outside_suit_searches(self):
+        title = "Ralph Lauren Purple Label Mens Wool Trousers Pants Size 32"
+        self.assertFalse(m.is_pants_only_suit_listing(title))
+        self.assertFalse(m.is_pants_only_suit_listing(title, 'ralph lauren "purple label"'))
+        self.assertFalse(m.is_pants_only_suit_listing(title, "bills khakis trousers"))
+
+
 class EmptyPackagingSignals(unittest.TestCase):
     def test_single_word_dustbag_only_is_caught(self):
         # Regression: dust\s+bag (requires a space) never matched the
