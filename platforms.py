@@ -1095,6 +1095,38 @@ def vinted_circuit_breaker_allows_calls():
     return True
 
 
+# A single query failing its own built-in one-retry (two 429s back to back)
+# is normal load-shedding noise - every "healthy" run already sees 5-12 429s
+# across ~90+ searches on 8 concurrent workers. Tripping the whole-lane
+# breaker on that one query blanked the entire run (confirmed live: one
+# streak-1 trip produced six straight 0-listing runs). Require several
+# DISTINCT queries to fail in a row before treating it as a real block.
+VINTED_TRIP_THRESHOLD = 5
+_vinted_failure_lock = threading.Lock()
+_vinted_consecutive_query_failures = 0
+
+
+def _note_vinted_query_success():
+    global _vinted_consecutive_query_failures
+    with _vinted_failure_lock:
+        _vinted_consecutive_query_failures = 0
+    _clear_vinted_circuit_breaker_if_tripped()
+
+
+def _note_vinted_query_failure(status):
+    global _vinted_consecutive_query_failures
+    with _vinted_failure_lock:
+        _vinted_consecutive_query_failures += 1
+        count = _vinted_consecutive_query_failures
+    if count >= VINTED_TRIP_THRESHOLD:
+        _trip_vinted_circuit_breaker(status)
+    else:
+        logger.info(
+            "vinted query failed (HTTP %s) after retry - %s/%s consecutive before tripping breaker",
+            status, count, VINTED_TRIP_THRESHOLD,
+        )
+
+
 def _trip_vinted_circuit_breaker(status):
     state = _read_vinted_rate_limit_state()
     streak = state.get("consecutive_block_streak", 0)
@@ -1199,7 +1231,7 @@ def _get_vinted_catalog_page(session, params):
             except ValueError:
                 logger.warning("vinted returned non-JSON body")
                 return None, session
-            _clear_vinted_circuit_breaker_if_tripped()
+            _note_vinted_query_success()
             return body, session
 
         multiplier = _register_rate_limit("vinted") if status == 429 else None
@@ -1218,7 +1250,7 @@ def _get_vinted_catalog_page(session, params):
                 if session is None:
                     return None, None
             continue
-        _trip_vinted_circuit_breaker(status)
+        _note_vinted_query_failure(status)
         return None, session
     return None, session
 
