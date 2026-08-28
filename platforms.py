@@ -48,6 +48,25 @@ USER_AGENT = (
 
 HTTP_TIMEOUT = 8
 
+
+def _configured_marketplace_fetch_budget():
+    """Mirror the caller's marketplace deadline without importing it.
+
+    ``ebay_deal_alert`` imports this module, so importing the caller here would
+    create a cycle.  Reading the same config value lets long-running batch
+    adapters stop before the caller's daemon-thread hard stop instead of
+    returning later and mutating results that have already been consumed.
+    """
+    try:
+        with Path(__file__).resolve().with_name("config.json").open("r", encoding="utf-8") as config_file:
+            value = float(json.load(config_file).get("MARKETPLACE_FETCH_BUDGET_SECONDS", 90))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return 90.0
+    return max(0.0, value)
+
+
+MARKETPLACE_BATCH_DEADLINE_SECONDS = _configured_marketplace_fetch_budget()
+
 # Minimum seconds between requests to the same platform, enforced process-wide
 # across the thread pool. Keeps us a polite guest instead of hammering.
 _MIN_INTERVAL = {
@@ -1017,25 +1036,191 @@ def search_shopgoodwill(saved_search):
 # (blazers, knitwear, shoes) lands mostly in the medium tier, so $5.99 is the
 # defensible midpoint. Assumed ON TOP of the buyer-protection fee below.
 VINTED_ASSUMED_SHIPPING = 5.99
+VINTED_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("vinted_rate_limit_state.json")
+VINTED_BACKOFF_INITIAL_MINUTES = 30
+VINTED_BACKOFF_MAX_MINUTES = 120
+VINTED_CATALOG_URL = "https://www.vinted.com/api/v2/catalog/items"
+# Both are issued by a healthy anonymous homepage bootstrap and are required
+# for catalog calls.  A Cloudflare cookie alone can also be present on a
+# challenge page, so it is deliberately not enough to accept a session.
+VINTED_REQUIRED_ANONYMOUS_COOKIES = frozenset({"anon_id", "access_token_web"})
 
-_vinted_session = None
-_vinted_lock = threading.Lock()
+_vinted_thread_state = threading.local()
+_vinted_bootstrap_lock = threading.Lock()
+_vinted_state_lock = threading.Lock()
+
+
+def _read_vinted_rate_limit_state():
+    with _vinted_state_lock:
+        if not VINTED_RATE_LIMIT_STATE_PATH.exists():
+            return {}
+        try:
+            with VINTED_RATE_LIMIT_STATE_PATH.open("r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring invalid Vinted rate-limit state: %s", exc)
+            return {}
+    if not isinstance(state, dict):
+        logger.warning("Vinted rate-limit state is %s, not an object - ignoring", type(state).__name__)
+        return {}
+    return state
+
+
+def _write_vinted_rate_limit_state(state):
+    with _vinted_state_lock:
+        try:
+            with VINTED_RATE_LIMIT_STATE_PATH.open("w", encoding="utf-8") as f:
+                json.dump(state, f)
+                f.write("\n")
+        except OSError as exc:
+            logger.warning("Failed to write Vinted rate-limit state: %s", exc)
+
+
+def vinted_circuit_breaker_allows_calls():
+    state = _read_vinted_rate_limit_state()
+    now_ts = time.time()
+    blocked_until = state.get("blocked_until_ts", 0)
+    if not isinstance(blocked_until, (int, float)) or blocked_until != blocked_until:
+        blocked_until = 0
+    if blocked_until > now_ts + VINTED_BACKOFF_MAX_MINUTES * 60:
+        logger.warning("Vinted circuit breaker has an impossible future timestamp - clearing it")
+        _write_vinted_rate_limit_state({"blocked_until_ts": 0, "consecutive_block_streak": 0})
+        return True
+    if now_ts < blocked_until:
+        logger.info(
+            "Vinted circuit breaker: cooldown active for ~%s more min (streak %s); blocked, not zero results",
+            round((blocked_until - now_ts) / 60), state.get("consecutive_block_streak", 0),
+        )
+        return False
+    return True
+
+
+def _trip_vinted_circuit_breaker(status):
+    state = _read_vinted_rate_limit_state()
+    streak = state.get("consecutive_block_streak", 0)
+    if not isinstance(streak, int) or streak < 0:
+        streak = 0
+    streak += 1
+    minutes = min(VINTED_BACKOFF_INITIAL_MINUTES * (2 ** (streak - 1)), VINTED_BACKOFF_MAX_MINUTES)
+    _write_vinted_rate_limit_state({
+        "blocked_until_ts": time.time() + minutes * 60,
+        "consecutive_block_streak": streak,
+        "last_status": status,
+    })
+    logger.warning(
+        "Vinted circuit breaker: persistent HTTP %s after retry (streak %s), backing off %s min",
+        status, streak, minutes,
+    )
+
+
+def _clear_vinted_circuit_breaker_if_tripped():
+    state = _read_vinted_rate_limit_state()
+    if state.get("consecutive_block_streak"):
+        logger.info("Vinted circuit breaker: request succeeded, clearing prior block streak")
+        _write_vinted_rate_limit_state({"blocked_until_ts": 0, "consecutive_block_streak": 0})
+
+
+def _discard_vinted_session(session):
+    if getattr(_vinted_thread_state, "session", None) is session:
+        _vinted_thread_state.session = None
+    try:
+        session.close()
+    except Exception:
+        pass
 
 
 def _get_vinted_session():
-    global _vinted_session
-    with _vinted_lock:
-        if _vinted_session is not None:
-            return _vinted_session
+    # requests.Session mutates its cookie jar while catalog responses arrive.
+    # The caller runs eight marketplace workers concurrently, so a single
+    # module-global session had a real data race.  Each worker now owns and
+    # reuses only its own session; the lock merely avoids an eight-request
+    # homepage bootstrap burst at process start.
+    session = getattr(_vinted_thread_state, "session", None)
+    if session is not None:
+        return session
+    with _vinted_bootstrap_lock:
+        session = getattr(_vinted_thread_state, "session", None)
+        if session is not None:
+            return session
         session = requests.Session()
         session.headers.update({"User-Agent": USER_AGENT})
         try:
-            session.get("https://www.vinted.com/", timeout=HTTP_TIMEOUT)
+            resp = session.get("https://www.vinted.com/", timeout=HTTP_TIMEOUT)
+            resp.raise_for_status()
         except requests.RequestException as exc:
             logger.warning("vinted session bootstrap failed: %s", exc)
+            _discard_vinted_session(session)
             return None
-        _vinted_session = session
+        cookie_names = {cookie.name for cookie in session.cookies}
+        missing = VINTED_REQUIRED_ANONYMOUS_COOKIES - cookie_names
+        if missing:
+            logger.warning(
+                "vinted session bootstrap returned no usable anonymous session cookies (missing %s)",
+                ", ".join(sorted(missing)),
+            )
+            _discard_vinted_session(session)
+            return None
+        _vinted_thread_state.session = session
         return session
+
+
+def _get_vinted_catalog_page(session, params):
+    """Fetch one catalog page, returning ``(body, live_session)``.
+
+    A 429 is retried once after Vinted's Retry-After (or a short fallback),
+    then persisted into the cross-run 30/60/120-minute circuit breaker.  A
+    challenged/403 session is discarded and bootstrapped once from scratch.
+    """
+    for attempt in range(2):
+        if not vinted_circuit_breaker_allows_calls():
+            return None, session
+        _pace("vinted")
+        # Another worker may have tripped the process-wide breaker while this
+        # one was sleeping in _pace().
+        if not vinted_circuit_breaker_allows_calls():
+            return None, session
+        try:
+            resp = session.get(
+                VINTED_CATALOG_URL,
+                params=params,
+                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                timeout=HTTP_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            logger.warning("vinted request failed: %s", exc)
+            return None, session
+        status = resp.status_code
+        if status not in (403, 429):
+            if not resp.ok:
+                logger.warning("vinted returned HTTP %s", status)
+                return None, session
+            try:
+                body = resp.json()
+            except ValueError:
+                logger.warning("vinted returned non-JSON body")
+                return None, session
+            _clear_vinted_circuit_breaker_if_tripped()
+            return body, session
+
+        multiplier = _register_rate_limit("vinted") if status == 429 else None
+        if status == 403:
+            _discard_vinted_session(session)
+        if attempt == 0:
+            delay = _retry_after_seconds(getattr(resp, "headers", None))
+            delay = 2 if delay is None else min(delay, VINTED_BACKOFF_MAX_MINUTES * 60)
+            logger.warning(
+                "vinted transient HTTP %s block; retrying once after %ss%s",
+                status, delay, f" and pacing {multiplier}x slower" if multiplier else "",
+            )
+            time.sleep(delay)
+            if status == 403:
+                session = _get_vinted_session()
+                if session is None:
+                    return None, None
+            continue
+        _trip_vinted_circuit_breaker(status)
+        return None, session
+    return None, session
 
 
 def _vinted_item_to_listing(item):
@@ -1074,6 +1259,8 @@ def _vinted_item_to_listing(item):
 
 @adapter("vinted")
 def search_vinted(saved_search):
+    if not vinted_circuit_breaker_allows_calls():
+        return [], None
     session = _get_vinted_session()
     if session is None:
         return [], None
@@ -1085,18 +1272,24 @@ def search_vinted(saved_search):
     # underinformed/underpriced compared to the other platforms, worth
     # hounding harder specifically here - this is that "harder".
     for page in (1, 2):
-        body = get_json(
-            "vinted",
-            "https://www.vinted.com/api/v2/catalog/items",
-            params={
+        body, session = _get_vinted_catalog_page(
+            session,
+            {
                 "search_text": query_text,
                 "order": "newest_first",
                 "per_page": 96,
                 "page": page,
             },
-            session=session,
         )
-        items = (body or {}).get("items", [])
+        if body is None:
+            # Failed is not the same as an empty/short page.  Keep any page
+            # already completed, but do not use the failure as pagination
+            # evidence or report a genuine zero.
+            return [x for x in listings if x], None
+        items = body.get("items") if isinstance(body, dict) else None
+        if not isinstance(items, list):
+            logger.warning("vinted catalog response missing a valid items collection; failed, not zero results")
+            return [x for x in listings if x], None
         listings.extend(_vinted_item_to_listing(item) for item in items)
         if len(items) < 96:
             # A short page means there's nothing left - don't waste a call
@@ -1125,7 +1318,7 @@ _FLIGHT_PUSH_RE = re.compile(
 )
 
 
-def _fetch_page(platform, url):
+def _fetch_page(platform, url, timeout=15):
     """Fetch an HTML page via scrapling's TLS-spoofing Fetcher, or None."""
     try:
         from scrapling.fetchers import Fetcher
@@ -1134,7 +1327,7 @@ def _fetch_page(platform, url):
         return None
     _pace(platform)
     try:
-        resp = Fetcher.get(url, timeout=15)
+        resp = Fetcher.get(url, timeout=timeout)
     except Exception as exc:
         logger.warning("%s request failed: %s", platform, exc)
         return None
@@ -1193,6 +1386,60 @@ def _offerup_to_listing(listing):
     )
 
 
+def _batch_request_timeout(deadline):
+    """Return a request timeout that cannot extend past a batch deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    return min(15, max(0.001, remaining))
+
+
+def _run_html_batch(platform, saved_searches, build_url, extract_objects, normalize_object):
+    """Run a sequential HTML batch behind a hard, snapshotting deadline.
+
+    Scrapling normally obeys its request timeout, but the outer marketplace
+    caller intentionally uses daemon threads because a socket can still wedge.
+    Keep any potentially late work in a private dict and return a copy at the
+    deadline.  If the inner daemon eventually wakes up, it can no longer mutate
+    the object the caller already merged and treated as final.
+    """
+    deadline = time.monotonic() + MARKETPLACE_BATCH_DEADLINE_SECONDS
+    working = {}
+    working_lock = threading.Lock()
+
+    def run():
+        try:
+            for saved_search in saved_searches:
+                timeout = _batch_request_timeout(deadline)
+                if timeout is None:
+                    return
+                query = split_query_exclusions(saved_search["query"])[0]
+                html = _fetch_page(platform, build_url(query), timeout=timeout)
+                if html is None or time.monotonic() > deadline:
+                    if time.monotonic() > deadline:
+                        logger.warning(
+                            "%s batch request exceeded the marketplace deadline; discarding its late result",
+                            platform,
+                        )
+                        return
+                    continue
+                listings = [x for x in (normalize_object(obj) for obj in extract_objects(html)) if x]
+                if listings:
+                    with working_lock:
+                        if time.monotonic() <= deadline:
+                            working[saved_search["query"]] = listings
+        except Exception:
+            logger.exception("%s batch fetch failed", platform)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=max(0.0, deadline - time.monotonic()))
+    if worker.is_alive():
+        logger.warning("%s batch hit the marketplace deadline; returning completed searches only", platform)
+    with working_lock:
+        return {query: list(listings) for query, listings in working.items()}
+
+
 @batch_adapter("offerup")
 def search_offerup(saved_searches):
     """Real bug caught in review before this ever shipped: this was built
@@ -1207,17 +1454,13 @@ def search_offerup(saved_searches):
     reach it - see batch_worker's `relevant` filter), so nothing had
     exercised the real call path yet. One HTTP call per query (no combined
     multi-query API like Grailed's Algolia endpoint exists for OfferUp)."""
-    result = {}
-    for saved_search in saved_searches:
-        query = split_query_exclusions(saved_search["query"])[0]
-        url = "https://offerup.com/search?" + urlencode({"q": query})
-        html = _fetch_page("offerup", url)
-        if html is None:
-            continue
-        listings = [x for x in (_offerup_to_listing(l) for l in _offerup_listings(html)) if x]
-        if listings:
-            result[saved_search["query"]] = listings
-    return result
+    return _run_html_batch(
+        "offerup",
+        saved_searches,
+        lambda query: "https://offerup.com/search?" + urlencode({"q": query}),
+        _offerup_listings,
+        _offerup_to_listing,
+    )
 
 
 # --- Depop ------------------------------------------------------------------
@@ -1373,14 +1616,10 @@ def search_depop(saved_searches):
     """Same real contract fix as search_offerup above - was single-search,
     prefetch_marketplaces()'s batch_worker needs (list-in) -> {query:
     [listings]}. One HTTP call per query (no combined multi-query API)."""
-    result = {}
-    for saved_search in saved_searches:
-        query = split_query_exclusions(saved_search["query"])[0]
-        url = "https://www.depop.com/search/?" + urlencode({"q": query})
-        html = _fetch_page("depop", url)
-        if html is None:
-            continue
-        listings = [x for x in (_depop_to_listing(o) for o in _depop_objects(html)) if x]
-        if listings:
-            result[saved_search["query"]] = listings
-    return result
+    return _run_html_batch(
+        "depop",
+        saved_searches,
+        lambda query: "https://www.depop.com/search/?" + urlencode({"q": query}),
+        _depop_objects,
+        _depop_to_listing,
+    )
