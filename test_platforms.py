@@ -15,14 +15,10 @@ Pure stdlib unittest + mock, matching the repo's "no scraper framework"
 philosophy. Run with:
     python -m unittest test_platforms
 """
-from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import os
 import pathlib
 import shutil
 import tempfile
-import threading
 import time
 import unittest
 from unittest import mock
@@ -52,9 +48,10 @@ class _FakeScraplingResp:
     """Minimal stand-in for a scrapling Fetcher response - .status not
     .status_code, and no .ok property, unlike requests.Response."""
 
-    def __init__(self, status, body=None):
+    def __init__(self, status, body=None, headers=None):
         self.status = status
         self._body = body
+        self.headers = headers or {}
 
     def json(self):
         if self._body is None:
@@ -263,10 +260,9 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
             "itemId": "1", "title": "Test Item", "currentPrice": "10.00",
             "remainingTime": "5m", "numBids": "3", "assetsUrl": "http://x",
         }]}}
-        response = {"status": 200, "headers": {}, "text": json.dumps(body)}
-        with mock.patch.object(p, "_get_shopgoodwill_session", return_value=mock.sentinel.session), \
-                mock.patch.object(p, "_shopgoodwill_session_post", return_value=response), \
-                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.return_value = _FakeScraplingResp(200, body)
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             listings, _ = p.search_shopgoodwill({"query": "test"})
         self.assertEqual(len(listings), 1)
 
@@ -277,28 +273,30 @@ class ShopGoodwillProxyScoping(unittest.TestCase):
     # of calls through (confirmed live: 23/29 still 403'd even proxied).
     # It's a TLS/HTTP client fingerprint check, same class of WAF that made
     # OfferUp/Depop need scrapling instead of plain requests - confirmed
-    # live that browser-shaped requests through the SAME proxy succeed.
-    # Fix routes search_shopgoodwill through one persistent StealthySession
-    # with SHOPGOODWILL_PROXY_URL scoped
+    # live that scrapling's Fetcher (curl_cffi impersonation) through the
+    # SAME proxy gets a clean 200 every time. Fix routes search_shopgoodwill
+    # through scrapling's Fetcher.post with SHOPGOODWILL_PROXY_URL - scoped
     # to ONLY this platform, since every other adapter (get_json-based or
     # scrapling-based) must keep hitting its own origin directly, unaffected.
     def _run(self, env):
         body = {"searchResults": {"items": [], "itemCount": 0}}
-        get_session = mock.Mock(return_value=mock.sentinel.session)
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.return_value = _FakeScraplingResp(200, body)
         with mock.patch.dict("os.environ", env, clear=True), \
-                mock.patch.object(p, "_get_shopgoodwill_session", get_session), \
-                mock.patch.object(p, "_shopgoodwill_session_post", return_value={"status": 200, "headers": {}, "text": json.dumps(body)}), \
-                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}):
+                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             p.search_shopgoodwill({"query": "test"})
-        return get_session
+        return fake_fetcher.post
 
-    def test_proxy_url_set_is_passed_to_session(self):
-        session_mock = self._run({"SHOPGOODWILL_PROXY_URL": "http://user:pass@proxy.example.com:8888"})
-        session_mock.assert_called_once_with("http://user:pass@proxy.example.com:8888")
+    def test_proxy_url_set_is_passed_to_fetcher_post(self):
+        post_mock = self._run({"SHOPGOODWILL_PROXY_URL": "http://user:pass@proxy.example.com:8888"})
+        _, kwargs = post_mock.call_args
+        self.assertEqual(kwargs["proxy"], "http://user:pass@proxy.example.com:8888")
+        self.assertEqual(kwargs["headers"], p.SHOPGOODWILL_HEADERS)
 
     def test_proxy_url_unset_passes_none(self):
-        session_mock = self._run({})
-        session_mock.assert_called_once_with(None)
+        post_mock = self._run({})
+        _, kwargs = post_mock.call_args
+        self.assertIsNone(kwargs["proxy"])
 
     def test_proxy_scoping_does_not_leak_into_get_json(self):
         # Regression guard: the proxy must be read directly inside
@@ -319,117 +317,6 @@ class ShopGoodwillProxyScoping(unittest.TestCase):
         self.assertEqual(listings, [])
         self.assertIsNone(count)
         self.assertIn("scrapling is not installed", " ".join(cm.output))
-
-
-class ShopGoodwillThreadConfinement(unittest.TestCase):
-    def test_concurrent_callers_route_browser_calls_to_one_worker(self):
-        body = {"searchResults": {"items": [], "itemCount": 0}}
-        browser_thread_ids = []
-        caller_thread_ids = []
-        callers_ready = threading.Barrier(3)
-
-        def get_session(_proxy_url):
-            browser_thread_ids.append(threading.get_ident())
-            return mock.sentinel.session
-
-        def post(_session, _payload):
-            browser_thread_ids.append(threading.get_ident())
-            return {"status": 200, "headers": {}, "text": json.dumps(body)}
-
-        def call_search(query):
-            caller_thread_ids.append(threading.get_ident())
-            callers_ready.wait()
-            return p.search_shopgoodwill({"query": query})
-
-        with mock.patch.object(p, "_get_shopgoodwill_session", side_effect=get_session), \
-                mock.patch.object(p, "_shopgoodwill_session_post", side_effect=post), \
-                mock.patch.object(p, "_pace"), \
-                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True), \
-                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}), \
-                ThreadPoolExecutor(max_workers=2) as callers:
-            futures = [callers.submit(call_search, query) for query in ("test one", "test two")]
-            callers_ready.wait()
-            results = [future.result(timeout=5) for future in futures]
-
-        self.assertEqual(results, [([], 0), ([], 0)])
-        self.assertEqual(len(set(caller_thread_ids)), 2)
-        self.assertEqual(len(set(browser_thread_ids)), 1)
-        self.assertNotIn(browser_thread_ids[0], caller_thread_ids)
-
-    @unittest.skipUnless(
-        os.environ.get("RUN_LIVE_SHOPGOODWILL_TEST") == "1",
-        "set RUN_LIVE_SHOPGOODWILL_TEST=1 to launch the real browser",
-    )
-    def test_real_browser_from_two_concurrent_threads(self):
-        """Real StealthySession + Playwright, with only the network local."""
-        response_body = {"searchResults": {"items": [], "itemCount": 0}}
-
-        class Handler(BaseHTTPRequestHandler):
-            posts = 0
-
-            def do_GET(self):
-                content = b"<!doctype html><html><body>ready</body></html>"
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
-
-            def do_POST(self):
-                type(self).posts += 1
-                self.rfile.read(int(self.headers.get("Content-Length", "0")))
-                content = json.dumps(response_body).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
-
-            def log_message(self, _format, *_args):
-                pass
-
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
-        origin = f"http://127.0.0.1:{server.server_port}"
-        worker_thread_ids = []
-        original_get_session = p._get_shopgoodwill_session
-        original_post = p._shopgoodwill_session_post
-
-        def recording_get_session(proxy_url):
-            worker_thread_ids.append(threading.get_ident())
-            return original_get_session(proxy_url)
-
-        def recording_post(session, payload):
-            worker_thread_ids.append(threading.get_ident())
-            return original_post(session, payload)
-
-        try:
-            p._close_shopgoodwill_session()
-            with mock.patch.dict(os.environ):
-                os.environ.pop("SHOPGOODWILL_PROXY_URL", None)
-                with mock.patch.object(p, "SHOPGOODWILL_HOME_URL", origin + "/"), \
-                        mock.patch.object(p, "SHOPGOODWILL_URL", origin + "/api"), \
-                        mock.patch.object(p, "_get_shopgoodwill_session", side_effect=recording_get_session), \
-                        mock.patch.object(p, "_shopgoodwill_session_post", side_effect=recording_post), \
-                        mock.patch.object(p, "_pace"), \
-                        mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True), \
-                        ThreadPoolExecutor(max_workers=2) as callers:
-                    futures = [
-                        callers.submit(p.search_shopgoodwill, {"query": query})
-                        for query in ("browser one", "browser two")
-                    ]
-                    results = [future.result(timeout=45) for future in futures]
-        finally:
-            p._close_shopgoodwill_session()
-            server.shutdown()
-            server.server_close()
-            server_thread.join(timeout=5)
-
-        self.assertEqual(results, [([], 0), ([], 0)])
-        self.assertEqual(Handler.posts, 2)
-        self.assertEqual(len(set(worker_thread_ids)), 1)
-        self.assertEqual(worker_thread_ids[0], p._shopgoodwill_browser_thread_id)
 
 
 class ShopGoodwillCircuitBreaker(unittest.TestCase):
@@ -453,28 +340,28 @@ class ShopGoodwillCircuitBreaker(unittest.TestCase):
 
     def test_active_cooldown_skips_without_request(self):
         self.path.write_text(json.dumps({"blocked_until_ts": time.time() + 600, "consecutive_block_streak": 1}))
-        with mock.patch.object(p, "_get_shopgoodwill_session") as get_session:
+        fake_fetcher = mock.MagicMock()
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             self.assertEqual(p.search_shopgoodwill({"query": "test"}), ([], None))
-        get_session.assert_not_called()
+        fake_fetcher.post.assert_not_called()
 
     def test_first_403_retries_then_success_clears_old_streak(self):
         self.path.write_text(json.dumps({"blocked_until_ts": 0, "consecutive_block_streak": 2}))
-        responses = [
-            {"status": 403, "headers": {"retry-after": "0"}, "text": "blocked"},
-            {"status": 200, "headers": {}, "text": json.dumps({"searchResults": {"items": [], "itemCount": 0}})},
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.side_effect = [
+            _FakeScraplingResp(403, headers={"retry-after": "0"}),
+            _FakeScraplingResp(200, {"searchResults": {"items": [], "itemCount": 0}}),
         ]
-        with mock.patch.object(p, "_get_shopgoodwill_session", return_value=mock.sentinel.session), \
-                mock.patch.object(p, "_shopgoodwill_session_post", side_effect=responses), \
-                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}):
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             self.assertEqual(p.search_shopgoodwill({"query": "test"}), ([], 0))
         self.assertEqual(p._read_shopgoodwill_rate_limit_state()["consecutive_block_streak"], 0)
 
     def test_two_429s_trip_breaker_and_honor_retry_after(self):
-        blocked = {"status": 429, "headers": {"Retry-After": "7"}, "text": "blocked"}
-        with mock.patch.object(p, "_get_shopgoodwill_session", return_value=mock.sentinel.session), \
-                mock.patch.object(p, "_shopgoodwill_session_post", side_effect=[blocked, blocked]), \
-                mock.patch.object(p.time, "sleep") as sleep_mock, \
-                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}):
+        blocked = _FakeScraplingResp(429, headers={"Retry-After": "7"})
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.side_effect = [blocked, blocked]
+        with mock.patch.object(p.time, "sleep") as sleep_mock, \
+                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             self.assertEqual(p.search_shopgoodwill({"query": "test"}), ([], None))
         sleep_mock.assert_any_call(7)
         self.assertEqual(p._read_shopgoodwill_rate_limit_state()["last_status"], 429)

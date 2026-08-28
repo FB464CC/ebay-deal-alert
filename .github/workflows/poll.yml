@@ -24,9 +24,8 @@ permissions:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    # Runs every 5 min - a wedged call (e.g. a browser task an executor
-    # can't force-kill) must never be allowed to hang indefinitely and
-    # eat the whole runner-minutes budget.
+    # Runs every 5 min - a wedged network call must never be allowed to
+    # hang indefinitely and eat the whole runner-minutes budget.
     timeout-minutes: 8
 
     steps:
@@ -44,18 +43,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Install Playwright Chromium
-        # Facebook Marketplace adapter (facebook_marketplace.py) needs a
-        # real browser - --with-deps pulls the Ubuntu system libs Chromium
-        # needs, which apt provides here (Linux-only flag, do not run this
-        # locally on Windows - the browser binary itself is separate from
-        # the playwright pip package installed above).
-        run: |
-          playwright install --with-deps chromium
-          # Scrapling's StealthySession uses Patchright's hardened browser
-          # build, which has a separate browser cache from Playwright.
-          patchright install chromium
 
       - name: Run eBay deal alert
         env:
