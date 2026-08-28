@@ -1692,6 +1692,215 @@
         "shopgoodwill",
         "facebook"
       ]
+    },
+    {
+      "query": "taylormade burner 2.0 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 140,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "taylormade rocketballz irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 140,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "taylormade rbz irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 140,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "callaway x-20 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 130,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "callaway x-22 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 130,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "callaway x-24 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 130,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "callaway diablo edge irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 130,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "ping g10 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "ping g15 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "ping g20 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 160,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "golf driver taylormade rbz OR callaway x-hot -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 70,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "odyssey white hot putter -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 40,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "ping karsten putter -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 40,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "cleveland rtx wedge 56 -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 40,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "sun mountain OR ogio golf stand bag -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 45,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "golf clubs and bag -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "mens golf set used -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "full golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "golf clubs garage -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
