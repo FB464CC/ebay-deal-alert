@@ -1598,6 +1598,16 @@ JACKET_ONLY_DISCLAIMER_SIGNALS = re.compile(
 # never on its own.
 BARE_JACKET_OR_COAT_WORD = re.compile(r"\b(jacket|coat)\b", re.IGNORECASE)
 
+# Inverse of the jacket-only suit guard: bottoms are legitimate results for
+# dedicated trouser/brand searches, but a suit-worded search must not surface
+# them unless the title also identifies the matching jacket or a complete suit.
+SUIT_PANTS_ONLY_SIGNALS = re.compile(r"\b(pants?|trousers?|slacks?)\b", re.IGNORECASE)
+SUIT_JACKET_OR_COMPLETE_SIGNALS = re.compile(
+    r"\b(jackets?|blazers?|coats?|2\s*-?\s*piece|two\s*-?\s*piece|2\s*pc|"
+    r"suit\s*set|full\s+suit|complete\s+suit)\b",
+    re.IGNORECASE,
+)
+
 # Phrasing a seller uses when NOT claiming genuine authenticity - real resale
 # terminology, not a guess. Someone with a genuine Cartier writes "Cartier
 # Pasha"; "Cartier Fashion Watch" is how a non-luxury piece styled to
@@ -1817,6 +1827,24 @@ def is_jacket_only_suit_listing(title, query=None, description=None):
     if SUIT_JACKET_ONLY_SIGNALS.search(haystack_title):
         return True
     return bool(query and "suit" in query.lower() and BARE_JACKET_OR_COAT_WORD.search(haystack_title))
+
+
+def is_pants_only_suit_listing(title, query=None):
+    """Inverse suit-completeness check for suit-worded saved searches.
+
+    Pants/trousers/slacks are valid results for dedicated bottoms and broad
+    brand searches, so this is deliberately scoped to queries containing
+    "suit", exactly like the jacket-only helper's bare-jacket branch. Within
+    a suit search, a bottoms word with no jacket/blazer/coat or explicit
+    2-piece/full-suit signal clearly describes only half of the expected set.
+    """
+    title = re.sub(r"([A-Za-z])(\d)", r"\1 \2", title or "")
+    return bool(
+        query
+        and "suit" in query.lower()
+        and SUIT_PANTS_ONLY_SIGNALS.search(title)
+        and not SUIT_JACKET_OR_COMPLETE_SIGNALS.search(title)
+    )
 
 
 REQUIRED_ITEM_TYPE_SYNONYMS = {
@@ -4537,6 +4565,14 @@ def run():
             if is_jacket_only_suit_listing(title, saved_search["query"], listing.get("description")):
                 logger.info(
                     "Skipping %s: jacket/blazer/sport-coat-only listing, no pants (standing no-jackets rule)",
+                    item_id,
+                )
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
+
+            if is_pants_only_suit_listing(title, saved_search["query"]):
+                logger.info(
+                    "Skipping %s: pants/trousers/slacks-only listing, no jacket (suit completeness rule)",
                     item_id,
                 )
                 mark_seen(conn, item_id, fingerprint, total_price)
