@@ -54,6 +54,21 @@ class _FakeScraplingResp:
         return self._body
 
 
+class ListingNumberValidation(unittest.TestCase):
+    def test_non_finite_boolean_and_non_positive_prices_are_rejected(self):
+        for price in (True, float("nan"), float("inf"), float("-inf"), 0, -1):
+            with self.subTest(price=price):
+                self.assertIsNone(p.make_listing("test", "1", "Title", price, "https://example.test/1"))
+
+    def test_negative_or_non_finite_shipping_cannot_reduce_landed_price(self):
+        for shipping in (-10, float("nan"), float("inf"), True):
+            with self.subTest(shipping=shipping):
+                listing = p.make_listing(
+                    "test", "1", "Title", 25, "https://example.test/1", shipping=shipping
+                )
+                self.assertNotIn("shippingOptions", listing)
+
+
 class VintedLandedCost(unittest.TestCase):
     def test_assumed_shipping_constant_is_positive(self):
         self.assertGreater(p.VINTED_ASSUMED_SHIPPING, 0)

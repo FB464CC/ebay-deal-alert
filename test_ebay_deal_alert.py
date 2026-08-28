@@ -188,6 +188,37 @@ class GolfEquipmentGate(unittest.TestCase):
         )
         self.assertIsNone(reason)
 
+    def test_left_handed_clubs_are_blocked(self):
+        # Real live miss: right-handed buyer, AI now identifies handedness
+        # from the photos as a backstop to the query-level "-lefty" exclude.
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          golf_is_left_handed=True),
+            category="golf-equipment",
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("left-handed", reason)
+
+    def test_right_handed_clubs_clear_the_handedness_check(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(price=250, golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          golf_is_left_handed=False),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
+    def test_counterfeit_suspected_is_blocked(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_complete_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          golf_counterfeit_suspected=True),
+            category="golf-equipment",
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("counterfeit", reason)
+
 
 class JacketOnlySuitListing(unittest.TestCase):
     def test_tuxedo_jacket_with_no_pants_is_blocked(self):

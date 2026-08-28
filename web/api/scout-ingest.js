@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 
 const MAX_QUEUE_LINES = 2000;
+const MAX_LISTINGS_PER_REQUEST = 250;
 const QUEUE_FILE = "scout_queue.jsonl";
 
 const githubHeaders = () => ({
@@ -71,6 +72,19 @@ const validateListing = (listing, index) => {
   for (const field of ["itemWebUrl", "imageUrl", "description"]) {
     if (typeof listing[field] !== "string") return `${prefix}.${field} must be a string`;
   }
+  const limits = { platform: 100, itemId: 500, title: 1000, itemWebUrl: 4096, imageUrl: 4096, description: 10000 };
+  for (const [field, limit] of Object.entries(limits)) {
+    if (listing[field].length > limit) return `${prefix}.${field} exceeds ${limit} characters`;
+  }
+  for (const field of ["itemWebUrl", "imageUrl"]) {
+    if (!listing[field]) continue;
+    try {
+      const url = new URL(listing[field]);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error();
+    } catch {
+      return `${prefix}.${field} must be an HTTP(S) URL without embedded credentials`;
+    }
+  }
   return null;
 };
 
@@ -84,6 +98,29 @@ const sanitizeListing = (listing) => ({
   description: listing.description,
   discoveredAt: new Date().toISOString()
 });
+
+const listingKey = (listing) => `${listing.platform.trim().toLowerCase()}:${listing.itemId.trim()}`;
+
+const existingKeys = (lines) => {
+  const keys = new Set();
+  for (const line of lines) {
+    try {
+      const listing = JSON.parse(line);
+      if (listing && typeof listing.platform === "string" && typeof listing.itemId === "string") keys.add(listingKey(listing));
+    } catch { /* malformed legacy line remains readable by the Python consumer */ }
+  }
+  return keys;
+};
+
+const withoutDuplicates = (listings, lines) => {
+  const seen = existingKeys(lines);
+  return listings.filter((listing) => {
+    const key = listingKey(listing);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 
 module.exports = async (req, res) => {
   if (req.method !== "POST") {
@@ -99,6 +136,9 @@ module.exports = async (req, res) => {
     if (!body || typeof body !== "object" || !Array.isArray(body.listings) || !body.listings.length) {
       return sendJson(res, 400, { error: "listings must be a non-empty array" });
     }
+    if (body.listings.length > MAX_LISTINGS_PER_REQUEST) {
+      return sendJson(res, 413, { error: `listings cannot exceed ${MAX_LISTINGS_PER_REQUEST} entries per request` });
+    }
     for (const [index, listing] of body.listings.entries()) {
       const error = validateListing(listing, index);
       if (error) return sendJson(res, 400, { error });
@@ -107,9 +147,14 @@ module.exports = async (req, res) => {
     const firstRead = await fetchCurrentFile();
     const currentLines = existingLines(firstRead);
     const available = Math.max(0, MAX_QUEUE_LINES - currentLines.length);
-    const accepted = body.listings.slice(0, available).map(sanitizeListing);
+    const sanitized = body.listings.map(sanitizeListing);
+    const newListings = withoutDuplicates(sanitized, currentLines);
+    const accepted = newListings.slice(0, available);
     const dropped = body.listings.length - accepted.length;
     if (!accepted.length) {
+      if (!newListings.length) {
+        return sendJson(res, 200, { ok: true, accepted: 0, dropped, queueLines: currentLines.length });
+      }
       console.warn(`Scout ingest dropped ${dropped} listing(s): queue is at ${MAX_QUEUE_LINES} lines`);
       return sendJson(res, 429, { error: "Scout queue is full", accepted: 0, dropped, maxQueueLines: MAX_QUEUE_LINES });
     }
@@ -119,11 +164,10 @@ module.exports = async (req, res) => {
     const latest = await fetchCurrentFile();
     const latestLines = existingLines(latest);
     const finalAvailable = Math.max(0, MAX_QUEUE_LINES - latestLines.length);
-    const finalAccepted = accepted.slice(0, finalAvailable);
+    const finalAccepted = withoutDuplicates(accepted, latestLines).slice(0, finalAvailable);
     const finalDropped = body.listings.length - finalAccepted.length;
     if (!finalAccepted.length) {
-      console.warn(`Scout ingest dropped ${finalDropped} listing(s): queue filled during ingest`);
-      return sendJson(res, 409, { error: "Scout queue filled during ingest", accepted: 0, dropped: finalDropped });
+      return sendJson(res, 200, { ok: true, accepted: 0, dropped: finalDropped, queueLines: latestLines.length });
     }
     if (finalDropped) console.warn(`Scout ingest accepted ${finalAccepted.length} and dropped ${finalDropped} listing(s) at queue cap`);
 
@@ -145,3 +189,5 @@ module.exports = async (req, res) => {
     return sendJson(res, error.status || 500, { error: error.message, details: error.details });
   }
 };
+
+module.exports._test = { validateListing, withoutDuplicates };
