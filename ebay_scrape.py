@@ -15,12 +15,11 @@ Confirmed live: a single residential IP with no proxy gets a 403 on ~1-in-10
 calls from a home connection - and, measured directly against a real GitHub
 Actions run, 100% of calls from GH Actions' shared runner IP range (eBay
 blocks that range far harder than a residential IP). EBAY_SCRAPE_PROXY_URL
-(same env-var pattern as FACEBOOK_PROXY_URL in facebook_marketplace.py) routes
-every call through a real residential proxy instead - confirmed live to
-return real listing data - and is optional: unset, this just calls eBay
+routes every call through a real residential proxy instead - confirmed live
+to return real listing data - and is optional: unset, this just calls eBay
 directly (same behavior as before, still works fine from a non-CI IP). On a
-403/other failure, or any parse failure, this returns an empty list and logs
-a warning. It never raises - a scrape failure must never take down the run.
+403/other failure, or any parse failure, this returns an empty list and logs a
+warning. It never raises - a scrape failure must never take down the run.
 """
 
 import logging
