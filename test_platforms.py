@@ -22,7 +22,6 @@ import tempfile
 import threading
 import time
 import unittest
-from types import SimpleNamespace
 from unittest import mock
 
 import platforms as p
@@ -51,10 +50,11 @@ class _FakeScraplingResp:
     """Minimal stand-in for a scrapling Fetcher response - .status not
     .status_code, and no .ok property, unlike requests.Response."""
 
-    def __init__(self, status, body=None, headers=None):
+    def __init__(self, status, body=None, headers=None, cookies=None):
         self.status = status
         self._body = body
         self.headers = headers or {}
+        self.cookies = cookies or {}
 
     def json(self):
         if self._body is None:
@@ -412,7 +412,7 @@ class VintedCircuitBreaker(unittest.TestCase):
         # NOT blank the whole lane by itself. Regression test for the
         # real outage this caused: one streak-1 trip produced six
         # straight 0-listing runs.
-        blocked = _FakeResp(429, headers={"Retry-After": "7"})
+        blocked = _FakeScraplingResp(429, headers={"Retry-After": "7"})
         session = mock.MagicMock()
         session.get.side_effect = [blocked, blocked]
         with mock.patch.object(p, "_pace"), mock.patch.object(p.time, "sleep") as sleep_mock:
@@ -424,7 +424,7 @@ class VintedCircuitBreaker(unittest.TestCase):
         self.assertEqual(state, {})
 
     def test_breaker_trips_only_after_threshold_distinct_query_failures(self):
-        blocked = _FakeResp(429, headers={"Retry-After": "0"})
+        blocked = _FakeScraplingResp(429, headers={"Retry-After": "0"})
         session = mock.MagicMock()
         with mock.patch.object(p, "_pace"), mock.patch.object(p.time, "sleep"):
             for i in range(p.VINTED_TRIP_THRESHOLD):
@@ -435,8 +435,8 @@ class VintedCircuitBreaker(unittest.TestCase):
         self.assertEqual(state["consecutive_block_streak"], 1)
 
     def test_success_between_failures_resets_the_failure_count(self):
-        blocked = _FakeResp(429, headers={"Retry-After": "0"})
-        ok = _FakeResp(200, {"items": []})
+        blocked = _FakeScraplingResp(429, headers={"Retry-After": "0"})
+        ok = _FakeScraplingResp(200, {"items": []})
         session = mock.MagicMock()
         with mock.patch.object(p, "_pace"), mock.patch.object(p.time, "sleep"):
             for _ in range(p.VINTED_TRIP_THRESHOLD - 1):
@@ -450,44 +450,93 @@ class VintedCircuitBreaker(unittest.TestCase):
     def test_success_after_expired_cooldown_clears_streak(self):
         self.path.write_text(json.dumps({"blocked_until_ts": 0, "consecutive_block_streak": 2}))
         session = mock.MagicMock()
-        session.get.return_value = _FakeResp(200, {"items": []})
+        session.get.return_value = _FakeScraplingResp(200, {"items": []})
         with mock.patch.object(p, "_pace"):
             body, _ = p._get_vinted_catalog_page(session, {"page": 1})
         self.assertEqual(body, {"items": []})
         self.assertEqual(p._read_vinted_rate_limit_state()["consecutive_block_streak"], 0)
 
+    def test_catalog_uses_same_fingerprinted_session_without_static_user_agent(self):
+        session = mock.MagicMock()
+        session.get.return_value = _FakeScraplingResp(200, {"items": []})
+        params = {"page": 1}
+        with mock.patch.object(p, "_pace"):
+            body, returned_session = p._get_vinted_catalog_page(session, params)
+        self.assertEqual(body, {"items": []})
+        self.assertIs(returned_session, session)
+        session.get.assert_called_once_with(
+            p.VINTED_CATALOG_URL,
+            params=params,
+            headers={"Accept": "application/json"},
+            timeout=p.HTTP_TIMEOUT,
+        )
+
     def test_bootstrap_rejects_missing_anonymous_cookies(self):
         session = mock.MagicMock()
-        session.cookies = []
-        session.get.return_value = mock.MagicMock()
-        with mock.patch("platforms.requests.Session", return_value=session):
+        session.get.return_value = _FakeScraplingResp(200)
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = session
+        fetcher_session = mock.MagicMock(return_value=manager)
+        with mock.patch.dict(
+            "sys.modules", {"scrapling.fetchers": mock.MagicMock(FetcherSession=fetcher_session)}
+        ):
             self.assertIsNone(p._get_vinted_session())
-        session.get.return_value.raise_for_status.assert_called_once_with()
-        session.close.assert_called_once_with()
+        manager.__exit__.assert_called_once_with(None, None, None)
 
     def test_bootstrap_rejects_http_challenge_instead_of_caching_it(self):
         session = mock.MagicMock()
-        response = mock.MagicMock()
-        response.raise_for_status.side_effect = p.requests.HTTPError("403 challenged")
-        session.get.return_value = response
-        with mock.patch("platforms.requests.Session", return_value=session):
+        session.get.return_value = _FakeScraplingResp(403)
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = session
+        fetcher_session = mock.MagicMock(return_value=manager)
+        with mock.patch.dict(
+            "sys.modules", {"scrapling.fetchers": mock.MagicMock(FetcherSession=fetcher_session)}
+        ):
             self.assertIsNone(p._get_vinted_session())
-        session.close.assert_called_once_with()
+        manager.__exit__.assert_called_once_with(None, None, None)
         self.assertIsNone(getattr(p._vinted_thread_state, "session", None))
 
-    def test_each_worker_gets_a_dedicated_session(self):
-        def healthy_session():
-            session = mock.MagicMock()
-            session.get.return_value = mock.MagicMock()
-            session.cookies = [
-                SimpleNamespace(name="anon_id"),
-                SimpleNamespace(name="access_token_web"),
-            ]
-            return session
+    def test_bootstrap_uses_browser_fingerprinted_fetcher_session(self):
+        session = mock.MagicMock()
+        session.get.return_value = _FakeScraplingResp(
+            200,
+            cookies={"anon_id": "anon", "access_token_web": "token"},
+        )
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = session
+        fetcher_session = mock.MagicMock(return_value=manager)
+        with mock.patch.dict(
+            "sys.modules", {"scrapling.fetchers": mock.MagicMock(FetcherSession=fetcher_session)}
+        ), mock.patch("platforms.requests.Session") as requests_session:
+            self.assertIs(p._get_vinted_session(), session)
+            self.assertIs(p._get_vinted_session(), session)
+        fetcher_session.assert_called_once_with(timeout=p.HTTP_TIMEOUT, retries=1)
+        session.get.assert_called_once_with("https://www.vinted.com/", timeout=p.HTTP_TIMEOUT)
+        requests_session.assert_not_called()
 
-        sessions = [healthy_session(), healthy_session()]
+    def test_bootstrap_without_scrapling_fails_closed(self):
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": None}):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                self.assertIsNone(p._get_vinted_session())
+        self.assertIn("scrapling is not installed", " ".join(cm.output))
+
+    def test_each_worker_gets_a_dedicated_session(self):
+        def healthy_manager():
+            session = mock.MagicMock()
+            session.get.return_value = _FakeScraplingResp(
+                200,
+                cookies={"anon_id": "anon", "access_token_web": "token"},
+            )
+            manager = mock.MagicMock()
+            manager.__enter__.return_value = session
+            return manager
+
+        managers = [healthy_manager(), healthy_manager()]
+        fetcher_session = mock.MagicMock(side_effect=managers)
         returned = []
-        with mock.patch("platforms.requests.Session", side_effect=sessions):
+        with mock.patch.dict(
+            "sys.modules", {"scrapling.fetchers": mock.MagicMock(FetcherSession=fetcher_session)}
+        ):
             threads = [threading.Thread(target=lambda: returned.append(p._get_vinted_session())) for _ in range(2)]
             for thread in threads:
                 thread.start()
