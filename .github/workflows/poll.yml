@@ -59,11 +59,12 @@ jobs:
         run: python ebay_deal_alert.py
 
       - name: Commit seen item updates
+        if: always()
         run: |
-          if [ -n "$(git status --porcelain seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json scout_queue.jsonl)" ]; then
+          if [ -n "$(git status --porcelain seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json scout_queue.jsonl; do
+            for file in seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl; do
               if [ -e "$file" ]; then
                 git add "$file"
               fi
@@ -72,19 +73,25 @@ jobs:
             if git pull --rebase origin main; then
               git push
             else
-              # Binary files (seen_items.db, a SQLite DB) can't be
-              # line-merged, so two runs racing to commit close together
-              # (native schedule + the 5-min external trigger + manual
-              # dispatches all landing near-simultaneously) sometimes hits
-              # a real rebase conflict here - confirmed live, it failed
-              # the whole job over this. All three files are low-stakes,
-              # self-healing state (a dedupe cache, an append-only log, a
-              # backoff timer) - dropping this run's specific update is
-              # harmless (worst case: one item re-scored, one extra probe
-              # of a rate limit), so abort the rebase and move on instead
-              # of failing the job over a binary-file merge conflict.
-              echo "Rebase conflict on state files - discarding this run's local update, not failing the job"
-              git rebase --abort
+              # The dedupe/log/backoff/queue state is safe to take from
+              # origin on a conflict. ai_spend.db is deliberately excluded:
+              # losing its local reservation could breach the monthly cap.
+              echo "Rebase conflict on retryable state files - keeping origin copies while preserving ai_spend.db"
+              for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl; do
+                if git cat-file -e "origin/main:$file" 2>/dev/null; then
+                  git checkout origin/main -- "$file"
+                  git add "$file"
+                else
+                  git rm -f --ignore-unmatch "$file"
+                fi
+              done
+              if GIT_EDITOR=true git rebase --continue; then
+                git push
+              else
+                echo "Could not preserve the paid-AI ledger during rebase; failing closed"
+                git rebase --abort || true
+                exit 1
+              fi
             fi
           else
             echo "poll state files unchanged"

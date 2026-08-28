@@ -312,6 +312,12 @@ HTTP_TIMEOUT_MARGIN = 10
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 
 DB_PATH = "seen_items.db"
+AI_SPEND_DB_PATH = "ai_spend.db"
+# Per-run Scout acknowledgement state. A queue row is registered only after
+# it is routed to a saved search, and acknowledged only when mark_seen()
+# records a genuine final disposition (or an explicit permanent skip does).
+_SCOUT_QUEUE_KEYS_BY_ITEM_ID = {}
+_SCOUT_QUEUE_PROCESSED_KEYS = set()
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
 # The settings web app reads this file via GitHub's Contents API
@@ -377,7 +383,7 @@ DEEPSEEK_BASE_URL = _CONFIG.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 # Paid-provider safety valve. Per-run call caps are throughput controls, not
 # spend controls: at a five-minute cadence even a cheap fallback can run tens
 # of thousands of times in a month. Reserve a deliberately conservative
-# amount before every DeepSeek request and persist it in seen_items.db. Failed
+# amount before every DeepSeek request and persist it in ai_spend.db. Failed
 # requests remain charged in the local ledger; that biases toward stopping
 # early, which is the safe failure mode for a hard personal budget.
 AI_PAID_MONTHLY_BUDGET_USD = float(_CONFIG.get("AI_PAID_MONTHLY_BUDGET_USD", 18.0))
@@ -1145,10 +1151,6 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS marketplace_anomaly_notified "
         "(platform TEXT PRIMARY KEY, last_notified_ts TEXT)"
     )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS ai_paid_spend "
-        "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
-    )
     conn.commit()
     return conn
 
@@ -1347,6 +1349,20 @@ def mark_seen(conn, item_id, fingerprint=None, price=None):
     if fingerprint:
         upsert_fingerprint(conn, fingerprint, price)
     conn.commit()
+    _mark_scout_queue_item_processed(item_id)
+
+
+def _mark_scout_queue_item_processed(item_id):
+    """Acknowledge every routed Scout row represented by this item id."""
+    _SCOUT_QUEUE_PROCESSED_KEYS.update(
+        _SCOUT_QUEUE_KEYS_BY_ITEM_ID.get(item_id, ())
+    )
+
+
+def _persist_scout_queue_acknowledgements():
+    """Remove only final-disposition rows; failures deliberately retry."""
+    if _SCOUT_QUEUE_PROCESSED_KEYS:
+        scout_queue.remove_processed_scout_queue(_SCOUT_QUEUE_PROCESSED_KEYS)
 
 
 def normalize_title_for_fingerprint(title):
@@ -2181,18 +2197,67 @@ def _reserve_paid_ai_spend(amount_usd):
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     conn = None
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn = sqlite3.connect(AI_SPEND_DB_PATH, timeout=10)
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS ai_paid_spend "
             "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
         )
+        # One-way conservative migration from releases that stored the
+        # ledger in seen_items.db. max(), rather than addition, makes this
+        # idempotent when the old table remains in a checkout, while ensuring
+        # the dedicated ledger can never start below already-reserved spend.
+        legacy_reserved = 0.0
+        legacy_calls = 0
+        legacy_path = Path(DB_PATH)
+        if legacy_path.exists() and legacy_path.resolve() != Path(AI_SPEND_DB_PATH).resolve():
+            legacy_conn = None
+            try:
+                legacy_conn = sqlite3.connect(
+                    f"file:{legacy_path.resolve().as_posix()}?mode=ro", uri=True, timeout=10
+                )
+                has_legacy_table = legacy_conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ai_paid_spend'"
+                ).fetchone()
+                if has_legacy_table:
+                    legacy_row = legacy_conn.execute(
+                        "SELECT reserved_usd, calls FROM ai_paid_spend WHERE month = ?", (month,)
+                    ).fetchone()
+                    if legacy_row:
+                        legacy_reserved = float(legacy_row[0])
+                        legacy_calls = int(legacy_row[1])
+            finally:
+                if legacy_conn is not None:
+                    legacy_conn.close()
+        existing_before_migration = conn.execute(
+            "SELECT reserved_usd, calls FROM ai_paid_spend WHERE month = ?", (month,)
+        ).fetchone()
+        migration_changed = bool(
+            (legacy_reserved > (float(existing_before_migration[0]) if existing_before_migration else 0.0))
+            or (legacy_calls > (int(existing_before_migration[1]) if existing_before_migration else 0))
+        )
+        if legacy_reserved > 0 or legacy_calls > 0:
+            conn.execute(
+                "INSERT INTO ai_paid_spend(month, reserved_usd, calls) VALUES (?, ?, ?) "
+                "ON CONFLICT(month) DO UPDATE SET "
+                "reserved_usd = MAX(reserved_usd, excluded.reserved_usd), "
+                "calls = MAX(calls, excluded.calls)",
+                (month, legacy_reserved, legacy_calls),
+            )
         row = conn.execute(
             "SELECT reserved_usd FROM ai_paid_spend WHERE month = ?", (month,)
         ).fetchone()
         already_reserved = float(row[0]) if row else 0.0
         if already_reserved + amount_usd > AI_PAID_MONTHLY_BUDGET_USD + 1e-9:
-            conn.rollback()
+            # Persist a newly imported legacy balance even though this new
+            # reservation is rejected. Rolling the migration back here would
+            # leave the dedicated file empty precisely when the old ledger is
+            # full; a later seen_items.db conflict could then erase the only
+            # record of the cap having been reached.
+            if migration_changed:
+                conn.commit()
+            else:
+                conn.rollback()
             logger.warning(
                 "Paid AI monthly cap reached ($%.2f reserved of $%.2f); skipping paid call",
                 already_reserved,
@@ -3888,8 +3953,6 @@ def prefetch_marketplaces(now, conn):
     if not searches:
         return {}
     scout_listings = scout_queue.load_scout_queue()
-    global _SCOUT_QUEUE_CONSUMED
-    _SCOUT_QUEUE_CONSUMED = scout_queue.scout_queue_has_data()
     active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.ADAPTERS]
     # Rotate the starting point each run so that when the budget truncates the
     # tail, it is a different tail every time and every search gets covered.
@@ -3915,35 +3978,65 @@ def prefetch_marketplaces(now, conn):
     counts = {}
     results_lock = threading.Lock()
 
-    # Scout's intentionally small transport shape has no saved-search id.
-    # Route each item to exactly one compatible search using title/query
-    # overlap. This keeps it out of unrelated categories without creating a
-    # second scoring path or multiplying one item across every saved search.
+    # New Scout rows carry the watch target's query/label, which is stable and
+    # authoritative. Word overlap remains only for legacy rows written before
+    # those fields existed.
     for listing in scout_listings:
-        title_words = set(re.findall(r"[a-z0-9]+", listing.get("title", "").lower()))
-        candidates = []
+        explicit_query = listing.get("_scout_search_query")
+        explicit_label = listing.get("_scout_search_label")
+        explicit_candidates = []
         for index, saved_search in enumerate(searches):
             platform = listing.get("platform")
             scoped_platforms = saved_search.get("platforms")
             if scoped_platforms and platform not in scoped_platforms:
                 continue
-            clean_query, excluded = marketplaces.split_query_exclusions(saved_search["query"])
-            if marketplaces.title_matches_exclusion(listing.get("title"), excluded):
+            clean_query, _excluded = marketplaces.split_query_exclusions(saved_search["query"])
+            query_matches = explicit_query and (
+                explicit_query.casefold() == saved_search["query"].casefold()
+                or explicit_query.casefold() == clean_query.casefold()
+            )
+            label_matches = explicit_label and saved_search.get("label") and (
+                explicit_label.casefold() == saved_search["label"].casefold()
+            )
+            if query_matches or label_matches:
+                explicit_candidates.append((-index, saved_search["query"]))
+
+        if explicit_query or explicit_label:
+            if not explicit_candidates:
+                logger.warning(
+                    "Scout listing %s carried target %r/%r but it did not match an enabled saved search; deferring",
+                    listing["itemId"], explicit_query, explicit_label,
+                )
                 continue
-            query_words = set(re.findall(r"[a-z0-9]+", clean_query.lower()))
-            overlap = len(title_words & query_words)
-            if overlap:
-                candidates.append((overlap, -index, saved_search["query"]))
-        if not candidates:
-            logger.warning("Scout listing %s did not match an enabled saved search; skipping", listing["itemId"])
-            continue
-        _overlap, _order, query = max(candidates)
+            _order, query = max(explicit_candidates)
+        else:
+            title_words = set(re.findall(r"[a-z0-9]+", listing.get("title", "").lower()))
+            candidates = []
+            for index, saved_search in enumerate(searches):
+                platform = listing.get("platform")
+                scoped_platforms = saved_search.get("platforms")
+                if scoped_platforms and platform not in scoped_platforms:
+                    continue
+                clean_query, excluded = marketplaces.split_query_exclusions(saved_search["query"])
+                if marketplaces.title_matches_exclusion(listing.get("title"), excluded):
+                    continue
+                query_words = set(re.findall(r"[a-z0-9]+", clean_query.lower()))
+                overlap = len(title_words & query_words)
+                if overlap:
+                    candidates.append((overlap, -index, saved_search["query"]))
+            if not candidates:
+                logger.warning("Scout listing %s did not match an enabled saved search; deferring", listing["itemId"])
+                continue
+            _overlap, _order, query = max(candidates)
         # Tagged so PASS 3's budget routing (see SCOUT_AI_CHECK_LIMIT) can
         # give these their own small AI-check budget instead of competing in
         # the shared GEMINI_CALL_LIMIT pool with every other platform - a
         # healthy extension scan can return far more candidates in one batch
         # than the shared budget could ever afford to check.
         listing["_from_scout_queue"] = True
+        queue_key = listing.get("_scout_queue_key") or scout_queue.scout_listing_key(listing)
+        if queue_key:
+            _SCOUT_QUEUE_KEYS_BY_ITEM_ID.setdefault(listing["itemId"], set()).add(queue_key)
         found.setdefault(query, []).append(listing)
         platform = listing.get("platform", "scout")
         counts[platform] = counts.get(platform, 0) + 1
@@ -4043,8 +4136,8 @@ def prefetch_marketplaces(now, conn):
 
 
 def run():
-    global _SCOUT_QUEUE_CONSUMED
-    _SCOUT_QUEUE_CONSUMED = False
+    _SCOUT_QUEUE_KEYS_BY_ITEM_ID.clear()
+    _SCOUT_QUEUE_PROCESSED_KEYS.clear()
     logger.info("Starting eBay deal alert run")
     conn = init_db()
     # Once/day, not every 5-min run - VACUUM rebuilds the whole (currently
@@ -4390,6 +4483,7 @@ def run():
             # only applying it to the 3 curated EBAY_AUCTION_SEARCHES
             # queries.
             if not classify_stray_auction_listing(listing):
+                _mark_scout_queue_item_processed(item_id)
                 continue  # not tagged, not closing soon, or unparseable end date - skip
             # An auction inside its final minutes is genuinely NEW
             # information about an item that may have been seen days ago
@@ -4409,6 +4503,7 @@ def run():
             # Re-evaluating these every run is cheap - the window filter
             # already caps it at a handful per run.
             if not listing.get("is_ending_soon_auction") and not is_new(conn, item_id):
+                _mark_scout_queue_item_processed(item_id)
                 continue
             # Already alerted on this auction? Drop it HERE, before any
             # expensive work. The same check exists at the send point as
@@ -4422,6 +4517,7 @@ def run():
             # tolerance. The key is written before the alert is sent, so
             # consulting it this early is safe.
             if listing.get("is_ending_soon_auction") and not is_new(conn, f"auction-alerted:{item_id}"):
+                _mark_scout_queue_item_processed(item_id)
                 continue
 
             price_value = (listing.get("price") or {}).get("value", 999999)
@@ -5390,16 +5486,14 @@ def run():
                     MAX_ALERTS_PER_RUN,
                 )
                 conn.close()
-                if _SCOUT_QUEUE_CONSUMED:
-                    scout_queue.clear_scout_queue()
+                _persist_scout_queue_acknowledgements()
                 return
         except Exception:
             logger.exception("Failed to send alert for %s", item_id)
 
     logger.info("Finished eBay deal alert run")
     conn.close()
-    if _SCOUT_QUEUE_CONSUMED:
-        scout_queue.clear_scout_queue()
+    _persist_scout_queue_acknowledgements()
 
 
 if __name__ == "__main__":

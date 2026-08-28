@@ -2287,6 +2287,107 @@ class ScoutPrefetchIntegration(unittest.TestCase):
             m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
         self.assertEqual(result, {"complete golf iron set -junior": [listing]})
 
+    def test_explicit_scout_query_wins_over_title_word_overlap(self):
+        listing = p.make_listing("facebook", "watch-1", "Rolex watch", 175,
+                                 "https://www.facebook.com/marketplace/item/watch-1/")
+        listing["_scout_search_query"] = "omega watch"
+        conn = sqlite3.connect(":memory:")
+        old_searches, old_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            m.SAVED_SEARCHES = [
+                {"query": "rolex watch", "enabled": True, "platforms": ["facebook"]},
+                {"query": "omega watch -strap", "enabled": True, "platforms": ["facebook"]},
+            ]
+            m.MARKETPLACES_ENABLED = []
+            with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[listing]):
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), conn)
+        finally:
+            conn.close()
+            m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
+        self.assertEqual(result, {"omega watch -strap": [listing]})
+
+    def test_explicit_unknown_target_is_deferred_without_overlap_fallback(self):
+        listing = p.make_listing("facebook", "watch-2", "Rolex watch", 175,
+                                 "https://www.facebook.com/marketplace/item/watch-2/")
+        listing["_scout_search_query"] = "deleted saved search"
+        conn = sqlite3.connect(":memory:")
+        old_searches, old_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            m.SAVED_SEARCHES = [{"query": "rolex watch", "enabled": True, "platforms": ["facebook"]}]
+            m.MARKETPLACES_ENABLED = []
+            with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[listing]):
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), conn)
+        finally:
+            conn.close()
+            m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
+        self.assertEqual(result, {})
+
+
+class PaidAiSpendLedger(unittest.TestCase):
+    def test_ledger_is_independent_of_seen_db_and_remains_fail_closed(self):
+        tempdir = pathlib.Path(tempfile.mkdtemp())
+        seen_path = tempdir / "seen.db"
+        spend_path = tempdir / "ai_spend.db"
+        with mock.patch.object(m, "DB_PATH", str(seen_path)), \
+             mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)):
+            conn = m.init_db()
+            conn.close()
+            seen_db = sqlite3.connect(seen_path)
+            try:
+                tables = seen_db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='ai_paid_spend'"
+                ).fetchall()
+            finally:
+                seen_db.close()
+            self.assertEqual(tables, [])
+
+            month = datetime.now(timezone.utc).strftime("%Y-%m")
+            legacy = sqlite3.connect(seen_path)
+            try:
+                legacy.execute(
+                    "CREATE TABLE ai_paid_spend "
+                    "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
+                )
+                legacy.execute("INSERT INTO ai_paid_spend VALUES (?, ?, ?)", (month, 10.0, 1))
+                legacy.commit()
+            finally:
+                legacy.close()
+            self.assertTrue(m._reserve_paid_ai_spend(8.0), "legacy reservations must migrate")
+            seen_path.unlink()
+            self.assertFalse(m._reserve_paid_ai_spend(m.AI_PAID_TEXT_RESERVATION_USD))
+
+            with sqlite3.connect(spend_path) as ledger:
+                reserved, calls = ledger.execute(
+                    "SELECT reserved_usd, calls FROM ai_paid_spend"
+                ).fetchone()
+            self.assertAlmostEqual(reserved, m.AI_PAID_MONTHLY_BUDGET_USD)
+            self.assertEqual(calls, 2)
+
+    def test_full_legacy_ledger_is_persisted_when_new_reservation_is_rejected(self):
+        tempdir = pathlib.Path(tempfile.mkdtemp())
+        seen_path = tempdir / "seen.db"
+        spend_path = tempdir / "ai_spend.db"
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        with sqlite3.connect(seen_path) as legacy:
+            legacy.execute(
+                "CREATE TABLE ai_paid_spend "
+                "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
+            )
+            legacy.execute(
+                "INSERT INTO ai_paid_spend VALUES (?, ?, ?)",
+                (month, m.AI_PAID_MONTHLY_BUDGET_USD, 99),
+            )
+
+        with mock.patch.object(m, "DB_PATH", str(seen_path)), \
+             mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)):
+            self.assertFalse(m._reserve_paid_ai_spend(m.AI_PAID_TEXT_RESERVATION_USD))
+            with sqlite3.connect(spend_path) as ledger:
+                reserved, calls = ledger.execute(
+                    "SELECT reserved_usd, calls FROM ai_paid_spend WHERE month = ?", (month,)
+                ).fetchone()
+            self.assertEqual(reserved, m.AI_PAID_MONTHLY_BUDGET_USD)
+            self.assertEqual(calls, 99)
+
 
 class MarketplaceAnomalyDetection(unittest.TestCase):
     """The bot has gone completely silent before: a scraper's JSON shape
@@ -2581,6 +2682,7 @@ class RunIntegration(unittest.TestCase):
         self.ai_calls = []     # listings check_photos_with_gemini() saw
 
         self._patch("DB_PATH", str(self.tmpdir / "seen.db"))
+        self._patch("AI_SPEND_DB_PATH", str(self.tmpdir / "ai_spend.db"))
         self._patch("ALERTS_LOG_PATH", self.tmpdir / "alerts_log.jsonl")
         self._patch("EBAY_RATE_LIMIT_STATE_PATH", self.tmpdir / "rate_limit_state.json")
         # Fast and deterministic: no inter-call backoff, no config drift on
@@ -2789,20 +2891,84 @@ class RunIntegration(unittest.TestCase):
         self.assertTrue(m.is_new(self._db(), "facebook:scout-deferred"),
             "a Scout candidate starved of its own budget stays retry-eligible, not discarded")
 
-    def test_successful_run_clears_consumed_scout_queue(self):
+    def test_scout_queue_keeps_deferred_unmatched_and_malformed_rows(self):
+        self._patch("SCOUT_AI_CHECK_LIMIT", 1)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
         saved_search = {"query": "loro piana sweater", "max_price": 400,
-                        "category_id": "11484", "enabled": True, "profile": "fast"}
+                        "category_id": "11484", "enabled": True, "profile": "fast",
+                        "platforms": ["facebook"]}
         self._serve(saved_search, [])
-        cleared = []
+        rows = [
+            {"platform": "facebook", "itemId": "checked", "title": "Loro Piana Cashmere Sweater Mens Medium",
+             "price": 185, "itemWebUrl": "https://example.test/checked", "imageUrl": "", "description": "",
+             "scoutSearchQuery": "loro piana sweater"},
+            {"platform": "facebook", "itemId": "deferred", "title": "Loro Piana Cashmere Sweater Mens Small",
+             "price": 165, "itemWebUrl": "https://example.test/deferred", "imageUrl": "", "description": "",
+             "scoutSearchQuery": "loro piana sweater"},
+            {"platform": "facebook", "itemId": "unmatched", "title": "Loro Piana Cashmere Sweater Mens Large",
+             "price": 155, "itemWebUrl": "https://example.test/unmatched", "imageUrl": "", "description": "",
+             "scoutSearchQuery": "removed target"},
+        ]
+        queue_path = self.tmpdir / "scout_queue.jsonl"
+        queue_path.write_text("\n".join(json.dumps(row) for row in rows) + "\nnot-json\n", encoding="utf-8")
 
-        def scout_prefetch(now, conn):
-            m._SCOUT_QUEUE_CONSUMED = True
-            return {}
-
-        self._patch("prefetch_marketplaces", scout_prefetch)
-        with mock.patch.object(m.scout_queue, "clear_scout_queue", side_effect=lambda: cleared.append(True)):
+        with mock.patch.object(m.scout_queue, "SCOUT_QUEUE_PATH", queue_path):
             m.run()
-        self.assertEqual(cleared, [True])
+
+        remaining = queue_path.read_text(encoding="utf-8").splitlines()
+        remaining_ids = {
+            json.loads(line)["itemId"] for line in remaining if line.startswith("{")
+        }
+        self.assertEqual(remaining_ids, {"deferred", "unmatched"})
+        self.assertIn("not-json", remaining)
+
+    def test_scout_alert_send_failure_stays_in_queue(self):
+        self._patch("SCOUT_AI_CHECK_LIMIT", 1)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
+        self._patch("send_alert", mock.Mock(side_effect=RuntimeError("ntfy unavailable")))
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast",
+                        "platforms": ["facebook"]}
+        self._serve(saved_search, [])
+        row = {"platform": "facebook", "itemId": "send-failed",
+               "title": "Loro Piana Cashmere Sweater Mens Medium", "price": 185,
+               "itemWebUrl": "https://example.test/send-failed", "imageUrl": "", "description": "",
+               "scoutSearchQuery": "loro piana sweater"}
+        queue_path = self.tmpdir / "scout_queue.jsonl"
+        queue_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+        with mock.patch.object(m.scout_queue, "SCOUT_QUEUE_PATH", queue_path):
+            m.run()
+
+        self.assertEqual(json.loads(queue_path.read_text(encoding="utf-8"))["itemId"], "send-failed")
+
+    def test_max_alerts_exit_only_acknowledges_scout_rows_already_sent(self):
+        self._patch("SCOUT_AI_CHECK_LIMIT", 2)
+        self._patch("MAX_ALERTS_PER_RUN", 1)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast",
+                        "platforms": ["facebook"]}
+        self._serve(saved_search, [])
+        rows = [
+            {"platform": "facebook", "itemId": "first", "title": "Loro Piana Cashmere Sweater Mens Medium",
+             "price": 200, "itemWebUrl": "https://example.test/first", "imageUrl": "", "description": "",
+             "scoutSearchQuery": "loro piana sweater"},
+            {"platform": "facebook", "itemId": "later", "title": "Loro Piana Cashmere Sweater Mens Small",
+             "price": 150, "itemWebUrl": "https://example.test/later", "imageUrl": "", "description": "",
+             "scoutSearchQuery": "loro piana sweater"},
+        ]
+        queue_path = self.tmpdir / "scout_queue.jsonl"
+        queue_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+        with mock.patch.object(m.scout_queue, "SCOUT_QUEUE_PATH", queue_path):
+            m.run()
+
+        remaining = [json.loads(line)["itemId"] for line in queue_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(remaining, ["later"])
 
     def test_official_api_candidates_ignore_scrape_budget(self):
         # EBAY_SCRAPE_AI_CHECK_LIMIT being exhausted must NOT leak into the

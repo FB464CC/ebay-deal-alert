@@ -19,8 +19,10 @@ import json
 import pathlib
 import shutil
 import tempfile
+import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import platforms as p
@@ -29,10 +31,11 @@ import platforms as p
 class _FakeResp:
     """Minimal stand-in for requests.Response - just what the code reads."""
 
-    def __init__(self, status_code, body=None, text=""):
+    def __init__(self, status_code, body=None, text="", headers=None):
         self.status_code = status_code
         self._body = body
         self.text = text
+        self.headers = headers or {}
 
     @property
     def ok(self):
@@ -95,8 +98,10 @@ class VintedLandedCost(unittest.TestCase):
                 "user": {"login": "seller1"},
             }],
         }
-        with mock.patch.object(p, "_get_vinted_session", return_value=object()), \
-                mock.patch.object(p, "get_json", return_value=body):
+        session = object()
+        with mock.patch.object(p, "_get_vinted_session", return_value=session), \
+                mock.patch.object(p, "_get_vinted_catalog_page", return_value=(body, session)), \
+                mock.patch.object(p, "vinted_circuit_breaker_allows_calls", return_value=True):
             listings, _ = p.search_vinted({"query": "alden shell cordovan"})
 
         self.assertEqual(len(listings), 1)
@@ -367,6 +372,101 @@ class ShopGoodwillCircuitBreaker(unittest.TestCase):
         self.assertEqual(p._read_shopgoodwill_rate_limit_state()["last_status"], 429)
 
 
+class VintedCircuitBreaker(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.path = pathlib.Path(self.tmpdir) / "state.json"
+        self.original = p.VINTED_RATE_LIMIT_STATE_PATH
+        p.VINTED_RATE_LIMIT_STATE_PATH = self.path
+        p._vinted_thread_state = threading.local()
+        p._backoff_multiplier.clear()
+        p._last_call.clear()
+
+    def tearDown(self):
+        p.VINTED_RATE_LIMIT_STATE_PATH = self.original
+        p._vinted_thread_state = threading.local()
+        shutil.rmtree(self.tmpdir)
+
+    def test_persistent_blocks_escalate_30_60_120_minutes(self):
+        with mock.patch.object(p.time, "time", return_value=1000):
+            for expected_streak, expected_minutes in ((1, 30), (2, 60), (3, 120), (4, 120)):
+                p._trip_vinted_circuit_breaker(429)
+                state = p._read_vinted_rate_limit_state()
+                self.assertEqual(state["consecutive_block_streak"], expected_streak)
+                self.assertEqual(state["blocked_until_ts"], 1000 + expected_minutes * 60)
+
+    def test_active_cooldown_skips_without_bootstrap_or_catalog_request(self):
+        self.path.write_text(json.dumps({
+            "blocked_until_ts": time.time() + 600,
+            "consecutive_block_streak": 1,
+        }))
+        with mock.patch.object(p, "_get_vinted_session") as bootstrap:
+            self.assertEqual(p.search_vinted({"query": "test"}), ([], None))
+        bootstrap.assert_not_called()
+
+    def test_two_429s_trip_breaker_and_honor_retry_after(self):
+        blocked = _FakeResp(429, headers={"Retry-After": "7"})
+        session = mock.MagicMock()
+        session.get.side_effect = [blocked, blocked]
+        with mock.patch.object(p, "_pace"), mock.patch.object(p.time, "sleep") as sleep_mock:
+            body, returned_session = p._get_vinted_catalog_page(session, {"page": 1})
+        self.assertIsNone(body)
+        self.assertIs(returned_session, session)
+        sleep_mock.assert_called_once_with(7)
+        state = p._read_vinted_rate_limit_state()
+        self.assertEqual(state["last_status"], 429)
+        self.assertEqual(state["consecutive_block_streak"], 1)
+
+    def test_success_after_expired_cooldown_clears_streak(self):
+        self.path.write_text(json.dumps({"blocked_until_ts": 0, "consecutive_block_streak": 2}))
+        session = mock.MagicMock()
+        session.get.return_value = _FakeResp(200, {"items": []})
+        with mock.patch.object(p, "_pace"):
+            body, _ = p._get_vinted_catalog_page(session, {"page": 1})
+        self.assertEqual(body, {"items": []})
+        self.assertEqual(p._read_vinted_rate_limit_state()["consecutive_block_streak"], 0)
+
+    def test_bootstrap_rejects_missing_anonymous_cookies(self):
+        session = mock.MagicMock()
+        session.cookies = []
+        session.get.return_value = mock.MagicMock()
+        with mock.patch("platforms.requests.Session", return_value=session):
+            self.assertIsNone(p._get_vinted_session())
+        session.get.return_value.raise_for_status.assert_called_once_with()
+        session.close.assert_called_once_with()
+
+    def test_bootstrap_rejects_http_challenge_instead_of_caching_it(self):
+        session = mock.MagicMock()
+        response = mock.MagicMock()
+        response.raise_for_status.side_effect = p.requests.HTTPError("403 challenged")
+        session.get.return_value = response
+        with mock.patch("platforms.requests.Session", return_value=session):
+            self.assertIsNone(p._get_vinted_session())
+        session.close.assert_called_once_with()
+        self.assertIsNone(getattr(p._vinted_thread_state, "session", None))
+
+    def test_each_worker_gets_a_dedicated_session(self):
+        def healthy_session():
+            session = mock.MagicMock()
+            session.get.return_value = mock.MagicMock()
+            session.cookies = [
+                SimpleNamespace(name="anon_id"),
+                SimpleNamespace(name="access_token_web"),
+            ]
+            return session
+
+        sessions = [healthy_session(), healthy_session()]
+        returned = []
+        with mock.patch("platforms.requests.Session", side_effect=sessions):
+            threads = [threading.Thread(target=lambda: returned.append(p._get_vinted_session())) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(len(returned), 2)
+        self.assertIsNot(returned[0], returned[1])
+
+
 _OFFERUP_HTML = (
     '<html><body><script id="__NEXT_DATA__" type="application/json">'
     '{"props":{"pageProps":{"searchFeedResponse":{"looseTiles":['
@@ -467,6 +567,30 @@ class OfferUpAdapter(unittest.TestCase):
             result = p.search_offerup([{"query": "rolex watch"}, {"query": "omega watch -parts"}])
         self.assertEqual(set(result.keys()), {"rolex watch", "omega watch -parts"})
 
+    def test_deadline_snapshots_completed_work_and_late_worker_cannot_mutate_it(self):
+        searches = [{"query": "rolex watch"}, {"query": "omega watch"}]
+        release_late_request = threading.Event()
+        late_request_started = threading.Event()
+
+        def fetch_page(*_args, **_kwargs):
+            if not late_request_started.is_set() and fetch_page.calls == 0:
+                fetch_page.calls += 1
+                return _OFFERUP_HTML
+            late_request_started.set()
+            release_late_request.wait(1)
+            return _OFFERUP_HTML
+
+        fetch_page.calls = 0
+        with mock.patch.object(p, "MARKETPLACE_BATCH_DEADLINE_SECONDS", 0.05), \
+                mock.patch.object(p, "_fetch_page", side_effect=fetch_page) as fetch:
+            result = p.search_offerup(searches)
+        self.assertTrue(late_request_started.is_set())
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(set(result), {"rolex watch"})
+        release_late_request.set()
+        time.sleep(0.02)
+        self.assertEqual(set(result), {"rolex watch"})
+
 
 class DepopAdapter(unittest.TestCase):
     def test_extracts_real_listing_from_fixture(self):
@@ -507,6 +631,30 @@ class DepopAdapter(unittest.TestCase):
             result = p.BATCH_ADAPTERS["depop"](relevant)
         self.assertIsInstance(result, dict)
         self.assertIn("rolex watch", result)
+
+    def test_deadline_snapshots_completed_work_and_late_worker_cannot_mutate_it(self):
+        searches = [{"query": "rolex watch"}, {"query": "omega watch"}]
+        release_late_request = threading.Event()
+        late_request_started = threading.Event()
+
+        def fetch_page(*_args, **_kwargs):
+            if not late_request_started.is_set() and fetch_page.calls == 0:
+                fetch_page.calls += 1
+                return _depop_html(_DEPOP_PAYLOAD)
+            late_request_started.set()
+            release_late_request.wait(1)
+            return _depop_html(_DEPOP_PAYLOAD)
+
+        fetch_page.calls = 0
+        with mock.patch.object(p, "MARKETPLACE_BATCH_DEADLINE_SECONDS", 0.05), \
+                mock.patch.object(p, "_fetch_page", side_effect=fetch_page) as fetch:
+            result = p.search_depop(searches)
+        self.assertTrue(late_request_started.is_set())
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(set(result), {"rolex watch"})
+        release_late_request.set()
+        time.sleep(0.02)
+        self.assertEqual(set(result), {"rolex watch"})
 
 
 if __name__ == "__main__":
