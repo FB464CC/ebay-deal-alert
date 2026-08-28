@@ -1,5 +1,6 @@
 """Small Node-backed regression tests for security-critical web API helpers."""
 
+import base64
 import json
 import subprocess
 import unittest
@@ -10,6 +11,9 @@ ROOT = Path(__file__).resolve().parent
 TELEGRAM_MODULE = (ROOT / "web" / "api" / "telegram.js").as_posix()
 URL_UTILS_MODULE = (ROOT / "chrome-extension" / "url-utils.js").as_posix()
 SCOUT_MODULE = (ROOT / "web" / "api" / "scout-ingest.js").as_posix()
+CONFIG_MODULE = (ROOT / "web" / "api" / "config.js").as_posix()
+LEDGER_MODULE = (ROOT / "web" / "api" / "ledger.js").as_posix()
+INDEX_HTML = ROOT / "web" / "index.html"
 
 
 def run_node(expression):
@@ -22,6 +26,89 @@ def run_node(expression):
         ["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True
     )
     return json.loads(completed.stdout)
+
+
+def run_node_script(script):
+    completed = subprocess.run(
+        ["node", "-"],
+        cwd=ROOT,
+        input=script,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def run_api_handler(module, body, fetch_responses):
+    script = f"""
+const calls = [];
+const responses = {json.dumps(fetch_responses)};
+global.fetch = async (url, options = {{}}) => {{
+  calls.push({{url, options}});
+  const next = responses.shift();
+  if (!next) throw new Error('Unexpected fetch call');
+  return {{
+    status: next.status,
+    ok: next.status >= 200 && next.status < 300,
+    json: async () => next.body
+  }};
+}};
+process.env.GITHUB_TOKEN = 'test-token';
+process.env.GITHUB_REPO = 'owner/repo';
+process.env.SETTINGS_PASSWORD = 'test-password';
+const handler = require({json.dumps(module)});
+const req = {{
+  method: 'POST',
+  headers: {{'x-settings-password': 'test-password'}},
+  body: {json.dumps(body)}
+}};
+let responseText = '';
+const res = {{
+  statusCode: 0,
+  headers: {{}},
+  setHeader(name, value) {{ this.headers[name] = value; }},
+  end(value) {{ responseText = Buffer.isBuffer(value) ? value.toString('utf8') : String(value); }}
+}};
+Promise.resolve(handler(req, res)).then(() => {{
+  process.stdout.write(JSON.stringify({{
+    status: res.statusCode,
+    body: JSON.parse(responseText),
+    calls
+  }}));
+}}).catch(error => {{ process.stderr.write(error.stack); process.exit(2); }});
+"""
+    return run_node_script(script)
+
+
+def github_file(records, sha):
+    text = "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records)
+    return {"sha": sha, "content": base64.b64encode(text.encode()).decode()}
+
+
+def valid_config():
+    return {
+        "SAVED_SEARCHES": [
+            {"query": "men's jacket", "size": ["M", "L"], "max_price": 50}
+        ],
+        "GRAB_ON_SIGHT_BRANDS": ["Brioni"],
+        "STANDARD_BRANDS": ["Brooks Brothers"],
+        "PASS_BRANDS": ["Example"],
+        "CORPORATE_LOGO_KEYWORDS": ["employee"],
+        "CONDITION_HARD_FAIL_KEYWORDS": ["torn"],
+        "CONDITION_FLAG_KEYWORDS": ["stain"],
+        "FABRIC_GOOD_KEYWORDS": ["cashmere"],
+        "GENDER_EXCLUDE_KEYWORDS": ["women"],
+        "FABRIC_POLY_KEYWORD": "polyester",
+        "PIT_TO_PIT_CAP_INCHES": 30,
+    }
+
+
+def index_javascript(start_marker, end_marker):
+    source = INDEX_HTML.read_text(encoding="utf-8")
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    return source[start:end]
 
 
 class TelegramUrlSafetyTests(unittest.TestCase):
@@ -83,6 +170,208 @@ class ScoutIngestValidationTests(unittest.TestCase):
         self.assertIsNone(values[0])
         self.assertIn("HTTP(S)", values[1])
         self.assertIn("HTTP(S)", values[2])
+
+
+class ConfigApiTests(unittest.TestCase):
+    def test_saved_search_and_keyword_fields_are_strictly_validated(self):
+        cases = []
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0]["query"] = "   "
+        cases.append((body, "SAVED_SEARCHES[0].query must be a non-empty string"))
+
+        body = valid_config()
+        del body["SAVED_SEARCHES"][0]["max_price"]
+        cases.append((body, "SAVED_SEARCHES[0].max_price must be a non-negative finite number"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0]["max_price"] = -1
+        cases.append((body, "SAVED_SEARCHES[0].max_price must be a non-negative finite number"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0]["max_price"] = float("inf")
+        cases.append((body, "SAVED_SEARCHES[0].max_price must be a non-negative finite number"))
+
+        body = valid_config()
+        body["STANDARD_BRANDS"].append(42)
+        cases.append((body, "STANDARD_BRANDS[1] must be a string"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0]["size"] = "M"
+        cases.append((body, "SAVED_SEARCHES[0].size must be a string array or null"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0]["size"] = ["M", 42]
+        cases.append((body, "SAVED_SEARCHES[0].size[1] must be a string"))
+
+        for body, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                result = run_api_handler(CONFIG_MODULE, body, [])
+                self.assertEqual(result["status"], 400)
+                self.assertEqual(result["body"]["error"], expected_error)
+                self.assertEqual(result["calls"], [])
+
+    def test_config_write_retries_conflict_with_fresh_sha(self):
+        body = valid_config()
+        result = run_api_handler(
+            CONFIG_MODULE,
+            body,
+            [
+                {"status": 200, "body": {"sha": "old-sha"}},
+                {"status": 409, "body": {"message": "conflict"}},
+                {"status": 200, "body": {"sha": "fresh-sha"}},
+                {"status": 200, "body": {"content": {"sha": "saved"}}},
+            ],
+        )
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual([call["options"].get("method") for call in result["calls"]], ["GET", "PUT", "GET", "PUT"])
+        first_put = json.loads(result["calls"][1]["options"]["body"])
+        second_put = json.loads(result["calls"][3]["options"]["body"])
+        self.assertEqual(first_put["sha"], "old-sha")
+        self.assertEqual(second_put["sha"], "fresh-sha")
+        self.assertEqual(json.loads(base64.b64decode(second_put["content"])), body)
+
+    def test_config_write_stops_after_two_conflict_retries(self):
+        responses = []
+        for attempt in range(3):
+            responses.extend(
+                [
+                    {"status": 200, "body": {"sha": f"sha-{attempt}"}},
+                    {"status": 409, "body": {"message": "still conflicted"}},
+                ]
+            )
+        result = run_api_handler(CONFIG_MODULE, valid_config(), responses)
+        self.assertEqual(result["status"], 409)
+        self.assertEqual(result["body"]["error"], "still conflicted")
+        self.assertEqual(len(result["calls"]), 6)
+
+
+class LedgerApiTests(unittest.TestCase):
+    def test_prices_must_be_null_or_non_negative_finite_numbers(self):
+        for field in ("bought_price", "sold_price"):
+            for value in (-1, float("inf"), ""):
+                with self.subTest(field=field, value=value):
+                    result = run_api_handler(
+                        LEDGER_MODULE, {"item_id": "123", field: value}, []
+                    )
+                    self.assertEqual(result["status"], 400)
+                    self.assertEqual(
+                        result["body"]["error"],
+                        f"{field} must be a non-negative number or null",
+                    )
+
+    def test_ledger_conflict_refetches_and_reapplies_entry_merge(self):
+        first_ledger = [{"item_id": "1", "title": "Original", "bought_price": 25}]
+        concurrent_ledger = [
+            {"item_id": "1", "title": "Concurrent", "bought_price": 25},
+            {"item_id": "2", "title": "Other", "bought_price": 10},
+        ]
+        result = run_api_handler(
+            LEDGER_MODULE,
+            {"item_id": "1", "sold_price": 40, "sold_platform": "eBay"},
+            [
+                {"status": 200, "body": github_file(first_ledger, "old-sha")},
+                {"status": 409, "body": {"message": "conflict"}},
+                {"status": 200, "body": github_file(concurrent_ledger, "fresh-sha")},
+                {"status": 200, "body": {"content": {"sha": "saved"}}},
+            ],
+        )
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual([call["options"].get("method") for call in result["calls"]], ["GET", "PUT", "GET", "PUT"])
+        second_put = json.loads(result["calls"][3]["options"]["body"])
+        self.assertEqual(second_put["sha"], "fresh-sha")
+        saved_text = base64.b64decode(second_put["content"]).decode()
+        saved_ledger = [json.loads(line) for line in saved_text.splitlines()]
+        self.assertEqual(
+            saved_ledger,
+            [
+                {
+                    "item_id": "1",
+                    "title": "Concurrent",
+                    "bought_price": 25,
+                    "sold_price": 40,
+                    "sold_platform": "eBay",
+                },
+                {"item_id": "2", "title": "Other", "bought_price": 10},
+            ],
+        )
+        self.assertEqual(result["body"], saved_ledger)
+
+
+class MobileSettingsUiTests(unittest.TestCase):
+    def test_number_value_preserves_missing_values_and_local_date_is_used(self):
+        number_function = index_javascript(
+            "    function numberValue", "    function money"
+        )
+        values = run_node_script(
+            number_function
+            + "process.stdout.write(JSON.stringify([numberValue(null),numberValue(undefined),numberValue(''),numberValue('   '),numberValue('0'),numberValue(0)]));"
+        )
+        self.assertEqual(values, [None, None, None, None, 0, 0])
+
+        date_function = index_javascript(
+            "    function todayIsoDate", "    async function saveLedgerEntry"
+        )
+        value = run_node_script(
+            "global.Date=class {getFullYear(){return 2026}getMonth(){return 7}getDate(){return 9}toISOString(){return '2099-01-01T00:00:00Z'}};"
+            + date_function
+            + "process.stdout.write(JSON.stringify(todayIsoDate()));"
+        )
+        self.assertEqual(value, "2026-08-09")
+
+    def test_stats_count_only_review_alerts_and_only_sold_cost_basis(self):
+        helpers = index_javascript("    function escapeHtml", "    function updateListCounts")
+        render_stats = index_javascript(
+            "    function renderStatsSection", "    function renderActivityFilters"
+        )
+        html = run_node_script(
+            "const ratings=['Steal','Great Deal','Good Deal','Fair','Marginal'];"
+            + helpers
+            + render_stats
+            + "const recent=new Date(Date.now()-1000).toISOString();"
+            + "const items=["
+            + "{timestamp:recent,verdict:'REVIEW',deal_rating:'Steal',discount_pct:50,price:25,estimated_resale_value:100},"
+            + "{timestamp:recent,verdict:'PASS',deal_rating:'Great Deal',discount_pct:99,price:1,estimated_resale_value:1000}];"
+            + "const ledger=[{bought_price:25,sold_price:40},{bought_price:100,sold_price:null}];"
+            + "process.stdout.write(JSON.stringify(renderStatsSection(items,ledger,true)));"
+        )
+        self.assertEqual(html.count('<div class="stat-value">1</div>'), 3)
+        self.assertIn("Avg discount: 50%", html)
+        self.assertNotIn("Avg discount: 75%", html)
+        self.assertIn("last 30 days were bought", html)
+        self.assertIn('<div class="stat-value">$75</div>', html)
+        self.assertIn('<div class="stat-value">$15</div>', html)
+        self.assertIn("Gross sales $40 | sold cost basis $25", html)
+        self.assertIn("Cost $100 | bought but not yet sold", html)
+
+    def test_blank_and_negative_prompt_prices_are_rejected_before_save(self):
+        mark_bought = index_javascript(
+            "    async function markBought", "    async function markSold"
+        )
+        mark_sold = index_javascript(
+            "    async function markSold", "    function renderActivity"
+        )
+        result = run_node_script(
+            "let promptValue='';let statuses=[];let saves=0;"
+            + "const window={prompt:()=>promptValue};"
+            + "const ledgerMap=()=>new Map();const findHistoryItem=()=>({});"
+            + "const showStatus=(message,kind)=>statuses.push([message,kind]);"
+            + "const clearStatus=()=>{};const saveLedgerEntry=async()=>{saves+=1};"
+            + mark_bought
+            + mark_sold
+            + "(async()=>{await markBought('1');promptValue='-1';await markSold('1');"
+            + "return {statuses,saves}})().then(value=>process.stdout.write(JSON.stringify(value)));"
+        )
+        self.assertEqual(result["saves"], 0)
+        self.assertEqual(
+            result["statuses"],
+            [
+                ["Bought price must be a non-negative number.", "error"],
+                ["Sold price must be a non-negative number.", "error"],
+            ],
+        )
 
 
 if __name__ == "__main__":

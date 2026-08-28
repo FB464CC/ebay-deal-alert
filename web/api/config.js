@@ -58,9 +58,13 @@ const passwordMatches = (provided) => {
   return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
 };
 
-const validateArrayField = (body, field) => {
+const validateStringArrayField = (body, field) => {
   if (!Array.isArray(body[field])) {
     return `${field} must be an array`;
+  }
+  const invalidIndex = body[field].findIndex((value) => typeof value !== "string");
+  if (invalidIndex >= 0) {
+    return `${field}[${invalidIndex}] must be a string`;
   }
   return null;
 };
@@ -77,8 +81,20 @@ const validateConfig = (body) => {
     if (!search || typeof search !== "object" || Array.isArray(search)) {
       return `SAVED_SEARCHES[${index}] must be an object`;
     }
-    if (typeof search.query !== "string") {
-      return `SAVED_SEARCHES[${index}].query must be a string`;
+    if (typeof search.query !== "string" || !search.query.trim()) {
+      return `SAVED_SEARCHES[${index}].query must be a non-empty string`;
+    }
+    if (typeof search.max_price !== "number" || !Number.isFinite(search.max_price) || search.max_price < 0) {
+      return `SAVED_SEARCHES[${index}].max_price must be a non-negative finite number`;
+    }
+    if ("size" in search && search.size !== null) {
+      if (!Array.isArray(search.size)) {
+        return `SAVED_SEARCHES[${index}].size must be a string array or null`;
+      }
+      const invalidSizeIndex = search.size.findIndex((value) => typeof value !== "string");
+      if (invalidSizeIndex >= 0) {
+        return `SAVED_SEARCHES[${index}].size[${invalidSizeIndex}] must be a string`;
+      }
     }
     if ("enabled" in search && typeof search.enabled !== "boolean") {
       return `SAVED_SEARCHES[${index}].enabled must be a boolean`;
@@ -102,7 +118,7 @@ const validateConfig = (body) => {
     "GENDER_EXCLUDE_KEYWORDS"
   ];
   for (const field of arrayFields) {
-    const error = validateArrayField(body, field);
+    const error = validateStringArrayField(body, field);
     if (error) {
       return error;
     }
@@ -161,27 +177,32 @@ module.exports = async (req, res) => {
         return sendJson(res, 400, { error: validationError });
       }
 
-      const currentFile = await fetchCurrentFile();
-      const response = await fetch(contentsUrl(), {
-        method: "PUT",
-        headers: {
-          ...githubHeaders(),
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          message: "Update config via mobile settings app",
-          content: Buffer.from(JSON.stringify(nextConfig, null, 2) + "\n", "utf8").toString("base64"),
-          sha: currentFile.sha
-        })
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        return sendJson(res, response.status, {
-          error: body.message || "GitHub update failed",
-          details: body
+      const maxConflictRetries = 2;
+      for (let attempt = 0; attempt <= maxConflictRetries; attempt += 1) {
+        const currentFile = await fetchCurrentFile();
+        const response = await fetch(contentsUrl(), {
+          method: "PUT",
+          headers: {
+            ...githubHeaders(),
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            message: "Update config via mobile settings app",
+            content: Buffer.from(JSON.stringify(nextConfig, null, 2) + "\n", "utf8").toString("base64"),
+            sha: currentFile.sha
+          })
         });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) {
+          return sendJson(res, 200, { ok: true });
+        }
+        if (response.status !== 409 || attempt === maxConflictRetries) {
+          return sendJson(res, response.status, {
+            error: body.message || "GitHub update failed",
+            details: body
+          });
+        }
       }
-      return sendJson(res, 200, { ok: true });
     } catch (error) {
       return sendJson(res, error.status || 500, { error: error.message, details: error.details });
     }

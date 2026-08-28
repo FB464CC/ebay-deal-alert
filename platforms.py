@@ -22,8 +22,6 @@ READ-ONLY. These adapters only ever fetch public search results. Nothing
 here logs in, creates accounts, bids, buys, offers, or messages.
 """
 
-import atexit
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import json
 import logging
 import math
@@ -749,22 +747,14 @@ SHOPGOODWILL_ASSUMED_SHIPPING = 13.50
 SHOPGOODWILL_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("shopgoodwill_rate_limit_state.json")
 SHOPGOODWILL_BACKOFF_INITIAL_MINUTES = 30
 SHOPGOODWILL_BACKOFF_MAX_MINUTES = 120
-SHOPGOODWILL_PAGE_LOAD_TIMEOUT = 30
-SHOPGOODWILL_BROWSER_TASK_TIMEOUT = SHOPGOODWILL_PAGE_LOAD_TIMEOUT + HTTP_TIMEOUT + 5
 SHOPGOODWILL_URL = "https://buyerapi.shopgoodwill.com/api/Search/ItemListing"
-SHOPGOODWILL_HOME_URL = "https://shopgoodwill.com/"
 SHOPGOODWILL_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Content-Type": "application/json",
     "Origin": "https://shopgoodwill.com",
-    "Referer": SHOPGOODWILL_HOME_URL,
+    "Referer": "https://shopgoodwill.com/",
 }
 
-_shopgoodwill_session = None
-_shopgoodwill_page = None
-_shopgoodwill_session_proxy = None
-_shopgoodwill_browser_thread_id = None
-_shopgoodwill_browser_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shopgoodwill-browser")
 _shopgoodwill_state_lock = threading.Lock()
 
 
@@ -851,127 +841,6 @@ def _retry_after_seconds(headers):
             return None
 
 
-def _bind_shopgoodwill_browser_thread():
-    """Record and enforce the one thread allowed to touch sync Playwright."""
-    global _shopgoodwill_browser_thread_id
-    current_thread_id = threading.get_ident()
-    if _shopgoodwill_browser_thread_id is None:
-        _shopgoodwill_browser_thread_id = current_thread_id
-    elif current_thread_id != _shopgoodwill_browser_thread_id:
-        raise RuntimeError("ShopGoodwill browser used outside its dedicated thread")
-
-
-def _close_shopgoodwill_session_on_browser_thread():
-    global _shopgoodwill_page, _shopgoodwill_session, _shopgoodwill_session_proxy
-    _bind_shopgoodwill_browser_thread()
-    if _shopgoodwill_session is not None:
-        try:
-            _shopgoodwill_session.close()
-        except Exception:
-            pass
-    _shopgoodwill_page = None
-    _shopgoodwill_session = None
-    _shopgoodwill_session_proxy = None
-
-
-def _close_shopgoodwill_session():
-    """Close Playwright on its owning thread, including during shutdown."""
-    if _shopgoodwill_session is None:
-        return
-    if threading.get_ident() == _shopgoodwill_browser_thread_id:
-        _close_shopgoodwill_session_on_browser_thread()
-        return
-    try:
-        _shopgoodwill_browser_executor.submit(_close_shopgoodwill_session_on_browser_thread).result(
-            timeout=HTTP_TIMEOUT
-        )
-    except Exception:
-        pass
-
-
-# ThreadPoolExecutor's own interpreter hook runs before normal atexit
-# handlers. Register alongside it (later registration runs first) so the
-# browser can close on its owning worker before that worker is joined.
-if hasattr(threading, "_register_atexit"):
-    threading._register_atexit(_close_shopgoodwill_session)
-else:  # pragma: no cover - CPython provides _register_atexit
-    atexit.register(_close_shopgoodwill_session)
-
-
-def _get_shopgoodwill_session(proxy_url):
-    """Return the persistent context; called only on the browser worker."""
-    global _shopgoodwill_page, _shopgoodwill_session, _shopgoodwill_session_proxy
-    _bind_shopgoodwill_browser_thread()
-    if _shopgoodwill_session is None:
-        from scrapling.fetchers import StealthySession
-        new_session = StealthySession(
-            headless=True, useragent=USER_AGENT, proxy=proxy_url,
-            google_search=False, timeout=HTTP_TIMEOUT * 1000, retries=1,
-        )
-        try:
-            new_session.start()
-            new_page = new_session.context.new_page()
-            new_page.goto(
-                SHOPGOODWILL_HOME_URL,
-                timeout=SHOPGOODWILL_PAGE_LOAD_TIMEOUT * 1000,
-                wait_until="domcontentloaded",
-            )
-        except Exception:
-            # Do not cache a half-started browser/page after a cold-start
-            # navigation failure; the next request must get a clean context.
-            try:
-                new_session.close()
-            except Exception:
-                pass
-            raise
-        _shopgoodwill_session = new_session
-        _shopgoodwill_page = new_page
-        _shopgoodwill_session_proxy = proxy_url
-    elif proxy_url != _shopgoodwill_session_proxy:
-        logger.warning("SHOPGOODWILL_PROXY_URL changed after session start; keeping the original session proxy")
-    return _shopgoodwill_session
-
-
-def _shopgoodwill_session_post(session, payload):
-    """POST inside the persistent browser so cookies and fingerprint persist."""
-    _bind_shopgoodwill_browser_thread()
-    if session is not _shopgoodwill_session or _shopgoodwill_page is None:
-        raise RuntimeError("ShopGoodwill browser session is not initialized")
-    return _shopgoodwill_page.evaluate(
-        """async ({url, payload, headers, referrer, timeoutMs}) => {
-            const response = await fetch(url, {
-                method: 'POST', credentials: 'include', headers,
-                referrer, referrerPolicy: 'strict-origin-when-cross-origin',
-                signal: AbortSignal.timeout(timeoutMs),
-                body: JSON.stringify(payload)
-            });
-            return {status: response.status,
-                    headers: Object.fromEntries(response.headers.entries()),
-                    text: await response.text()};
-        }""",
-        {"url": SHOPGOODWILL_URL, "payload": payload, "headers": SHOPGOODWILL_HEADERS,
-         "referrer": SHOPGOODWILL_HOME_URL, "timeoutMs": HTTP_TIMEOUT * 1000},
-    )
-
-
-def _shopgoodwill_browser_request(proxy_url, payload):
-    """Create/use the browser entirely on the executor's sole worker."""
-    _bind_shopgoodwill_browser_thread()
-    session = _get_shopgoodwill_session(proxy_url)
-    return _shopgoodwill_session_post(session, payload)
-
-
-def _submit_shopgoodwill_browser_request(proxy_url, payload):
-    future = _shopgoodwill_browser_executor.submit(_shopgoodwill_browser_request, proxy_url, payload)
-    try:
-        return future.result(timeout=SHOPGOODWILL_BROWSER_TASK_TIMEOUT)
-    except FutureTimeoutError:
-        future.cancel()
-        raise TimeoutError(
-            f"ShopGoodwill browser task exceeded {SHOPGOODWILL_BROWSER_TASK_TIMEOUT}s overall timeout"
-        ) from None
-
-
 def _parse_shopgoodwill_remaining(remaining_str):
     """Parse ShopGoodwill's human-readable "2d 19h" / "45m" / "46s" countdown
     into total minutes (rounded down - a sub-minute remainder still counts
@@ -1030,7 +899,7 @@ def search_shopgoodwill(saved_search):
     if not shopgoodwill_circuit_breaker_allows_calls():
         return [], None
     try:
-        from scrapling.fetchers import StealthySession  # noqa: F401 - availability check
+        from scrapling.fetchers import Fetcher
     except ImportError:
         logger.warning("shopgoodwill skipped: scrapling is not installed")
         return [], None
@@ -1043,16 +912,22 @@ def search_shopgoodwill(saved_search):
         if not shopgoodwill_circuit_breaker_allows_calls():
             return [], None
         try:
-            resp = _submit_shopgoodwill_browser_request(proxy_url, payload)
+            resp = Fetcher.post(
+                SHOPGOODWILL_URL,
+                json=payload,
+                headers=SHOPGOODWILL_HEADERS,
+                timeout=HTTP_TIMEOUT,
+                proxy=proxy_url,
+            )
         except Exception as exc:
             logger.warning("shopgoodwill request failed: %s", exc)
             return [], None
-        status = resp["status"]
+        status = resp.status
         if status not in (403, 429):
             break
         multiplier = _register_rate_limit("shopgoodwill") if status == 429 else None
         if attempt == 0:
-            delay = _retry_after_seconds(resp.get("headers"))
+            delay = _retry_after_seconds(getattr(resp, "headers", None))
             delay = 2 if delay is None else min(delay, SHOPGOODWILL_BACKOFF_MAX_MINUTES * 60)
             logger.warning(
                 "shopgoodwill transient HTTP %s block; retrying once after %ss%s",
@@ -1062,13 +937,13 @@ def search_shopgoodwill(saved_search):
             continue
         _trip_shopgoodwill_circuit_breaker(status)
         return [], None
-    if resp["status"] != 200:
-        logger.warning("shopgoodwill request failed with HTTP %s; blocked/failed, not zero results", resp["status"])
+    if resp.status != 200:
+        logger.warning("shopgoodwill request failed with HTTP %s; blocked/failed, not zero results", resp.status)
         return [], None
     _clear_shopgoodwill_circuit_breaker_if_tripped()
     try:
-        body = json.loads(resp["text"])
-    except (TypeError, ValueError, json.JSONDecodeError):
+        body = resp.json()
+    except Exception:
         logger.warning("shopgoodwill returned HTTP 200 with a non-JSON body; failed, not zero results")
         return [], None
     results = _dget(_dget(body, "searchResults"), "items") or []

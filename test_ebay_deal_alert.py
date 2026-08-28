@@ -2145,6 +2145,16 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
     close to final. Contested auctions (numBids > 0) get an even tighter
     window - a bid war is the strongest signal the price isn't done moving."""
 
+    def _fake_response(self, items):
+        # search_shopgoodwill goes through scrapling's Fetcher.post (TLS-
+        # impersonation, to get past ShopGoodwill's WAF fingerprint check -
+        # see platforms.ShopGoodwillProxyScoping), not plain requests.post -
+        # .status not .status_code/.ok, matching scrapling's Response shape.
+        resp = mock.Mock()
+        resp.status = 200
+        resp.json.return_value = {"searchResults": {"items": items, "itemCount": len(items)}}
+        return resp
+
     def _item(self, item_id, remaining, num_bids=0):
         return {
             "itemId": item_id, "title": f"item {item_id}", "currentPrice": 20.0,
@@ -2159,10 +2169,9 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
             self._item(3, "20m", num_bids=3),   # too early once contested (>15)
             self._item(4, "10m", num_bids=3),   # in window, contested
         ]
-        body = {"searchResults": {"items": items, "itemCount": len(items)}}
-        with mock.patch.object(p, "_get_shopgoodwill_session", return_value=mock.sentinel.session), \
-                mock.patch.object(p, "_shopgoodwill_session_post", return_value={"status": 200, "headers": {}, "text": json.dumps(body)}), \
-                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.return_value = self._fake_response(items)
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
             listings, _count = p.search_shopgoodwill({"query": "test watch"})
         surfaced_ids = {int(l["itemId"].split(":")[1]) for l in listings}
         self.assertEqual(surfaced_ids, {2, 4})
@@ -2337,12 +2346,9 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         mock_notify.assert_not_called()
 
     def test_batch_only_platform_zero_drop_notifies(self):
-        """facebook lives only in BATCH_ADAPTERS, so `active` (filtered to
-        ADAPTERS) used to exclude it from anomaly checks - a zero-count
-        collapse went unnoticed even though counts[facebook] is populated.
-        The check must cover every enabled platform, not just the
-        per-search-queue ones."""
-        self._seed_history("facebook", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        """A platform that lives only in BATCH_ADAPTERS is absent from
+        `active`, so anomaly checks must still cover every enabled platform."""
+        self._seed_history("grailed", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
         now = datetime.now(timezone.utc)
         orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
         orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
@@ -2353,15 +2359,15 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
                 [{"itemId": "poshmark:1", "title": "test item", "seller": {}} for _ in range(45)],
                 45,
             )
-            p.BATCH_ADAPTERS["facebook"] = lambda searches: {}  # silent collapse
-            m.MARKETPLACES_ENABLED = ["poshmark", "facebook"]
+            p.BATCH_ADAPTERS["grailed"] = lambda searches: {}  # silent collapse
+            m.MARKETPLACES_ENABLED = ["poshmark", "grailed"]
             m.SAVED_SEARCHES = [
-                {"query": "test watch", "enabled": True, "platforms": ["poshmark", "facebook"]}
+                {"query": "test watch", "enabled": True, "platforms": ["poshmark", "grailed"]}
             ]
             with mock.patch.object(m, "notify_bot_down") as mock_notify:
                 m.prefetch_marketplaces(now, self.conn)
             mock_notify.assert_called_once()
-            self.assertIn("facebook", mock_notify.call_args[0][0])
+            self.assertIn("grailed", mock_notify.call_args[0][0])
             self.assertIn("0 listings", mock_notify.call_args[0][0])
         finally:
             p.ADAPTERS.clear()
