@@ -1155,18 +1155,21 @@ def _clear_vinted_circuit_breaker_if_tripped():
 def _discard_vinted_session(session):
     if getattr(_vinted_thread_state, "session", None) is session:
         _vinted_thread_state.session = None
-    try:
-        session.close()
-    except Exception:
-        pass
+        manager = getattr(_vinted_thread_state, "session_manager", None)
+        _vinted_thread_state.session_manager = None
+        if manager is not None:
+            try:
+                manager.__exit__(None, None, None)
+            except Exception:
+                pass
 
 
 def _get_vinted_session():
-    # requests.Session mutates its cookie jar while catalog responses arrive.
-    # The caller runs eight marketplace workers concurrently, so a single
-    # module-global session had a real data race.  Each worker now owns and
-    # reuses only its own session; the lock merely avoids an eight-request
-    # homepage bootstrap burst at process start.
+    # FetcherSession uses curl_cffi's browser TLS fingerprint and retains the
+    # homepage cookies for catalog calls.  The caller runs eight marketplace
+    # workers concurrently, so each worker owns and reuses only its own
+    # session; the lock merely avoids an eight-request homepage bootstrap
+    # burst at process start.
     session = getattr(_vinted_thread_state, "session", None)
     if session is not None:
         return session
@@ -1174,16 +1177,28 @@ def _get_vinted_session():
         session = getattr(_vinted_thread_state, "session", None)
         if session is not None:
             return session
-        session = requests.Session()
-        session.headers.update({"User-Agent": USER_AGENT})
         try:
+            from scrapling.fetchers import FetcherSession
+        except ImportError:
+            logger.warning("vinted skipped: scrapling is not installed")
+            return None
+        manager = FetcherSession(timeout=HTTP_TIMEOUT, retries=1)
+        session = None
+        try:
+            session = manager.__enter__()
+            _vinted_thread_state.session = session
+            _vinted_thread_state.session_manager = manager
             resp = session.get("https://www.vinted.com/", timeout=HTTP_TIMEOUT)
-            resp.raise_for_status()
-        except requests.RequestException as exc:
+        except Exception as exc:
             logger.warning("vinted session bootstrap failed: %s", exc)
+            if session is not None:
+                _discard_vinted_session(session)
+            return None
+        if not 200 <= resp.status < 300:
+            logger.warning("vinted session bootstrap failed with HTTP %s", resp.status)
             _discard_vinted_session(session)
             return None
-        cookie_names = {cookie.name for cookie in session.cookies}
+        cookie_names = set(getattr(resp, "cookies", {}) or {})
         missing = VINTED_REQUIRED_ANONYMOUS_COOKIES - cookie_names
         if missing:
             logger.warning(
@@ -1192,7 +1207,6 @@ def _get_vinted_session():
             )
             _discard_vinted_session(session)
             return None
-        _vinted_thread_state.session = session
         return session
 
 
@@ -1215,15 +1229,15 @@ def _get_vinted_catalog_page(session, params):
             resp = session.get(
                 VINTED_CATALOG_URL,
                 params=params,
-                headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+                headers={"Accept": "application/json"},
                 timeout=HTTP_TIMEOUT,
             )
-        except requests.RequestException as exc:
+        except Exception as exc:
             logger.warning("vinted request failed: %s", exc)
             return None, session
-        status = resp.status_code
+        status = resp.status
         if status not in (403, 429):
-            if not resp.ok:
+            if not 200 <= status < 300:
                 logger.warning("vinted returned HTTP %s", status)
                 return None, session
             try:
