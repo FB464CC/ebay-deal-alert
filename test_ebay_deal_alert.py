@@ -1791,6 +1791,49 @@ class MarketplaceQueryExclusions(unittest.TestCase):
         self.assertTrue(m.GARMENT_TYPE_WORDS.search("loro piana suit"))
 
 
+class EbayResponseShapeValidation(unittest.TestCase):
+    """resp.raise_for_status() only guards the HTTP status, so eBay
+    answering 200 with an error envelope (or drifting its JSON shape) used
+    to come back as `body.get("itemSummaries", [])` -> an empty list
+    indistinguishable from a real no-match, silently blanking the eBay lane
+    run after run AND clearing the circuit breaker each time because the
+    call "succeeded". Same silent-zero class as the ShopGoodwill and Vinted
+    outages."""
+
+    def test_genuine_empty_results_are_still_accepted(self):
+        # Must stay conservative - eBay really does answer this way for a
+        # real no-match, and turning those into failures would false-alarm
+        # on every quiet search.
+        for body in ({}, {"total": 0}, {"itemSummaries": [], "total": 0}):
+            with self.subTest(body=body):
+                self.assertEqual(m._ebay_items_from_body(body, "q", "search"), [])
+
+    def test_normal_results_pass_through(self):
+        body = {"itemSummaries": [{"itemId": "1"}], "total": 1}
+        self.assertEqual(m._ebay_items_from_body(body, "q", "search"), [{"itemId": "1"}])
+
+    def test_error_envelope_raises_instead_of_looking_empty(self):
+        body = {"errors": [{"errorId": 2001, "message": "Invalid filter"}]}
+        with self.assertRaises(ValueError):
+            m._ebay_items_from_body(body, "q", "search")
+
+    def test_positive_total_with_no_items_raises(self):
+        # The shape-drift case: eBay says it found 47 but the collection the
+        # code reads is gone/renamed.
+        with self.assertRaises(ValueError):
+            m._ebay_items_from_body({"total": 47}, "q", "search")
+
+    def test_wrong_types_raise(self):
+        for body in ({"itemSummaries": "nope"}, "not a dict", None):
+            with self.subTest(body=body):
+                with self.assertRaises(ValueError):
+                    m._ebay_items_from_body(body, "q", "search")
+
+    def test_total_true_is_not_treated_as_a_positive_count(self):
+        # bool is an int subclass - True must not read as total=1.
+        self.assertEqual(m._ebay_items_from_body({"total": True}, "q", "search"), [])
+
+
 class EbayRateLimitCheck(unittest.TestCase):
     """Previously the bot had NO visibility into its own eBay quota - it
     found the wall by 429ing into it repeatedly, which is what turned a
