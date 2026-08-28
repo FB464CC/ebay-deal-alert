@@ -1907,6 +1907,46 @@ class MarketplaceQueryExclusions(unittest.TestCase):
         self.assertTrue(m.GARMENT_TYPE_WORDS.search("loro piana suit"))
 
 
+class DescriptionOnlyDamageDisclosure(unittest.TestCase):
+    """Real live near-miss (2026-08-28): a Ping G10 5-PW set listed at $124
+    landed against a $199 sold comp for the identical config - a textbook
+    "steal" to any value gate. The reason for the discount was disclosed only
+    in the description prose: "The shafts appear to be snapped at the handles
+    on all the clubs." No photo check can read that, and the discount is
+    exactly what makes such a listing attractive to the resale gate."""
+
+    def test_snapped_shafts_in_description_hard_fails(self):
+        haystack = (
+            "ping g10 iron set 5-pw white dot awt regular flex right handed read description "
+            "the shafts appear to be snapped at the handles on all the clubs. "
+            "therefore, they will need new shafts. selling as is and price reflects this."
+        )
+        self.assertIsNotNone(m.matched_keyword(haystack, m.CONDITION_HARD_FAIL_KEYWORDS))
+
+    def test_head_only_and_reshaft_wording_hard_fails(self):
+        for text in (
+            "taylormade m2 2017 8 iron - head only - #8 single iron right hand rh",
+            "callaway rogue iron set needs new shafts, otherwise clean",
+            "ping g400 irons with a bent shaft on the 7 iron",
+        ):
+            self.assertIsNotNone(
+                m.matched_keyword(text, m.CONDITION_HARD_FAIL_KEYWORDS), text
+            )
+
+    def test_positive_wording_is_not_over_blocked(self):
+        # "broken in" is a POSITIVE signal on leather/denim and "sold as is" is
+        # common boilerplate on sound items - neither may hard-fail. This is why
+        # the keywords anchor on a damage noun rather than the bare adjective.
+        for text in (
+            "alden shell cordovan boots nicely broken in",
+            "omega seamaster sold as is no returns, pristine, runs perfectly",
+            "brooks brothers suit comes with original box and garment bag",
+        ):
+            self.assertIsNone(
+                m.matched_keyword(text, m.CONDITION_HARD_FAIL_KEYWORDS), text
+            )
+
+
 class SeenDbSizeCeiling(unittest.TestCase):
     """The row cap is a PROXY for file size and it drifted: 100k rows was
     sized at ~0.45 KB/row (~45 MB) but measured 91.7 MB live, so the cap read
