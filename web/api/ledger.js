@@ -89,7 +89,9 @@ const validateNullableNumber = (entry, field) => {
   if (!(field in entry) || entry[field] === null) {
     return null;
   }
-  return typeof entry[field] === "number" && Number.isFinite(entry[field]) ? null : `${field} must be a number or null`;
+  return typeof entry[field] === "number" && Number.isFinite(entry[field]) && entry[field] >= 0
+    ? null
+    : `${field} must be a non-negative number or null`;
 };
 
 const validateNullableString = (entry, field) => {
@@ -167,40 +169,44 @@ module.exports = async (req, res) => {
         return clean;
       };
       const cleanEntry = sanitizeEntry(entry);
+      const maxConflictRetries = 2;
+      for (let attempt = 0; attempt <= maxConflictRetries; attempt += 1) {
+        const currentFile = await fetchCurrentFile();
+        const ledger = parseLedger(currentFile);
+        const index = ledger.findIndex((line) => String(line.item_id) === cleanEntry.item_id);
+        if (index >= 0) {
+          ledger[index] = { ...ledger[index], ...cleanEntry };
+        } else {
+          ledger.push(cleanEntry);
+        }
 
-      const currentFile = await fetchCurrentFile();
-      const ledger = parseLedger(currentFile);
-      const index = ledger.findIndex((line) => String(line.item_id) === cleanEntry.item_id);
-      if (index >= 0) {
-        ledger[index] = { ...ledger[index], ...cleanEntry };
-      } else {
-        ledger.push(cleanEntry);
-      }
+        const body = {
+          message: "Update ledger via mobile settings app",
+          content: Buffer.from(serializeLedger(ledger), "utf8").toString("base64")
+        };
+        if (currentFile?.sha) {
+          body.sha = currentFile.sha;
+        }
 
-      const body = {
-        message: "Update ledger via mobile settings app",
-        content: Buffer.from(serializeLedger(ledger), "utf8").toString("base64")
-      };
-      if (currentFile?.sha) {
-        body.sha = currentFile.sha;
-      }
-
-      const response = await fetch(contentsUrl(), {
-        method: "PUT",
-        headers: {
-          ...githubHeaders(),
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body)
-      });
-      const responseBody = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        return sendJson(res, response.status, {
-          error: responseBody.message || "GitHub update failed",
-          details: responseBody
+        const response = await fetch(contentsUrl(), {
+          method: "PUT",
+          headers: {
+            ...githubHeaders(),
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(body)
         });
+        const responseBody = await response.json().catch(() => ({}));
+        if (response.ok) {
+          return sendJson(res, 200, ledger);
+        }
+        if (response.status !== 409 || attempt === maxConflictRetries) {
+          return sendJson(res, response.status, {
+            error: responseBody.message || "GitHub update failed",
+            details: responseBody
+          });
+        }
       }
-      return sendJson(res, 200, ledger);
     } catch (error) {
       return sendJson(res, error.status || 500, { error: error.message, details: error.details });
     }

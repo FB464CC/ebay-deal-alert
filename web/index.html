@@ -663,6 +663,9 @@
     }
 
     function numberValue(value) {
+      if (value == null || (typeof value === "string" && !value.trim())) {
+        return null;
+      }
       const number = Number(value);
       return Number.isFinite(number) ? number : null;
     }
@@ -923,13 +926,14 @@
 
     function renderStatsSection(items, ledger, compact = false) {
       const now = Date.now();
+      const actualAlerts = items.filter((item) => item.verdict === "REVIEW");
       const windows = [
         ["7 days", 7],
         ["30 days", 30]
       ];
       const historyStats = windows.map(([label, days]) => {
         const start = now - days * 86400000;
-        const windowItems = items.filter((item) => {
+        const windowItems = actualAlerts.filter((item) => {
           const time = new Date(item.timestamp).getTime();
           return Number.isFinite(time) && time >= start;
         });
@@ -942,20 +946,25 @@
           byRating
         };
       });
-      const monthStart = now - 30 * 86400000;
-      const potentialMargin = items.reduce((sum, item) => {
+      const rollingThirtyDayStart = now - 30 * 86400000;
+      const potentialMargin = actualAlerts.reduce((sum, item) => {
         const time = new Date(item.timestamp).getTime();
-        if (!Number.isFinite(time) || time < monthStart || !["Steal", "Great Deal"].includes(item.deal_rating)) {
+        if (!Number.isFinite(time) || time < rollingThirtyDayStart || !["Steal", "Great Deal"].includes(item.deal_rating)) {
           return sum;
         }
         const resale = numberValue(item.estimated_resale_value);
         const price = numberValue(item.price);
         return resale == null || price == null ? sum : sum + resale - price;
       }, 0);
-      const grossSales = ledger.reduce((sum, entry) => sum + (numberValue(entry.sold_price) || 0), 0);
-      const costBasis = ledger.reduce((sum, entry) => sum + (numberValue(entry.bought_price) || 0), 0);
+      const soldEntries = ledger.filter((entry) => numberValue(entry.sold_price) != null);
+      const grossSales = soldEntries.reduce((sum, entry) => sum + numberValue(entry.sold_price), 0);
+      const soldCostBasis = soldEntries.reduce((sum, entry) => sum + (numberValue(entry.bought_price) || 0), 0);
       const openInventory = ledger.filter((entry) => numberValue(entry.bought_price) != null && numberValue(entry.sold_price) == null).length;
-      const netProfit = grossSales - costBasis;
+      const openInventoryCost = ledger.reduce((sum, entry) => {
+        const boughtPrice = numberValue(entry.bought_price);
+        return boughtPrice != null && numberValue(entry.sold_price) == null ? sum + boughtPrice : sum;
+      }, 0);
+      const netProfit = grossSales - soldCostBasis;
       const content = `
         <div class="stats-grid">
           ${historyStats.map((stat) => `
@@ -967,19 +976,19 @@
             </div>
           `).join("")}
           <div class="stat-box">
-            <div class="stat-label">Potential margin if all Steals/Great Deals this month were bought</div>
+            <div class="stat-label">Potential margin if all Steals/Great Deals in the last 30 days were bought</div>
             <div class="stat-value">${money(potentialMargin)}</div>
             <div class="stat-detail">Rough estimate, not a guarantee.</div>
           </div>
           <div class="stat-box">
             <div class="stat-label">Ledger net profit</div>
             <div class="stat-value">${money(netProfit)}</div>
-            <div class="stat-detail">Gross sales ${money(grossSales)} | cost basis ${money(costBasis)}</div>
+            <div class="stat-detail">Gross sales ${money(grossSales)} | sold cost basis ${money(soldCostBasis)}</div>
           </div>
           <div class="stat-box">
             <div class="stat-label">Open inventory</div>
             <div class="stat-value">${openInventory}</div>
-            <div class="stat-detail">Bought but not yet sold.</div>
+            <div class="stat-detail">Cost ${money(openInventoryCost)} | bought but not yet sold.</div>
           </div>
         </div>
         ${compact ? "" : '<div class="button-row"><button id="exportLedger" class="secondary small-button" type="button">Export Ledger</button></div>'}
@@ -1122,7 +1131,11 @@
     }
 
     function todayIsoDate() {
-      return new Date().toISOString().slice(0, 10);
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = String(today.getMonth() + 1).padStart(2, "0");
+      const day = String(today.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
     }
 
     async function saveLedgerEntry(entry) {
@@ -1146,9 +1159,10 @@
       if (paid === null) {
         return;
       }
-      const boughtPrice = Number(paid);
-      if (!Number.isFinite(boughtPrice)) {
-        showStatus("Bought price must be a number.", "error");
+      const paidText = paid.trim();
+      const boughtPrice = Number(paidText);
+      if (!paidText || !Number.isFinite(boughtPrice) || boughtPrice < 0) {
+        showStatus("Bought price must be a non-negative number.", "error");
         return;
       }
       const date = window.prompt("Bought date", existing.bought_date || todayIsoDate());
@@ -1177,9 +1191,10 @@
       if (sold === null) {
         return;
       }
-      const soldPrice = Number(sold);
-      if (!Number.isFinite(soldPrice)) {
-        showStatus("Sold price must be a number.", "error");
+      const soldText = sold.trim();
+      const soldPrice = Number(soldText);
+      if (!soldText || !Number.isFinite(soldPrice) || soldPrice < 0) {
+        showStatus("Sold price must be a non-negative number.", "error");
         return;
       }
       const platform = window.prompt("Sold platform", existing.sold_platform || "");
