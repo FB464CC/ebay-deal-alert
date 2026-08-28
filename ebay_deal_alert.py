@@ -1223,6 +1223,60 @@ MAX_SEEN_ROWS = 100_000
 # MAX_SEEN_ROWS is therefore 100k (~45 MB steady state), leaving real
 # headroom under this failsafe so it only fires on a genuine anomaly.
 SEEN_DB_EMERGENCY_MB = 60
+# What the file gets shrunk BACK to once the emergency line is crossed, and
+# the floor below which dedup would stop working. The row cap above is only a
+# PROXY for size, and the proxy DRIFTED: 100k rows was sized at ~0.45 KB/row
+# (~45 MB) but measured 91.7 MB live - ~0.94 KB/row - so the cap was fully
+# satisfied while the file sat 8 MB from GitHub's 100 MB hard rejection. A
+# proxy that can drift must never be the only thing guarding a hard limit,
+# so the size is now enforced DIRECTLY, by measurement, in a loop that
+# self-corrects for whatever the real bytes-per-row turns out to be.
+SEEN_DB_TARGET_MB = 45
+SEEN_DB_MIN_ROWS = 20_000
+SEEN_DB_MAX_SHRINK_PASSES = 4
+
+
+def _shrink_seen_db_to_target(conn):
+    """Delete oldest seen rows until the FILE is under SEEN_DB_TARGET_MB.
+
+    Deliberately measures the file between passes rather than trusting any
+    bytes-per-row constant - that constant is exactly what went stale and
+    let the file reach 91.7 MB while the row cap read as healthy. Each pass
+    drops a share of rows proportional to the overshoot, so it converges in
+    one or two passes at any row size, and stops at SEEN_DB_MIN_ROWS so
+    dedup keeps working even in the worst case."""
+    for _ in range(SEEN_DB_MAX_SHRINK_PASSES):
+        try:
+            megabytes = os.path.getsize(DB_PATH) / (1024 * 1024)
+        except OSError:
+            return
+        if megabytes <= SEEN_DB_TARGET_MB:
+            return
+        rows = conn.execute("SELECT COUNT(*) FROM seen").fetchone()[0]
+        if rows <= SEEN_DB_MIN_ROWS:
+            logger.error(
+                "seen_items.db is %.1f MB but only %s seen rows remain (floor %s) - "
+                "cannot shrink further by pruning; the bulk is not the seen table",
+                megabytes, rows, SEEN_DB_MIN_ROWS,
+            )
+            return
+        fraction = max(0.15, 1.0 - (SEEN_DB_TARGET_MB / megabytes))
+        drop = min(rows - SEEN_DB_MIN_ROWS, max(1, int(rows * fraction)))
+        conn.execute(
+            "DELETE FROM seen WHERE item_id IN "
+            "(SELECT item_id FROM seen ORDER BY seen_at ASC LIMIT ?)", (drop,)
+        )
+        conn.commit()
+        logger.warning(
+            "seen_items.db %.1f MB over the %s MB target - dropped %s oldest seen rows",
+            megabytes, SEEN_DB_TARGET_MB, drop,
+        )
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.Error as exc:
+            # A wedged VACUUM must not abort the run - alerting matters more.
+            logger.error("VACUUM failed during size-ceiling shrink: %s", exc)
+            return
 
 
 def prune_old_seen_entries(conn):
@@ -1317,6 +1371,13 @@ def prune_old_seen_entries(conn):
             # here would kill every run over housekeeping, which is how
             # the 100 MB outage became a total outage in the first place.
             logger.error("VACUUM failed after pruning: %s", exc)
+    # Last line of defence, and the only one that measures the thing that
+    # actually kills the bot. Everything above prunes by ROW COUNT or AGE,
+    # both of which read as perfectly healthy at 100k rows / 91.7 MB - the
+    # exact live state that sat 8 MB from GitHub's hard rejection while the
+    # caller logged "pruning hard regardless of row count" and then deleted
+    # nothing, because the row cap was already satisfied.
+    _shrink_seen_db_to_target(conn)
     return seen_deleted, fp_deleted
 
 
