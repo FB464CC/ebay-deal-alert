@@ -1907,6 +1907,53 @@ class MarketplaceQueryExclusions(unittest.TestCase):
         self.assertTrue(m.GARMENT_TYPE_WORDS.search("loro piana suit"))
 
 
+class SeenDbSizeCeiling(unittest.TestCase):
+    """The row cap is a PROXY for file size and it drifted: 100k rows was
+    sized at ~0.45 KB/row (~45 MB) but measured 91.7 MB live, so the cap read
+    as healthy while the file sat 8 MB from GitHub's 100 MB hard rejection.
+    These exercise the real file on disk - real sqlite, real VACUUM."""
+
+    def _make_db(self, rows, pad):
+        import sqlite3, tempfile, os
+        path = os.path.join(tempfile.mkdtemp(), "seen_items.db")
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE seen (item_id TEXT PRIMARY KEY, seen_at TEXT)")
+        conn.executemany(
+            "INSERT INTO seen VALUES (?, ?)",
+            [(f"{i:06d}" + "x" * pad, f"2026-08-{(i % 27) + 1:02d}T00:00:00+00:00")
+             for i in range(rows)],
+        )
+        conn.commit()
+        return conn, path
+
+    def test_shrinks_the_actual_file_under_the_target(self):
+        import os
+        conn, path = self._make_db(6000, 400)
+        start_mb = os.path.getsize(path) / (1024 * 1024)
+        self.assertGreater(start_mb, 1.5, "fixture must start over the target")
+        with mock.patch.object(m, "DB_PATH", path),              mock.patch.object(m, "SEEN_DB_TARGET_MB", 1),              mock.patch.object(m, "SEEN_DB_MIN_ROWS", 50):
+            m._shrink_seen_db_to_target(conn)
+        end_mb = os.path.getsize(path) / (1024 * 1024)
+        self.assertLessEqual(end_mb, 1, f"file still {end_mb:.2f} MB after shrink")
+        self.assertGreater(conn.execute("SELECT COUNT(*) FROM seen").fetchone()[0], 0)
+
+    def test_never_prunes_below_the_dedup_floor(self):
+        # If the bulk is NOT the seen table, pruning it to nothing would break
+        # dedup without fixing the size. Stop at the floor and say so instead.
+        conn, path = self._make_db(500, 400)
+        with mock.patch.object(m, "DB_PATH", path),              mock.patch.object(m, "SEEN_DB_TARGET_MB", 0.001),              mock.patch.object(m, "SEEN_DB_MIN_ROWS", 400):
+            m._shrink_seen_db_to_target(conn)
+        self.assertGreaterEqual(conn.execute("SELECT COUNT(*) FROM seen").fetchone()[0], 400)
+
+    def test_deletes_the_oldest_rows_first(self):
+        conn, path = self._make_db(4000, 400)
+        with mock.patch.object(m, "DB_PATH", path),              mock.patch.object(m, "SEEN_DB_TARGET_MB", 1),              mock.patch.object(m, "SEEN_DB_MIN_ROWS", 50):
+            m._shrink_seen_db_to_target(conn)
+        oldest = conn.execute("SELECT MIN(seen_at) FROM seen").fetchone()[0]
+        self.assertIsNotNone(oldest)
+        self.assertGreater(oldest, "2026-08-01T00:00:00+00:00")
+
+
 class EbayResponseShapeValidation(unittest.TestCase):
     """resp.raise_for_status() only guards the HTTP status, so eBay
     answering 200 with an error envelope (or drifting its JSON shape) used
