@@ -24,6 +24,10 @@ permissions:
 jobs:
   poll:
     runs-on: ubuntu-latest
+    # Runs every 5 min - a wedged call (e.g. a browser task an executor
+    # can't force-kill) must never be allowed to hang indefinitely and
+    # eat the whole runner-minutes budget.
+    timeout-minutes: 8
 
     steps:
       - name: Check out repository
