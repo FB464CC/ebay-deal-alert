@@ -2145,16 +2145,6 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
     close to final. Contested auctions (numBids > 0) get an even tighter
     window - a bid war is the strongest signal the price isn't done moving."""
 
-    def _fake_response(self, items):
-        # search_shopgoodwill goes through scrapling's Fetcher.post (TLS-
-        # impersonation, to get past ShopGoodwill's WAF fingerprint check -
-        # see platforms.ShopGoodwillProxyScoping), not plain requests.post -
-        # .status not .status_code/.ok, matching scrapling's Response shape.
-        resp = mock.Mock()
-        resp.status = 200
-        resp.json.return_value = {"searchResults": {"items": items, "itemCount": len(items)}}
-        return resp
-
     def _item(self, item_id, remaining, num_bids=0):
         return {
             "itemId": item_id, "title": f"item {item_id}", "currentPrice": 20.0,
@@ -2169,9 +2159,10 @@ class ShopGoodwillClosingSoon(unittest.TestCase):
             self._item(3, "20m", num_bids=3),   # too early once contested (>15)
             self._item(4, "10m", num_bids=3),   # in window, contested
         ]
-        fake_fetcher = mock.MagicMock()
-        fake_fetcher.post.return_value = self._fake_response(items)
-        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}):
+        body = {"searchResults": {"items": items, "itemCount": len(items)}}
+        with mock.patch.object(p, "_get_shopgoodwill_session", return_value=mock.sentinel.session), \
+                mock.patch.object(p, "_shopgoodwill_session_post", return_value={"status": 200, "headers": {}, "text": json.dumps(body)}), \
+                mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(StealthySession=mock.Mock)}):
             listings, _count = p.search_shopgoodwill({"query": "test watch"})
         surfaced_ids = {int(l["itemId"].split(":")[1]) for l in listings}
         self.assertEqual(surfaced_ids, {2, 4})

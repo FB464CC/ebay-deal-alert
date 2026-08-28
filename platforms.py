@@ -22,6 +22,7 @@ READ-ONLY. These adapters only ever fetch public search results. Nothing
 here logs in, creates accounts, bids, buys, offers, or messages.
 """
 
+import atexit
 import json
 import logging
 import math
@@ -29,6 +30,8 @@ import os
 import re
 import threading
 import time
+from email.utils import parsedate_to_datetime
+from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
@@ -742,6 +745,163 @@ SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES = 15
 # own shippingPrice/handlingPrice fields don't reflect real cost. Midpoint
 # of the $12-15 range given.
 SHOPGOODWILL_ASSUMED_SHIPPING = 13.50
+SHOPGOODWILL_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("shopgoodwill_rate_limit_state.json")
+SHOPGOODWILL_BACKOFF_INITIAL_MINUTES = 30
+SHOPGOODWILL_BACKOFF_MAX_MINUTES = 120
+SHOPGOODWILL_URL = "https://buyerapi.shopgoodwill.com/api/Search/ItemListing"
+SHOPGOODWILL_HOME_URL = "https://shopgoodwill.com/"
+SHOPGOODWILL_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Content-Type": "application/json",
+    "Origin": "https://shopgoodwill.com",
+    "Referer": SHOPGOODWILL_HOME_URL,
+}
+
+_shopgoodwill_session = None
+_shopgoodwill_page = None
+_shopgoodwill_session_proxy = None
+_shopgoodwill_session_lock = threading.Lock()
+_shopgoodwill_page_lock = threading.Lock()
+_shopgoodwill_state_lock = threading.Lock()
+
+
+def _read_shopgoodwill_rate_limit_state():
+    with _shopgoodwill_state_lock:
+        if not SHOPGOODWILL_RATE_LIMIT_STATE_PATH.exists():
+            return {}
+        try:
+            with SHOPGOODWILL_RATE_LIMIT_STATE_PATH.open("r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring invalid ShopGoodwill rate-limit state: %s", exc)
+            return {}
+    if not isinstance(state, dict):
+        logger.warning("ShopGoodwill rate-limit state is %s, not an object - ignoring", type(state).__name__)
+        return {}
+    return state
+
+
+def _write_shopgoodwill_rate_limit_state(state):
+    with _shopgoodwill_state_lock:
+        try:
+            with SHOPGOODWILL_RATE_LIMIT_STATE_PATH.open("w", encoding="utf-8") as f:
+                json.dump(state, f)
+                f.write("\n")
+        except OSError as exc:
+            logger.warning("Failed to write ShopGoodwill rate-limit state: %s", exc)
+
+
+def shopgoodwill_circuit_breaker_allows_calls():
+    state = _read_shopgoodwill_rate_limit_state()
+    now_ts = time.time()
+    blocked_until = state.get("blocked_until_ts", 0)
+    if not isinstance(blocked_until, (int, float)) or blocked_until != blocked_until:
+        blocked_until = 0
+    if blocked_until > now_ts + SHOPGOODWILL_BACKOFF_MAX_MINUTES * 60:
+        logger.warning("ShopGoodwill circuit breaker has an impossible future timestamp - clearing it")
+        _write_shopgoodwill_rate_limit_state({"blocked_until_ts": 0, "consecutive_block_streak": 0})
+        return True
+    if now_ts < blocked_until:
+        logger.info(
+            "ShopGoodwill circuit breaker: cooldown active for ~%s more min (streak %s); blocked, not zero results",
+            round((blocked_until - now_ts) / 60), state.get("consecutive_block_streak", 0),
+        )
+        return False
+    return True
+
+
+def _trip_shopgoodwill_circuit_breaker(status):
+    state = _read_shopgoodwill_rate_limit_state()
+    streak = state.get("consecutive_block_streak", 0)
+    if not isinstance(streak, int) or streak < 0:
+        streak = 0
+    streak += 1
+    minutes = min(SHOPGOODWILL_BACKOFF_INITIAL_MINUTES * (2 ** (streak - 1)), SHOPGOODWILL_BACKOFF_MAX_MINUTES)
+    _write_shopgoodwill_rate_limit_state({
+        "blocked_until_ts": time.time() + minutes * 60,
+        "consecutive_block_streak": streak,
+        "last_status": status,
+    })
+    logger.warning(
+        "ShopGoodwill circuit breaker: persistent HTTP %s after retry (streak %s), backing off %s min",
+        status, streak, minutes,
+    )
+
+
+def _clear_shopgoodwill_circuit_breaker_if_tripped():
+    state = _read_shopgoodwill_rate_limit_state()
+    if state.get("consecutive_block_streak"):
+        logger.info("ShopGoodwill circuit breaker: request succeeded, clearing prior block streak")
+        _write_shopgoodwill_rate_limit_state({"blocked_until_ts": 0, "consecutive_block_streak": 0})
+
+
+def _retry_after_seconds(headers):
+    value = (headers or {}).get("retry-after") or (headers or {}).get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        try:
+            return max(0, int(parsedate_to_datetime(value).timestamp() - time.time()))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
+def _close_shopgoodwill_session():
+    global _shopgoodwill_page, _shopgoodwill_session
+    with _shopgoodwill_session_lock:
+        if _shopgoodwill_session is not None:
+            try:
+                _shopgoodwill_session.close()
+            except Exception:
+                pass
+            _shopgoodwill_page = None
+            _shopgoodwill_session = None
+
+
+atexit.register(_close_shopgoodwill_session)
+
+
+def _get_shopgoodwill_session(proxy_url):
+    """Return one persistent browser context for this process and egress."""
+    global _shopgoodwill_page, _shopgoodwill_session, _shopgoodwill_session_proxy
+    with _shopgoodwill_session_lock:
+        if _shopgoodwill_session is None:
+            from scrapling.fetchers import StealthySession
+            _shopgoodwill_session = StealthySession(
+                headless=True, useragent=USER_AGENT, proxy=proxy_url,
+                google_search=False, timeout=HTTP_TIMEOUT * 1000, retries=1,
+            )
+            _shopgoodwill_session.start()
+            _shopgoodwill_page = _shopgoodwill_session.context.new_page()
+            _shopgoodwill_page.goto(SHOPGOODWILL_HOME_URL, timeout=HTTP_TIMEOUT * 1000)
+            _shopgoodwill_session_proxy = proxy_url
+        elif proxy_url != _shopgoodwill_session_proxy:
+            logger.warning("SHOPGOODWILL_PROXY_URL changed after session start; keeping the original session proxy")
+        return _shopgoodwill_session
+
+
+def _shopgoodwill_session_post(session, payload):
+    """POST inside the persistent browser so cookies and fingerprint persist."""
+    if session is not _shopgoodwill_session or _shopgoodwill_page is None:
+        raise RuntimeError("ShopGoodwill browser session is not initialized")
+    with _shopgoodwill_page_lock:
+        return _shopgoodwill_page.evaluate(
+            """async ({url, payload, headers, referrer, timeoutMs}) => {
+                const response = await fetch(url, {
+                    method: 'POST', credentials: 'include', headers,
+                    referrer, referrerPolicy: 'strict-origin-when-cross-origin',
+                    signal: AbortSignal.timeout(timeoutMs),
+                    body: JSON.stringify(payload)
+                });
+                return {status: response.status,
+                        headers: Object.fromEntries(response.headers.entries()),
+                        text: await response.text()};
+            }""",
+            {"url": SHOPGOODWILL_URL, "payload": payload, "headers": SHOPGOODWILL_HEADERS,
+             "referrer": SHOPGOODWILL_HOME_URL, "timeoutMs": HTTP_TIMEOUT * 1000},
+        )
 
 
 def _parse_shopgoodwill_remaining(remaining_str):
@@ -799,47 +959,49 @@ def search_shopgoodwill(saved_search):
         "savedSearchId": 0, "useBuyerPrefs": "true", "searchUSOnlyShipping": "true",
         "categoryLevelNo": "1", "categoryLevel": 1, "categoryId": 0, "partNumber": "",
     }
-    _pace("shopgoodwill")
-    # ShopGoodwill's WAF blocks plain `requests` outright, independent of
-    # source IP - confirmed live: routing plain requests.post through a
-    # residential proxy (SHOPGOODWILL_PROXY_URL) still got HTTP 403 on ~90%
-    # of calls (23/29 in one run), because it isn't just IP reputation, it's
-    # a TLS/HTTP client fingerprint check (same class of WAF that made
-    # OfferUp/Depop need scrapling instead of plain requests). Confirmed
-    # live the fix: scrapling's Fetcher (curl_cffi TLS-impersonation) through
-    # the SAME proxy gets a clean 200 every time. Lazy-imported, matching
-    # _fetch_page()'s ImportError guard, so a missing scrapling install can't
-    # crash the whole run - just this one platform.
+    if not shopgoodwill_circuit_breaker_allows_calls():
+        return [], None
     try:
-        from scrapling.fetchers import Fetcher
+        from scrapling.fetchers import StealthySession  # noqa: F401 - availability check
     except ImportError:
         logger.warning("shopgoodwill skipped: scrapling is not installed")
         return [], None
     proxy_url = os.environ.get("SHOPGOODWILL_PROXY_URL")
+    resp = None
+    for attempt in range(2):
+        _pace("shopgoodwill")
+        # Another worker may have opened the process-wide breaker while this
+        # one waited for pacing. Recheck immediately before touching the site.
+        if not shopgoodwill_circuit_breaker_allows_calls():
+            return [], None
+        try:
+            resp = _shopgoodwill_session_post(_get_shopgoodwill_session(proxy_url), payload)
+        except Exception as exc:
+            logger.warning("shopgoodwill request failed: %s", exc)
+            return [], None
+        status = resp["status"]
+        if status not in (403, 429):
+            break
+        multiplier = _register_rate_limit("shopgoodwill") if status == 429 else None
+        if attempt == 0:
+            delay = _retry_after_seconds(resp.get("headers"))
+            delay = 2 if delay is None else min(delay, SHOPGOODWILL_BACKOFF_MAX_MINUTES * 60)
+            logger.warning(
+                "shopgoodwill transient HTTP %s block; retrying once after %ss%s",
+                status, delay, f" and pacing {multiplier}x slower" if multiplier else "",
+            )
+            time.sleep(delay)
+            continue
+        _trip_shopgoodwill_circuit_breaker(status)
+        return [], None
+    if resp["status"] != 200:
+        logger.warning("shopgoodwill request failed with HTTP %s; blocked/failed, not zero results", resp["status"])
+        return [], None
+    _clear_shopgoodwill_circuit_breaker_if_tripped()
     try:
-        resp = Fetcher.post(
-            "https://buyerapi.shopgoodwill.com/api/Search/ItemListing",
-            json=payload,
-            timeout=HTTP_TIMEOUT,
-            proxy=proxy_url,
-        )
-    except Exception as exc:
-        logger.warning("shopgoodwill request failed: %s", exc)
-        return [], None
-    if resp.status == 429:
-        multiplier = _register_rate_limit("shopgoodwill")
-        logger.warning(
-            "shopgoodwill rate limited (429) - backing off, next calls to "
-            "this platform paced %sx slower for the rest of this run",
-            multiplier,
-        )
-        return [], None
-    if resp.status != 200:
-        logger.warning("shopgoodwill returned HTTP %s", resp.status)
-        return [], None
-    try:
-        body = resp.json()
-    except Exception:
+        body = json.loads(resp["text"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("shopgoodwill returned HTTP 200 with a non-JSON body; failed, not zero results")
         return [], None
     results = _dget(_dget(body, "searchResults"), "items") or []
     listings = []
@@ -891,7 +1053,12 @@ def search_shopgoodwill(saved_search):
             "(>%s min uncontested, >%s min with bids already on it)",
             skipped_too_early, SHOPGOODWILL_CLOSING_SOON_MINUTES, SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES,
         )
-    return [x for x in listings if x], _dget(_dget(body, "searchResults"), "itemCount")
+    item_count = _dget(_dget(body, "searchResults"), "itemCount")
+    if item_count == 0:
+        logger.info("shopgoodwill: genuine zero-result response for query %r", saved_search["query"])
+    else:
+        logger.info("shopgoodwill: HTTP 200 returned %s total result(s), %s on this page", item_count, len(results))
+    return [x for x in listings if x], item_count
 
 
 # ---------------------------------------------------------------------------
