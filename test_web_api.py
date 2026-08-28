@@ -30,7 +30,12 @@ def run_node(expression):
 
 def run_node_script(script):
     completed = subprocess.run(
-        ["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True
+        ["node", "-"],
+        cwd=ROOT,
+        input=script,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return json.loads(completed.stdout)
 
