@@ -88,13 +88,16 @@ class CallDeepseekJson(unittest.TestCase):
 class PaidAiSpendGuard(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
-        self.db_patch = mock.patch.object(m, "DB_PATH", pathlib.Path(self.tmpdir.name) / "spend.db")
+        self.db_patch = mock.patch.object(m, "AI_SPEND_DB_PATH", pathlib.Path(self.tmpdir.name) / "spend.db")
+        self.seen_db_patch = mock.patch.object(m, "DB_PATH", pathlib.Path(self.tmpdir.name) / "seen.db")
         self.budget_patch = mock.patch.object(m, "AI_PAID_MONTHLY_BUDGET_USD", 0.01)
         self.db_patch.start()
+        self.seen_db_patch.start()
         self.budget_patch.start()
 
     def tearDown(self):
         self.budget_patch.stop()
+        self.seen_db_patch.stop()
         self.db_patch.stop()
         self.tmpdir.cleanup()
 

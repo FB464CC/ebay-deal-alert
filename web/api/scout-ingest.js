@@ -72,9 +72,14 @@ const validateListing = (listing, index) => {
   for (const field of ["itemWebUrl", "imageUrl", "description"]) {
     if (typeof listing[field] !== "string") return `${prefix}.${field} must be a string`;
   }
-  const limits = { platform: 100, itemId: 500, title: 1000, itemWebUrl: 4096, imageUrl: 4096, description: 10000 };
+  for (const field of ["scoutSearchQuery", "scoutSearchLabel"]) {
+    if (field in listing && (typeof listing[field] !== "string" || !listing[field].trim())) {
+      return `${prefix}.${field} must be a non-empty string`;
+    }
+  }
+  const limits = { platform: 100, itemId: 500, title: 1000, itemWebUrl: 4096, imageUrl: 4096, description: 10000, scoutSearchQuery: 1000, scoutSearchLabel: 1000 };
   for (const [field, limit] of Object.entries(limits)) {
-    if (listing[field].length > limit) return `${prefix}.${field} exceeds ${limit} characters`;
+    if (listing[field] && listing[field].length > limit) return `${prefix}.${field} exceeds ${limit} characters`;
   }
   for (const field of ["itemWebUrl", "imageUrl"]) {
     if (!listing[field]) continue;
@@ -96,6 +101,8 @@ const sanitizeListing = (listing) => ({
   itemWebUrl: listing.itemWebUrl,
   imageUrl: listing.imageUrl,
   description: listing.description,
+  ...(listing.scoutSearchQuery ? { scoutSearchQuery: listing.scoutSearchQuery.trim() } : {}),
+  ...(listing.scoutSearchLabel ? { scoutSearchLabel: listing.scoutSearchLabel.trim() } : {}),
   discoveredAt: new Date().toISOString()
 });
 

@@ -2,6 +2,7 @@ importScripts("url-utils.js");
 
 const ALARM_NAME = "deal-scout-scan";
 const DEFAULT_TARGETS = [{
+  query: "golf club set",
   label: "Golf club sets — Columbia, SC",
   platform: "facebook",
   searchUrl: "https://www.facebook.com/marketplace/columbiasc/search?query=golf%20club%20set",
@@ -56,7 +57,18 @@ async function scanTarget(target) {
       : "content-scripts/facebook-parser.js";
     const results = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [file] });
     const extracted = Array.isArray(results?.[0]?.result) ? results[0].result : [];
-    return extracted.map((listing) => ({ ...listing, platform: target.platform }));
+    const urlQuery = new URL(targetUrl).searchParams.get("query");
+    const scoutSearchQuery = [target.query, urlQuery, target.label]
+      .find((value) => typeof value === "string" && value.trim())?.trim();
+    const scoutSearchLabel = typeof target.label === "string" && target.label.trim()
+      ? target.label.trim()
+      : undefined;
+    return extracted.map((listing) => ({
+      ...listing,
+      platform: target.platform,
+      ...(scoutSearchQuery ? { scoutSearchQuery } : {}),
+      ...(scoutSearchLabel ? { scoutSearchLabel } : {})
+    }));
   } finally {
     if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
   }
