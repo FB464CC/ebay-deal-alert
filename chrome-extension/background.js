@@ -1,7 +1,7 @@
 importScripts("url-utils.js");
 
 const ALARM_NAME = "deal-scout-scan";
-const TARGETS_VERSION = 5;
+const TARGETS_VERSION = 6;
 
 // Verified live 2026-08-28: Facebook IGNORES the /marketplace/<city>/ slug and
 // redirects to /marketplace/category/search/, resolving location from
@@ -9,7 +9,15 @@ const TARGETS_VERSION = 5;
 // been five identical Columbia searches. `radius` is in KILOMETERS - 200km
 // (~124mi) from Columbia covers Charlotte, Charleston, Augusta and Greenville
 // in ONE tab per query instead of one per city.
-const GOLF_ORIGIN = { latitude: 34.0007, longitude: -81.0348, radius: 200 };
+// Radius corrected 2026-08-30: 200km (124mi) reached Charlotte (85mi away),
+// which the user explicitly does NOT want to drive for golf clubs - "all of
+// the golf stuff is in charlotte, im in columbia". 65km (~40mi) keeps the
+// actual Columbia metro (Lexington, Irmo, Chapin, West Columbia, Elgin,
+// Batesburg-Leesville - every listing that was actually verified as good
+// tonight was in this ring) and drops Charlotte/Charleston/Augusta/Greenville
+// entirely. Widen this again only if the user explicitly says they'll drive
+// further - don't re-guess it.
+const GOLF_ORIGIN = { latitude: 34.0007, longitude: -81.0348, radius: 65 };
 // These strings MUST each match a saved search in the bot's config.json
 // (compared after exclusion-stripping). A query with no matching saved
 // search makes every listing it finds defer forever with "did not match
