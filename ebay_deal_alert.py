@@ -30,6 +30,7 @@ import requests
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 from urllib.parse import quote_plus
 
 # ---------------------------------------------------------------------------
@@ -300,6 +301,10 @@ SCOUT_AI_CHECK_LIMIT = int(_CONFIG.get("SCOUT_AI_CHECK_LIMIT", 1))
 # budget. Anything still not fetched inside the budget is skipped this run
 # and picked up next time (the search list rotates so no tail starves twice).
 MARKETPLACE_FETCH_BUDGET_SECONDS = float(_CONFIG.get("MARKETPLACE_FETCH_BUDGET_SECONDS", 90))
+# The workflow hard-kills the job at eight minutes. Stop starting network/AI
+# work at 6.5 minutes so in-flight bounded requests and final state writes have
+# ninety seconds of shutdown headroom instead of being SIGKILLed mid-write.
+RUN_BUDGET_SECONDS = float(_CONFIG.get("RUN_BUDGET_SECONDS", 390))
 # Hard ceiling on notifications per run. Turning on a new marketplace makes
 # every one of its listings unseen at once, so without this the first run
 # fires hundreds of pushes in a row. Listings past the cap are deliberately
@@ -1186,8 +1191,12 @@ def init_db():
     # can be caught and alerted on instead of the bot going silently dead.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS marketplace_counts "
-        "(platform TEXT, run_ts TEXT, count INTEGER)"
+        "(platform TEXT, run_ts TEXT, count INTEGER, request_count INTEGER DEFAULT 0, "
+        "error_count INTEGER DEFAULT 0, timeout_count INTEGER DEFAULT 0, "
+        "rate_limit_count INTEGER DEFAULT 0, raw_count INTEGER DEFAULT 0, "
+        "garbage_count INTEGER DEFAULT 0)"
     )
+    _ensure_marketplace_health_columns(conn)
     # Last time we alerted on a given platform, to dedupe ntfy spam (the run
     # loop fires every ~5 minutes; once notified, stay quiet for 6 hours).
     conn.execute(
@@ -1196,6 +1205,25 @@ def init_db():
     )
     conn.commit()
     return conn
+
+
+def _ensure_marketplace_health_columns(conn):
+    """Migrate the historical count-only table without rebuilding the DB."""
+    existing = {
+        row[1] for row in conn.execute("PRAGMA table_info(marketplace_counts)").fetchall()
+    }
+    for name in (
+        "request_count",
+        "error_count",
+        "timeout_count",
+        "rate_limit_count",
+        "raw_count",
+        "garbage_count",
+    ):
+        if name not in existing:
+            conn.execute(
+                f"ALTER TABLE marketplace_counts ADD COLUMN {name} INTEGER DEFAULT 0"
+            )
 
 
 # Age-based retention alone was useless and let the bot die. The DB was
@@ -1458,9 +1486,21 @@ def mark_seen(conn, item_id, fingerprint=None, price=None):
 
 def _mark_scout_queue_item_processed(item_id):
     """Acknowledge every routed Scout row represented by this item id."""
-    _SCOUT_QUEUE_PROCESSED_KEYS.update(
-        _SCOUT_QUEUE_KEYS_BY_ITEM_ID.get(item_id, ())
-    )
+    queue_keys = _SCOUT_QUEUE_KEYS_BY_ITEM_ID.get(item_id, ())
+    if not queue_keys:
+        return
+    _SCOUT_QUEUE_PROCESSED_KEYS.update(queue_keys)
+    # Persist at the same final-disposition boundary as the seen-item commit.
+    # Waiting until run() returns stranded already-processed Scout rows when
+    # GitHub's eight-minute watchdog SIGKILLed the process. The end-of-run
+    # call remains as an idempotent safety net.
+    try:
+        _persist_scout_queue_acknowledgements()
+    except Exception:
+        logger.exception(
+            "Failed to persist Scout acknowledgement for %s; will retry at run shutdown",
+            item_id,
+        )
 
 
 def _persist_scout_queue_acknowledgements():
@@ -1470,14 +1510,58 @@ def _persist_scout_queue_acknowledgements():
 
 
 def normalize_title_for_fingerprint(title):
-    normalized = re.sub(r"[^\w\s]", " ", title.lower())
+    normalized = title.lower()
+    # Relisters commonly add/remove condition and relist boilerplate while
+    # leaving the underlying item unchanged. Those edits should not produce a
+    # second alert.
+    normalized = re.sub(
+        r"\b(?:nwt|new\s+with\s+tags?|relist(?:ed|ing)?|re-list(?:ed|ing)?)\b",
+        " ",
+        normalized,
+    )
+
+    # Normalize the most common shoe-size edit: "13D" and "Size 13 Medium"
+    # describe the same fit. Include the other ordinary width spellings so a
+    # seller changing "13 EE" to "size 13 extra wide" is equally stable.
+    width_names = {
+        "d": "medium",
+        "m": "medium",
+        "medium": "medium",
+        "e": "wide",
+        "w": "wide",
+        "wide": "wide",
+        "ee": "extra wide",
+        "2e": "extra wide",
+        "eee": "extra wide",
+        "3e": "extra wide",
+        "extra wide": "extra wide",
+    }
+
+    def normalize_size_width(match):
+        return f" size {match.group('size')} width {width_names[match.group('width')]} "
+
+    normalized = re.sub(
+        r"\b(?:size\s*)?(?P<size>\d{1,2}(?:\.\d+)?)\s*"
+        r"(?:width\s*)?(?P<width>extra\s+wide|medium|wide|3e|eee|2e|ee|e|d|m|w)\b",
+        normalize_size_width,
+        normalized,
+    )
+    normalized = re.sub(r"[^\w\s]", " ", normalized)
     return re.sub(r"\s+", " ", normalized).strip()
 
 
 def listing_fingerprint(listing):
     seller_username = (listing.get("seller") or {}).get("username")
-    if not seller_username:
+    title = normalize_title_for_fingerprint(listing.get("title", ""))
+    if not title:
         return None
+    if not seller_username:
+        # Some marketplace payloads omit seller handles. A normalized-title
+        # fallback still catches that marketplace's own relists, while the
+        # platform namespace prevents unrelated sellers on different sites
+        # from colliding solely because they used the same generic title.
+        platform = str(listing.get("platform") or "ebay").strip().lower()
+        return hashlib.sha256(f"{title}|platform:{platform}".encode("utf-8")).hexdigest()
     # Strip the "platform:" prefix make_listing() adds - that namespacing
     # exists so itemId can't collide across marketplaces (see run()'s
     # eBay-vs-marketplace itemId handling), but it doesn't belong in a
@@ -1487,8 +1571,7 @@ def listing_fingerprint(listing):
     # "poshmark:izzysvintage" and eBay's bare "izzysvintage" hashed
     # differently for the same human seller. 4 of 77 historical alerts were
     # exactly this pattern.
-    seller_username = seller_username.split(":", 1)[-1]
-    title = normalize_title_for_fingerprint(listing.get("title", ""))
+    seller_username = seller_username.split(":", 1)[-1].strip().lower()
     return hashlib.sha256(f"{title}|{seller_username}".encode("utf-8")).hexdigest()
 
 
@@ -1939,6 +2022,70 @@ def is_oversized_fitted_shirt(haystack):
     return bool(OVERSIZED_SHIRT_SIGNALS.search(haystack))
 
 
+def listing_matches_size_filter(saved_search, listing):
+    """Return whether a listing contains an accepted configured size.
+
+    ``size`` remains the buyer-facing US size list. Searches for makers that
+    commonly label footwear in UK/EU sizes can add ``size_equivalents`` (for
+    example US 13 -> UK 12 / EU 46-47) without weakening every size-13 shoe
+    search to also accept a US 12.
+    """
+    size_tokens = list(saved_search.get("size") or [])
+    size_tokens.extend(saved_search.get("size_equivalents") or [])
+    if not size_tokens:
+        return True
+
+    haystack = re.sub(
+        r"\b(\d{2})\s?(R|L|S|XL|XS)\b",
+        r"\1 \2",
+        (
+            f"{listing.get('title', '')} {listing.get('size') or ''} "
+            f"{listing.get('description') or ''}"
+        ),
+        flags=re.IGNORECASE,
+    )
+    for size_token in size_tokens:
+        token = str(size_token).strip()
+        if not token:
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+)?", token):
+            # Numeric shoe sizes are frequently glued to a width ("12E").
+            # Consume that suffix so the size still matches, while keeping
+            # 13 from matching 13.5/113/42mm. Width suitability is a separate
+            # filter because UK makers use E as a standard rather than wide.
+            pattern = rf"(?<![\d.]){re.escape(token)}(?![\d.])(?:\s?[A-G]{{1,3}})?\b"
+        else:
+            pattern = rf"\b{re.escape(token)}\b"
+        if re.search(pattern, haystack, re.IGNORECASE):
+            return True
+    return False
+
+
+def has_excluded_single_e_shoe_width(saved_search, listing):
+    r"""Detect an E width attached to the configured US shoe size.
+
+    This is intentionally not a bare ``\bE\b`` search: E occurs in ordinary
+    titles and is the standard width for several UK makers. Only E immediately
+    following the buyer-facing US size is excluded, so an audited UK-size alias
+    such as Edward Green ``UK 12E`` remains eligible for a US-13 search.
+    """
+    if str(saved_search.get("category_id") or "") != "53120":
+        return False
+    haystack = (
+        f"{listing.get('title', '')} {listing.get('size') or ''} "
+        f"{listing.get('description') or ''}"
+    )
+    for size_token in saved_search.get("size") or []:
+        token = str(size_token).strip()
+        if re.fullmatch(r"\d+(?:\.\d+)?", token) and re.search(
+            rf"(?<![\d.]){re.escape(token)}(?![\d.])\s*E\b",
+            haystack,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
 def is_jacket_only_suit_listing(title, query=None, description=None):
     """Explicit, standing user rule: no more standalone jackets, period -
     "i do NOT need any more jackets. the exception is full suits[,]...
@@ -2267,7 +2414,11 @@ def _collect_listing_image_urls(listing):
         image_url = image.get("imageUrl")
         if image_url:
             urls.append(image_url)
-    return urls[:4]
+    # Four images routinely stopped before a seller's later damage close-up
+    # (the audited example disclosed a moth hole in photo 6). Eight reaches
+    # those later gallery disclosures while retaining a firm per-call ceiling
+    # so vision payload size and paid-provider cost cannot grow without bound.
+    return urls[:8]
 
 
 def _upscale_ebay_image_url(image_url):
@@ -2282,7 +2433,17 @@ def _upscale_ebay_image_url(image_url):
     return re.sub(r"s-l\d+", "s-l1600", image_url)
 
 
-def _download_listing_image(image_url):
+def _deadline_timeout(hard_stop, maximum):
+    """Return a request timeout bounded by an optional monotonic deadline."""
+    if hard_stop is None:
+        return maximum
+    remaining = hard_stop - time.monotonic()
+    if remaining <= 0:
+        return None
+    return min(maximum, max(0.001, remaining))
+
+
+def _download_listing_image(image_url, hard_stop=None):
     # Try the largest available size first, then fall back to the original
     # URL if eBay doesn't have a bigger one (some old listings only store a
     # small image). Returns (content_bytes, mime_type) or None on failure.
@@ -2291,8 +2452,12 @@ def _download_listing_image(image_url):
     if upscaled != image_url:
         candidates.insert(0, upscaled)
     for candidate_url in candidates:
+        timeout = _deadline_timeout(hard_stop, 10)
+        if timeout is None:
+            logger.warning("Run deadline reached while downloading listing images")
+            return None
         try:
-            image_resp = requests.get(candidate_url, timeout=10)
+            image_resp = requests.get(candidate_url, timeout=timeout)
             image_resp.raise_for_status()
             return image_resp.content, _detect_image_mime_type(image_resp, image_url)
         except requests.exceptions.RequestException:
@@ -2522,7 +2687,7 @@ def _call_deepseek_text_json(prompt, timeout=15):
     return json.loads(_strip_json_code_fence(text))
 
 
-def _deepseek_alert_sanity_check(listing, ai_result, category):
+def _deepseek_alert_sanity_check(listing, ai_result, category, hard_stop=None):
     # Final cheap sanity pass right before an alert fires. The vision photo
     # check can pass while the listing is still junk it never discloses: a
     # watch strap or crystal instead of the whole watch, packaging/box only,
@@ -2566,6 +2731,12 @@ def _deepseek_alert_sanity_check(listing, ai_result, category):
         f"Vision AI damage_found: {ai_damage_found}"
     )
     try:
+        if _deadline_timeout(hard_stop, 1) is None:
+            return {
+                "is_complete_item": True,
+                "is_part_or_accessory": False,
+                "reason": "run deadline reached before sanity check",
+            }
         data = _call_deepseek_text_json(prompt)
     except Exception as exc:
         logger.warning("DeepSeek sanity check failed (%s); failing open", exc)
@@ -2584,7 +2755,7 @@ def _deepseek_alert_sanity_check(listing, ai_result, category):
     }
 
 
-def _deepseek_second_opinion(listing, ai_result, category):
+def _deepseek_second_opinion(listing, ai_result, category, hard_stop=None):
     # Independent text-only re-estimate of resale value for a borderline-
     # confidence vision result. The vision model's medium/low-confidence
     # resale guess is the single weakest link in the alert path (of 97
@@ -2619,6 +2790,11 @@ def _deepseek_second_opinion(listing, ai_result, category):
         f"Vision AI brand evidence: {ai_brand_evidence}"
     )
     try:
+        if _deadline_timeout(hard_stop, 1) is None:
+            return {
+                "estimated_resale_value": None,
+                "reasoning": "run deadline reached before second opinion",
+            }
         data = _call_deepseek_text_json(prompt)
     except Exception as exc:
         logger.warning("DeepSeek second opinion failed (%s); keeping original estimate", exc)
@@ -2632,7 +2808,7 @@ def _deepseek_second_opinion(listing, ai_result, category):
     }
 
 
-def _call_photo_check(prompt, images, timeout=20):
+def _call_photo_check(prompt, images, timeout=20, hard_stop=None):
     # Provider router for the vision check. The provider named by
     # AI_PHOTO_PROVIDER is primary (DeepSeek is cheap, no free-tier 429
     # ceiling); the other provider is the automatic fallback whenever the
@@ -2642,34 +2818,52 @@ def _call_photo_check(prompt, images, timeout=20):
     # trust.
     gemini_parts = [_make_gemini_inline_part(content, mime_type) for content, mime_type in images]
     if AI_PHOTO_PROVIDER == "deepseek":
+        call_timeout = _deadline_timeout(hard_stop, timeout)
+        if call_timeout is None:
+            logger.warning("Run deadline reached before DeepSeek photo check")
+            return None
         try:
-            result = _call_deepseek_json(prompt, images, timeout=timeout)
+            result = _call_deepseek_json(prompt, images, timeout=call_timeout)
             if result is not None:
                 return result
             logger.warning("DeepSeek photo check returned no result; falling back to Gemini")
         except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
             logger.warning("DeepSeek photo check failed (%s); falling back to Gemini", exc)
+        call_timeout = _deadline_timeout(hard_stop, timeout)
+        if call_timeout is None:
+            logger.warning("Run deadline reached before Gemini photo fallback")
+            return None
         try:
-            return _call_gemini_json(prompt, gemini_parts, timeout=timeout)
+            return _call_gemini_json(prompt, gemini_parts, timeout=call_timeout)
         except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
             logger.warning("Photo check failed (both providers); proceeding without AI result: %s", exc)
             return None
     # Gemini is primary: try it first, then fall back to DeepSeek.
+    call_timeout = _deadline_timeout(hard_stop, timeout)
+    if call_timeout is None:
+        logger.warning("Run deadline reached before Gemini photo check")
+        return None
     try:
-        result = _call_gemini_json(prompt, gemini_parts, timeout=timeout)
+        result = _call_gemini_json(prompt, gemini_parts, timeout=call_timeout)
         if result is not None:
             return result
         logger.warning("Gemini photo check returned no result; falling back to DeepSeek")
     except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
         logger.warning("Gemini photo check failed (%s); falling back to DeepSeek", exc)
+    call_timeout = _deadline_timeout(hard_stop, timeout)
+    if call_timeout is None:
+        logger.warning("Run deadline reached before DeepSeek photo fallback")
+        return None
     try:
-        return _call_deepseek_json(prompt, images, timeout=timeout)
+        return _call_deepseek_json(prompt, images, timeout=call_timeout)
     except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
         logger.warning("Photo check failed (both providers); proceeding without AI result: %s", exc)
         return None
 
 
-def check_photos_with_gemini(listing, category="other", current_month_name=None):
+def check_photos_with_gemini(
+    listing, category="other", current_month_name=None, hard_stop=None
+):
     # Use Google's rolling "-latest" alias instead of a pinned model name -
     # gemini-2.0-flash and gemini-2.5-flash/-flash-lite all 404 for this key
     # ("no longer available to new users"), confirmed live against the
@@ -2682,7 +2876,10 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
     # can't silently change what the model sees.
     images = []
     for image_url in _collect_listing_image_urls(listing):
-        downloaded = _download_listing_image(image_url)
+        if _deadline_timeout(hard_stop, 1) is None:
+            logger.warning("Run deadline reached before all listing images were downloaded")
+            return None
+        downloaded = _download_listing_image(image_url, hard_stop=hard_stop)
         if downloaded is None:
             logger.warning("Skipping failed image download for photo check: %s", image_url)
             continue
@@ -2777,7 +2974,9 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "assessment by itself. summary should briefly state the visual evidence and "
             "any uncertainty, without making a price or resale-value judgment."
         )
-        return _call_photo_check(poker_chips_prompt, images, timeout=20)
+        return _call_photo_check(
+            poker_chips_prompt, images, timeout=20, hard_stop=hard_stop
+        )
 
     if category == "golf-equipment":
         # Entirely different prompt/JSON shape from the clothing one below -
@@ -2862,7 +3061,9 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "stock-looking photos. Explain briefly in counterfeit_reason, or leave it "
             "empty if not suspected."
         )
-        return _call_photo_check(golf_prompt, images, timeout=20)
+        return _call_photo_check(
+            golf_prompt, images, timeout=20, hard_stop=hard_stop
+        )
 
     if category == "watches":
         # Real live miss: an "Oris Star Automatic" ($149.99) was genuinely
@@ -2934,7 +3135,9 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
             "Explain briefly in counterfeit_reason, or leave it empty if not "
             "suspected."
         )
-        return _call_photo_check(watch_prompt, images, timeout=20)
+        return _call_photo_check(
+            watch_prompt, images, timeout=20, hard_stop=hard_stop
+        )
 
     prompt = (
         "Inspect these secondhand clothing or footwear listing photos to help build "
@@ -3024,7 +3227,7 @@ def check_photos_with_gemini(listing, category="other", current_month_name=None)
         "counterfeit_reason, or leave it empty if not suspected."
     )
 
-    return _call_photo_check(prompt, images, timeout=20)
+    return _call_photo_check(prompt, images, timeout=20, hard_stop=hard_stop)
 
 
 def draft_resale_listing(image_paths):
@@ -3777,7 +3980,7 @@ def _format_estimated_usd(value):
         return None
 
 
-def append_alert_log(result):
+def append_alert_log(result, delivered=False, delivery_error=None):
     listing = result["listing"]
     # `price` is the total landed cost (item + shipping + tax) computed in
     # full scoring - it only exists on REVIEW results. Early hard-fail PASS
@@ -3801,7 +4004,13 @@ def append_alert_log(result):
         "item_price": item_price,
         "verdict": result.get("verdict"),
         "reason": result.get("reason") or "; ".join(result.get("flags", [])),
+        # REVIEW used to imply "sent", even when this record was written
+        # before send_alert() and delivery then failed. Keep the state
+        # explicit so every reader can distinguish evaluated from delivered.
+        "delivered": bool(delivered),
     }
+    if delivery_error:
+        record["delivery_error"] = str(delivery_error)
     if result.get("search_query"):
         record["query"] = result["search_query"]
     for key in (
@@ -4133,7 +4342,11 @@ def send_weekly_digest():
     # received - verdict REVIEW (sent). append_alert_log() also writes PASS
     # (blocked/rejected) records to the same log, and counting them here
     # presented a week heavy on blocked junk as if those were alerts.
-    alert_count = sum(1 for record in recent_records if record.get("verdict") == "REVIEW")
+    alert_count = sum(
+        1
+        for record in recent_records
+        if record.get("delivered", record.get("verdict") == "REVIEW")
+    )
     blocked_count = len(recent_records) - alert_count
     message = f"{alert_count} alerts {window_label}"
     if blocked_count:
@@ -4170,9 +4383,10 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
     """One (search, marketplace) fetch. Never raises - a dead marketplace must
     not be able to abort the run for the others."""
     if time.monotonic() >= deadline:
-        return platform_name, saved_search["query"], []
+        return platform_name, saved_search["query"], [], 0, 0, 0
     try:
         listings, _total = marketplaces.ADAPTERS[platform_name](saved_search)
+        raw_count = len(listings)
         # Enforce the search's "-term" exclusions on the RESULTS. Only eBay's
         # API understands "-term" natively; every marketplace silently ignored
         # it, so a query like `zenith watch -radio -canteen -mug` was happily
@@ -4192,48 +4406,100 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
                     platform_name, len(listings) - len(kept), len(listings), _clean,
                 )
             listings = kept
-        return platform_name, saved_search["query"], listings
+        return (
+            platform_name,
+            saved_search["query"],
+            listings,
+            raw_count,
+            raw_count - len(listings),
+            0,
+        )
     except Exception:
         logger.exception("%s search failed for query: %s", platform_name, saved_search["query"])
-        return platform_name, saved_search["query"], []
+        return platform_name, saved_search["query"], [], 0, 0, 1
 
 
-def _check_marketplace_anomalies(conn, now, active, counts):
-    """Alert when a marketplace scraper silently stops returning listings.
+def _check_marketplace_anomalies(conn, now, active, counts, health=None):
+    """Alert on seven-day count deviations and explicit request sickness.
 
     Real live failure this guards: a scraper's JSON shape drifted (a renamed
     field), every query for a platform came back empty, and the bot went
     completely silent for hours before anyone manually checked. Each run
     records how many listings each active platform returned; if a platform's
-    count collapses versus its trailing baseline, push an ntfy alert via
+    count collapses versus its fixed seven-day median, push an ntfy alert via
     notify_bot_down(). Called with MARKETPLACES_ENABLED (every configured
     platform), not the ADAPTERS-filtered `active` local in
     prefetch_marketplaces() - a batch-only platform like facebook has no
     ADAPTERS entry and would otherwise never be watched at all, even though
-    its count is populated the same as every other platform."""
+    its count is populated the same as every other platform. ``health`` adds
+    429, timeout, request-error, and known-garbage signals so a platform can
+    alarm even while its raw listing count still looks plausible."""
+    health = health or {}
+    _ensure_marketplace_health_columns(conn)
     for platform in active:
         today = counts.get(platform, 0)
+        signals = health.get(platform) or {}
+        request_count = int(signals.get("requests") or 0)
+        error_count = int(signals.get("errors") or 0)
+        timeout_count = int(signals.get("timeouts") or 0)
+        rate_limit_count = int(signals.get("rate_limits") or 0)
+        raw_count = int(signals.get("raw_listings") or today)
+        garbage_count = int(signals.get("known_garbage") or 0)
         conn.execute(
-            "INSERT INTO marketplace_counts (platform, run_ts, count) VALUES (?, ?, ?)",
-            (platform, now.isoformat(), today),
+            "INSERT INTO marketplace_counts "
+            "(platform, run_ts, count, request_count, error_count, timeout_count, "
+            "rate_limit_count, raw_count, garbage_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                platform,
+                now.isoformat(),
+                today,
+                request_count,
+                error_count,
+                timeout_count,
+                rate_limit_count,
+                raw_count,
+                garbage_count,
+            ),
         )
         conn.commit()
         prior = [
             row[0]
             for row in conn.execute(
                 "SELECT count FROM marketplace_counts "
-                "WHERE platform = ? AND run_ts < ? "
-                "ORDER BY run_ts DESC LIMIT 20",
-                (platform, now.isoformat()),
+                "WHERE platform = ? AND run_ts >= ? AND run_ts < ?",
+                (
+                    platform,
+                    (now - timedelta(days=7)).isoformat(),
+                    now.isoformat(),
+                ),
             ).fetchall()
         ]
-        # Fewer than 5 prior runs = not enough history. A newly-added
-        # platform has no baseline yet and must not false-alarm on its
-        # first few runs.
-        if len(prior) < 5:
-            continue
-        baseline = sum(prior) / len(prior)
-        if not ((today == 0 and baseline >= 5) or (baseline > 0 and today < baseline / 10)):
+        baseline = median(prior) if len(prior) >= 5 else None
+        count_collapse = bool(
+            baseline is not None
+            and baseline >= 5
+            and today < baseline * 0.5
+        )
+        error_rate = error_count / request_count if request_count else 0.0
+        sick_reasons = []
+        if count_collapse:
+            sick_reasons.append(
+                f"{today} listings vs fixed 7-day median baseline ~{round(baseline)}/run"
+            )
+        if rate_limit_count >= 5:
+            sick_reasons.append(f"{rate_limit_count} HTTP 429/rate-limit events")
+        if timeout_count:
+            sick_reasons.append(f"{timeout_count} timeout event(s)")
+        if error_count and (request_count <= 1 or error_rate >= 0.25):
+            sick_reasons.append(
+                f"{error_count}/{request_count or '?'} request errors ({error_rate:.0%})"
+            )
+        if raw_count > 0 and garbage_count >= raw_count:
+            sick_reasons.append(
+                f"all {raw_count} raw listings matched known-garbage exclusions"
+            )
+        if not sick_reasons:
             continue
         row = conn.execute(
             "SELECT last_notified_ts FROM marketplace_anomaly_notified WHERE platform = ?",
@@ -4242,9 +4508,8 @@ def _check_marketplace_anomalies(conn, now, active, counts):
         if row and now - datetime.fromisoformat(row[0]) < timedelta(hours=6):
             continue  # already alerted within the last 6h; don't spam every 5-min run
         notify_bot_down(
-            f"{platform} returned {today} listings this run "
-            f"(baseline ~{round(baseline)}/run over last {len(prior)} runs) "
-            "- scraper may be broken"
+            f"{platform} marketplace unhealthy: {'; '.join(sick_reasons)} "
+            "- scraper may be degraded or broken"
         )
         conn.execute(
             "INSERT OR REPLACE INTO marketplace_anomaly_notified (platform, last_notified_ts) "
@@ -4285,9 +4550,64 @@ def prefetch_marketplaces(now, conn):
         if p in marketplaces.ADAPTERS and p not in marketplaces.BATCH_ADAPTERS
     ]
     deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
+    # Outer daemon workers may outlive prefetch_marketplaces() when an adapter
+    # wedges. This is the last instant at which they may publish anything to
+    # shared state; late private results are discarded below.
+    hard_stop = deadline + HTTP_TIMEOUT_MARGIN
     found = {}
     counts = {}
+    health = {
+        platform: {
+            "requests": 0,
+            "errors": 0,
+            "timeouts": 0,
+            "rate_limits": 0,
+            "raw_listings": 0,
+            "known_garbage": 0,
+        }
+        for platform in MARKETPLACES_ENABLED
+    }
     results_lock = threading.Lock()
+    health_context = threading.local()
+
+    class MarketplaceHealthLogHandler(logging.Handler):
+        """Turn adapter warnings into per-run health counters.
+
+        The adapters deliberately swallow request failures so one marketplace
+        cannot abort the run. Capturing their warning records here preserves
+        that contract while making 429s/timeouts/errors visible to anomaly
+        detection, without modifying platforms.py.
+        """
+
+        def emit(self, record):
+            if time.monotonic() >= hard_stop:
+                return
+            platform_name = getattr(health_context, "platform", None)
+            if platform_name not in health:
+                return
+            message = record.getMessage().lower()
+            updates = []
+            if "429" in message or "rate limited" in message:
+                updates.append("rate_limits")
+            if "timeout" in message or "timed out" in message:
+                updates.extend(("timeouts", "errors"))
+            elif any(
+                signal in message
+                for signal in (
+                    "request failed",
+                    "returned http",
+                    "non-json",
+                    "fetch failed",
+                    "search failed",
+                )
+            ) and "429" not in message and "rate limited" not in message:
+                updates.append("errors")
+            if updates:
+                with results_lock:
+                    for name in updates:
+                        health[platform_name][name] += 1
+
+    health_log_handler = MarketplaceHealthLogHandler(level=logging.WARNING)
 
     # New Scout rows carry the watch target's query/label, which is stable and
     # authoritative. Word overlap remains only for legacy rows written before
@@ -4363,17 +4683,47 @@ def prefetch_marketplaces(now, conn):
         relevant = [s for s in searches if platform_name in s.get("platforms", active)]
         if not relevant:
             return
+        if time.monotonic() >= hard_stop:
+            return
+        with results_lock:
+            if time.monotonic() >= hard_stop:
+                return
+            health[platform_name]["requests"] += 1
+        started = time.monotonic()
+        health_context.platform = platform_name
         try:
             results = marketplaces.BATCH_ADAPTERS[platform_name](relevant)
         except Exception:
             logger.exception("%s batch fetch failed", platform_name)
+            if time.monotonic() < hard_stop:
+                with results_lock:
+                    if time.monotonic() < hard_stop:
+                        health[platform_name]["errors"] += 1
+            return
+        finally:
+            health_context.platform = None
+            if (
+                deadline <= time.monotonic() < hard_stop
+                and started < deadline
+            ):
+                with results_lock:
+                    if time.monotonic() < hard_stop:
+                        health[platform_name]["timeouts"] += 1
+        if time.monotonic() >= hard_stop:
+            logger.warning(
+                "%s outer batch exceeded the marketplace hard stop; discarding late result",
+                platform_name,
+            )
             return
         with results_lock:
+            if time.monotonic() >= hard_stop:
+                return
             for query, listings in (results or {}).items():
                 # Same "-term" exclusion enforcement _fetch_marketplace()
                 # applies to the per-task path - a batch call skips that
                 # function entirely, so it has to happen here instead.
                 clean, excluded = marketplaces.split_query_exclusions(query)
+                raw_count = len(listings)
                 if excluded:
                     kept = [
                         listing for listing in listings
@@ -4385,6 +4735,8 @@ def prefetch_marketplaces(now, conn):
                             platform_name, len(listings) - len(kept), len(listings), clean,
                         )
                     listings = kept
+                health[platform_name]["raw_listings"] += raw_count
+                health[platform_name]["known_garbage"] += raw_count - len(listings)
                 if listings:
                     found.setdefault(query, []).extend(listings)
                     counts[platform_name] = counts.get(platform_name, 0) + len(listings)
@@ -4406,13 +4758,42 @@ def prefetch_marketplaces(now, conn):
 
     def worker():
         while True:
+            if time.monotonic() >= hard_stop:
+                return
             try:
                 saved_search, platform_name = work_queue.get_nowait()
             except queue.Empty:
                 return
-            _platform, query, listings = _fetch_marketplace(saved_search, platform_name, deadline)
-            if listings:
-                with results_lock:
+            with results_lock:
+                if time.monotonic() >= hard_stop:
+                    work_queue.task_done()
+                    return
+                health[platform_name]["requests"] += 1
+            started = time.monotonic()
+            health_context.platform = platform_name
+            try:
+                _platform, query, listings, raw_count, garbage_count, errors = (
+                    _fetch_marketplace(saved_search, platform_name, deadline)
+                )
+            finally:
+                health_context.platform = None
+            timed_out = time.monotonic() >= deadline and started < deadline
+            if time.monotonic() >= hard_stop:
+                logger.warning(
+                    "%s outer worker exceeded the marketplace hard stop; discarding late result",
+                    platform_name,
+                )
+                work_queue.task_done()
+                return
+            with results_lock:
+                if time.monotonic() >= hard_stop:
+                    work_queue.task_done()
+                    return
+                health[_platform]["raw_listings"] += raw_count
+                health[_platform]["known_garbage"] += garbage_count
+                health[_platform]["errors"] += errors
+                health[_platform]["timeouts"] += int(timed_out)
+                if listings:
                     found.setdefault(query, []).extend(listings)
                     counts[_platform] = counts.get(_platform, 0) + len(listings)
             work_queue.task_done()
@@ -4422,31 +4803,67 @@ def prefetch_marketplaces(now, conn):
         threading.Thread(target=batch_worker, args=(pl,), daemon=True)
         for pl in batched_platforms
     ]
+    marketplaces.logger.addHandler(health_log_handler)
     for w in workers:
         w.start()
     # Bounded by the shared deadline, not remaining*worker_count - each join
     # re-derives its timeout from the same absolute wall-clock deadline, so
     # total time spent here is capped at budget + margin regardless of how
     # many workers are still outstanding.
-    hard_stop = deadline + HTTP_TIMEOUT_MARGIN
     for w in workers:
         w.join(timeout=max(0.0, hard_stop - time.monotonic()))
+    marketplaces.logger.removeHandler(health_log_handler)
     if any(w.is_alive() for w in workers):
         logger.warning("Marketplace prefetch hit its hard deadline; using partial results")
+    # Return/check immutable snapshots. Even if a daemon wakes after this
+    # point, its hard-stop gate prevents mutation; the copies make that
+    # guarantee structural rather than timing-dependent.
+    with results_lock:
+        found_snapshot = {
+            query: list(listings) for query, listings in found.items()
+        }
+        counts_snapshot = dict(counts)
+        health_snapshot = {
+            platform: dict(signals) for platform, signals in health.items()
+        }
     try:
         # Every enabled platform, not just `active` (ADAPTERS-only): a
         # batch-only platform like facebook has no ADAPTERS entry, so it was
         # never watched even though counts[facebook] is populated above.
-        _check_marketplace_anomalies(conn, now, MARKETPLACES_ENABLED, counts)
+        _check_marketplace_anomalies(
+            conn,
+            now,
+            MARKETPLACES_ENABLED,
+            counts_snapshot,
+            health=health_snapshot,
+        )
     except Exception:
         # A bug in anomaly detection itself must never break the marketplace
         # fetch or crash the run - log and move on.
         logger.exception("Marketplace anomaly detection failed; continuing")
-    logger.info("Marketplace prefetch: %s", counts or "nothing returned")
-    return found
+    logger.info("Marketplace prefetch: %s", counts_snapshot or "nothing returned")
+    return found_snapshot
 
 
 def run():
+    run_started = time.monotonic()
+    hard_stop = run_started + RUN_BUDGET_SECONDS
+    deadline_logged = False
+
+    def _run_deadline_reached(stage):
+        nonlocal deadline_logged
+        if time.monotonic() < hard_stop:
+            return False
+        if not deadline_logged:
+            logger.warning(
+                "Global %.0fs run deadline reached during %s; stopping cleanly "
+                "with unfinished listings left retryable",
+                RUN_BUDGET_SECONDS,
+                stage,
+            )
+            deadline_logged = True
+        return True
+
     _SCOUT_QUEUE_KEYS_BY_ITEM_ID.clear()
     _SCOUT_QUEUE_PROCESSED_KEYS.clear()
     logger.info("Starting eBay deal alert run")
@@ -4565,7 +4982,11 @@ def run():
         batch_start = batch_index * per_run_limit
         return {s["query"] for s in searches[batch_start:batch_start + per_run_limit]}
 
-    ebay_circuit_closed = token is not None and ebay_circuit_breaker_allows_calls(token)
+    ebay_circuit_closed = (
+        token is not None
+        and not _run_deadline_reached("eBay setup")
+        and ebay_circuit_breaker_allows_calls(token)
+    )
     if ebay_circuit_closed:
         # Ask eBay directly instead of guessing. Costs nothing (separate
         # quota pool, see get_ebay_rate_limit_remaining()) and turns "find
@@ -4633,6 +5054,8 @@ def run():
     ebay_searches_attempted = 0
     ebay_results_reported = 0
     for saved_search in enabled_searches:
+        if _run_deadline_reached("PASS 1 search collection"):
+            break
         category = classify_search_category(saved_search["query"])
         if saved_search.get("is_auction_search"):
             # Unconditional every run - see search_ebay_ending_soon_auctions()'s
@@ -4647,6 +5070,8 @@ def run():
                 logger.debug("Skipping auction-snipe search (circuit breaker open): %s", saved_search["query"])
                 listings, search_total_listings = [], None
             else:
+                if _run_deadline_reached("before an eBay auction search"):
+                    break
                 logger.info("Polling auction-snipe search: %s (category %s)", saved_search["query"] or "(any)", saved_search["category_id"])
                 ebay_searches_attempted += 1
                 try:
@@ -4674,6 +5099,8 @@ def run():
                     logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
                     listings, search_total_listings = [], None
         elif saved_search["query"] in ebay_this_run:
+            if _run_deadline_reached("before an eBay saved search"):
+                break
             logger.info("Polling saved search (eBay + marketplaces): %s", saved_search["query"])
             ebay_searches_attempted += 1
             try:
@@ -4708,6 +5135,8 @@ def run():
             except Exception:
                 logger.exception("eBay search failed for query: %s", saved_search["query"])
                 listings, search_total_listings = [], None
+            if _run_deadline_reached("after an eBay saved search"):
+                break
             if EBAY_SCRAPE_ENABLED:
                 # Supplementary, quota-free lane - only for a query the
                 # official API is ALREADY covering this run (ebay_this_run
@@ -4720,6 +5149,8 @@ def run():
                 # dedupes correctly against the SAME listing if search_ebay()
                 # above already returned it, rather than double-counting.
                 try:
+                    if _run_deadline_reached("before the supplementary eBay scrape"):
+                        break
                     scraped = ebay_scrape.search_ebay_scraped(
                         saved_search["query"],
                         max_price=saved_search.get("max_price"),
@@ -4802,6 +5233,8 @@ def run():
 
         logger.info("Found %s listings for query: %s", len(listings), saved_search["query"])
         for listing in listings:
+            if _run_deadline_reached("PASS 1 listing scoring"):
+                break
             if not seller_username_presence_logged:
                 seller_username = (listing.get("seller") or {}).get("username")
                 logger.debug("First listing seller username present: %s", bool(seller_username))
@@ -4897,7 +5330,6 @@ def run():
                     mark_seen(conn, item_id, fingerprint, total_price)
                     continue
 
-            size_tokens = saved_search.get("size")
             title = listing.get("title", "")
             # Vinted's search payload often omits the description, while
             # its item page contains decisive text such as "jacket only,
@@ -4940,14 +5372,11 @@ def run():
                 f"{title} {listing.get('size') or ''} {listing.get('description') or ''}",
                 flags=re.IGNORECASE,
             )
-            if size_tokens and not any(
-                # (?!\.\d) so shoe size "13" doesn't match "13.5" - "." is a
-                # word boundary, so \b13\b happily matched half sizes.
-                # Confirmed live: "Gucci Horsebit Loafers Men's 13.5" was
-                # ALERTED against a size ["13"] search.
-                re.search(rf"\b{re.escape(size_token)}\b(?!\.\d)", size_haystack, re.IGNORECASE)
-                for size_token in size_tokens
-            ):
+            if has_excluded_single_e_shoe_width(saved_search, listing):
+                logger.info("Skipping %s because configured shoe size has excluded E width", item_id)
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
+            if not listing_matches_size_filter(saved_search, listing):
                 logger.info("Skipping %s because title does not match size filter", item_id)
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
@@ -5170,6 +5599,9 @@ def run():
                     "total_price": total_price,
                 }
 
+        if _run_deadline_reached("PASS 1 listing scoring"):
+            break
+
     if ebay_searches_attempted:
         try:
             # eBay is fetched outside prefetch_marketplaces(), so it needs
@@ -5210,9 +5642,13 @@ def run():
     # market where a genuine steal sells out in minutes.
     # review_candidates is keyed BY item_id at this point (the sort below
     # is what turns it into a list), so its keys are exactly the ids.
-    pending_minutes_by_item = get_ai_pending_minutes(
-        conn, list(review_candidates)
-    )
+    if _run_deadline_reached("before AI prioritization"):
+        review_candidates = {}
+        pending_minutes_by_item = {}
+    else:
+        pending_minutes_by_item = get_ai_pending_minutes(
+            conn, list(review_candidates)
+        )
 
     def _ai_check_priority(candidate):
         result = candidate["result"]
@@ -5306,7 +5742,10 @@ def run():
     gemini_budget_logged = False
     ebay_scrape_budget_logged = False
     scout_budget_logged = False
+    delivery_failures = []
     for candidate in review_candidates:
+        if _run_deadline_reached("PASS 3 AI scoring"):
+            break
         item_id = candidate["item_id"]
         listing = candidate["listing"]
         result = candidate["result"]
@@ -5372,7 +5811,13 @@ def run():
                 scout_ai_calls += 1
             else:
                 if gemini_calls > 0:
-                    time.sleep(GEMINI_INTER_CALL_SLEEP_SECONDS)
+                    remaining = hard_stop - time.monotonic()
+                    if remaining <= 0:
+                        _run_deadline_reached("between AI calls")
+                        break
+                    time.sleep(min(GEMINI_INTER_CALL_SLEEP_SECONDS, remaining))
+                    if _run_deadline_reached("between AI calls"):
+                        break
                 gemini_calls += 1
             # eBay's item_summary/search (search_ebay()) never returns a
             # description - only this separate per-item call does.
@@ -5382,6 +5827,8 @@ def run():
             # above, not an independent one - see fetch_ebay_item_
             # description()'s docstring for why that distinction matters.
             if not listing.get("platform") and not listing.get("description"):
+                if _run_deadline_reached("before an eBay description fetch"):
+                    break
                 description = fetch_ebay_item_description(token, item_id)
                 if description:
                     listing["description"] = description
@@ -5407,11 +5854,16 @@ def run():
                 append_alert_log(result)
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
+            if _run_deadline_reached("before an AI vision check"):
+                break
             ai_result = check_photos_with_gemini(
                 listing,
                 category=category,
                 current_month_name=current_month_name,
+                hard_stop=hard_stop,
             )
+            if _run_deadline_reached("after an AI vision check"):
+                break
             # Moved here from right after the budget check above (real live
             # bug): the reserved slot exists to guarantee "at least one
             # closing auction always gets its vision check", so it must
@@ -5643,7 +6095,13 @@ def run():
                     and (listing.get("sold_comp_count") or 0) >= SOLD_COMP_MIN_TO_OVERRIDE_AI
                 )
             ):
-                second_opinion = _deepseek_second_opinion(listing, ai_result, category)
+                if _run_deadline_reached("before an AI second opinion"):
+                    break
+                second_opinion = _deepseek_second_opinion(
+                    listing, ai_result, category, hard_stop=hard_stop
+                )
+                if _run_deadline_reached("after an AI second opinion"):
+                    break
                 ds_estimate = second_opinion.get("estimated_resale_value")
                 if ds_estimate is not None and ds_estimate < result["estimated_resale_value"]:
                     original = result["estimated_resale_value"]
@@ -5855,7 +6313,13 @@ def run():
         # mismatch the title never says. Same suppression pattern as the
         # gender/pet re-checks: verdict PASS, logged, marked seen, no alert.
         # Any failure fails OPEN (alert proceeds) - bonus filter, not a gate.
-        sanity = _deepseek_alert_sanity_check(listing, ai_result, category)
+        if _run_deadline_reached("before the final AI sanity check"):
+            break
+        sanity = _deepseek_alert_sanity_check(
+            listing, ai_result, category, hard_stop=hard_stop
+        )
+        if _run_deadline_reached("after the final AI sanity check"):
+            break
         if sanity["is_part_or_accessory"] or not sanity["is_complete_item"]:
             sanity_reason = sanity.get("reason") or "part/accessory or incomplete item"
             logger.info("Suppressing %s: DeepSeek sanity check - %s", item_id, sanity_reason)
@@ -5865,9 +6329,13 @@ def run():
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
-        append_alert_log(result)
         try:
+            if _run_deadline_reached("before alert delivery"):
+                break
             send_alert(result)
+            # A REVIEW record is an alert-history record only after the push
+            # provider accepted it. This must stay after send_alert().
+            append_alert_log(result, delivered=True)
             logger.info("Sent alert for %s", item_id)
             if result.get("is_ending_soon_auction"):
                 mark_seen(conn, auction_alert_key)
@@ -5879,13 +6347,34 @@ def run():
                     "listings stay unseen and will be picked up next run.",
                     MAX_ALERTS_PER_RUN,
                 )
-                _finish_run()
-                return
-        except Exception:
+                break
+        except Exception as exc:
             logger.exception("Failed to send alert for %s", item_id)
+            failure_message = f"{item_id}: {exc}"
+            delivery_failures.append(failure_message)
+            failure_result = dict(result)
+            failure_result["verdict"] = "DELIVERY_FAILED"
+            failure_result["reason"] = f"alert delivery failed after retries: {exc}"
+            append_alert_log(
+                failure_result,
+                delivered=False,
+                delivery_error=exc,
+            )
+            notify_bot_down(
+                f"Persistent alert delivery failure for {item_id}: {exc}. "
+                "The listing remains unseen and will retry next run."
+            )
 
     logger.info("Finished eBay deal alert run")
     _finish_run()
+    if delivery_failures:
+        # A non-zero process exit also triggers the workflow's failure
+        # healthcheck, so an ntfy outage cannot self-mask by also swallowing
+        # notify_bot_down() above.
+        raise RuntimeError(
+            f"{len(delivery_failures)} alert delivery failure(s): "
+            + "; ".join(delivery_failures)
+        )
 
 
 if __name__ == "__main__":

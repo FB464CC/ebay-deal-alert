@@ -2,6 +2,11 @@ importScripts("url-utils.js");
 
 const ALARM_NAME = "deal-scout-scan";
 const TARGETS_VERSION = 6;
+const RETRY_QUEUE_KEY = "scoutRetryQueue";
+const FAILURE_STATE_KEY = "scoutIngestFailures";
+const MAX_INGEST_ATTEMPTS = 5;
+const DEFAULT_RETRY_DELAY_MS = 10 * 60 * 1000;
+const MAX_FAILURE_RECORDS = 100;
 
 // Verified live 2026-08-28: Facebook IGNORES the /marketplace/<city>/ slug and
 // redirects to /marketplace/category/search/, resolving location from
@@ -55,6 +60,7 @@ let lastRunStatus = { startedAt: null, finishedAt: null, running: false, targets
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const syncGet = (keys) => new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
 const localGet = (keys) => new Promise((resolve) => chrome.storage.local.get(keys, resolve));
+const localSet = (values) => new Promise((resolve) => chrome.storage.local.set(values, resolve));
 
 async function initialize() {
   const { watchTargets, targetsVersion } = await syncGet(["watchTargets", "targetsVersion"]);
@@ -65,6 +71,7 @@ async function initialize() {
     await chrome.storage.sync.set({ watchTargets: DEFAULT_TARGETS, targetsVersion: TARGETS_VERSION });
   }
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 10 });
+  await updateUnsentBadge();
 }
 
 chrome.runtime.onInstalled.addListener(initialize);
@@ -140,6 +147,20 @@ async function scanTarget(target) {
   }
 }
 
+function retryDelayMs(response, body) {
+  const retryAfter = response.headers?.get?.("Retry-After");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    const dateDelay = Date.parse(retryAfter) - Date.now();
+    if (Number.isFinite(dateDelay) && dateDelay > 0) return dateDelay;
+  }
+  const bodySeconds = Number(body?.retryAfterSeconds);
+  return Number.isFinite(bodySeconds) && bodySeconds >= 0
+    ? bodySeconds * 1000
+    : DEFAULT_RETRY_DELAY_MS;
+}
+
 async function postListings(endpointUrl, secret, listings) {
   if (!listings.length) return { accepted: 0, dropped: 0 };
   const endpoint = DealScoutUrls.normalizeUrl(endpointUrl, { requireHttps: true });
@@ -149,8 +170,194 @@ async function postListings(endpointUrl, secret, listings) {
     body: JSON.stringify({ listings })
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `Ingest returned HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(body.error || `Ingest returned HTTP ${response.status}`);
+    error.status = response.status;
+    error.retryAfterMs = retryDelayMs(response, body);
+    throw error;
+  }
   return body;
+}
+
+const retryListingKey = (listing) => {
+  if (!listing || typeof listing.platform !== "string" || typeof listing.itemId !== "string") return null;
+  return `${listing.platform.trim().toLowerCase()}:${listing.itemId.trim()}`;
+};
+
+function normalizeFailureState(value) {
+  const state = value && typeof value === "object" ? value : {};
+  return {
+    records: Array.isArray(state.records) ? state.records.slice(-MAX_FAILURE_RECORDS) : [],
+    abandonedKeys: Array.isArray(state.abandonedKeys) ? state.abandonedKeys.filter((key) => typeof key === "string") : [],
+    abandonedCount: Number.isInteger(state.abandonedCount) && state.abandonedCount >= 0 ? state.abandonedCount : 0,
+    pendingCount: 0,
+    unsentCount: 0,
+    updatedAt: state.updatedAt || null
+  };
+}
+
+async function readRetryState() {
+  const stored = await localGet([RETRY_QUEUE_KEY, FAILURE_STATE_KEY]);
+  return {
+    queue: Array.isArray(stored[RETRY_QUEUE_KEY])
+      ? stored[RETRY_QUEUE_KEY].filter((entry) => entry && Array.isArray(entry.listings) && entry.listings.length)
+      : [],
+    failures: normalizeFailureState(stored[FAILURE_STATE_KEY])
+  };
+}
+
+function appendFailureRecord(failures, record) {
+  failures.records.push({ at: new Date().toISOString(), ...record });
+  failures.records = failures.records.slice(-MAX_FAILURE_RECORDS);
+}
+
+function countPendingListings(queue) {
+  const keys = new Set();
+  let unkeyed = 0;
+  for (const entry of queue) {
+    for (const listing of entry.listings) {
+      const key = retryListingKey(listing);
+      if (key) keys.add(key);
+      else unkeyed += 1;
+    }
+  }
+  return keys.size + unkeyed;
+}
+
+async function setUnsentBadge(unsentCount, hasAbandoned) {
+  const badgeText = unsentCount > 999 ? "999+" : (unsentCount ? String(unsentCount) : "");
+  await Promise.all([
+    chrome.action.setBadgeText({ text: badgeText }),
+    chrome.action.setBadgeBackgroundColor({ color: hasAbandoned ? "#b3261e" : "#b06000" }),
+    chrome.action.setTitle({
+      title: unsentCount
+        ? `Deal Scout: ${unsentCount} listing${unsentCount === 1 ? "" : "s"} unsent`
+        : "Deal Scout"
+    })
+  ]);
+}
+
+async function writeRetryState(queue, failures) {
+  failures.pendingCount = countPendingListings(queue);
+  failures.unsentCount = failures.pendingCount + failures.abandonedCount;
+  failures.updatedAt = new Date().toISOString();
+  await localSet({ [RETRY_QUEUE_KEY]: queue, [FAILURE_STATE_KEY]: failures });
+  await setUnsentBadge(failures.unsentCount, failures.abandonedCount > 0);
+}
+
+async function updateUnsentBadge() {
+  const { queue, failures } = await readRetryState();
+  await writeRetryState(queue, failures);
+}
+
+function retryBatchId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function persistFailedListings(listings, error) {
+  if (!listings.length) return 0;
+  const { queue, failures } = await readRetryState();
+  const queuedKeys = new Set(queue.flatMap((entry) => entry.listings.map(retryListingKey).filter(Boolean)));
+  const abandonedKeys = new Set(failures.abandonedKeys);
+  const retryListings = listings.filter((listing) => {
+    const key = retryListingKey(listing);
+    if (!key) return true;
+    if (queuedKeys.has(key) || abandonedKeys.has(key)) return false;
+    queuedKeys.add(key);
+    return true;
+  });
+  const batchId = retryBatchId();
+  if (retryListings.length) {
+    queue.push({
+      id: batchId,
+      listings: retryListings,
+      attempts: 1,
+      createdAt: new Date().toISOString(),
+      nextAttemptAt: new Date(Date.now() + (error.retryAfterMs || DEFAULT_RETRY_DELAY_MS)).toISOString(),
+      lastError: String(error.message || error).slice(0, 500),
+      lastStatus: error.status || null
+    });
+  }
+  appendFailureRecord(failures, {
+    batchId,
+    attempt: 1,
+    status: error.status || null,
+    listingCount: listings.length,
+    queuedCount: retryListings.length,
+    outcome: retryListings.length ? "queued" : "already-pending-or-abandoned",
+    error: String(error.message || error).slice(0, 500)
+  });
+  await writeRetryState(queue, failures);
+  return retryListings.length;
+}
+
+async function retryPendingListings(endpointUrl, secret) {
+  const { queue, failures } = await readRetryState();
+  const retained = [];
+  const summary = { attempted: 0, delivered: 0, pending: 0, abandoned: 0 };
+  const now = Date.now();
+
+  for (const entry of queue) {
+    const nextAttemptAt = Date.parse(entry.nextAttemptAt || 0);
+    if (Number.isFinite(nextAttemptAt) && nextAttemptAt > now) {
+      retained.push(entry);
+      continue;
+    }
+    summary.attempted += entry.listings.length;
+    try {
+      await postListings(endpointUrl, secret, entry.listings);
+      summary.delivered += entry.listings.length;
+      appendFailureRecord(failures, {
+        batchId: entry.id,
+        attempt: entry.attempts + 1,
+        listingCount: entry.listings.length,
+        outcome: "delivered"
+      });
+    } catch (error) {
+      const attempts = (Number.isInteger(entry.attempts) ? entry.attempts : 1) + 1;
+      if (attempts >= MAX_INGEST_ATTEMPTS) {
+        const abandonedKeys = new Set(failures.abandonedKeys);
+        let newlyAbandoned = 0;
+        for (const listing of entry.listings) {
+          const key = retryListingKey(listing);
+          if (key && !abandonedKeys.has(key)) {
+            abandonedKeys.add(key);
+            newlyAbandoned += 1;
+          } else if (!key) newlyAbandoned += 1;
+        }
+        failures.abandonedKeys = [...abandonedKeys];
+        failures.abandonedCount += newlyAbandoned;
+        summary.abandoned += newlyAbandoned;
+        appendFailureRecord(failures, {
+          batchId: entry.id,
+          attempt: attempts,
+          status: error.status || null,
+          listingCount: entry.listings.length,
+          outcome: "abandoned",
+          error: String(error.message || error).slice(0, 500)
+        });
+      } else {
+        retained.push({
+          ...entry,
+          attempts,
+          nextAttemptAt: new Date(Date.now() + (error.retryAfterMs || DEFAULT_RETRY_DELAY_MS)).toISOString(),
+          lastError: String(error.message || error).slice(0, 500),
+          lastStatus: error.status || null
+        });
+        appendFailureRecord(failures, {
+          batchId: entry.id,
+          attempt: attempts,
+          status: error.status || null,
+          listingCount: entry.listings.length,
+          outcome: "retry-scheduled",
+          error: String(error.message || error).slice(0, 500)
+        });
+      }
+    }
+  }
+  await writeRetryState(retained, failures);
+  summary.pending = failures.pendingCount;
+  return summary;
 }
 
 async function runScan() {
@@ -167,6 +374,13 @@ async function runScan() {
     return lastRunStatus;
   }
 
+  try {
+    lastRunStatus.retry = await retryPendingListings(ingestEndpoint, scoutSecret);
+  } catch (error) {
+    lastRunStatus.retry = { ok: false, error: error.message };
+    console.error("Deal Scout retry processing failed", error);
+  }
+
   for (const [index, target] of watchTargets.entries()) {
     if (!target || typeof target !== "object") {
       lastRunStatus.targets[`${index}:Invalid target`] = { ok: false, error: "Stored watch target is invalid" };
@@ -174,16 +388,33 @@ async function runScan() {
     }
     if (!target.enabled) continue;
     const key = `${index}:${target.label || "Unnamed target"}`;
+    let listings = [];
     try {
       // A short gap between targets keeps consecutive create/remove pairs from
       // landing inside the same transient tab-strip state.
       if (index > 0) await sleep(1500);
-      const listings = await scanTarget(target);
+      listings = await scanTarget(target);
       const ingest = await postListings(ingestEndpoint, scoutSecret, listings);
       lastRunStatus.targets[key] = { ok: true, found: listings.length, accepted: ingest.accepted || 0, dropped: ingest.dropped || 0 };
       console.info("Deal Scout target complete", target.label, lastRunStatus.targets[key]);
     } catch (error) {
-      lastRunStatus.targets[key] = { ok: false, error: error.message };
+      let queued = 0;
+      let persistenceError = null;
+      if (listings.length) {
+        try {
+          queued = await persistFailedListings(listings, error);
+        } catch (storageError) {
+          persistenceError = storageError.message;
+          console.error("Deal Scout could not persist failed listings", target.label, storageError);
+        }
+      }
+      lastRunStatus.targets[key] = {
+        ok: false,
+        error: error.message,
+        found: listings.length,
+        queued,
+        ...(persistenceError ? { persistenceError } : {})
+      };
       console.error("Deal Scout target failed", target.label, error);
     }
   }

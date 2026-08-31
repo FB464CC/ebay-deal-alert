@@ -223,6 +223,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 180,
       "enabled": true,
       "profile": "slow",
@@ -233,6 +234,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 180,
       "enabled": true,
       "profile": "slow",
@@ -243,6 +245,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 120,
       "enabled": true,
       "profile": "slow",
@@ -253,6 +256,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 90,
       "enabled": true,
       "profile": "slow",
@@ -650,6 +654,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 130,
       "enabled": true,
       "profile": "slow",
@@ -763,6 +768,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 100,
       "enabled": true,
       "profile": "slow",
@@ -1037,6 +1043,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
@@ -1047,6 +1054,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
@@ -1057,6 +1065,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
@@ -1336,6 +1345,7 @@
       "size": [
         "13"
       ],
+      "size_equivalents": ["12", "46", "47"],
       "max_price": 250,
       "enabled": true,
       "profile": "slow",
@@ -2449,6 +2459,7 @@
   "EBAY_SCRAPE_ENABLED": true,
   "EBAY_SCRAPE_AI_CHECK_LIMIT": 1,
   "MARKETPLACE_FETCH_BUDGET_SECONDS": 90,
+  "RUN_BUDGET_SECONDS": 390,
   "MAX_ALERTS_PER_RUN": 8,
   "MARKETPLACE_QUERY_STOPWORDS": [
     "sweater",

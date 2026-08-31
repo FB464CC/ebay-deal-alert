@@ -21,6 +21,7 @@ import json
 import pathlib
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -916,9 +917,7 @@ class WatchPriceBand(unittest.TestCase):
 
 
 class SizeMatching(unittest.TestCase):
-    """The size-normalization step is inlined in run() (ebay_deal_alert.py,
-    right after total_price is computed), not its own function - these
-    tests exercise the identical regex logic in isolation."""
+    """Size normalization and per-search footwear aliases."""
 
     def _normalize(self, title):
         return re.sub(r"\b(\d{2})\s?(R|L|S|XL|XS)\b", r"\1 \2", title, flags=re.IGNORECASE)
@@ -942,6 +941,64 @@ class SizeMatching(unittest.TestCase):
         self.assertFalse(re.search(r"\b13\b(?!\.\d)", haystack))
         haystack_real = self._normalize("Alden Cordovan 13 D")
         self.assertTrue(re.search(r"\b13\b(?!\.\d)", haystack_real))
+
+    def test_uk_and_eu_shoe_size_aliases_match_us_13_search(self):
+        search = {"size": ["13"], "size_equivalents": ["12", "46", "47"]}
+        for title in (
+            "Edward Green Chelsea Boot UK 12E",
+            "Crockett & Jones Connaught UK 12 E",
+            "John Lobb Oxford EU 46",
+            "Carmina Rain Last EU 47",
+            "Vass Budapest Size 13 D",
+        ):
+            with self.subTest(title=title):
+                self.assertTrue(m.listing_matches_size_filter(search, {"title": title}))
+
+    def test_shoe_aliases_do_not_accept_wrong_or_half_size(self):
+        search = {"size": ["13"], "size_equivalents": ["12", "46", "47"]}
+        for title in ("Edward Green UK 11E", "Carmina EU 45", "Gucci Loafer 13.5"):
+            with self.subTest(title=title):
+                self.assertFalse(m.listing_matches_size_filter(search, {"title": title}))
+
+    def test_only_uk_eu_maker_searches_receive_aliases(self):
+        aliased = {
+            "edward green", "john lobb", "crockett jones", "church's",
+            "cheaney", "alfred sargent", "carmina", "vass", "gaziano", "berluti",
+        }
+        for search in m.SAVED_SEARCHES:
+            query = search["query"].lower()
+            if search.get("category_id") != "53120":
+                continue
+            should_alias = any(maker in query for maker in aliased)
+            if should_alias:
+                self.assertEqual(search.get("size_equivalents"), ["12", "46", "47"], query)
+            else:
+                self.assertNotIn("size_equivalents", search, query)
+
+    def test_single_e_width_is_excluded_only_as_us_size_suffix(self):
+        search = {
+            "query": "allen edmonds",
+            "size": ["13"],
+            "category_id": "53120",
+        }
+        for title in ("Allen Edmonds Park Avenue 13 E", "Allen Edmonds Leeds Size 13E"):
+            with self.subTest(title=title):
+                self.assertTrue(m.has_excluded_single_e_shoe_width(search, {"title": title}))
+
+        for title in (
+            "Edward Green Chelsea Boot UK 12E",
+            "Allen Edmonds Size 13 D",
+            "European Size 47 EU",
+            "Model E Oxford Size 13 D",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(m.has_excluded_single_e_shoe_width(search, {"title": title}))
+
+    def test_single_e_width_rule_is_shoe_scoped(self):
+        non_shoe = {"query": "vintage garment", "size": ["13"], "category_id": "11484"}
+        self.assertFalse(
+            m.has_excluded_single_e_shoe_width(non_shoe, {"title": "Vintage Model 13 E"})
+        )
 
 
 class OversizedFittedShirt(unittest.TestCase):
@@ -993,8 +1050,26 @@ class ListingFingerprint(unittest.TestCase):
         b = {"title": "Canali Wool Suit 42R", "seller": {"username": "poshmark:seller_b"}}
         self.assertNotEqual(m.listing_fingerprint(a), m.listing_fingerprint(b))
 
-    def test_no_seller_returns_none(self):
-        self.assertIsNone(m.listing_fingerprint({"title": "No Seller Listing"}))
+    def test_size_width_and_relist_title_edits_still_collide(self):
+        original = {
+            "title": "NWT Edward Green Chelsea Boot 13D",
+            "seller": {"username": "FineShoes"},
+        }
+        relist = {
+            "title": "Edward Green Chelsea Boot Size 13 Medium - RELISTED",
+            "seller": {"username": "fineshoes"},
+        }
+        self.assertEqual(m.listing_fingerprint(original), m.listing_fingerprint(relist))
+
+    def test_no_seller_falls_back_to_platform_scoped_normalized_title(self):
+        original = {"platform": "vinted", "title": "NWT Canali Wool Suit 42R"}
+        relist = {"platform": "vinted", "title": "Canali Wool Suit 42R - relisted"}
+        cross_platform = {"platform": "poshmark", "title": "Canali Wool Suit 42R"}
+        self.assertEqual(m.listing_fingerprint(original), m.listing_fingerprint(relist))
+        self.assertNotEqual(m.listing_fingerprint(original), m.listing_fingerprint(cross_platform))
+
+    def test_no_seller_and_no_title_has_no_fingerprint(self):
+        self.assertIsNone(m.listing_fingerprint({"platform": "vinted", "title": ""}))
 
 
 class MarkSeenFingerprintTiming(unittest.TestCase):
@@ -3124,6 +3199,194 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         mock_notify = self._run_prefetch("poshmark", 45)
         mock_notify.assert_not_called()
 
+    def test_gradual_decline_compares_against_full_seven_day_median(self):
+        now = datetime.now(timezone.utc)
+        # A trailing-20 baseline would have drifted down to ~295 and treated
+        # 200 as normal. The seven-day reference remains anchored at 1000.
+        for index in range(60):
+            self.conn.execute(
+                "INSERT INTO marketplace_counts (platform, run_ts, count) VALUES (?, ?, ?)",
+                ("vinted", (now - timedelta(hours=index + 2)).isoformat(), 1000),
+            )
+        for index, count in enumerate(range(390, 190, -10)):
+            self.conn.execute(
+                "INSERT INTO marketplace_counts (platform, run_ts, count) VALUES (?, ?, ?)",
+                ("vinted", (now - timedelta(minutes=(index + 1) * 5)).isoformat(), count),
+            )
+        self.conn.commit()
+
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn, now, ["vinted"], {"vinted": 200}
+            )
+
+        mock_notify.assert_called_once()
+        self.assertIn("fixed 7-day median baseline ~1000", mock_notify.call_args[0][0])
+
+    def test_healthy_count_but_five_429s_is_unhealthy(self):
+        self._seed_history("vinted", [100] * 10)
+        now = datetime.now(timezone.utc)
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn,
+                now,
+                ["vinted"],
+                {"vinted": 100},
+                health={"vinted": {"requests": 20, "rate_limits": 5}},
+            )
+        mock_notify.assert_called_once()
+        self.assertIn("5 HTTP 429", mock_notify.call_args[0][0])
+
+    def test_timeout_error_rate_and_garbage_signals_are_persisted(self):
+        now = datetime.now(timezone.utc)
+        health = {
+            "poshmark": {
+                "requests": 8,
+                "errors": 2,
+                "timeouts": 1,
+                "raw_listings": 12,
+                "known_garbage": 12,
+            }
+        }
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn, now, ["poshmark"], {"poshmark": 0}, health=health
+            )
+        message = mock_notify.call_args[0][0]
+        self.assertIn("timeout", message)
+        self.assertIn("2/8 request errors", message)
+        self.assertIn("all 12 raw listings", message)
+        recorded = self.conn.execute(
+            "SELECT request_count, error_count, timeout_count, raw_count, garbage_count "
+            "FROM marketplace_counts WHERE platform = 'poshmark' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (8, 2, 1, 12, 12))
+
+    def test_prefetch_captures_adapter_429_warning_count(self):
+        self._seed_history("vinted", [45] * 10)
+        now = datetime.now(timezone.utc)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def rate_limited_but_populated(_search):
+            for _ in range(5):
+                p.logger.warning("vinted rate limited (429) during test")
+            return ([{"itemId": "vinted:1", "title": "test item", "seller": {}}] * 45, 45)
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS["vinted"] = rate_limited_but_populated
+            m.MARKETPLACES_ENABLED = ["vinted"]
+            m.SAVED_SEARCHES = [
+                {"query": "test watch", "enabled": True, "platforms": ["vinted"]}
+            ]
+            with mock.patch.object(m, "notify_bot_down") as mock_notify:
+                m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        mock_notify.assert_called_once()
+        self.assertIn("5 HTTP 429", mock_notify.call_args[0][0])
+        rate_limits = self.conn.execute(
+            "SELECT rate_limit_count FROM marketplace_counts "
+            "WHERE platform = 'vinted' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()[0]
+        self.assertEqual(rate_limits, 5)
+
+    def test_late_outer_worker_cannot_mutate_returned_results_or_counts(self):
+        started = threading.Event()
+        release = threading.Event()
+        adapter_returned = threading.Event()
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def late_adapter(_search):
+            started.set()
+            release.wait(timeout=1)
+            adapter_returned.set()
+            return ([{"itemId": "poshmark:late", "title": "late item", "seller": {}}], 1)
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS["poshmark"] = late_adapter
+            m.MARKETPLACES_ENABLED = ["poshmark"]
+            m.SAVED_SEARCHES = [
+                {"query": "test item", "enabled": True, "platforms": ["poshmark"]}
+            ]
+            with mock.patch.object(m, "MARKETPLACE_FETCH_BUDGET_SECONDS", 0.02), \
+                 mock.patch.object(m, "HTTP_TIMEOUT_MARGIN", 0.01):
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), self.conn)
+        finally:
+            release.set()
+            adapter_returned.wait(timeout=1)
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertTrue(started.is_set())
+        self.assertEqual(result, {})
+        recorded = self.conn.execute(
+            "SELECT count FROM marketplace_counts WHERE platform = 'poshmark' "
+            "ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()[0]
+        self.assertEqual(recorded, 0)
+
+    def test_late_outer_batch_worker_discards_private_batch_result(self):
+        started = threading.Event()
+        release = threading.Event()
+        adapter_returned = threading.Event()
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def late_batch(_searches):
+            started.set()
+            release.wait(timeout=1)
+            adapter_returned.set()
+            return {
+                "test item": [
+                    {"itemId": "grailed:late", "title": "late item", "seller": {}}
+                ]
+            }
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS["grailed"] = late_batch
+            m.MARKETPLACES_ENABLED = ["grailed"]
+            m.SAVED_SEARCHES = [
+                {"query": "test item", "enabled": True, "platforms": ["grailed"]}
+            ]
+            with mock.patch.object(m, "MARKETPLACE_FETCH_BUDGET_SECONDS", 0.02), \
+                 mock.patch.object(m, "HTTP_TIMEOUT_MARGIN", 0.01):
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), self.conn)
+        finally:
+            release.set()
+            adapter_returned.wait(timeout=1)
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertTrue(started.is_set())
+        self.assertEqual(result, {})
+        recorded = self.conn.execute(
+            "SELECT count FROM marketplace_counts WHERE platform = 'grailed' "
+            "ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()[0]
+        self.assertEqual(recorded, 0)
+
     def test_batch_only_platform_zero_drop_notifies(self):
         """A platform that lives only in BATCH_ADAPTERS is absent from
         `active`, so anomaly checks must still cover every enabled platform."""
@@ -3362,7 +3625,9 @@ class RunIntegration(unittest.TestCase):
 
         self.ai_result = dict(self.AI_STEAL)
 
-    def _fake_ai(self, listing, category="other", current_month_name=None):
+    def _fake_ai(
+        self, listing, category="other", current_month_name=None, hard_stop=None
+    ):
         self.ai_calls.append(listing.get("itemId"))
         return self.ai_result
 
@@ -3427,6 +3692,92 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(self.ai_calls), 2, "both REVIEW candidates get an AI check")
         self.assertFalse(m.is_new(self._db(), "v1|297183440152|0"),
                          "a hard-failed listing is a final disposition - mark it seen")
+
+    def test_global_deadline_stops_before_the_next_ebay_search(self):
+        self._patch("RUN_BUDGET_SECONDS", 1.0)
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        self._patch("SAVED_SEARCHES", [
+            {"query": "alden shoes", "max_price": 400, "category_id": "24087",
+             "enabled": True, "profile": "fast"},
+            {"query": "allen edmonds shoes", "max_price": 150, "category_id": "24087",
+             "enabled": True, "profile": "fast"},
+        ])
+        clock = {"now": 0.0}
+        search_calls = []
+
+        def slow_first_search(token, search):
+            search_calls.append(search["query"])
+            clock["now"] = 2.0
+            return [], 0
+
+        self._patch("search_ebay", slow_first_search)
+        with mock.patch.object(m.time, "monotonic", side_effect=lambda: clock["now"]):
+            m.run()
+
+        self.assertEqual(len(search_calls), 1)
+        self.assertEqual(self.ai_calls, [])
+
+    def test_global_deadline_stops_after_one_ai_call_without_disposition(self):
+        self._patch("RUN_BUDGET_SECONDS", 1.0)
+        item_id = "v1|deadline-ai|0"
+        self._serve(
+            {"query": "alden shoes", "max_price": 400, "category_id": "24087",
+             "enabled": True, "profile": "fast"},
+            [self._ebay_item(
+                item_id,
+                "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
+                200.0,
+            )],
+        )
+        clock = {"now": 0.0}
+
+        def ai_crossing_deadline(
+            listing, category="other", current_month_name=None, hard_stop=None
+        ):
+            self.ai_calls.append(listing["itemId"])
+            clock["now"] = 2.0
+            return dict(self.AI_STEAL)
+
+        self._patch("check_photos_with_gemini", ai_crossing_deadline)
+        with mock.patch.object(m.time, "monotonic", side_effect=lambda: clock["now"]):
+            m.run()
+
+        self.assertEqual(self.ai_calls, [item_id])
+        self.assertEqual(self.alerts, [])
+        self.assertTrue(
+            m.is_new(self._db(), item_id),
+            "a candidate abandoned at the run deadline must retry next run",
+        )
+
+    def test_scout_acknowledgement_is_persisted_at_final_disposition(self):
+        queue_path = self.tmpdir / "scout_queue.jsonl"
+        row = {
+            "platform": "facebook",
+            "itemId": "incremental-ack",
+            "title": "Loro Piana Cashmere Sweater",
+            "price": 100,
+            "itemWebUrl": "https://example.test/incremental-ack",
+        }
+        queue_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        (listing,) = m.scout_queue.load_scout_queue(queue_path)
+        item_id = listing["itemId"]
+        queue_key = listing["_scout_queue_key"]
+        m._SCOUT_QUEUE_KEYS_BY_ITEM_ID.clear()
+        m._SCOUT_QUEUE_PROCESSED_KEYS.clear()
+        m._SCOUT_QUEUE_KEYS_BY_ITEM_ID[item_id] = {queue_key}
+
+        try:
+            with mock.patch.object(m.scout_queue, "SCOUT_QUEUE_PATH", queue_path):
+                m._mark_scout_queue_item_processed(item_id)
+        finally:
+            m._SCOUT_QUEUE_KEYS_BY_ITEM_ID.clear()
+            m._SCOUT_QUEUE_PROCESSED_KEYS.clear()
+
+        self.assertEqual(
+            queue_path.read_text(encoding="utf-8"),
+            "",
+            "Scout acknowledgements must not wait for the end of the run",
+        )
 
     def test_token_failure_still_processes_marketplaces_then_exits_nonzero(self):
         saved_search = {
@@ -3732,6 +4083,7 @@ class RunIntegration(unittest.TestCase):
         self._patch("MARKETPLACES_ENABLED", [])
         self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
         self._patch("send_alert", mock.Mock(side_effect=RuntimeError("ntfy unavailable")))
+        notify_failure = self._patch("notify_bot_down", mock.Mock())
         saved_search = {"query": "loro piana sweater", "max_price": 400,
                         "category_id": "11484", "enabled": True, "profile": "fast",
                         "platforms": ["facebook"]}
@@ -3744,9 +4096,15 @@ class RunIntegration(unittest.TestCase):
         queue_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
 
         with mock.patch.object(m.scout_queue, "SCOUT_QUEUE_PATH", queue_path):
-            m.run()
+            with self.assertRaisesRegex(RuntimeError, "alert delivery failure"):
+                m.run()
 
         self.assertEqual(json.loads(queue_path.read_text(encoding="utf-8"))["itemId"], "send-failed")
+        notify_failure.assert_called_once()
+        (failure_record,) = self._alert_log_records()
+        self.assertEqual(failure_record["verdict"], "DELIVERY_FAILED")
+        self.assertIs(failure_record["delivered"], False)
+        self.assertIn("ntfy unavailable", failure_record["delivery_error"])
 
     def test_max_alerts_exit_only_acknowledges_scout_rows_already_sent(self):
         self._patch("SCOUT_AI_CHECK_LIMIT", 2)
@@ -3937,13 +4295,23 @@ class RunIntegration(unittest.TestCase):
                     [self._ebay_item(item_id,
                                      "Alden Shell Cordovan Longwing Blucher 10 D Color 8",
                                      200.0)])
+        log_state_during_send = []
+
+        def capture_send(result):
+            log_state_during_send.append(self._alert_log_records())
+            self.alerts.append(result)
+
+        self._patch("send_alert", capture_send)
 
         m.run()
 
+        self.assertEqual(log_state_during_send, [[]], "alert log must be empty until send succeeds")
         self.assertEqual(len(self.alerts), 1, "an AI-confirmed steal must alert exactly once")
         alerted = self.alerts[0]
         self.assertEqual(alerted["deal_rating"], "Steal")
         self.assertEqual(alerted["listing"]["itemId"], item_id)
+        (delivered_record,) = self._alert_log_records()
+        self.assertIs(delivered_record["delivered"], True)
         self.assertFalse(m.is_new(self._db(), item_id), "an alerted item is seen")
 
     def test_deepseek_sanity_suppresses_part_accessory_only(self):
@@ -4424,6 +4792,22 @@ class GluedSizeDefeatsJacketOnlyFilter(unittest.TestCase):
 
 
 class PhotoCheckProviderFallback(unittest.TestCase):
+    def test_gallery_includes_late_damage_photos_up_to_eight_image_cost_cap(self):
+        listing = {
+            "image": {"imageUrl": "https://images.example/primary.jpg"},
+            "additionalImages": [
+                {"imageUrl": f"https://images.example/{index}.jpg"}
+                for index in range(1, 10)
+            ],
+        }
+
+        urls = m._collect_listing_image_urls(listing)
+
+        self.assertEqual(len(urls), 8)
+        self.assertEqual(urls[0], "https://images.example/primary.jpg")
+        self.assertIn("https://images.example/6.jpg", urls)
+        self.assertNotIn("https://images.example/8.jpg", urls)
+
     def test_gemini_primary_falls_back_to_deepseek_on_failure(self):
         deepseek_result = {"damage_found": False, "looks_good": True}
         with mock.patch.object(m, "AI_PHOTO_PROVIDER", "gemini"), \

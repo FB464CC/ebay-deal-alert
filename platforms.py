@@ -214,15 +214,19 @@ def _to_float(value):
         return None
     if isinstance(value, (int, float)):
         number = float(value)
-        return number if math.isfinite(number) else None
-    cleaned = re.sub(r"[^\d.]", "", str(value))
-    if not cleaned or cleaned.count(".") > 1:
-        return None
-    try:
-        number = float(cleaned)
-        return number if math.isfinite(number) else None
-    except ValueError:
-        return None
+    else:
+        raw = str(value).strip()
+        negative = raw.startswith("-")
+        cleaned = re.sub(r"[^\d.]", "", raw)
+        if negative:
+            cleaned = "-" + cleaned if cleaned else ""
+        if not cleaned or cleaned.count(".") > 1:
+            return None
+        try:
+            number = float(cleaned)
+        except ValueError:
+            return None
+    return number if number > 0 and math.isfinite(number) else None
 
 
 def make_listing(

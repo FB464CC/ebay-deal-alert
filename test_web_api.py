@@ -2,7 +2,9 @@
 
 import base64
 import json
+import sqlite3
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -153,6 +155,101 @@ class ScoutIngestValidationTests(unittest.TestCase):
         )
         completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
         self.assertEqual(json.loads(completed.stdout), ["2"])
+
+    def test_duplicate_items_are_removed_against_durable_seen_keys(self):
+        script = (
+            f"const t=require({json.dumps(SCOUT_MODULE)})._test;"
+            "const a={platform:'facebook',itemId:'1'};const b={...a,itemId:'2'};"
+            "const durable=new Set(['facebook:1']);"
+            "process.stdout.write(JSON.stringify(t.withoutDuplicates([a,b],[],durable).map(x=>x.itemId)))"
+        )
+        completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(completed.stdout), ["2"])
+
+    def test_seen_database_lookup_uses_platform_namespaced_item_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "seen.db"
+            connection = sqlite3.connect(database_path)
+            connection.execute("CREATE TABLE seen (item_id TEXT PRIMARY KEY, seen_at TEXT)")
+            connection.executemany(
+                "INSERT INTO seen (item_id, seen_at) VALUES (?, '2026-08-31')",
+                [("facebook:1",), ("poshmark:1",)],
+            )
+            connection.commit()
+            connection.close()
+            script = (
+                f"const t=require({json.dumps(SCOUT_MODULE)})._test;"
+                f"const found=[...t.findSeenKeysInDatabase({json.dumps(database_path.as_posix())},"
+                "['facebook:1','facebook:2'])].sort();"
+                "process.stdout.write(JSON.stringify(found))"
+            )
+            completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(completed.stdout), ["facebook:1"])
+
+    def test_seen_dedup_happens_before_full_queue_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "seen.db"
+            connection = sqlite3.connect(database_path)
+            connection.execute("CREATE TABLE seen (item_id TEXT PRIMARY KEY, seen_at TEXT)")
+            connection.execute(
+                "INSERT INTO seen (item_id, seen_at) VALUES ('facebook:1', '2026-08-31')"
+            )
+            connection.commit()
+            connection.close()
+            database_content = base64.b64encode(database_path.read_bytes()).decode()
+        queue_content = base64.b64encode(("{}\n" * 2000).encode()).decode()
+        listing = {
+            "platform": "facebook",
+            "itemId": "1",
+            "title": "Already handled",
+            "price": 10,
+            "itemWebUrl": "https://example.com/1",
+            "imageUrl": "",
+            "description": "",
+        }
+        script = f"""
+const calls = [];
+const responses = [
+  {{status: 200, body: {{sha: 'seen-sha', encoding: 'base64', content: {json.dumps(database_content)}}}}},
+  {{status: 200, body: {{sha: 'queue-sha', content: {json.dumps(queue_content)}}}}}
+];
+global.fetch = async (url, options = {{}}) => {{
+  calls.push(url);
+  const next = responses.shift();
+  return {{status: next.status, ok: true, json: async () => next.body}};
+}};
+process.env.GITHUB_TOKEN = 'test-token';
+process.env.GITHUB_REPO = 'owner/repo';
+process.env.SCOUT_INGEST_SECRET = 'test-secret';
+const handler = require({json.dumps(SCOUT_MODULE)});
+const req = {{method: 'POST', headers: {{'x-scout-secret': 'test-secret'}}, body: {{listings: [{json.dumps(listing)}]}}}};
+let responseText = '';
+const res = {{statusCode: 0, headers: {{}}, setHeader(name, value) {{this.headers[name] = value;}}, end(value) {{responseText = value.toString('utf8');}}}};
+Promise.resolve(handler(req, res)).then(() => process.stdout.write(JSON.stringify({{
+  status: res.statusCode, body: JSON.parse(responseText), calls
+}}))).catch(error => {{process.stderr.write(error.stack);process.exit(2);}});
+"""
+        result = run_node_script(script)
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["body"]["accepted"], 0)
+        self.assertEqual(result["body"]["duplicates"], 1)
+        self.assertEqual(result["body"]["capacityDropped"], 0)
+        self.assertTrue(result["calls"][0].endswith("/contents/seen_items.db"))
+        self.assertTrue(result["calls"][1].endswith("/contents/scout_queue.jsonl"))
+
+    def test_queue_full_response_includes_retry_after_contract(self):
+        script = (
+            f"const t=require({json.dumps(SCOUT_MODULE)})._test;"
+            "let text='';const res={statusCode:0,headers:{},setHeader(k,v){this.headers[k]=v},"
+            "end(v){text=v.toString('utf8')}};"
+            "t.sendQueueFull(res,{error:'full'});"
+            "process.stdout.write(JSON.stringify({status:res.statusCode,headers:res.headers,body:JSON.parse(text)}))"
+        )
+        completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], 429)
+        self.assertEqual(result["headers"]["Retry-After"], "600")
+        self.assertEqual(result["body"]["retryAfterSeconds"], 600)
 
     def test_listing_urls_reject_credentials_and_non_http_schemes(self):
         base = {"platform": "facebook", "itemId": "1", "title": "A", "price": 1, "itemWebUrl": "https://example.com/1", "imageUrl": "", "description": ""}

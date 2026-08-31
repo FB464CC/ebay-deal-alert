@@ -63,6 +63,11 @@ class _FakeScraplingResp:
 
 
 class ListingNumberValidation(unittest.TestCase):
+    def test_to_float_rejects_leading_minus_strings(self):
+        self.assertIsNone(p._to_float("-10"))
+        self.assertIsNone(p._to_float("-$12.50"))
+        self.assertEqual(p._to_float("$12.50"), 12.5)
+
     def test_non_finite_boolean_and_non_positive_prices_are_rejected(self):
         for price in (True, float("nan"), float("inf"), float("-inf"), 0, -1):
             with self.subTest(price=price):

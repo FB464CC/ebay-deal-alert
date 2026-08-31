@@ -80,16 +80,25 @@ module.exports = async (req, res) => {
   try {
     const file = await fetchHistoryFile();
     if (!file) {
-      return sendJson(res, 200, []);
+      return sendJson(res, 200, { history: [], skipped: 0 });
     }
     const text = Buffer.from(file.content, "base64").toString("utf8");
-    const history = text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .reverse();
-    return sendJson(res, 200, history);
+    const history = [];
+    let skipped = 0;
+    for (const [index, rawLine] of text.split("\n").entries()) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      try {
+        history.push(JSON.parse(line));
+      } catch (error) {
+        skipped += 1;
+        console.warn(`Skipping invalid alerts_log.jsonl line ${index + 1}: ${error.message}`);
+      }
+    }
+    history.reverse();
+    return sendJson(res, 200, { history, skipped });
   } catch (error) {
     return sendJson(res, error.status || 500, { error: error.message, details: error.details });
   }
