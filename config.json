@@ -1901,6 +1901,61 @@
         "shopgoodwill",
         "facebook"
       ]
+    },
+    {
+      "query": "casino poker chips set",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "paulson poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "vintage casino chip set",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "clay poker chips lot",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
+    },
+    {
+      "query": "poker chip set vintage",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ]
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
@@ -2289,18 +2344,10 @@
     "left shoe only",
     "right shoe only",
     "single shoe",
-    "watch box",
-    "presentation box",
-    "display case",
     "watch case only",
     "service booklet",
     "warranty card",
     "booklet only",
-    "travel case",
-    "watch roll",
-    "watch pouch",
-    "watch organizer",
-    "storage case",
     "radio",
     "advertisement",
     "print ad",
@@ -2312,7 +2359,6 @@
     "pamphlet",
     "watchstrap",
     "watch strap",
-    "caseback",
     "biography",
     "book",
     "paperback",

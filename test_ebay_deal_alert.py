@@ -107,10 +107,169 @@ class CategoryClassification(unittest.TestCase):
         self.assertEqual(m.classify_search_category("callaway strata golf set"), "golf-equipment")
         self.assertEqual(m.classify_search_category("peter millar golf polo"), "golf")
 
+    def test_poker_chip_queries_reach_specialized_category(self):
+        for query in (
+            "casino poker chips set",
+            "paulson poker chips",
+            "vintage casino chip set",
+            "clay poker chips lot",
+            "poker chip set vintage",
+        ):
+            with self.subTest(query=query):
+                self.assertEqual(m.classify_search_category(query), "poker-chips")
+
+
+class PokerChipsGate(unittest.TestCase):
+    def _result(self, price=100, **poker_fields):
+        result = {
+            "price": price,
+            "search_query": "paulson poker chips",
+            "listing": {"title": "Vintage Casino Poker Chip Set"},
+            "poker_chips_ai_checked": True,
+            "poker_chips_chip_type": "compression-molded clay",
+            "poker_chips_is_genuine_clay": True,
+            "poker_chips_has_inlay_not_sticker": True,
+            "poker_chips_edge_spots_consistent": True,
+            "poker_chips_recolor_suspected": False,
+            "poker_chips_recolor_reason": "",
+        }
+        result.update(poker_fields)
+        return result
+
+    def test_genuine_clay_with_inlay_and_consistent_edges_passes(self):
+        self.assertIsNone(
+            m.is_blocked_by_steal_quality_gate(
+                self._result(), category="poker-chips"
+            )
+        )
+
+    def test_abs_novelty_chip_type_blocks(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                poker_chips_chip_type="ABS plastic/novelty",
+                poker_chips_is_genuine_clay=False,
+            ),
+            category="poker-chips",
+        )
+        self.assertEqual(reason, "poker-chips bar: not genuine clay chips")
+
+    def test_sticker_not_inlay_blocks(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(poker_chips_has_inlay_not_sticker=False),
+            category="poker-chips",
+        )
+        self.assertEqual(
+            reason,
+            "poker-chips bar: no confirmed inlay (sticker/printed label risk)",
+        )
+
+    def test_inconsistent_edge_spots_block(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(poker_chips_edge_spots_consistent=False),
+            category="poker-chips",
+        )
+        self.assertEqual(
+            reason, "poker-chips bar: inconsistent edge spots across the set"
+        )
+
+    def test_recolor_suspected_blocks_with_reason(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                poker_chips_recolor_suspected=True,
+                poker_chips_recolor_reason="uneven saturated red patch on one face",
+            ),
+            category="poker-chips",
+        )
+        self.assertEqual(
+            reason,
+            "poker-chips bar: recolor suspected: uneven saturated red patch on one face",
+        )
+
+    def test_price_over_150_blocks(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(price=150.01), category="poker-chips"
+        )
+        self.assertEqual(
+            reason,
+            "poker-chips bar: price $150.01 exceeds $150 manual-research cap",
+        )
+
+    def test_specialized_prompt_contains_schema_and_conservative_rules(self):
+        response = {
+            "chip_type": "compression-molded clay",
+            "is_genuine_clay": True,
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(
+            m, "_call_photo_check", return_value=response
+        ) as photo_check:
+            actual = m.check_photos_with_gemini(
+                {
+                    "title": "Old casino poker chips",
+                    "image": {"imageUrl": "https://example.test/chips.jpg"},
+                },
+                category="poker-chips",
+                current_month_name="August",
+            )
+
+        self.assertEqual(actual, response)
+        prompt = photo_check.call_args.args[0]
+        for required_text in (
+            '"chip_type": string',
+            '"has_inlay_not_sticker": bool',
+            '"edge_spots_consistent": bool',
+            '"recolor_suspected": bool',
+            "Paulson",
+            "obsolete casino-issued sets",
+            "Do not estimate resale value",
+            "use false for boolean fields",
+            "unknown for applicable string fields rather than guessing",
+        ):
+            with self.subTest(required_text=required_text):
+                self.assertIn(required_text, prompt)
+
+
+class PokerChipsConfiguration(unittest.TestCase):
+    def test_saved_searches_have_requested_shape_and_implicit_ebay_lane(self):
+        expected_queries = {
+            "casino poker chips set",
+            "paulson poker chips",
+            "vintage casino chip set",
+            "clay poker chips lot",
+            "poker chip set vintage",
+        }
+        searches = {
+            search["query"]: search
+            for search in m.SAVED_SEARCHES
+            if search["query"] in expected_queries
+        }
+        self.assertEqual(set(searches), expected_queries)
+        for query, search in searches.items():
+            with self.subTest(query=query):
+                self.assertEqual(
+                    set(search),
+                    {"query", "size", "max_price", "enabled", "profile", "platforms"},
+                )
+                self.assertIsNone(search["size"])
+                self.assertEqual(search["max_price"], 150)
+                self.assertIs(search["enabled"], True)
+                self.assertEqual(search["profile"], "fast")
+                # `platforms` scopes non-eBay adapters only. The Browse API
+                # lane consumes all enabled SAVED_SEARCHES independently.
+                self.assertEqual(search["platforms"], ["shopgoodwill", "facebook"])
+
 
 class GolfEquipmentGate(unittest.TestCase):
     def _result(self, price=200, **golf_fields):
-        result = {"price": price, "search_query": "golf club set", "listing": {"title": "Golf Set"}}
+        result = {
+            "price": price,
+            "search_query": "golf club set",
+            "listing": {"title": "Golf Set"},
+            "golf_handedness_confirmed": True,
+            "golf_brand_claims_confirmed": True,
+            "golf_identified_brand": "Titleist",
+        }
         result.update(golf_fields)
         return result
 
@@ -150,6 +309,70 @@ class GolfEquipmentGate(unittest.TestCase):
             category="golf-equipment",
         )
         self.assertIsNotNone(reason)
+
+    def test_incoherent_grab_bag_blocks_but_compatible_mixed_combo_passes(self):
+        listings = (
+            ({
+                "title": "7 Right 6 irons. Taylormade aeroburner,R11,R9 TP,rocketballz",
+                "description": (
+                    "Seven individual irons from TaylorMade, Cleveland, and Mizuno "
+                    "production lines and eras"
+                ),
+                "image": {"imageUrl": "https://example.test/grab-bag.jpg"},
+            }, {
+                "is_playable_first_set": False,
+                "identified_brand": "TaylorMade / Cleveland / Mizuno",
+                "summary": (
+                    "Incoherent multi-brand, multi-era grab-bag with no matched-set logic"
+                ),
+            }),
+            ({
+                "title": "Ping Eye2 irons with Callaway Big Bertha driver and woods",
+                "description": "Right-handed adult irons-and-woods combo",
+                "image": {"imageUrl": "https://example.test/compatible-combo.jpg"},
+            }, {
+                "is_playable_first_set": True,
+                "identified_brand": "Ping / Callaway",
+                "summary": "Coherent Ping iron set with compatible Callaway woods",
+            }),
+        )
+        ai_results = iter(ai_result for _, ai_result in listings)
+
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(
+            m, "_call_photo_check", side_effect=lambda *_args, **_kwargs: next(ai_results)
+        ) as photo_check:
+            gate_reasons = []
+            for listing, expected_ai_result in listings:
+                ai_result = m.check_photos_with_gemini(
+                    listing, category="golf-equipment", current_month_name="August"
+                )
+                self.assertEqual(ai_result, expected_ai_result)
+                gate_reasons.append(m.is_blocked_by_steal_quality_gate(
+                    self._result(
+                        listing=listing,
+                        golf_ai_checked=True,
+                        golf_is_playable_first_set=ai_result["is_playable_first_set"],
+                        golf_is_starter_kit=False,
+                        golf_is_left_handed=False,
+                        golf_handedness_confirmed=True,
+                        golf_brand_claims_confirmed=True,
+                        golf_identified_brand=ai_result["identified_brand"],
+                        golf_counterfeit_suspected=False,
+                        damage_found=False,
+                    ),
+                    category="golf-equipment",
+                ))
+
+        self.assertIn("did not confirm a playable first set", gate_reasons[0])
+        self.assertIsNone(gate_reasons[1])
+        prompt = photo_check.call_args_list[0].args[0]
+        self.assertIn("INCOHERENT GRAB-BAG", prompt)
+        self.assertIn("different, unrelated manufacturers, product lines, or eras", prompt)
+        self.assertIn("not sold or built together as a matched or reasonably-compatible set", prompt)
+        self.assertIn("Ping Eye2 irons with Callaway Big Bertha woods", prompt)
+        self.assertIn("distinct from mere incompleteness", prompt)
 
     def test_playable_partial_set_under_cap_clears_the_gate(self):
         reason = m.is_blocked_by_steal_quality_gate(
@@ -210,6 +433,60 @@ class GolfEquipmentGate(unittest.TestCase):
             self._result(price=250, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           golf_is_left_handed=False),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
+    def test_unconfirmed_handedness_is_blocked(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          golf_is_left_handed=False, golf_handedness_confirmed=False),
+            category="golf-equipment",
+        )
+        self.assertEqual(
+            reason,
+            "golf-equipment bar: AI could not visually confirm right-handed clubs",
+        )
+
+    def test_unconfirmed_brand_claims_are_blocked(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          golf_is_left_handed=False, golf_brand_claims_confirmed=False),
+            category="golf-equipment",
+        )
+        self.assertEqual(
+            reason,
+            "golf-equipment bar: AI could not confirm the clubs match their claimed brand/model",
+        )
+
+    def test_blocked_brands_are_rejected_even_when_every_other_check_passes(self):
+        for brand in ("Wilson", "Golden Bear"):
+            with self.subTest(brand=brand):
+                reason = m.is_blocked_by_steal_quality_gate(
+                    self._result(
+                        golf_ai_checked=True,
+                        golf_is_playable_first_set=True,
+                        golf_is_starter_kit=False,
+                        golf_is_left_handed=False,
+                        golf_handedness_confirmed=True,
+                        golf_brand_claims_confirmed=True,
+                        golf_identified_brand=brand,
+                        golf_counterfeit_suspected=False,
+                        damage_found=False,
+                    ),
+                    category="golf-equipment",
+                )
+                self.assertIn("blocked brand", reason)
+                self.assertIn(brand.lower(), reason.lower())
+
+    def test_tour_edge_exotics_preserves_the_premium_line_carve_out(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
+                          golf_is_starter_kit=False, damage_found=False,
+                          golf_is_left_handed=False,
+                          golf_identified_brand="Tour Edge Exotics"),
             category="golf-equipment",
         )
         self.assertIsNone(reason)
@@ -529,6 +806,76 @@ class WatchLotSignals(unittest.TestCase):
     def test_single_watch_listings_untouched(self):
         self.assertFalse(m.WATCH_LOT_SIGNALS.search("Rolex Submariner 116610 Automatic"))
         self.assertFalse(m.WATCH_LOT_SIGNALS.search("Vintage Omega Seamaster Automatic Watch"))
+
+
+class WatchNotAWatchSignals(unittest.TestCase):
+    def test_packaging_display_literature_and_parts_are_flagged(self):
+        bad_titles = (
+            "AP Watch Presentation Set",
+            "Rolex Green Presentation Box",
+            "Luxury Watch Display Case",
+            "Omega Watch Display",
+            "Watch Display Stand",
+            "Patek Philippe Watch Catalogue 2025",
+            "Rolex Watch Catalog",
+            "Omega Product Brochure",
+            "Wolf Watch Winder",
+            "Rolex Caliber Movement Only",
+            "Omega Dial Only",
+            "Sapphire Crystal Only",
+            "Rolex Crown Only",
+            "Rolex Watch Stainless Case Only",
+            "Vintage Watch Parts Only",
+            "Omega Seamaster For Parts",
+            "Rolex Single Link",
+            "Tissot Spare Gold Link",
+            "Cartier Extra Bracelet Link",
+            "Omega Replacement Steel Link",
+            "Tissot - Just the Gold Link",
+        )
+        for title in bad_titles:
+            with self.subTest(title=title):
+                self.assertTrue(m.WATCH_NOT_A_WATCH_SIGNALS.search(title))
+
+    def test_included_accessories_do_not_hide_a_real_watch(self):
+        good_titles = (
+            "Omega Seamaster - Comes With Original Presentation Box and Papers",
+            "Rolex Submariner With Display Stand",
+            "Cartier Tank Includes Original Catalog and Brochure",
+            "Tissot PRX Includes One Extra Link",
+            "Vintage Omega Seamaster Automatic Watch",
+            "Leather Travel Case Only",
+        )
+        for title in good_titles:
+            with self.subTest(title=title):
+                self.assertFalse(m.WATCH_NOT_A_WATCH_SIGNALS.search(title))
+
+
+class WatchPackagingHardFailScoping(unittest.TestCase):
+    REMOVED_GENERIC_TOKENS = {
+        "watch box", "presentation box", "display case", "watch roll",
+        "watch pouch", "watch organizer", "travel case", "storage case",
+        "caseback",
+    }
+
+    def test_bare_packaging_tokens_are_not_generic_condition_failures(self):
+        self.assertTrue(
+            self.REMOVED_GENERIC_TOKENS.isdisjoint(m.CONDITION_HARD_FAIL_KEYWORDS)
+        )
+        genuine_watch = (
+            "Omega Seamaster automatic watch with original watch box and "
+            "presentation box, display case, travel case, watch roll, watch pouch, "
+            "watch organizer, storage case, papers, and signed caseback"
+        )
+        self.assertIsNone(
+            m.matched_keyword(genuine_watch, m.CONDITION_HARD_FAIL_KEYWORDS)
+        )
+
+    def test_accessory_only_wording_remains_covered_by_scoped_gates(self):
+        self.assertTrue(
+            m.WATCH_NOT_A_WATCH_SIGNALS.search("Omega Watch Presentation Box")
+        )
+        self.assertTrue(m.EMPTY_PACKAGING_SIGNALS.search("Rolex watch box only"))
 
 
 class WatchPriceBand(unittest.TestCase):
@@ -2290,6 +2637,61 @@ class MakeListingDescription(unittest.TestCase):
         self.assertNotIn("description", listing)
 
 
+class MultiUnitCounterfeitSignal(unittest.TestCase):
+    def test_reads_only_ebay_estimated_availability(self):
+        listing = {
+            "estimatedAvailabilities": [
+                {"estimatedAvailableQuantity": "3"},
+                {"estimatedAvailableQuantity": 5},
+            ]
+        }
+        self.assertEqual(m.get_listing_quantity_available(listing), 5)
+        self.assertIsNone(m.get_listing_quantity_available({
+            "estimatedAvailabilities": [{"estimatedSoldQuantity": 8}]
+        }))
+        self.assertIsNone(m.get_listing_quantity_available({
+            "platform": "poshmark",
+            "estimatedAvailabilities": [{"estimatedAvailableQuantity": 5}],
+        }))
+
+    def test_multi_unit_signal_reaches_all_counterfeit_prompts(self):
+        listing = {
+            "title": "Gucci Branded Item",
+            "image": {"imageUrl": "https://example.test/item.jpg"},
+            "estimatedAvailabilities": [{"estimatedAvailableQuantity": 4}],
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(
+            m, "_call_photo_check", return_value={}
+        ) as photo_check:
+            for category in ("leather-goods", "watches", "golf-equipment"):
+                with self.subTest(category=category):
+                    m.check_photos_with_gemini(
+                        listing, category=category, current_month_name="August"
+                    )
+                    prompt = photo_check.call_args.args[0]
+                    self.assertIn("seller has 4 identical units listed", prompt)
+                    self.assertIn("factor this into counterfeit_suspected", prompt)
+                    self.assertIn("not conclusive on its own", prompt)
+
+    def test_single_unit_does_not_create_a_counterfeit_flag(self):
+        listing = {
+            "title": "Gucci Leather Belt",
+            "image": {"imageUrl": "https://example.test/belt.jpg"},
+            "estimatedAvailabilities": [{"estimatedAvailableQuantity": 1}],
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(
+            m, "_call_photo_check", return_value={}
+        ) as photo_check:
+            m.check_photos_with_gemini(
+                listing, category="leather-goods", current_month_name="August"
+            )
+        self.assertNotIn("Marketplace inventory risk signal", photo_check.call_args.args[0])
+
+
 class AsciiSafeHeader(unittest.TestCase):
     """Live miss: a genuine 72%-under-resale "Steal" (Allen Edmonds
     LaSalle, size 13) sat completely unsent for 6+ hours because its
@@ -3026,6 +3428,103 @@ class RunIntegration(unittest.TestCase):
         self.assertFalse(m.is_new(self._db(), "v1|297183440152|0"),
                          "a hard-failed listing is a final disposition - mark it seen")
 
+    def test_token_failure_still_processes_marketplaces_then_exits_nonzero(self):
+        saved_search = {
+            "query": "loro piana sweater", "max_price": 400,
+            "category_id": "11484", "enabled": True, "profile": "fast",
+        }
+        marketplace_item = p.make_listing(
+            "shopgoodwill", "oauth-independent-1",
+            "Loro Piana Cashmere Sweater Mens Medium Navy", 180,
+            "https://shopgoodwill.example/items/oauth-independent-1",
+        )
+        self._serve(saved_search, [])
+        self._patch("get_ebay_token", mock.Mock(side_effect=RuntimeError("oauth 503")))
+        prefetch = mock.Mock(return_value={saved_search["query"]: [marketplace_item]})
+        self._patch("prefetch_marketplaces", prefetch)
+
+        with self.assertRaisesRegex(RuntimeError, "OAuth token unavailable"):
+            m.run()
+
+        prefetch.assert_called_once()
+        self.assertEqual(
+            [alert["listing"]["itemId"] for alert in self.alerts],
+            ["shopgoodwill:oauth-independent-1"],
+            "an eBay token outage must not blank an independent marketplace alert",
+        )
+
+    def test_vinted_description_blocks_jacket_only_suit_before_ai(self):
+        saved_search = {
+            "query": "canali suit", "max_price": 300, "size": ["42"],
+            "category_id": "3001", "enabled": True, "profile": "fast",
+        }
+        listing = p.make_listing(
+            "vinted", "jacket-only-1", "Canali Navy Wool Suit 42R", 95,
+            "https://www.vinted.com/items/jacket-only-1",
+            size="42R",
+        )
+        self._serve(saved_search, [])
+        self._patch("prefetch_marketplaces", lambda now, conn: {
+            saved_search["query"]: [listing]
+        })
+        fetch_description = mock.Mock(
+            return_value="Sport jacket only; matching pants are not included."
+        )
+        self._patch("fetch_vinted_item_description", fetch_description)
+
+        m.run()
+
+        fetch_description.assert_called_once_with(listing["itemWebUrl"])
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), listing["itemId"]))
+
+    def test_watch_not_a_watch_title_is_blocked_before_ai(self):
+        item = self._ebay_item(
+            "v1|100000000003|0",
+            "Audemars Piguet AP Watch Presentation Set", 120,
+        )
+        self._serve({
+            "query": "audemars piguet watch", "max_price": 2000,
+            "category_id": "31387", "enabled": True, "profile": "fast",
+        }, [item])
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), item["itemId"]))
+
+    def test_ebay_regular_and_auction_counts_reach_anomaly_history(self):
+        regular = self._ebay_item(
+            "v1|100000000001|0",
+            "Loro Piana Cashmere Sweater Mens Medium Navy", 180,
+        )
+        auction = self._auction_item(
+            "v1|100000000002|0",
+            "Loro Piana Cashmere Sweater Mens Small Grey", 160, 8,
+        )
+        saved_search = {
+            "query": "loro piana sweater", "max_price": 400,
+            "category_id": "11484", "enabled": True, "profile": "fast",
+        }
+        self._serve(saved_search, [regular], total_listings=17)
+        self._patch("EBAY_AUCTION_SEARCHES", [{
+            "query": "loro piana sweater auction", "max_price": 400,
+            "category_id": "11484", "enabled": True,
+        }])
+        self._patch(
+            "search_ebay_ending_soon_auctions",
+            lambda token, search: ([auction], 3),
+        )
+
+        m.run()
+
+        ebay_counts = self._db().execute(
+            "SELECT count FROM marketplace_counts WHERE platform = 'ebay'"
+        ).fetchall()
+        self.assertEqual(ebay_counts, [(20,)])
+
     def test_ebay_scrape_lane_merges_and_dedupes_against_official_api(self):
         # Covers the run()-loop WIRING specifically (mutation-tested:
         # commenting out the merge line makes this fail): the scraped
@@ -3103,10 +3602,12 @@ class RunIntegration(unittest.TestCase):
         self._serve(saved_search, [])
         self.ai_result = {
             "clubs_identified": "bag, putter, 5 mixed-brand irons",
-            "identified_brand": "Wilson / Top Flite mixed set",
+            "identified_brand": "Titleist",
+            "brand_claims_confirmed": True,
             "is_playable_first_set": True,
             "is_starter_kit_quality": True,
             "is_left_handed": False,
+            "handedness_confirmed": True,
             "damage_found": False,
             "damage_desc": "",
             "looks_good": True,
@@ -3120,7 +3621,7 @@ class RunIntegration(unittest.TestCase):
         queue_path.write_text(json.dumps({
             "platform": "facebook",
             "itemId": "fb-golf-1",
-            "title": "Mens Right Hand Golf Club Set Bag 5 Irons Putter",
+            "title": "Titleist Mens Right Hand Golf Club Set Bag 5 Irons Putter",
             "price": 150,
             "itemWebUrl": "https://www.facebook.com/marketplace/item/fb-golf-1/",
             "imageUrl": "https://example.test/golf.jpg",
