@@ -3480,8 +3480,14 @@ class PaidAiSpendLedger(unittest.TestCase):
         tempdir = pathlib.Path(tempfile.mkdtemp())
         seen_path = tempdir / "seen.db"
         spend_path = tempdir / "ai_spend.db"
+        # Real-money spend is disabled in the live config (paid AI budget is
+        # $0 - DeepSeek always fails closed and every check falls back to
+        # Gemini's free tier), but this test is about the legacy-ledger
+        # migration path specifically, so it patches its own positive
+        # budget rather than depending on config.json's live value.
         with mock.patch.object(m, "DB_PATH", str(seen_path)), \
-             mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)):
+             mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)), \
+             mock.patch.object(m, "AI_PAID_MONTHLY_BUDGET_USD", 18.0):
             conn = m.init_db()
             conn.close()
             seen_db = sqlite3.connect(seen_path)
@@ -3516,10 +3522,15 @@ class PaidAiSpendLedger(unittest.TestCase):
             self.assertEqual(calls, 2)
 
     def test_full_legacy_ledger_is_persisted_when_new_reservation_is_rejected(self):
+        # Same rationale as test_ledger_is_independent_of_seen_db_and_
+        # remains_fail_closed above: patches its own positive budget so
+        # this "ledger already full" scenario is exercised regardless of
+        # the live config's $0 paid-AI budget.
         tempdir = pathlib.Path(tempfile.mkdtemp())
         seen_path = tempdir / "seen.db"
         spend_path = tempdir / "ai_spend.db"
         month = datetime.now(timezone.utc).strftime("%Y-%m")
+        test_budget = 18.0
         with sqlite3.connect(seen_path) as legacy:
             legacy.execute(
                 "CREATE TABLE ai_paid_spend "
@@ -3527,11 +3538,12 @@ class PaidAiSpendLedger(unittest.TestCase):
             )
             legacy.execute(
                 "INSERT INTO ai_paid_spend VALUES (?, ?, ?)",
-                (month, m.AI_PAID_MONTHLY_BUDGET_USD, 99),
+                (month, test_budget, 99),
             )
 
         with mock.patch.object(m, "DB_PATH", str(seen_path)), \
-             mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)):
+             mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)), \
+             mock.patch.object(m, "AI_PAID_MONTHLY_BUDGET_USD", test_budget):
             self.assertFalse(m._reserve_paid_ai_spend(m.AI_PAID_TEXT_RESERVATION_USD))
             with sqlite3.connect(spend_path) as ledger:
                 reserved, calls = ledger.execute(
