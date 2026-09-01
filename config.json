@@ -1956,7 +1956,7 @@
       "query": "casino poker chips set",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -1967,7 +1967,7 @@
       "query": "paulson poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -1978,7 +1978,7 @@
       "query": "vintage casino chip set",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -1989,7 +1989,7 @@
       "query": "clay poker chips lot",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -2000,7 +2000,7 @@
       "query": "poker chip set vintage",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
