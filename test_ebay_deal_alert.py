@@ -1362,6 +1362,32 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("obfuscated", result["reason"])
 
+    def test_openly_non_genuine_language_hard_fails_every_category(self):
+        disclosures = (
+            "reproduction",
+            "my own version",
+            "our own version",
+            "handmade tribute",
+            "knock-off",
+            "imitation",
+            "designer dupe",
+            "homage",
+        )
+        categories = ("leather-goods", "watches", "golf-equipment", "poker-chips")
+        for category in categories:
+            for disclosure in disclosures:
+                with self.subTest(category=category, disclosure=disclosure):
+                    result = m.score_listing(
+                        self._listing(
+                            "Luxury branded item",
+                            description=f"Handmade {disclosure} of the famous original",
+                        ),
+                        gap_report=None,
+                        category=category,
+                    )
+                    self.assertEqual(result["verdict"], "PASS")
+                    self.assertIn("counterfeit/replica listing language", result["reason"])
+
     def test_clean_brand_spelling_not_flagged_as_obfuscated(self):
         result = m.score_listing(self._listing("Goyard Blue Card Holder Wallet Excellent Condition"), gap_report=None)
         self.assertNotIn("obfuscated", result.get("reason", ""))
@@ -2854,6 +2880,30 @@ class MultiUnitCounterfeitSignal(unittest.TestCase):
             )
         self.assertNotIn("Marketplace inventory risk signal", photo_check.call_args.args[0])
 
+    def test_seller_disclosure_rule_reaches_every_category_prompt(self):
+        listing = {
+            "title": "Designer item - my own version",
+            "description": "Handmade tribute inspired by the original",
+            "image": {"imageUrl": "https://example.test/item.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(
+            m, "_call_photo_check", return_value={}
+        ) as photo_check:
+            for category in ("leather-goods", "watches", "golf-equipment", "poker-chips"):
+                with self.subTest(category=category):
+                    m.check_photos_with_gemini(
+                        listing, category=category, current_month_name="September"
+                    )
+                    prompt = photo_check.call_args.args[0]
+                    self.assertIn("Seller authenticity disclosure is decisive", prompt)
+                    self.assertIn("seller's own version", prompt)
+                    self.assertIn("handmade tribute", prompt)
+                    self.assertIn("regardless of how convincing the photos look", prompt)
+                    if category == "poker-chips":
+                        self.assertIn("set is_genuine_clay false", prompt)
+
 
 class AsciiSafeHeader(unittest.TestCase):
     """Live miss: a genuine 72%-under-resale "Steal" (Allen Edmonds
@@ -4260,6 +4310,47 @@ class RunIntegration(unittest.TestCase):
         self.assertIs(record["delivered"], True)
         self.assertNotIn("delivery_error", record)
         self.assertTrue(any("failed to persist seen marker" in line for line in captured.output))
+
+    def test_alert_log_failure_after_send_still_marks_exact_item_seen(self):
+        # Regression for the live duplicate shape: delivery succeeded, but
+        # append_alert_log used to run before mark_seen and an I/O failure
+        # therefore left the exact canonical marketplace item eligible next
+        # run. A second AI pass could then give the same title/price a new
+        # estimate and send it again.
+        item_id = "depop:854045330"
+        listing = {
+            "itemId": item_id,
+            "platform": "depop",
+            "title": "Vintage Salvatore Ferragamo red leather continental wallet",
+            "description": "Vintage Salvatore Ferragamo red leather continental wallet",
+            "price": {"value": 28.0, "currency": "USD"},
+            "itemWebUrl": "https://www.depop.com/products/example-wallet/",
+            "image": {"imageUrl": "https://media-photos.depop.com/P0.jpg"},
+        }
+        self._patch("SAVED_SEARCHES", [{
+            "query": "ferragamo wallet", "max_price": 60,
+            "category_id": "11484", "enabled": True, "profile": "slow",
+            "platforms": ["depop"],
+        }])
+        self._patch("search_ebay", lambda token, search: ([], 0))
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        self._patch("prefetch_marketplaces", lambda now, conn: {
+            "ferragamo wallet": [listing]
+        })
+        self._patch(
+            "append_alert_log",
+            mock.Mock(side_effect=OSError("alerts log disk write failed")),
+        )
+        notify_failure = self._patch("notify_bot_down", mock.Mock())
+
+        with self.assertLogs("ebay_deal_alert", level="ERROR") as captured:
+            m.run()
+
+        self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [item_id])
+        self.assertFalse(m.is_new(self._db(), item_id))
+        notify_failure.assert_not_called()
+        self.assertTrue(any("failed to append the delivered alert log" in line
+                            for line in captured.output))
 
     def test_max_alerts_exit_only_acknowledges_scout_rows_already_sent(self):
         self._patch("SCOUT_AI_CHECK_LIMIT", 2)

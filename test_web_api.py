@@ -165,11 +165,11 @@ class TelegramUrlSafetyTests(unittest.TestCase):
         expression = (
             f"(()=>{{const q=t.searchQueryFromUrl({json.dumps(url)},'Titleist listing {url}');"
             "return [q,t.classify(q),t.classify('Titleist AP1 712 irons'),"
-            "t.classify('casino poker chips')]})()"
+            "t.classify('casino poker chips'),t.classify('shirt with free shipping')]})()"
         )
         self.assertEqual(
             run_node(expression),
-            ["golf club set", "golf-equipment", "golf-equipment", "poker-chips"],
+            ["golf club set", "golf-equipment", "golf-equipment", "poker-chips", "other"],
         )
 
     def test_category_falls_back_to_user_text_not_seller_metadata(self):
@@ -179,6 +179,25 @@ class TelegramUrlSafetyTests(unittest.TestCase):
             "return [q,t.classify(q)]})()"
         )
         self.assertEqual(run_node(expression), ["golf bag", "golf-equipment"])
+
+    def test_counterfeit_seller_disclosures_hard_fail(self):
+        expression = (
+            "['replica club heads','my own version of Bottega','handmade tribute watch',"
+            "'reproduction casino chips','designer dupe','Rolex homage'].map(x=>"
+            "t.counterfeitListingLanguage('Clean title',x))"
+        )
+        self.assertEqual(run_node(expression), [True] * 6)
+        self.assertFalse(
+            run_node("t.counterfeitListingLanguage('Vintage genuine watch','Original box included')")
+        )
+
+    def test_every_category_prompt_treats_seller_disclosure_as_decisive(self):
+        expression = (
+            "['golf-equipment','poker-chips','watches','other'].map(c=>"
+            "t.buildPrompt(c,'Replica item','my own version handmade tribute','September',"
+            "{amount:25,currency:'USD'}).includes('Seller authenticity disclosure is decisive'))"
+        )
+        self.assertEqual(run_node(expression), [True] * 4)
 
     def test_private_and_reserved_addresses_are_rejected(self):
         addresses = ["127.0.0.1", "10.2.3.4", "100.64.0.1", "169.254.1.1", "172.16.0.1", "192.168.1.1", "198.51.100.1", "203.0.113.1", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"]
@@ -336,6 +355,17 @@ Promise.resolve(handler(req, res)).then(() => process.stdout.write(JSON.stringif
 
 
 class ConfigApiTests(unittest.TestCase):
+    def test_repeated_bad_passwords_trigger_per_ip_backoff(self):
+        script = f"""
+process.env.GITHUB_TOKEN='test-token';process.env.GITHUB_REPO='owner/repo';process.env.SETTINGS_PASSWORD='right';delete process.env.NTFY_TOPIC;
+const handler=require({json.dumps(CONFIG_MODULE)});
+const invoke=async()=>{{let text='';const res={{statusCode:0,headers:{{}},setHeader(k,v){{this.headers[k]=v}},end(v){{text=v.toString('utf8')}}}};await handler({{method:'GET',headers:{{'x-settings-password':'wrong','x-forwarded-for':'203.0.113.4'}}}},res);return {{status:res.statusCode,headers:res.headers}}}};
+(async()=>{{const results=[];for(let i=0;i<4;i++)results.push(await invoke());process.stdout.write(JSON.stringify(results))}})().catch(e=>{{process.stderr.write(e.stack);process.exit(2)}});
+"""
+        results = run_node_script(script)
+        self.assertEqual([result["status"] for result in results], [401, 401, 401, 429])
+        self.assertEqual(results[2]["headers"]["Retry-After"], "1")
+
     def test_saved_search_and_keyword_fields_are_strictly_validated(self):
         cases = []
 
