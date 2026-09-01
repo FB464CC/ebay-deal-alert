@@ -99,7 +99,7 @@
         "13"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -109,7 +109,7 @@
         "13"
       ],
       "max_price": 80,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -229,7 +229,7 @@
         "47"
       ],
       "max_price": 180,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -244,7 +244,7 @@
         "47"
       ],
       "max_price": 180,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -259,7 +259,7 @@
         "47"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -274,7 +274,7 @@
         "47"
       ],
       "max_price": 90,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -284,7 +284,7 @@
         "13"
       ],
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -294,7 +294,7 @@
         "13"
       ],
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -315,7 +315,7 @@
         "13"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -439,7 +439,7 @@
         "13"
       ],
       "max_price": 70,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -676,7 +676,7 @@
         "47"
       ],
       "max_price": 130,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -794,7 +794,7 @@
         "47"
       ],
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -1073,7 +1073,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -1088,7 +1088,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -1103,7 +1103,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
@@ -1118,7 +1118,7 @@
       "query": "marinella tie -scarf",
       "size": null,
       "max_price": 40,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -1260,7 +1260,7 @@
       "query": "hermes tie -scarf -cufflinks -clip -bar -box -case -square",
       "size": null,
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "2993"
     },
@@ -1387,7 +1387,7 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120"
     },
