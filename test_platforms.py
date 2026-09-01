@@ -689,6 +689,65 @@ class OfferUpAdapter(unittest.TestCase):
 
         self.assertTrue(listing["offerup_placeholder_price"])
 
+    def test_numeric_zero_price_prefers_450_description_ask(self):
+        # A genuine $0/free-listing OfferUp card must not be dropped just
+        # because 0 isn't ">0" - it has to survive to reconciliation.
+        listing = p._offerup_to_listing({
+            "listingId": "zero-price-numeric",
+            "title": "Tissot Divers Automatic Watch",
+            "price": 0,
+            "description": (
+                "Tissot divers automatic watch in excellent condition. "
+                "Retail was about $650. Asking price is $450."
+            ),
+            "image": {"url": "https://images.offerup.com/tissot.jpg"},
+        })
+
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing["price"], {"value": 450.0, "currency": "USD"})
+        self.assertEqual(listing["offerup_search_price"], 0.0)
+        self.assertTrue(listing["offerup_price_from_description"])
+        self.assertNotIn("offerup_placeholder_price", listing)
+
+    def test_string_dollar_zero_price_prefers_450_description_ask(self):
+        listing = p._offerup_to_listing({
+            "listingId": "zero-price-string",
+            "title": "Tissot Divers Automatic Watch",
+            "price": "$0",
+            "description": (
+                "Tissot divers automatic watch in excellent condition. "
+                "Retail was about $650. Asking price is $450."
+            ),
+            "image": {"url": "https://images.offerup.com/tissot.jpg"},
+        })
+
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing["price"], {"value": 450.0, "currency": "USD"})
+        self.assertEqual(listing["offerup_search_price"], 0.0)
+        self.assertTrue(listing["offerup_price_from_description"])
+        self.assertNotIn("offerup_placeholder_price", listing)
+
+    def test_unresolved_zero_price_is_marked_suspicious_not_dropped(self):
+        listing = p._offerup_to_listing({
+            "listingId": "zero-price-unresolved",
+            "title": "Tissot Divers Automatic Watch",
+            "price": 0,
+        })
+
+        self.assertIsNotNone(listing)
+        self.assertTrue(listing["offerup_placeholder_price"])
+        self.assertEqual(listing["offerup_search_price"], 0.0)
+
+    def test_missing_price_still_returns_none(self):
+        # allow_zero must not turn into "accept anything" - a genuinely
+        # missing/invalid price still drops the candidate.
+        listing = p._offerup_to_listing({
+            "listingId": "no-price",
+            "title": "Tissot Divers Automatic Watch",
+        })
+
+        self.assertIsNone(listing)
+
     def test_detail_page_description_parser_handles_attribute_order(self):
         page = (
             '<html><head><meta content="Seller says asking $450 &amp; firm" '

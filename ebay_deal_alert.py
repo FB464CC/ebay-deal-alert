@@ -2290,6 +2290,59 @@ def is_pants_only_suit_listing(title, query=None):
     )
 
 
+# User's real chest+cut is 42L (41L/42L/43L all fit; anything else, including
+# same chest with a different cut letter, does not). Matches "42L"/"42 L"/
+# "Size 42L" glued or spaced (same \b(\d{2})\s?(R|L|S)\b technique already
+# proven safe against "42mm" watch cases and "1942" years in the size_haystack
+# normalization above - see its comment for why the word boundaries matter),
+# plus the spelled-out "42 Long"/"42 Regular"/"42 Short" form. Leftmost match
+# wins when a listing somehow contains both forms.
+SUIT_CHEST_CUT_PATTERN = re.compile(
+    r"\b(\d{2})\s?(R|L|S)\b|\b(\d{2})\s+(Long|Regular|Short)\b", re.IGNORECASE
+)
+SUIT_CHEST_MIN = 41
+SUIT_CHEST_MAX = 43
+# Bounds for "this two-digit number is plausibly a jacket chest size" at all -
+# outside this, treat it as unparsed rather than confidently wrong (a stray
+# "10L"/"99L" is far more likely noise than a real chest size).
+SUIT_CHEST_PLAUSIBLE_MIN = 30
+SUIT_CHEST_PLAUSIBLE_MAX = 60
+
+
+def parse_suit_body_size(haystack):
+    """Best-effort chest+cut extraction from suit/blazer listing text.
+    Returns (chest:int, cut:str-lowercased-first-letter) or (None, None) if
+    nothing confidently parseable was found. Deliberately conservative: a
+    bare "42" with no cut letter/word directly attached is NOT parsed here
+    (false negatives are fine per the user's instruction; a false positive
+    that blocks a real fit is not)."""
+    match = SUIT_CHEST_CUT_PATTERN.search(haystack or "")
+    if not match:
+        return None, None
+    chest_str, cut = (match.group(1), match.group(2)) if match.group(1) else (match.group(3), match.group(4))
+    chest = int(chest_str)
+    if not (SUIT_CHEST_PLAUSIBLE_MIN <= chest <= SUIT_CHEST_PLAUSIBLE_MAX):
+        return None, None
+    return chest, cut[0].lower()
+
+
+def is_wrong_suit_body_size(title, description=None):
+    """Hard-fail: a suit/blazer listing whose title/description states a
+    parseable chest+cut outside chest 41-43 or cut != L/Long. Scoped to the
+    "tailoring" category by the caller (see classify_search_category) so
+    this never touches shirts/pants-only/shoes, which have unrelated size
+    conventions. Real live miss: "Hickey Freeman Loro Piana Tasmanian Super
+    150 Full Suit 46L 40x30 Pants Jacket" alerted as a 76%-under-resale
+    steal despite being a 46L on a 41-43L/L-cut-only user - zero suit body-
+    size filtering existed anywhere before this."""
+    chest, cut = parse_suit_body_size(f"{title or ''} {description or ''}")
+    if chest is None:
+        return False
+    if not (SUIT_CHEST_MIN <= chest <= SUIT_CHEST_MAX):
+        return True
+    return cut is not None and cut != "l"
+
+
 REQUIRED_ITEM_TYPE_SYNONYMS = {
     "cardholder": {"cardholder", "card holder", "card case", "wallet", "billfold", "coin purse"},
     "wallet": {"wallet", "billfold", "cardholder", "card holder", "card case"},
@@ -2394,6 +2447,28 @@ def is_relevant_marketplace_listing(listing, query):
     return any(re.search(rf"\b{re.escape(token)}\b", title) for token in query_tokens)
 
 
+def _text_safety_hard_fails(haystack):
+    """Deterministic, free (no AI call) gender/pet/packaging/counterfeit
+    text signals - score_listing()'s "block 0", factored out so other call
+    sites can re-run the exact same checks against text score_listing()
+    hadn't seen yet (see the eBay Browse path's late-description re-check
+    for why that matters). Returns a reason string, or None."""
+    if brand_in(haystack, GENDER_EXCLUDE_KEYWORDS):
+        return "excluded gender keyword in title/description"
+    if WOMENS_SIZE_CROSSREF_SIGNAL.search(haystack) and not UK_SIZE_CROSSREF_EXCEPTION.search(haystack):
+        return "women's size cross-reference in title/description"
+    if PET_PRODUCT_SIGNALS.search(haystack):
+        return "pet product, not menswear"
+    if EMPTY_PACKAGING_SIGNALS.search(haystack):
+        return "packaging/accessory-only listing, not the item"
+    if COUNTERFEIT_SIGNALS.search(haystack):
+        return "counterfeit/replica listing language in title/description"
+    obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
+    if obfuscation_hit:
+        return f"obfuscated/split brand name (counterfeit-listing pattern): {obfuscation_hit.group(0)!r}"
+    return None
+
+
 def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     title = listing.get("title", "").lower()
     # Per explicit user instruction: "not all sizes etc are in the titles.
@@ -2432,23 +2507,9 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     # 0. Gender - hard disqualifier, checked before anything else. Backstop
     # for search_ebay()'s query-level exclusion, in case a listing slips
     # through eBay's own "-term" matching.
-    if brand_in(haystack, GENDER_EXCLUDE_KEYWORDS):
-        return {"verdict": "PASS", "reason": "excluded gender keyword in title/description", "listing": listing}
-    if WOMENS_SIZE_CROSSREF_SIGNAL.search(haystack) and not UK_SIZE_CROSSREF_EXCEPTION.search(haystack):
-        return {"verdict": "PASS", "reason": "women's size cross-reference in title/description", "listing": listing}
-    if PET_PRODUCT_SIGNALS.search(haystack):
-        return {"verdict": "PASS", "reason": "pet product, not menswear", "listing": listing}
-    if EMPTY_PACKAGING_SIGNALS.search(haystack):
-        return {"verdict": "PASS", "reason": "packaging/accessory-only listing, not the item", "listing": listing}
-    if COUNTERFEIT_SIGNALS.search(haystack):
-        return {"verdict": "PASS", "reason": "counterfeit/replica listing language in title/description", "listing": listing}
-    obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
-    if obfuscation_hit:
-        return {
-            "verdict": "PASS",
-            "reason": f"obfuscated/split brand name (counterfeit-listing pattern): {obfuscation_hit.group(0)!r}",
-            "listing": listing,
-        }
+    safety_hard_fail = _text_safety_hard_fails(haystack)
+    if safety_hard_fail:
+        return {"verdict": "PASS", "reason": safety_hard_fail, "listing": listing}
 
     # 1. Brand/fabric/fit are apparel concerns. Golf equipment previously
     # ran through them too, which hard-rejected every normal "golf club"
@@ -4094,6 +4155,12 @@ def _format_estimated_usd(value):
 
 
 def append_alert_log(result, delivered=False, delivery_error=None):
+    """Returns True on a successful append, False if the write itself
+    failed. Callers that log a real delivery (verdict already sent) must
+    check this - a swallowed disk-full/read-only/path error there used to
+    look identical to success, leaving no durable record that the item was
+    ever handled. Best-effort callers (blocked/rejected/PASS logging before
+    any delivery happened) can ignore the return value, same as before."""
     listing = result["listing"]
     # `price` is the total landed cost (item + shipping + tax) computed in
     # full scoring - it only exists on REVIEW results. Early hard-fail PASS
@@ -4152,8 +4219,11 @@ def append_alert_log(result, delivered=False, delivery_error=None):
             log_file.write(json.dumps(record, separators=(",", ":")) + "\n")
     except OSError as exc:
         # Don't let a disk error here abort the whole run() batch - logging
-        # is best-effort, the alert itself already went out.
+        # is best-effort for callers that don't check the return value.
+        # Callers logging a real delivery DO check it (see docstring).
         logger.warning("Failed to write alerts log: %s", exc)
+        return False
+    return True
 
 
 def _ascii_safe_header(text):
@@ -4688,9 +4758,17 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
     conn.commit()
 
 
-def prefetch_marketplaces(now, conn):
+def prefetch_marketplaces(now, conn, run_hard_stop=None):
     """Fetch every enabled non-eBay marketplace for every enabled saved search,
-    in parallel, inside a fixed wall-clock budget. Returns {query: [listings]}."""
+    in parallel, inside a fixed wall-clock budget. Returns {query: [listings]}.
+
+    run_hard_stop: the caller's absolute time.monotonic() run deadline
+    (~390s), if any. Without this, prefetch computed its own independent
+    budget-only deadline and _run_html_batch() (OfferUp/Depop) computed yet
+    another one, so both marketplace layers could keep working - and write
+    anomaly rows to SQLite - well past the global run deadline. Clamping
+    against it here, and threading the SAME clamped deadline down into the
+    batch adapters below, makes every layer agree on one absolute stop."""
     searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
     if not searches:
         return {}
@@ -4723,6 +4801,8 @@ def prefetch_marketplaces(now, conn):
         if p in marketplaces.ADAPTERS and p not in marketplaces.BATCH_ADAPTERS
     ]
     deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
+    if run_hard_stop is not None:
+        deadline = min(deadline, run_hard_stop)
     # Outer daemon workers may outlive prefetch_marketplaces() when an adapter
     # wedges. This is the last instant at which they may publish anything to
     # shared state; late private results are discarded below.
@@ -4875,7 +4955,7 @@ def prefetch_marketplaces(now, conn):
             health[platform_name]["requests"] += 1
         health_context.platform = platform_name
         try:
-            results = marketplaces.BATCH_ADAPTERS[platform_name](relevant)
+            results = marketplaces.BATCH_ADAPTERS[platform_name](relevant, deadline=deadline)
         except Exception:
             logger.exception("%s batch fetch failed", platform_name)
             if time.monotonic() < hard_stop:
@@ -4999,6 +5079,16 @@ def prefetch_marketplaces(now, conn):
         health_snapshot = {
             platform: dict(signals) for platform, signals in health.items()
         }
+    # Gated on the same global run deadline this function's own deadline was
+    # clamped against - without this, a run that hit its ~390s hard stop
+    # while a batch was still in flight could still write fresh anomaly/
+    # count rows to SQLite after the point run() considers the run over.
+    if run_hard_stop is not None and time.monotonic() >= run_hard_stop:
+        logger.warning(
+            "Marketplace prefetch: global run deadline already passed; "
+            "skipping anomaly persistence for this run"
+        )
+        return found_snapshot
     try:
         # Every enabled platform, not just `active` (ADAPTERS-only): a
         # batch-only platform like facebook has no ADAPTERS entry, so it was
@@ -5113,7 +5203,7 @@ def run():
     current_month = current_utc.month
     current_month_name = current_utc.strftime("%B")
 
-    marketplace_listings = prefetch_marketplaces(current_utc, conn)
+    marketplace_listings = prefetch_marketplaces(current_utc, conn, run_hard_stop=hard_stop)
 
     # Same rotation trick as prefetch_marketplaces(): without it, the AI
     # budget and any future collect-time truncation would always bias
@@ -5643,6 +5733,14 @@ def run():
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
+            if category == "tailoring" and is_wrong_suit_body_size(title, listing.get("description")):
+                logger.info(
+                    "Skipping %s: suit/blazer body size parsed outside 41L-43L (user's fit)",
+                    item_id,
+                )
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
+
             if category == "watches" and WATCH_NOT_A_WATCH_SIGNALS.search(title):
                 logger.info(
                     "Skipping %s: watch-category title describes packaging/display/literature/parts, not a timepiece",
@@ -6044,6 +6142,49 @@ def run():
                 append_alert_log(result)
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
+            # Same gap as the jacket-only re-check above, for the suit
+            # body-size hard-fail: PASS 1 ran it title-only for eBay
+            # listings too, since the description doesn't exist yet then.
+            # Re-check now that it's readable.
+            if category == "tailoring" and is_wrong_suit_body_size(
+                listing.get("title", ""), listing.get("description")
+            ):
+                logger.info(
+                    "Skipping %s: description reveals suit/blazer body size outside 41L-43L on re-check",
+                    item_id,
+                )
+                result["verdict"] = "PASS"
+                result["reason"] = "suit/blazer body size (chest/cut) outside 41L-43L in description"
+                append_alert_log(result)
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
+            # Same gap as the jacket-only re-check above: PASS 1 ran EVERY
+            # cheap deterministic text hard-fail (counterfeit signals,
+            # condition hard-fails, gender/pet/packaging exclusions) against
+            # title + an empty description, since the eBay description
+            # doesn't exist yet at that point. A signal that only appears in
+            # the real description (e.g. "inspired handmade tribute" for a
+            # counterfeit, or a condition hard-fail word) was invisible then
+            # and would otherwise burn a scarce paid vision call below for
+            # nothing. Re-run them now that the real text is in hand.
+            if listing.get("description"):
+                late_haystack = f"{listing.get('title', '').lower()} {listing['description'].lower()}"
+                late_hard_fail = _text_safety_hard_fails(late_haystack)
+                if late_hard_fail is None:
+                    condition_hit = matched_keyword(late_haystack, CONDITION_HARD_FAIL_KEYWORDS)
+                    if condition_hit is not None:
+                        late_hard_fail = f"condition hard-fail keyword in title/description: {condition_hit!r}"
+                if late_hard_fail:
+                    logger.info(
+                        "Skipping %s: description hard-fail on re-check (avoided a wasted AI call) - %s",
+                        item_id,
+                        late_hard_fail,
+                    )
+                    result["verdict"] = "PASS"
+                    result["reason"] = late_hard_fail
+                    append_alert_log(result)
+                    mark_seen(conn, item_id, fingerprint, total_price)
+                    continue
             if _run_deadline_reached("before an AI vision check"):
                 break
             ai_result = check_photos_with_gemini(
@@ -6530,15 +6671,22 @@ def run():
             failure_result = dict(result)
             failure_result["verdict"] = "DELIVERY_FAILED"
             failure_result["reason"] = f"alert delivery failed after retries: {exc}"
-            append_alert_log(
+            log_success = append_alert_log(
                 failure_result,
                 delivered=False,
                 delivery_error=exc,
             )
-            notify_bot_down(
+            notify_message = (
                 f"Persistent alert delivery failure for {item_id}: {exc}. "
                 "The listing remains unseen and will retry next run."
             )
+            if not log_success:
+                notify_message += (
+                    " Additionally, the DELIVERY_FAILED alert-log record itself "
+                    "failed to write - the weekly digest will have no record "
+                    "of this failure."
+                )
+            notify_bot_down(notify_message)
             continue
 
         # Everything below is post-delivery bookkeeping. Persist the dedupe
@@ -6552,25 +6700,55 @@ def run():
             seen_markers.append((auction_alert_key, None, None))
         seen_markers.append((item_id, fingerprint, total_price))
         for seen_item_id, seen_fingerprint, seen_price in seen_markers:
-            try:
-                mark_seen(conn, seen_item_id, seen_fingerprint, seen_price)
-            except Exception:
+            # A push can succeed and then mark_seen() can hit a transient
+            # failure (SQLite "database is locked", a bad commit). A single
+            # miss here used to fall straight through to append_alert_log()
+            # as if dedupe had succeeded, so the item was logged delivered
+            # but never actually marked seen - the next run sends it again.
+            # Retry a few times with a tiny backoff before accepting that;
+            # if it's still failing after retries, this is a real
+            # correctness gap, so notify loudly instead of a quiet log line.
+            last_exc = None
+            for attempt in range(1, 4):
+                try:
+                    mark_seen(conn, seen_item_id, seen_fingerprint, seen_price)
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < 3:
+                        time.sleep(0.2 * attempt)
+            if last_exc is not None:
                 logger.exception(
-                    "Alert for %s was delivered, but failed to persist seen marker %s; "
-                    "a duplicate alert is possible on the next run",
+                    "Alert for %s was delivered, but failed to persist seen marker %s "
+                    "after 3 attempts; a duplicate alert is possible on the next run",
                     item_id,
                     seen_item_id,
+                    exc_info=last_exc,
+                )
+                notify_bot_down(
+                    f"{item_id}: delivered but failed to persist seen marker "
+                    f"{seen_item_id} after retries ({last_exc}); a duplicate "
+                    "alert is possible on the next run."
                 )
         try:
-            append_alert_log(result, delivered=True)
+            log_success = append_alert_log(result, delivered=True)
         except Exception:
-            # Delivery and dedupe persistence already happened. Losing one
-            # history record is diagnosable but must neither manufacture a
-            # delivery failure nor make the item alertable again.
+            log_success = False
             logger.exception(
                 "Alert for %s was delivered and marked seen, but failed to append "
                 "the delivered alert log record",
                 item_id,
+            )
+        if not log_success:
+            # Delivery and dedupe persistence already happened. Losing one
+            # history record is diagnosable but must neither manufacture a
+            # delivery failure nor make the item alertable again - just make
+            # sure it's not silent, or the weekly digest quietly loses a row.
+            notify_bot_down(
+                f"{item_id}: delivered and marked seen, but the delivered "
+                "alert-log record failed to write; the weekly digest will "
+                "have no record of this delivery."
             )
         alerts_sent += 1
         if alerts_sent >= MAX_ALERTS_PER_RUN:

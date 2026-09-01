@@ -65,7 +65,14 @@ const parseBody = async (req) => {
       if (Buffer.byteLength(req.body, "utf-8") > MAX_BODY_BYTES) throw new Error("Payload too large");
       return JSON.parse(req.body);
     }
-    if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) return req.body;
+    if (req.body && typeof req.body === "object" && !Array.isArray(req.body)) {
+      // Vercel auto-parses application/json into req.body before this
+      // function ever sees bytes, so the Buffer/string checks above never
+      // apply on the real Vercel path - this is the only place that guards
+      // it, up to Vercel's own much larger platform body-size limit.
+      if (Buffer.byteLength(JSON.stringify(req.body), "utf-8") > MAX_BODY_BYTES) throw new Error("Payload too large");
+      return req.body;
+    }
     throw new Error("Invalid JSON body");
   }
 

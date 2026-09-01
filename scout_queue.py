@@ -70,10 +70,17 @@ def load_scout_queue(path=None):
                 ):
                     raise ValueError(f"{field} is not a non-empty string")
             queue_key = scout_listing_key(row)
-            if isinstance(item_id, str) and isinstance(platform, str):
-                prefix = f"{platform}:"
-                if item_id.startswith(prefix):
-                    item_id = item_id[len(prefix):]
+            if queue_key:
+                # Reuse scout_listing_key()'s own case-insensitive prefix
+                # strip (platform.lower()+":" against item_id.lower())
+                # instead of duplicating it here. The earlier version
+                # compared item_id.startswith(f"{platform}:") verbatim, so
+                # a platform/itemId pair that differed only in case (e.g.
+                # platform="Facebook", itemId="facebook:123") never had its
+                # prefix stripped, and make_listing() below then built a
+                # double-prefixed "Facebook:facebook:123" itemId that could
+                # never dedupe against the same listing again.
+                item_id = queue_key.split(":", 1)[1]
             listing = make_listing(
                 platform,
                 item_id,

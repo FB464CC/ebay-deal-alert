@@ -33,6 +33,20 @@ class ScoutQueueTests(unittest.TestCase):
         self.assertEqual(listings[0]["_scout_search_label"], "Golf sets")
         self.assertEqual(len(logs.records), 2)
 
+    def test_load_strips_mismatched_case_item_id_prefix(self):
+        # Real bug: platform="Facebook" but itemId carries a lowercase
+        # "facebook:" prefix. The old code compared item_id.startswith(
+        # f"{platform}:") verbatim (case-sensitive), so the mismatch was
+        # never stripped and make_listing() built a double-prefixed
+        # "Facebook:facebook:123" itemId that could never dedupe against
+        # the same listing again.
+        row = {"platform": "Facebook", "itemId": "facebook:123", "title": "Case mismatch", "price": 10,
+               "itemWebUrl": "https://example.test/123", "imageUrl": "", "description": ""}
+        self.path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        listings = scout_queue.load_scout_queue(self.path)
+        self.assertEqual(len(listings), 1)
+        self.assertEqual(listings[0]["itemId"], "Facebook:123")
+
     def test_missing_empty_and_clear_are_safe(self):
         self.assertEqual(scout_queue.load_scout_queue(self.path), [])
         self.assertFalse(scout_queue.scout_queue_has_data(self.path))

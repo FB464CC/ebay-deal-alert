@@ -225,8 +225,13 @@ def _dget(obj, key, default=None):
     return obj.get(key, default)
 
 
-def _to_float(value):
-    """Coerce the many price shapes these APIs use ('$42.00', 4200, '42.5')."""
+def _to_float(value, allow_zero=False):
+    """Coerce the many price shapes these APIs use ('$42.00', 4200, '42.5').
+
+    allow_zero=True lets a literal 0 through instead of rejecting it like
+    every other non-positive value - OfferUp is the one marketplace that
+    permits a genuine $0/free-listing card whose real ask lives only in the
+    description. Every other caller keeps the strict >0 default."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -245,7 +250,11 @@ def _to_float(value):
             number = float(cleaned)
         except ValueError:
             return None
-    return number if number > 0 and math.isfinite(number) else None
+    if not math.isfinite(number):
+        return None
+    if number > 0 or (allow_zero and number == 0):
+        return number
+    return None
 
 
 def make_listing(
@@ -624,7 +633,7 @@ def _algolia_multi_query(sub_requests):
 
 
 @batch_adapter("grailed")
-def search_grailed_batch(saved_searches):
+def search_grailed_batch(saved_searches, deadline=None):
     """Same live-search + sold-comps pair per query as search_grailed(),
     but for EVERY grailed-enabled search in 1-4 HTTP round trips via
     Algolia's multi-query endpoint instead of one round trip PER search.
@@ -638,7 +647,12 @@ def search_grailed_batch(saved_searches):
     from happening. Batching frees that budget for every other platform
     and search instead of just moving the truncation point around.
 
-    Returns {query: [listings]} covering every search passed in."""
+    Returns {query: [listings]} covering every search passed in.
+
+    deadline: accepted for call-site uniformity with the other
+    BATCH_ADAPTERS entries (batch_worker() now passes it to all of them) -
+    unused here, Grailed's Algolia batching already bounds itself with its
+    own per-request timeout, not a wall-clock deadline."""
     cutoff = int(time.time()) - SOLD_COMP_WINDOW_DAYS * 86400
     clean_queries = [split_query_exclusions(s["query"])[0] for s in saved_searches]
 
@@ -1392,6 +1406,12 @@ _FLIGHT_PUSH_RE = re.compile(
     r'self\.__next_f\.push\(\[1,"((?:\\.|[^"\\])*)"\]\)', re.DOTALL
 )
 OFFERUP_PLACEHOLDER_MAX_PRICE = 1.50
+# Not a real price - make_listing() requires price > 0, so a genuine $0/
+# free-listing OfferUp card needs a non-authoritative stand-in to survive
+# construction. It only ever reaches score_listing() tagged
+# offerup_placeholder_price=True, which hard-fails it unless detail-page
+# reconciliation finds a real ask in the description.
+_OFFERUP_ZERO_PRICE_PLACEHOLDER = 0.01
 _OFFERUP_CONTEXTUAL_PRICE_PATTERNS = (
     re.compile(
         r"\b(?:asking(?:\s+price)?|price(?:d)?(?:\s+at)?|listed(?:\s+at)?|"
@@ -1526,17 +1546,25 @@ def _offerup_to_listing(listing):
     image = listing.get("image")
     image_url = image.get("url") if isinstance(image, dict) else None
     description = listing.get("description")
-    search_price = _to_float(listing.get("price"))
+    # allow_zero: a literal $0 card price is real on OfferUp (free-listing/
+    # placeholder cards whose real ask is only on the detail page) and must
+    # not be conflated with a missing/invalid price.
+    search_price = _to_float(listing.get("price"), allow_zero=True)
     description_price = (
         offerup_text_asking_price(description)
         if search_price is not None and search_price <= OFFERUP_PLACEHOLDER_MAX_PRICE
         else None
     )
+    # make_listing() still requires price > 0, so a literal 0 needs the
+    # placeholder stand-in to survive construction (see its definition).
+    listing_price = description_price or search_price or (
+        _OFFERUP_ZERO_PRICE_PLACEHOLDER if search_price == 0 else None
+    )
     normalized = make_listing(
         "offerup",
         listing.get("listingId"),
         (listing.get("title") or "").strip(),
-        description_price or search_price,
+        listing_price,
         f"https://offerup.com/item/detail/{listing.get('listingId')}",
         image_url=image_url,
         description=description,
@@ -1558,7 +1586,7 @@ def _batch_request_timeout(deadline):
     return min(15, max(0.001, remaining))
 
 
-def _run_html_batch(platform, saved_searches, build_url, extract_objects, normalize_object):
+def _run_html_batch(platform, saved_searches, build_url, extract_objects, normalize_object, deadline=None):
     """Run a sequential HTML batch behind a hard, snapshotting deadline.
 
     Scrapling normally obeys its request timeout, but the outer marketplace
@@ -1566,8 +1594,15 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
     Keep any potentially late work in a private dict and return a copy at the
     deadline.  If the inner daemon eventually wakes up, it can no longer mutate
     the object the caller already merged and treated as final.
+
+    deadline: an absolute time.monotonic() value to stop at, threaded down
+    from prefetch_marketplaces() so this inner deadline can never outlive
+    the global run deadline it was clamped against. Falls back to computing
+    its own budget-only deadline when called with none (e.g. directly, or
+    from a test).
     """
-    deadline = time.monotonic() + MARKETPLACE_BATCH_DEADLINE_SECONDS
+    if deadline is None:
+        deadline = time.monotonic() + MARKETPLACE_BATCH_DEADLINE_SECONDS
     working = {}
     working_lock = threading.Lock()
 
@@ -1608,7 +1643,7 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
 
 
 @batch_adapter("offerup")
-def search_offerup(saved_searches):
+def search_offerup(saved_searches, deadline=None):
     """Real bug caught in review before this ever shipped: this was built
     single-search (saved_search -> [listings]), but prefetch_marketplaces()'s
     batch_worker calls every BATCH_ADAPTERS entry with the FULL list of
@@ -1627,6 +1662,7 @@ def search_offerup(saved_searches):
         lambda query: "https://offerup.com/search?" + urlencode({"q": query}),
         _offerup_listings,
         _offerup_to_listing,
+        deadline=deadline,
     )
 
 
@@ -1797,7 +1833,7 @@ def _depop_to_listing(obj):
 
 
 @batch_adapter("depop")
-def search_depop(saved_searches):
+def search_depop(saved_searches, deadline=None):
     """Same real contract fix as search_offerup above - was single-search,
     prefetch_marketplaces()'s batch_worker needs (list-in) -> {query:
     [listings]}. One HTTP call per query (no combined multi-query API)."""
@@ -1807,4 +1843,5 @@ def search_depop(saved_searches):
         lambda query: "https://www.depop.com/search/?" + urlencode({"q": query}),
         _depop_objects,
         _depop_to_listing,
+        deadline=deadline,
     )

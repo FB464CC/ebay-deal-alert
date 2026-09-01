@@ -768,6 +768,60 @@ class PantsOnlySuitListing(unittest.TestCase):
         self.assertFalse(m.is_pants_only_suit_listing(title, "bills khakis trousers"))
 
 
+class SuitBodySizeHardFail(unittest.TestCase):
+    """Real live alert: a "loro piana suit" search sent "Hickey Freeman Loro
+    Piana Tasmanian Super 150 Full Suit 46L 40x30 Pants Jacket" as a 76%-
+    under-resale steal. The user's actual fit is 41L/42L/43L only (chest 42,
+    "L" cut for tall) - 46L is a completely different body size. Zero suit
+    body-size filtering existed anywhere before this."""
+
+    def test_reported_46L_is_blocked(self):
+        self.assertTrue(m.is_wrong_suit_body_size(
+            "Hickey Freeman Loro Piana Tasmanian Super 150 Full Suit 46L 40x30 Pants Jacket"))
+        # Same size disclosed only in the description (eBay's late-fetched
+        # description re-check path) must also block.
+        self.assertTrue(m.is_wrong_suit_body_size(
+            "Hickey Freeman Loro Piana Tasmanian Super 150 Full Suit Pants Jacket",
+            "Size 46L, chest measures 24 inches flat."))
+
+    def test_41L_42L_43L_all_pass_the_size_gate(self):
+        for size in ("41L", "42L", "43L", "42 L", "Size 42L", "42 Long"):
+            self.assertFalse(
+                m.is_wrong_suit_body_size(f"Hickey Freeman Suit {size} Navy Wool"), size
+            )
+
+    def test_right_chest_wrong_cut_is_blocked(self):
+        # Same chest (42) the user fits, but "R"/"S" cut is a different body
+        # shape entirely (Regular/Short torso, not the user's Long).
+        self.assertTrue(m.is_wrong_suit_body_size("Canali Suit 42R Navy"))
+        self.assertTrue(m.is_wrong_suit_body_size("Canali Suit 42S Navy"))
+        self.assertTrue(m.is_wrong_suit_body_size("Canali Suit 42 Regular Navy"))
+        self.assertTrue(m.is_wrong_suit_body_size("Canali Suit 42 Short Navy"))
+
+    def test_no_parseable_size_is_not_blocked(self):
+        # A suit listing with the size only in item specifics/photos, not
+        # the text, can't be safely judged by this text-based filter - let
+        # it flow through to normal handling instead of false-blocking it.
+        self.assertFalse(m.is_wrong_suit_body_size("Hickey Freeman Suit Navy Wool Pinstripe"))
+        self.assertFalse(m.is_wrong_suit_body_size(
+            "Kiton Full Suit Pants Jacket", "Beautiful navy wool suit, minor wear"))
+        # A bare two-digit number with no cut attached (e.g. a price or an
+        # unrelated measurement) must not be treated as a confidently
+        # parsed chest size either.
+        self.assertFalse(m.is_wrong_suit_body_size("Canali Suit Navy $42 OBO"))
+
+    def test_does_not_fire_outside_the_tailoring_category(self):
+        # This is a suit/blazer-only filter - classify_search_category()
+        # is the actual scoping mechanism the run loop gates on, so a shirt
+        # or shoe search containing "42" must never be classified as
+        # "tailoring" (which is what run() checks before calling
+        # is_wrong_suit_body_size at all).
+        self.assertNotEqual(m.classify_search_category("ralph lauren dress shirt 46L"), "tailoring")
+        self.assertNotEqual(m.classify_search_category("alden shoes size 46"), "tailoring")
+        self.assertEqual(m.classify_search_category("canali suit"), "tailoring")
+        self.assertEqual(m.classify_search_category("hickey freeman blazer"), "tailoring")
+
+
 class EmptyPackagingSignals(unittest.TestCase):
     def test_single_word_dustbag_only_is_caught(self):
         # Regression: dust\s+bag (requires a space) never matched the
@@ -3096,7 +3150,7 @@ class GrailedBatching(unittest.TestCase):
 
         calls = []
 
-        def fake_grailed_batch(saved_searches):
+        def fake_grailed_batch(saved_searches, deadline=None):
             calls.append(len(saved_searches))
             return {
                 s["query"]: [{"itemId": f"grailed:{s['query']}", "title": s["query"], "seller": {}}]
@@ -3538,7 +3592,7 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
         orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
 
-        def late_batch(_searches):
+        def late_batch(_searches, deadline=None):
             started.set()
             release.wait(timeout=1)
             adapter_returned.set()
@@ -3591,7 +3645,7 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
                 [{"itemId": "poshmark:1", "title": "test item", "seller": {}} for _ in range(45)],
                 45,
             )
-            p.BATCH_ADAPTERS["grailed"] = lambda searches: {}  # silent collapse
+            p.BATCH_ADAPTERS["grailed"] = lambda searches, deadline=None: {}  # silent collapse
             m.MARKETPLACES_ENABLED = ["poshmark", "grailed"]
             m.SAVED_SEARCHES = [
                 {"query": "test watch", "enabled": True, "platforms": ["poshmark", "grailed"]}
@@ -3608,6 +3662,87 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
             p.BATCH_ADAPTERS.update(orig_batch)
             m.SAVED_SEARCHES = orig_searches
             m.MARKETPLACES_ENABLED = orig_enabled
+
+    def test_deadline_clamped_to_global_hard_stop_and_threaded_to_batch_adapter(self):
+        # Regression for the deadline-composition finding: prefetch_
+        # marketplaces() used to compute its own independent deadline (now
+        # + MARKETPLACE_FETCH_BUDGET_SECONDS) with no awareness of the
+        # global run deadline, and the batch adapters (OfferUp/Depop via
+        # _run_html_batch) computed yet another independent one - both
+        # layers could keep working well past the ~390s global stop.
+        # run_hard_stop must clamp prefetch's own deadline AND be the exact
+        # same absolute value threaded down into the batch adapter.
+        received = {}
+
+        def capturing_batch(_searches, deadline=None):
+            received["deadline"] = deadline
+            return {}
+
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS["grailed"] = capturing_batch
+            m.MARKETPLACES_ENABLED = ["grailed"]
+            m.SAVED_SEARCHES = [
+                {"query": "test item", "enabled": True, "platforms": ["grailed"]}
+            ]
+            # A global run deadline 5s out - much tighter than the real
+            # multi-minute MARKETPLACE_FETCH_BUDGET_SECONDS default, so a
+            # clamp failure would be caught (deadline would be minutes away
+            # instead of ~5s).
+            run_hard_stop = time.monotonic() + 5
+            m.prefetch_marketplaces(
+                datetime.now(timezone.utc), self.conn, run_hard_stop=run_hard_stop
+            )
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertIsNotNone(received.get("deadline"))
+        self.assertLessEqual(received["deadline"], run_hard_stop)
+
+    def test_anomaly_persistence_skipped_once_global_deadline_has_passed(self):
+        # If the global run deadline already expired by the time
+        # prefetch_marketplaces() finishes (e.g. slow startup/gap-report
+        # work, or a batch still wrapping up), it must not still write
+        # fresh anomaly/count rows to SQLite as if the run were still live.
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            # Would normally anomaly-notify (a real collapse to 0) if the
+            # gate didn't skip persistence first.
+            p.ADAPTERS["poshmark"] = lambda s: ([], 0)
+            m.MARKETPLACES_ENABLED = ["poshmark"]
+            m.SAVED_SEARCHES = [
+                {"query": "test watch", "enabled": True, "platforms": ["poshmark"]}
+            ]
+            with mock.patch.object(m, "notify_bot_down") as mock_notify:
+                m.prefetch_marketplaces(
+                    datetime.now(timezone.utc), self.conn,
+                    run_hard_stop=time.monotonic() - 1,  # already expired
+                )
+            mock_notify.assert_not_called()
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        rows = self.conn.execute(
+            "SELECT COUNT(*) FROM marketplace_counts WHERE platform = 'poshmark'"
+        ).fetchone()[0]
+        self.assertEqual(rows, 10, "no new count row should be written past the global deadline")
 
 
 if __name__ == "__main__":
@@ -3800,7 +3935,7 @@ class RunIntegration(unittest.TestCase):
         self._patch("fetch_ebay_item_description", lambda token, item_id: None)
         self._patch("fetch_vinted_item_description", lambda url: None)
         self._patch("fetch_offerup_item_description", lambda url: None)
-        self._patch("prefetch_marketplaces", lambda now, conn: {})
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {})
         self._patch("search_ebay_ending_soon_auctions", lambda token, search: ([], None))
         self._patch("notify_bot_down", lambda message: None)
         self._patch("send_alert", self.alerts.append)
@@ -4006,7 +4141,7 @@ class RunIntegration(unittest.TestCase):
             size="42R",
         )
         self._serve(saved_search, [])
-        self._patch("prefetch_marketplaces", lambda now, conn: {
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
             saved_search["query"]: [listing]
         })
         fetch_description = mock.Mock(
@@ -4021,6 +4156,66 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.alerts, [])
         self.assertFalse(m.is_new(self._db(), listing["itemId"]))
 
+    def test_wrong_suit_body_size_blocked_before_ai_end_to_end(self):
+        # Exact reported live alert: a "loro piana suit" search sent this
+        # 46L listing as a 76%-under-resale steal despite the user's real
+        # fit being 41L/42L/43L only. Must never reach the AI vision check
+        # or send an alert.
+        saved_search = {
+            "query": "loro piana suit", "max_price": 500,
+            "category_id": "3001", "enabled": True, "profile": "fast",
+        }
+        listing = self._ebay_item(
+            "v1|wrong-suit-size-1|0",
+            "Hickey Freeman Loro Piana Tasmanian Super 150 Full Suit 46L 40x30 Pants Jacket",
+            120.0,
+        )
+        self._serve(saved_search, [listing])
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), listing["itemId"]))
+
+    def test_correct_suit_body_size_still_reaches_ai(self):
+        # 41L/42L/43L must not be rejected by this new check specifically -
+        # confirms the gate doesn't over-block a real fit end-to-end.
+        saved_search = {
+            "query": "loro piana suit", "max_price": 500,
+            "category_id": "3001", "enabled": True, "profile": "fast",
+        }
+        listing = self._ebay_item(
+            "v1|right-suit-size-1|0",
+            "Hickey Freeman Loro Piana Full Suit 42L Navy Wool Pants Jacket",
+            120.0,
+        )
+        self._serve(saved_search, [listing])
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [listing["itemId"]])
+
+    def test_suit_body_size_filter_does_not_fire_outside_tailoring(self):
+        # A shirt listing containing "42" (not a suit/blazer search, so
+        # classify_search_category() never returns "tailoring") must be
+        # completely unaffected by this filter, even with a "46L"-shaped
+        # token in the title.
+        saved_search = {
+            "query": "ralph lauren dress shirt", "max_price": 200,
+            "category_id": "57991", "enabled": True, "profile": "fast",
+        }
+        listing = self._ebay_item(
+            "v1|shirt-not-suit-1|0",
+            "Ralph Lauren Dress Shirt Size 46L Tall Fit White",
+            40.0,
+        )
+        self._serve(saved_search, [listing])
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [listing["itemId"]])
+
     def test_offerup_one_dollar_watch_uses_450_description_ask(self):
         saved_search = {
             "query": "tissot watch", "max_price": 700,
@@ -4033,7 +4228,7 @@ class RunIntegration(unittest.TestCase):
         )
         listing["offerup_placeholder_price"] = True
         self._serve(saved_search, [])
-        self._patch("prefetch_marketplaces", lambda now, conn: {
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
             saved_search["query"]: [listing]
         })
         fetch_description = mock.Mock(return_value=(
@@ -4051,6 +4246,68 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.ai_calls, [listing["itemId"]])
         self.assertEqual(self.alerts, [])
 
+    def test_offerup_zero_dollar_watch_uses_450_description_ask(self):
+        # Regression for the $0-drop finding: a genuine $0/free-listing
+        # OfferUp card price (real numeric 0 or string "$0") must reach the
+        # exact same detail-page reconciliation path the $1 case already
+        # gets, not vanish before make_listing() ever sees it.
+        saved_search = {
+            "query": "tissot watch", "max_price": 700,
+            "category_id": "31387", "enabled": True, "profile": "fast",
+        }
+        listing = p._offerup_to_listing({
+            "listingId": "tissot-divers-automatic-watch-zero",
+            "title": "Tissot Divers Automatic Watch",
+            "price": 0,
+        })
+        self.assertIsNotNone(listing)
+        self.assertTrue(listing["offerup_placeholder_price"])
+        self._serve(saved_search, [])
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
+            saved_search["query"]: [listing]
+        })
+        fetch_description = mock.Mock(return_value=(
+            "Tissot divers automatic watch. Retail about $650; asking price is $450."
+        ))
+        self._patch("fetch_offerup_item_description", fetch_description)
+        self.ai_result = dict(self.AI_STEAL, estimated_retail_price=650,
+                              estimated_resale_value=250)
+
+        m.run()
+
+        fetch_description.assert_called_once_with(listing["itemWebUrl"])
+        self.assertEqual(listing["price"]["value"], 450.0)
+        self.assertTrue(listing["offerup_price_from_description"])
+        self.assertNotIn("offerup_placeholder_price", listing)
+        self.assertEqual(self.ai_calls, [listing["itemId"]])
+        self.assertEqual(self.alerts, [])
+
+    def test_offerup_zero_dollar_watch_unresolved_hard_fails(self):
+        # If the detail page never yields a real ask, the $0 card must be
+        # hard-failed as a suspicious placeholder, not scored as a fake
+        # 100%-off steal.
+        saved_search = {
+            "query": "tissot watch", "max_price": 700,
+            "category_id": "31387", "enabled": True, "profile": "fast",
+        }
+        listing = p._offerup_to_listing({
+            "listingId": "tissot-divers-automatic-watch-zero-unresolved",
+            "title": "Tissot Divers Automatic Watch",
+            "price": "$0",
+        })
+        self.assertIsNotNone(listing)
+        self._serve(saved_search, [])
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
+            saved_search["query"]: [listing]
+        })
+        self._patch("fetch_offerup_item_description", lambda url: None)
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), listing["itemId"]))
+
     def test_offerup_description_alone_blocks_reported_ladies_not_working_watch(self):
         saved_search = {
             "query": "longines watch", "max_price": 500,
@@ -4062,7 +4319,7 @@ class RunIntegration(unittest.TestCase):
             "https://offerup.com/item/detail/vintage-longines-watch",
         )
         self._serve(saved_search, [])
-        self._patch("prefetch_marketplaces", lambda now, conn: {
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
             saved_search["query"]: [listing]
         })
         fetch_description = mock.Mock(return_value=(
@@ -4094,6 +4351,37 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.ai_calls, [])
         self.assertEqual(self.alerts, [])
         self.assertFalse(m.is_new(self._db(), item["itemId"]))
+
+    def test_ebay_late_description_counterfeit_signal_skips_ai_call(self):
+        # Regression for the paid-call-waste finding: PASS 1 scores an eBay
+        # listing's title against an EMPTY description (the real one costs a
+        # separate per-item call), so a counterfeit disclosure that only
+        # exists in the description was invisible at PASS 1 and used to
+        # reach check_photos_with_gemini() anyway once the description was
+        # fetched - burning a scarce, real, paid vision call for nothing.
+        item = self._ebay_item(
+            "v1|100000000009|0", "Bottega Wallet", 40,
+        )
+        self._serve({
+            "query": "bottega wallet", "max_price": 200,
+            "category_id": "11484", "enabled": True, "profile": "fast",
+        }, [item])
+        self._patch(
+            "fetch_ebay_item_description",
+            lambda token, item_id: (
+                "This is my own version / inspired handmade tribute of the "
+                "classic design, not the real thing."
+            ),
+        )
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), item["itemId"]))
+        (record,) = self._alert_log_records()
+        self.assertEqual(record["verdict"], "PASS")
+        self.assertIn("counterfeit", record["reason"])
 
     def test_ebay_regular_and_auction_counts_reach_anomaly_history(self):
         regular = self._ebay_item(
@@ -4356,6 +4644,10 @@ class RunIntegration(unittest.TestCase):
         self.assertIn("ntfy unavailable", failure_record["delivery_error"])
 
     def test_seen_db_failure_after_send_is_not_a_delivery_failure(self):
+        # A single transient hiccup (SQLite momentarily locked) must be
+        # absorbed by mark_seen()'s retry-with-backoff, so the seen marker
+        # still lands and no loud notify_bot_down fires for a blip that
+        # recovered on its own.
         item_id = "v1|555444333222|0"
         item = self._ebay_item(
             item_id, "Loro Piana Cashmere Sweater Mens Medium Navy", 180.0
@@ -4365,24 +4657,59 @@ class RunIntegration(unittest.TestCase):
             "category_id": "11484", "enabled": True, "profile": "fast",
         }, [item])
         real_mark_seen = m.mark_seen
+        hiccup_calls = {"count": 0}
 
         def mark_seen_with_one_db_hiccup(conn, seen_item_id, *args):
-            if seen_item_id == item_id:
+            if seen_item_id == item_id and hiccup_calls["count"] == 0:
+                hiccup_calls["count"] += 1
                 raise sqlite3.OperationalError("database is temporarily locked")
             return real_mark_seen(conn, seen_item_id, *args)
 
         self._patch("mark_seen", mark_seen_with_one_db_hiccup)
         notify_failure = self._patch("notify_bot_down", mock.Mock())
 
-        with self.assertLogs("ebay_deal_alert", level="ERROR") as captured:
+        with mock.patch.object(m.time, "sleep"):
             m.run()
 
         self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [item_id])
         notify_failure.assert_not_called()
+        self.assertFalse(m.is_new(self._db(), item_id))
         (record,) = self._alert_log_records()
         self.assertEqual(record["verdict"], "REVIEW")
         self.assertIs(record["delivered"], True)
         self.assertNotIn("delivery_error", record)
+
+    def test_seen_db_failure_persisting_after_retries_notifies_loudly(self):
+        # If mark_seen() is STILL failing after all retries, the item never
+        # actually got marked seen even though the alert log says
+        # delivered=True. That's the exact double-send gap - it must not
+        # pass silently, so notify_bot_down has to fire.
+        item_id = "v1|666555444333|0"
+        item = self._ebay_item(
+            item_id, "Loro Piana Cashmere Sweater Mens Medium Navy", 180.0
+        )
+        self._serve({
+            "query": "loro piana sweater", "max_price": 400,
+            "category_id": "11484", "enabled": True, "profile": "fast",
+        }, [item])
+        real_mark_seen = m.mark_seen
+
+        def mark_seen_always_locked(conn, seen_item_id, *args):
+            if seen_item_id == item_id:
+                raise sqlite3.OperationalError("database is temporarily locked")
+            return real_mark_seen(conn, seen_item_id, *args)
+
+        self._patch("mark_seen", mark_seen_always_locked)
+        notify_failure = self._patch("notify_bot_down", mock.Mock())
+
+        with mock.patch.object(m.time, "sleep"):
+            with self.assertLogs("ebay_deal_alert", level="ERROR") as captured:
+                m.run()
+
+        self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [item_id])
+        notify_failure.assert_called_once()
+        self.assertIn("failed to persist seen marker", notify_failure.call_args[0][0])
+        self.assertTrue(m.is_new(self._db(), item_id))
         self.assertTrue(any("failed to persist seen marker" in line for line in captured.output))
 
     def test_alert_log_failure_after_send_still_marks_exact_item_seen(self):
@@ -4408,7 +4735,7 @@ class RunIntegration(unittest.TestCase):
         }])
         self._patch("search_ebay", lambda token, search: ([], 0))
         self._patch("EBAY_SCRAPE_ENABLED", False)
-        self._patch("prefetch_marketplaces", lambda now, conn: {
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
             "ferragamo wallet": [listing]
         })
         self._patch(
@@ -4422,9 +4749,55 @@ class RunIntegration(unittest.TestCase):
 
         self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [item_id])
         self.assertFalse(m.is_new(self._db(), item_id))
-        notify_failure.assert_not_called()
+        # Delivery and dedupe still succeeded, so this must not be reported
+        # as a delivery failure or make the item alertable again - but it
+        # must not be silent either: the digest just lost a history row.
+        notify_failure.assert_called_once()
+        self.assertIn("alert-log record failed to write", notify_failure.call_args[0][0])
         self.assertTrue(any("failed to append the delivered alert log" in line
                             for line in captured.output))
+
+    def test_append_alert_log_real_write_failure_after_send_notifies_loudly(self):
+        # Regression for the swallowed-OSError gap: append_alert_log() used
+        # to catch every OSError internally and just log a warning, so this
+        # exact scenario (a REAL disk write failure, not a mocked function)
+        # could never be observed by the post-delivery call site at all.
+        # Force a genuine OSError by pointing ALERTS_LOG_PATH at a directory
+        # - opening a directory for append raises a real OSError, no mocking
+        # of append_alert_log itself.
+        item_id = "depop:900111222"
+        listing = {
+            "itemId": item_id,
+            "platform": "depop",
+            "title": "Vintage Salvatore Ferragamo red leather continental wallet",
+            "description": "Vintage Salvatore Ferragamo red leather continental wallet",
+            "price": {"value": 28.0, "currency": "USD"},
+            "itemWebUrl": "https://www.depop.com/products/example-wallet/",
+            "image": {"imageUrl": "https://media-photos.depop.com/P0.jpg"},
+        }
+        self._patch("SAVED_SEARCHES", [{
+            "query": "ferragamo wallet", "max_price": 60,
+            "category_id": "11484", "enabled": True, "profile": "slow",
+            "platforms": ["depop"],
+        }])
+        self._patch("search_ebay", lambda token, search: ([], 0))
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
+            "ferragamo wallet": [listing]
+        })
+        bad_log_path = self.tmpdir / "alerts_log_is_a_dir.jsonl"
+        bad_log_path.mkdir()
+        self._patch("ALERTS_LOG_PATH", bad_log_path)
+        notify_failure = self._patch("notify_bot_down", mock.Mock())
+
+        with self.assertLogs("ebay_deal_alert", level="WARNING") as captured:
+            m.run()
+
+        self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [item_id])
+        self.assertFalse(m.is_new(self._db(), item_id))
+        notify_failure.assert_called_once()
+        self.assertIn("alert-log record failed to write", notify_failure.call_args[0][0])
+        self.assertTrue(any("Failed to write alerts log" in line for line in captured.output))
 
     def test_max_alerts_exit_only_acknowledges_scout_rows_already_sent(self):
         self._patch("SCOUT_AI_CHECK_LIMIT", 2)
@@ -4842,7 +5215,7 @@ class RunIntegration(unittest.TestCase):
                       "max_price": 400, "enabled": True}])
         self._patch("search_ebay_ending_soon_auctions",
                     lambda token, search: (
-                        [self._auction_item("v1|1|0", "Canali Suit 42R", 200.0, 3)], None
+                        [self._auction_item("v1|1|0", "Canali Suit 42L", 200.0, 3)], None
                     ))
 
         m.run()
@@ -4864,9 +5237,9 @@ class RunIntegration(unittest.TestCase):
         self._patch("search_ebay_ending_soon_auctions",
                     lambda token, search: (
                         [
-                            self._auction_item("v1|1|0", "Canali Suit 42R", 200.0, 1),
-                            self._auction_item("v1|2|0", "Canali Suit 42R", 200.0, 2),
-                            self._auction_item("v1|3|0", "Canali Suit 42R", 200.0, 3),
+                            self._auction_item("v1|1|0", "Canali Suit 42L", 200.0, 1),
+                            self._auction_item("v1|2|0", "Canali Suit 42L", 200.0, 2),
+                            self._auction_item("v1|3|0", "Canali Suit 42L", 200.0, 3),
                         ], None
                     ))
 

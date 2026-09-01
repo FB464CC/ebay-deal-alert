@@ -18,12 +18,25 @@ async function renderTargets() {
     const box = document.createElement("div"); box.className = "target";
     const remove = document.createElement("button"); remove.className = "danger"; remove.textContent = "Remove";
     remove.addEventListener("click", async () => {
-      watchTargets.splice(index, 1); await chrome.storage.sync.set({ watchTargets }); await renderTargets();
+      watchTargets.splice(index, 1);
+      try {
+        await chrome.storage.sync.set({ watchTargets });
+        await renderTargets();
+      } catch (error) {
+        statusNode.textContent = `Failed to remove target: ${error.message}`;
+      }
     });
     const label = document.createElement("label");
     const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.checked = target.enabled;
     toggle.addEventListener("change", async () => {
-      watchTargets[index].enabled = toggle.checked; await chrome.storage.sync.set({ watchTargets });
+      watchTargets[index].enabled = toggle.checked;
+      try {
+        await chrome.storage.sync.set({ watchTargets });
+      } catch (error) {
+        toggle.checked = !toggle.checked;
+        watchTargets[index].enabled = toggle.checked;
+        statusNode.textContent = `Failed to save toggle: ${error.message}`;
+      }
     });
     label.append(toggle, document.createTextNode(target.label));
     const meta = document.createElement("div"); meta.className = "meta";
@@ -44,7 +57,11 @@ function showStatus(status) {
 
 document.getElementById("scanNow").addEventListener("click", async () => {
   statusNode.textContent = "Scanning…";
-  showStatus(await chrome.runtime.sendMessage({ type: "scan-now" }));
+  try {
+    showStatus(await chrome.runtime.sendMessage({ type: "scan-now" }));
+  } catch (error) {
+    statusNode.textContent = `Scan failed: ${error.message}`;
+  }
 });
 
 document.getElementById("targetForm").addEventListener("submit", async (event) => {
@@ -76,9 +93,14 @@ document.getElementById("setupForm").addEventListener("submit", async (event) =>
   }
 });
 
-Promise.all([renderTargets(), localGet(["ingestEndpoint", "scoutSecret"]), chrome.runtime.sendMessage({ type: "get-status" })])
-  .then(([, setup, status]) => {
+Promise.allSettled([renderTargets(), localGet(["ingestEndpoint", "scoutSecret"]), chrome.runtime.sendMessage({ type: "get-status" })])
+  .then(([, setupResult, statusResult]) => {
+    const setup = setupResult.status === "fulfilled" ? setupResult.value : {};
     document.getElementById("endpoint").value = setup.ingestEndpoint || "";
     document.getElementById("secret").value = setup.scoutSecret || "";
-    showStatus(status);
+    if (statusResult.status === "fulfilled") {
+      showStatus(statusResult.value);
+    } else {
+      statusNode.textContent = `Status unavailable: ${statusResult.reason?.message || statusResult.reason}`;
+    }
   });

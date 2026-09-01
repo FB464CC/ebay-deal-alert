@@ -7,6 +7,12 @@ const FAILURE_STATE_KEY = "scoutIngestFailures";
 const MAX_INGEST_ATTEMPTS = 5;
 const DEFAULT_RETRY_DELAY_MS = 10 * 60 * 1000;
 const MAX_FAILURE_RECORDS = 100;
+// chrome.storage.local has a 10MB quota (only "storage" permission, no
+// unlimitedStorage) - neither of these grew a bound before. Oldest-first
+// eviction once past the cap; simple array-length cap, not a byte-measuring
+// system.
+const MAX_RETRY_QUEUE_BATCHES = 300;
+const MAX_ABANDONED_KEYS = 2000;
 
 // Verified live 2026-08-28: Facebook IGNORES the /marketplace/<city>/ slug and
 // redirects to /marketplace/category/search/, resolving location from
@@ -44,7 +50,13 @@ const GOLF_QUERIES = [
   "golf clubs garage"
 ];
 
+// Stable per-default id, independent of array order/text tweaks - the
+// migration merge below matches on this, never on array position, so
+// reordering/rewording GOLF_QUERIES can't misattribute a user's overrides.
+const slugify = (value) => String(value).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
 const DEFAULT_TARGETS = GOLF_QUERIES.map((query) => ({
+  id: `facebook-golf-${slugify(query)}`,
   label: `${query} — Columbia +124mi`,
   platform: "facebook",
   // newest-first so a 10-min alarm sees fresh posts, not page-1 staleness
@@ -60,15 +72,65 @@ let lastRunStatus = { startedAt: null, finishedAt: null, running: false, targets
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const syncGet = (keys) => new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
 const localGet = (keys) => new Promise((resolve) => chrome.storage.local.get(keys, resolve));
-const localSet = (values) => new Promise((resolve) => chrome.storage.local.set(values, resolve));
+const localSet = (values) => new Promise((resolve, reject) => {
+  chrome.storage.local.set(values, () => {
+    if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+    else resolve();
+  });
+});
+
+// Merge shipped defaults into the user's live target collection instead of
+// replacing it. `defaultsVersion` (schema version of DEFAULT_TARGETS) is
+// stored separately from `watchTargets` (the user's actual, editable data)
+// precisely so this same merge runs correctly on every future bump too.
+//
+// For each shipped default: if the user already has a record with that
+// default's id, update its fields but keep the user's own enabled/disabled
+// choice. If the id is new (never shipped before), add it. If the id was
+// shipped in a prior version but the user's collection no longer has it,
+// that means the user deleted it - leave it deleted, don't resurrect it.
+// Any record that isn't a recognized default id (user-created) is left
+// completely untouched.
+//
+// `defaultsSeenIds` is what lets us tell "new default" apart from "user
+// deleted this one" - it's the full set of default ids that have ever been
+// shipped, refreshed on every merge.
+function mergeDefaultTargets(existing, previouslySeenIds) {
+  const byId = new Map();
+  // One-time bootstrap for installs upgrading from before defaults had
+  // stable ids: match by label (the only stable identity those records
+  // have) so an already-customized legacy default gets upgraded in place
+  // instead of duplicated.
+  const byLegacyLabel = new Map();
+  for (const record of existing) {
+    if (!record || typeof record !== "object") continue;
+    if (typeof record.id === "string") byId.set(record.id, record);
+    else if (typeof record.label === "string") byLegacyLabel.set(record.label, record);
+  }
+
+  const merged = existing.slice();
+  for (const def of DEFAULT_TARGETS) {
+    const current = byId.get(def.id) || byLegacyLabel.get(def.label);
+    if (current) {
+      merged[merged.indexOf(current)] = { ...def, enabled: current.enabled };
+    } else if (!previouslySeenIds.has(def.id)) {
+      merged.push({ ...def });
+    }
+  }
+  return merged;
+}
 
 async function initialize() {
-  const { watchTargets, targetsVersion } = await syncGet(["watchTargets", "targetsVersion"]);
-  // Seed on first run, and re-seed when DEFAULT_TARGETS itself changes -
-  // without the version gate a shipped target list can never reach an
-  // install that already has the old one in storage.sync.
-  if (!Array.isArray(watchTargets) || (targetsVersion || 0) < TARGETS_VERSION) {
-    await chrome.storage.sync.set({ watchTargets: DEFAULT_TARGETS, targetsVersion: TARGETS_VERSION });
+  const { watchTargets, defaultsVersion, defaultsSeenIds } = await syncGet([
+    "watchTargets", "defaultsVersion", "defaultsSeenIds"
+  ]);
+  const seenIds = DEFAULT_TARGETS.map((target) => target.id);
+  if (!Array.isArray(watchTargets)) {
+    // First run: nothing to merge against, seed straight from defaults.
+    await chrome.storage.sync.set({ watchTargets: DEFAULT_TARGETS, defaultsVersion: TARGETS_VERSION, defaultsSeenIds: seenIds });
+  } else if ((defaultsVersion || 0) < TARGETS_VERSION) {
+    const merged = mergeDefaultTargets(watchTargets, new Set(Array.isArray(defaultsSeenIds) ? defaultsSeenIds : []));
+    await chrome.storage.sync.set({ watchTargets: merged, defaultsVersion: TARGETS_VERSION, defaultsSeenIds: seenIds });
   }
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: 10 });
   await updateUnsentBadge();
@@ -115,9 +177,16 @@ function waitForTab(tabId, timeoutMs = 30000) {
   });
 }
 
+// A parser that returns [] because the query genuinely has no hits looks
+// identical to one that returned [] because Facebook bounced the tab to a
+// login/checkpoint/consent wall - unless we also look at where the tab
+// actually ended up. Lightweight post-load URL check, not a full DOM signal.
+const FACEBOOK_BLOCKED_PATH_RE = /\/(login|checkpoint|recover|two_step_verification|confirmemail|consent)(?:[/?]|$)/i;
+
 async function scanTarget(target) {
   if (!target || typeof target !== "object" || typeof target.searchUrl !== "string") throw new Error("Invalid watch target");
   const targetUrl = DealScoutUrls.normalizeUrl(target.searchUrl);
+  const isFacebookParser = target.parser !== "generic-og";
   let tab;
   let createdWindowId = null;
   try {
@@ -134,6 +203,14 @@ async function scanTarget(target) {
     tab = await withTabRetry(() => chrome.tabs.create({ url: targetUrl, active: false, windowId }));
     await waitForTab(tab.id);
     await sleep(2500);
+    if (isFacebookParser) {
+      const finalTab = await chrome.tabs.get(tab.id).catch(() => null);
+      let finalPath = "";
+      try { finalPath = new URL(finalTab?.url || "").pathname; } catch (_error) { /* leave blank */ }
+      if (FACEBOOK_BLOCKED_PATH_RE.test(finalPath)) {
+        throw new Error(`Facebook redirected to a login/checkpoint page (${finalPath}) - session likely logged out`);
+      }
+    }
     const file = target.parser === "generic-og"
       ? "content-scripts/generic-og-parser.js"
       : "content-scripts/facebook-parser.js";
@@ -161,14 +238,29 @@ function retryDelayMs(response, body) {
     : DEFAULT_RETRY_DELAY_MS;
 }
 
+const POST_TIMEOUT_MS = 20000;
+
 async function postListings(endpointUrl, secret, listings) {
   if (!listings.length) return { accepted: 0, dropped: 0 };
   const endpoint = DealScoutUrls.normalizeUrl(endpointUrl, { requireHttps: true });
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-scout-secret": secret },
-    body: JSON.stringify({ listings })
-  });
+  // A stalled fetch (retry POST or live-scan POST - this is shared by both)
+  // must not be able to hang indefinitely and block everything behind it.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-scout-secret": secret },
+      body: JSON.stringify({ listings }),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error(`Ingest request timed out after ${POST_TIMEOUT_MS}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(body.error || `Ingest returned HTTP ${response.status}`);
@@ -238,6 +330,11 @@ async function setUnsentBadge(unsentCount, hasAbandoned) {
 }
 
 async function writeRetryState(queue, failures) {
+  // Drop oldest batches/keys past the cap rather than growing forever.
+  if (queue.length > MAX_RETRY_QUEUE_BATCHES) queue = queue.slice(queue.length - MAX_RETRY_QUEUE_BATCHES);
+  if (failures.abandonedKeys.length > MAX_ABANDONED_KEYS) {
+    failures.abandonedKeys = failures.abandonedKeys.slice(failures.abandonedKeys.length - MAX_ABANDONED_KEYS);
+  }
   failures.pendingCount = countPendingListings(queue);
   failures.unsentCount = failures.pendingCount + failures.abandonedCount;
   failures.updatedAt = new Date().toISOString();
