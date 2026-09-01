@@ -3613,7 +3613,7 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         mock_notify = self._run_prefetch("poshmark", 0)
         mock_notify.assert_not_called()
 
-    def test_already_notified_within_6h_does_not_notify_again(self):
+    def test_already_notified_within_suppression_window_does_not_notify_again(self):
         self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
         self.conn.execute(
             "INSERT INTO marketplace_anomaly_notified (platform, last_notified_ts) VALUES (?, ?)",
@@ -3622,6 +3622,32 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         self.conn.commit()
         mock_notify = self._run_prefetch("poshmark", 0)
         mock_notify.assert_not_called()
+
+    def test_notified_seven_hours_ago_still_suppressed_under_widened_window(self):
+        # Real live complaint: several platforms each independently able to
+        # trip this check meant a fresh "[ALERT-BOT DOWN]" ping roughly
+        # every 10-20 minutes with the old 6h-per-platform window, since
+        # each platform's suppression timer is independent. Widened to
+        # MARKETPLACE_ANOMALY_SUPPRESS_HOURS (24) - 7h ago must now still
+        # be suppressed, where it would have re-fired under the old 6h.
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        self.conn.execute(
+            "INSERT INTO marketplace_anomaly_notified (platform, last_notified_ts) VALUES (?, ?)",
+            ("poshmark", (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat()),
+        )
+        self.conn.commit()
+        mock_notify = self._run_prefetch("poshmark", 0)
+        mock_notify.assert_not_called()
+
+    def test_notified_more_than_a_day_ago_notifies_again(self):
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        self.conn.execute(
+            "INSERT INTO marketplace_anomaly_notified (platform, last_notified_ts) VALUES (?, ?)",
+            ("poshmark", (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()),
+        )
+        self.conn.commit()
+        mock_notify = self._run_prefetch("poshmark", 0)
+        mock_notify.assert_called_once()
 
     def test_normal_run_in_line_with_baseline_never_notifies(self):
         self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])

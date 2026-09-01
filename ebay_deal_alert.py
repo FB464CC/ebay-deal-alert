@@ -5203,6 +5203,17 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
         return platform_name, saved_search["query"], [], 0, 0, 1
 
 
+# Was 6h. Real live complaint: with several platforms each independently
+# capable of tripping this check, a 6h-per-platform suppression window
+# still meant a fresh "[ALERT-BOT DOWN]" ping roughly every 10-20 minutes
+# whenever more than one platform was flagged in the same rough window (a
+# rate-limit blip on one, a stale 7-day baseline on another) - each has its
+# own independent 6h timer, so the pings interleave. Widened to once per
+# platform per day; a genuinely broken platform still gets caught same-day,
+# it just can't re-page every few minutes for a condition that hasn't changed.
+MARKETPLACE_ANOMALY_SUPPRESS_HOURS = 24
+
+
 def _check_marketplace_anomalies(conn, now, active, counts, health=None):
     """Alert on seven-day count deviations and explicit request sickness.
 
@@ -5289,8 +5300,8 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
             "SELECT last_notified_ts FROM marketplace_anomaly_notified WHERE platform = ?",
             (platform,),
         ).fetchone()
-        if row and now - datetime.fromisoformat(row[0]) < timedelta(hours=6):
-            continue  # already alerted within the last 6h; don't spam every 5-min run
+        if row and now - datetime.fromisoformat(row[0]) < timedelta(hours=MARKETPLACE_ANOMALY_SUPPRESS_HOURS):
+            continue  # already alerted within the suppression window; don't spam every 5-min run
         notify_bot_down(
             f"{platform} marketplace unhealthy: {'; '.join(sick_reasons)} "
             "- scraper may be degraded or broken"
