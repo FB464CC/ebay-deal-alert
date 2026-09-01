@@ -223,7 +223,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 180,
       "enabled": true,
       "profile": "slow",
@@ -234,7 +238,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 180,
       "enabled": true,
       "profile": "slow",
@@ -245,7 +253,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 120,
       "enabled": true,
       "profile": "slow",
@@ -256,7 +268,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 90,
       "enabled": true,
       "profile": "slow",
@@ -522,14 +538,14 @@
       "query": "ferragamo cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
       "query": "bottega veneta cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 80,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -567,21 +583,21 @@
       "query": "loro piana cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
       "query": "brunello cucinelli cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
       "query": "berluti cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -654,7 +670,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 130,
       "enabled": true,
       "profile": "slow",
@@ -768,7 +788,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 100,
       "enabled": true,
       "profile": "slow",
@@ -923,14 +947,14 @@
       "query": "\"maison margiela\" hat -scarf",
       "size": null,
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
       "query": "\"maison margiela\" cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 80,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -1043,7 +1067,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
@@ -1054,7 +1082,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
@@ -1065,7 +1097,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
@@ -1075,7 +1111,7 @@
       "query": "valextra cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -1193,21 +1229,21 @@
       "query": "smythson cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
       "query": "ettinger cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
       "query": "goyard cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow"
     },
     {
@@ -1345,7 +1381,11 @@
       "size": [
         "13"
       ],
-      "size_equivalents": ["12", "46", "47"],
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ],
       "max_price": 250,
       "enabled": true,
       "profile": "slow",

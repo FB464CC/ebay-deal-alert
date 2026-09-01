@@ -176,8 +176,13 @@ EMPTY_PACKAGING_SIGNALS = re.compile(
 # is legitimate on "faux leather" goods), and "not authentic" is the phrase,
 # not bare "authentic", so "guaranteed authentic" is untouched.
 COUNTERFEIT_SIGNALS = re.compile(
-    r"\b(replica|inspired\s+by|mirror\s+quality|unauthenticated|not\s+authentic|"
-    r"no\s+guarantee\s+of\s+authenticity|aaa\s+quality|faux\s+designer)\b|"
+    # Real live miss: "(BOTTEGA INSPIRED WALLET MADE BY ME)" alerted as a 93%
+    # "Steal" - the seller openly says it's a handmade replica, but
+    # "inspired" alone (no trailing "by") didn't match the old
+    # inspired\s+by pattern. Dropped the "by" requirement.
+    r"\b(replica|inspired|mirror\s+quality|unauthenticated|not\s+authentic|"
+    r"no\s+guarantee\s+of\s+authenticity|aaa\s+quality|faux\s+designer|"
+    r"made\s+by\s+me)\b|"
     r"\b1\s*:\s*1\b",
     re.IGNORECASE,
 )
@@ -5026,6 +5031,12 @@ def run():
     if _seen_rows > MAX_SEEN_ROWS or _db_mb >= SEEN_DB_EMERGENCY_MB or (now_utc.hour == 7 and now_utc.minute < 15):
         logger.info("Pruning seen table (%s rows, cap %s)", _seen_rows, MAX_SEEN_ROWS)
         prune_old_seen_entries(conn)
+    # Real bug caught live: this function was written but never actually
+    # called anywhere, so alerts_log.jsonl grew unbounded on the new
+    # append-only write path and hit 3.4MB - past the point GitHub's
+    # Contents API stops including file content in its response at all,
+    # silently breaking web/api/history.js's dashboard read.
+    prune_alert_log_if_oversized()
     ebay_token_error = None
     try:
         token = get_ebay_token()
