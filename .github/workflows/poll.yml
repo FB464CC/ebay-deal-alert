@@ -61,10 +61,10 @@ jobs:
       - name: Commit seen item updates
         if: always()
         run: |
-          if [ -n "$(git status --porcelain seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl)" ]; then
+          if [ -n "$(git status --porcelain seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl search_activity_state.json quiet_alert_queue.json weekly_digest_state.json)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            for file in seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl; do
+            for file in seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
               if [ -e "$file" ]; then
                 git add "$file"
               fi
@@ -77,7 +77,7 @@ jobs:
               # origin on a conflict. ai_spend.db is deliberately excluded:
               # losing its local reservation could breach the monthly cap.
               echo "Rebase conflict on retryable state files - keeping origin copies while preserving ai_spend.db"
-              for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl; do
+              for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
                 if git cat-file -e "origin/main:$file" 2>/dev/null; then
                   git checkout origin/main -- "$file"
                   git add "$file"

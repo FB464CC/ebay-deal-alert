@@ -76,6 +76,36 @@ class BrandMatching(unittest.TestCase):
 
 
 class CategoryClassification(unittest.TestCase):
+    def test_explicit_category_wins_over_query_inference(self):
+        search = {"query": "rolex watch", "category": "golf-equipment"}
+        self.assertEqual(m.classify_search_category(search), "golf-equipment")
+
+    def test_every_saved_search_has_unique_stable_id_and_category(self):
+        ids = [search.get("id") for search in m.SAVED_SEARCHES]
+        self.assertTrue(all(ids))
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(all(search.get("category") for search in m.SAVED_SEARCHES))
+
+    def test_every_enabled_golf_platform_search_uses_golf_equipment_rules(self):
+        golf_searches = [
+            search
+            for search in m.SAVED_SEARCHES
+            if search.get("enabled", True)
+            and set(search.get("platforms") or []) == {"shopgoodwill", "facebook"}
+            and re.search(
+                r"(?i)\b(?:golf|irons?|driver|putter|wedge|taylormade|callaway|"
+                r"ping\s+g\d|cobra\s+f\d|cleveland\s+rtx|odyssey)\b",
+                search["query"],
+            )
+        ]
+        self.assertGreaterEqual(len(golf_searches), 30)
+        for search in golf_searches:
+            with self.subTest(search_id=search.get("id"), query=search["query"]):
+                self.assertEqual(
+                    m.classify_search_category(search),
+                    "golf-equipment",
+                )
+
     def test_sport_coat_reaches_tailoring_not_outerwear(self):
         # Regression: "jacket"/"coat" (outerwear) was checked before
         # "blazer"/"suit"/"sport coat" (tailoring), so "sport coat"
@@ -118,6 +148,45 @@ class CategoryClassification(unittest.TestCase):
         ):
             with self.subTest(query=query):
                 self.assertEqual(m.classify_search_category(query), "poker-chips")
+
+
+class ConfigPreflight(unittest.TestCase):
+    def test_bad_rows_are_disabled_and_recoverable_errors_are_reported(self):
+        searches = [
+            {
+                "id": "golf-good", "query": "golf club set",
+                "category": "golf-equipment", "profile": "fast",
+                "max_price": 350, "platforms": ["shopgoodwill", "ghost-market"],
+                "enabled": True,
+            },
+            {
+                "id": "golf-duplicate", "query": " GOLF   CLUB SET ",
+                "category": "golf-equipment", "profile": "slow",
+                "max_price": 100, "enabled": True,
+            },
+            {
+                "id": "bad-profile", "query": "rolex watch",
+                "category": "watches", "profile": "turbo",
+                "max_price": 100, "enabled": True,
+            },
+            {
+                "id": "dead-category", "query": "mystery thing",
+                "category": "unwired-category", "profile": "slow",
+                "max_price": 10, "enabled": True,
+            },
+        ]
+        safe, warnings = m.validate_config({"SAVED_SEARCHES": searches})
+        self.assertEqual(safe[0]["platforms"], ["shopgoodwill"])
+        self.assertTrue(safe[0]["enabled"])
+        self.assertFalse(safe[1]["enabled"])
+        self.assertFalse(safe[2]["enabled"])
+        self.assertFalse(safe[3]["enabled"])
+        warning_text = "\n".join(warnings)
+        self.assertIn("unknown platform(s) ghost-market", warning_text)
+        self.assertIn("duplicate active query", warning_text)
+        self.assertIn("invalid profile", warning_text)
+        self.assertIn("has no scoring/adapter path", warning_text)
+        self.assertIn("exceeds golf-equipment hard gate $300", warning_text)
 
 
 class PokerChipsGate(unittest.TestCase):
@@ -250,11 +319,19 @@ class PokerChipsConfiguration(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(
                     set(search),
-                    {"query", "size", "max_price", "enabled", "profile", "platforms"},
+                    {
+                        "id", "category", "query", "size", "max_price",
+                        "enabled", "profile", "platforms",
+                    },
                 )
+                self.assertEqual(search["category"], "poker-chips")
                 self.assertIsNone(search["size"])
                 self.assertEqual(search["max_price"], 150)
-                self.assertIs(search["enabled"], True)
+                # Not asserting a specific enabled value here: owner turned
+                # these off 2026-09-01 (already bought a set), so pinning
+                # True would just force accidental re-enables through as a
+                # passing test. Shape/category/price are the real invariant.
+                self.assertIsInstance(search["enabled"], bool)
                 self.assertEqual(search["profile"], "fast")
                 # `platforms` scopes non-eBay adapters only. The Browse API
                 # lane consumes all enabled SAVED_SEARCHES independently.
@@ -606,8 +683,12 @@ class GolfRampConfiguration(unittest.TestCase):
             search = searches_by_clean_query[clean_query]
             self.assertEqual(
                 set(search),
-                {"query", "size", "max_price", "enabled", "profile", "platforms"},
+                {
+                    "id", "category", "query", "size", "max_price",
+                    "enabled", "profile", "platforms",
+                },
             )
+            self.assertEqual(search["category"], "golf-equipment")
             self.assertIsNone(search["size"])
             self.assertEqual(search["max_price"], 300)
             self.assertIs(search["enabled"], True)
@@ -3010,10 +3091,12 @@ class SendAlertRetailResaleLine(unittest.TestCase):
 
         def fake_post(url, data=None, headers=None, timeout=None):
             captured["message"] = data.decode("utf-8")
+            captured["headers"] = headers
             return fake_resp
 
         with mock.patch("requests.post", side_effect=fake_post):
             m.send_alert(result)
+        self.last_headers = captured["headers"]
         return captured["message"]
 
     def test_retail_and_resale_both_shown(self):
@@ -3057,19 +3140,133 @@ class SendAlertRetailResaleLine(unittest.TestCase):
         message = self._send_and_capture(result)
         self.assertNotIn("seller:", message)
 
-    def test_verify_sold_comps_link_appears_when_search_query_present(self):
-        # Feature 2: the one-tap sold-comps link rides on the raw saved
-        # search query, with exclusions stripped and terms URL-encoded.
+    def test_ntfy_actions_open_listing_and_sold_comps_without_raw_body_url(self):
         result = {
             "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
             "price": 100.0, "item_price": 90.0, "shipping_cost": 10.0,
             "search_query": "canali suit -navy",
         }
         message = self._send_and_capture(result)
+        self.assertNotIn("verify:", message)
         self.assertIn(
-            "verify: https://www.ebay.com/sch/i.html?_nkw=canali+suit&LH_Sold=1&LH_Complete=1",
-            message,
+            "view, Open listing, https://x",
+            self.last_headers["Actions"],
         )
+        self.assertIn(
+            "view, Check sold comps, https://www.ebay.com/sch/i.html?_nkw=canali+suit&LH_Sold=1&LH_Complete=1",
+            self.last_headers["Actions"],
+        )
+
+
+class AlertUrgencyTests(unittest.TestCase):
+    def test_ending_soon_auction_is_max_priority_regardless_of_brand(self):
+        priority, tags = m.alert_urgency({
+            "is_ending_soon_auction": True,
+            "brand_tier": "standard",
+            "profile": "slow",
+        })
+        self.assertEqual(priority, 5)
+        self.assertIn("alarm_clock", tags)
+
+    def test_verified_extreme_discount_is_max_priority(self):
+        self.assertEqual(m.alert_urgency({
+            "discount_pct": 0.76, "price_confidence": "high", "profile": "slow",
+        })[0], 5)
+
+    def test_high_confidence_great_fast_deal_is_high_priority(self):
+        self.assertEqual(m.alert_urgency({
+            "deal_rating": "Great Deal", "discount_pct": 0.55,
+            "price_confidence": "high", "profile": "fast",
+        })[0], 4)
+
+    def test_ordinary_slow_flip_stays_normal_priority(self):
+        self.assertEqual(m.alert_urgency({
+            "deal_rating": "Good Deal", "discount_pct": 0.35,
+            "price_confidence": "medium", "profile": "slow",
+        })[0], 3)
+
+
+class QuietHoursTests(unittest.TestCase):
+    def _quiet_patch(self):
+        return (
+            mock.patch.object(m, "OWNER_TIMEZONE", "America/New_York"),
+            mock.patch.object(m, "QUIET_HOURS_START", "23:00"),
+            mock.patch.object(m, "QUIET_HOURS_END", "07:00"),
+        )
+
+    def test_cross_midnight_window_uses_owner_timezone(self):
+        patches = self._quiet_patch()
+        with patches[0], patches[1], patches[2]:
+            self.assertTrue(m.is_quiet_hours(datetime(2026, 9, 1, 4, 30, tzinfo=timezone.utc)))  # 00:30 ET
+            self.assertFalse(m.is_quiet_hours(datetime(2026, 9, 1, 13, 0, tzinfo=timezone.utc)))  # 09:00 ET
+
+    def test_only_nonurgent_slow_alerts_queue(self):
+        quiet_now = datetime(2026, 9, 1, 4, 30, tzinfo=timezone.utc)
+        patches = self._quiet_patch()
+        with patches[0], patches[1], patches[2]:
+            self.assertTrue(m.should_queue_quiet_alert({"profile": "slow"}, quiet_now))
+            self.assertFalse(m.should_queue_quiet_alert({"profile": "fast"}, quiet_now))
+            self.assertFalse(m.should_queue_quiet_alert({"profile": "slow", "brand_tier": "grab_on_sight"}, quiet_now))
+            self.assertFalse(m.should_queue_quiet_alert({"profile": "slow", "is_ending_soon_auction": True}, quiet_now))
+            self.assertFalse(m.should_queue_quiet_alert({
+                "profile": "slow", "discount_pct": 0.8, "price_confidence": "high",
+            }, quiet_now))
+
+    def test_queue_survives_reload_and_flush_logs_and_marks_seen_only_after_send(self):
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        queue_path = tmpdir / "quiet_alert_queue.json"
+        log_path = tmpdir / "alerts_log.jsonl"
+        db_path = str(tmpdir / "seen.db")
+        activity_path = tmpdir / "search_activity.json"
+        result = {
+            "listing": {
+                "itemId": "ebay:quiet-1", "title": "Slow Canali Suit",
+                "itemWebUrl": "https://example.test/quiet-1",
+                "price": {"value": 80.0, "currency": "USD"},
+            },
+            "verdict": "REVIEW", "profile": "slow", "price": 90.0,
+            "search_id": "tailoring-canali-suit", "category": "tailoring",
+            "search_query": "canali suit",
+        }
+        with mock.patch.object(m, "DB_PATH", db_path), \
+             mock.patch.object(m, "QUIET_ALERT_QUEUE_PATH", queue_path), \
+             mock.patch.object(m, "ALERTS_LOG_PATH", log_path), \
+             mock.patch.object(m, "SEARCH_ACTIVITY_STATE_PATH", activity_path):
+            conn = m.init_db()
+            self.assertTrue(m.enqueue_quiet_alert(result, datetime(2026, 9, 1, 4, tzinfo=timezone.utc)))
+            self.assertEqual(len(m.load_quiet_alert_queue()), 1)
+            self.assertFalse(log_path.exists(), "queue time must not write a delivered alert record")
+            self.assertTrue(m.is_new(conn, result["listing"]["itemId"]), "queue time must not mark seen")
+            with mock.patch.object(m, "send_alert") as send:
+                delivered = m.flush_quiet_alert_queue(
+                    conn, datetime(2026, 9, 1, 13, tzinfo=timezone.utc)
+                )
+            self.assertEqual(delivered, 1)
+            send.assert_called_once()
+            self.assertEqual(m.load_quiet_alert_queue(), [])
+            self.assertFalse(m.is_new(conn, result["listing"]["itemId"]))
+            record = json.loads(log_path.read_text(encoding="utf-8"))
+            self.assertTrue(record["delivered"])
+            self.assertEqual(record["disposition_code"], "DELIVERED")
+            conn.close()
+
+    def test_failed_morning_delivery_remains_persisted_and_unseen(self):
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        result = {
+            "listing": {"itemId": "quiet-fail", "title": "Queued item", "price": {"value": 10}},
+            "verdict": "REVIEW", "profile": "slow", "price": 11.0,
+        }
+        with mock.patch.object(m, "DB_PATH", str(tmpdir / "seen.db")), \
+             mock.patch.object(m, "QUIET_ALERT_QUEUE_PATH", tmpdir / "queue.json"), \
+             mock.patch.object(m, "ALERTS_LOG_PATH", tmpdir / "log.jsonl"), \
+             mock.patch.object(m, "SEARCH_ACTIVITY_STATE_PATH", tmpdir / "activity.json"):
+            conn = m.init_db()
+            m.enqueue_quiet_alert(result)
+            with mock.patch.object(m, "send_alert", side_effect=RuntimeError("ntfy down")):
+                self.assertEqual(m.flush_quiet_alert_queue(conn), 0)
+            self.assertEqual(len(m.load_quiet_alert_queue()), 1)
+            self.assertTrue(m.is_new(conn, "quiet-fail"))
+            conn.close()
 
 
 class EbaySoldCompsUrl(unittest.TestCase):
@@ -3920,6 +4117,10 @@ class RunIntegration(unittest.TestCase):
         self._patch("DB_PATH", str(self.tmpdir / "seen.db"))
         self._patch("AI_SPEND_DB_PATH", str(self.tmpdir / "ai_spend.db"))
         self._patch("ALERTS_LOG_PATH", self.tmpdir / "alerts_log.jsonl")
+        self._patch("SEARCH_ACTIVITY_STATE_PATH", self.tmpdir / "search_activity_state.json")
+        self._patch("QUIET_ALERT_QUEUE_PATH", self.tmpdir / "quiet_alert_queue.json")
+        self._patch("QUIET_HOURS_START", None)
+        self._patch("QUIET_HOURS_END", None)
         self._patch("EBAY_RATE_LIMIT_STATE_PATH", self.tmpdir / "rate_limit_state.json")
         # Fast and deterministic: no inter-call backoff, no config drift on
         # the AI budget, no auction lane unless a test asks for one.
@@ -5263,7 +5464,7 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
     could therefore present a week heavy on blocked junk as if it were
     alerts the user actually received."""
 
-    def _digest_message(self, records):
+    def _digest_message(self, records, weekly_spend=(0.0, 0.0), starved=()):
         captured = {}
         fake_resp = mock.Mock()
         fake_resp.raise_for_status = lambda: None
@@ -5273,6 +5474,9 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
             return fake_resp
 
         with mock.patch.object(m, "_read_alert_log_records", return_value=records), \
+             mock.patch.object(m, "_weekly_ai_spend", return_value=weekly_spend), \
+             mock.patch.object(m, "_persist_weekly_ai_spend_snapshot"), \
+             mock.patch.object(m, "starved_searches", return_value=list(starved)), \
              mock.patch("requests.post", side_effect=fake_post):
             m.send_weekly_digest()
         return captured["message"]
@@ -5328,6 +5532,96 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
         self.assertIn("Verdicts: REVIEW: 1", message)
         self.assertNotIn("DELIVERY_FAILED:", message)
         self.assertIn("Latest delivery error: ntfy rate limited", message)
+
+    def test_digest_includes_ranked_deals_verified_discount_and_zero_alert_ai_searches(self):
+        ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        records = [
+            {"timestamp": ts, "verdict": "REVIEW", "delivered": True,
+             "title": "Verified Omega", "discount_pct": 0.80,
+             "price_confidence": "high", "search_id": "watch-omega", "query": "omega watch"},
+            {"timestamp": ts, "verdict": "REVIEW", "delivered": True,
+             "title": "Canali Suit", "discount_pct": 0.60,
+             "search_id": "tailoring-canali", "query": "canali suit"},
+            {"timestamp": ts, "verdict": "REVIEW", "delivered": True,
+             "title": "Alden Shoes", "discount_pct": 0.40,
+             "search_id": "footwear-alden", "query": "alden shoes"},
+            {"timestamp": ts, "verdict": "PASS", "delivered": False,
+             "ai_checked": True, "search_id": "watch-tudor", "query": "tudor watch",
+             "disposition_code": "BELOW_MARGIN"},
+        ]
+        message = self._digest_message(records, weekly_spend=(1.23, 4.56))
+        self.assertIn("AI dollars spent: $1.23", message)
+        self.assertIn("Biggest verified discount: 80% - Verified Omega", message)
+        self.assertIn("Top delivered deals: 80% Verified Omega | 60% Canali Suit | 40% Alden Shoes", message)
+        self.assertIn("AI checked, zero alerts: tudor watch", message)
+
+    def test_weekly_ai_spend_uses_persisted_monthly_delta_without_changing_reservations(self):
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        spend_db = tmpdir / "ai_spend.db"
+        state_path = tmpdir / "weekly_digest_state.json"
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        with sqlite3.connect(spend_db) as ledger:
+            ledger.execute(
+                "CREATE TABLE ai_paid_spend (month TEXT PRIMARY KEY, reserved_usd REAL, calls INTEGER)"
+            )
+            ledger.execute("INSERT INTO ai_paid_spend VALUES ('2026-09', 3.50, 7)")
+        state_path.write_text(
+            json.dumps({"month": "2026-09", "paid_ai_reserved_usd": 1.25}),
+            encoding="utf-8",
+        )
+        with mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_db)), \
+             mock.patch.object(m, "WEEKLY_DIGEST_STATE_PATH", state_path):
+            weekly, current = m._weekly_ai_spend(now)
+        self.assertAlmostEqual(weekly, 2.25)
+        self.assertAlmostEqual(current, 3.50)
+
+    def test_starved_searches_are_surfaced_separately(self):
+        message = self._digest_message([], starved=[{
+            "id": "golf-taylormade-m2-irons",
+            "query": "TaylorMade M2 irons",
+            "hours_empty": 60,
+            "threshold_hours": 36,
+        }])
+        self.assertIn("Starved searches: TaylorMade M2 irons (2.5d empty)", message)
+
+
+class SearchStarvationTracking(unittest.TestCase):
+    def test_activity_timestamps_round_trip_in_persisted_state(self):
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        path = tmpdir / "search_activity_state.json"
+        now = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
+        activity = {}
+        search = {
+            "id": "golf-taylormade-m2-irons",
+            "query": "TaylorMade M2 irons -lefty",
+            "category": "golf-equipment",
+        }
+        m.record_search_activity(activity, search, now, candidate_count=3)
+        m.record_search_activity(activity, search, now + timedelta(minutes=1), alerted=True)
+        with mock.patch.object(m, "SEARCH_ACTIVITY_STATE_PATH", path):
+            m.save_search_activity(activity)
+            loaded = m.load_search_activity()
+        entry = loaded[search["id"]]
+        self.assertEqual(entry["last_attempted_at"], now.isoformat())
+        self.assertEqual(entry["last_nonzero_at"], now.isoformat())
+        self.assertEqual(entry["last_alert_at"], (now + timedelta(minutes=1)).isoformat())
+
+    def test_starvation_threshold_is_category_aware(self):
+        now = datetime(2026, 9, 10, tzinfo=timezone.utc)
+        started = (now - timedelta(hours=60)).isoformat()
+        searches = [
+            {"id": "golf-one", "query": "TaylorMade M2 irons", "category": "golf-equipment", "enabled": True},
+            {"id": "watch-one", "query": "rare watch", "category": "watches", "enabled": True},
+        ]
+        activity = {
+            search["id"]: {
+                "tracking_started_at": started,
+                "last_attempted_at": now.isoformat(),
+            }
+            for search in searches
+        }
+        starved = m.starved_searches(now, searches=searches, activity=activity)
+        self.assertEqual([item["id"] for item in starved], ["golf-one"])
 
 
 class EbayTokenCacheWriteFailure(unittest.TestCase):
@@ -5400,6 +5694,51 @@ class AlertLogPriceSemantics(unittest.TestCase):
         record = self._write_and_read(result)
         self.assertEqual(record["price"], 100.0)
         self.assertEqual(record["item_price"], 80.0)
+
+    def test_versioned_disposition_and_search_metadata_are_always_written(self):
+        search = next(search for search in m.SAVED_SEARCHES if search["id"] == "golf-taylormade-m2-irons")
+        result = {
+            "listing": {
+                "itemId": "facebook:club-1",
+                "title": "TaylorMade M2 iron set",
+                "platform": "facebook",
+                "price": {"value": 180.0, "currency": "USD"},
+            },
+            "search_query": search["query"],
+            "verdict": "PASS",
+            "reason": "excluded gender keyword in title/description",
+        }
+        record = self._write_and_read(result)
+        self.assertEqual(record["schema_version"], 2)
+        self.assertEqual(record["disposition_code"], "GENDER_EXCLUDE")
+        self.assertEqual(record["search_id"], search["id"])
+        self.assertEqual(record["category"], "golf-equipment")
+        self.assertEqual(record["platform"], "facebook")
+        self.assertEqual(len(record["config_hash"]), 12)
+
+    def test_disposition_codes_map_existing_real_gate_reasons(self):
+        cases = {
+            "no AI price estimate - every alert must be AI-vetted": "NO_AI_BUDGET",
+            "counterfeit/replica disclosure": "COUNTERFEIT",
+            "over max price: $400 landed": "OVER_MAX_PRICE",
+            "wrong size filter": "SIZE_MISMATCH",
+            "deal_rating 'Marginal' below steal bar": "BELOW_MARGIN",
+            "condition hard-fail keyword in title": "CONDITION_REJECT",
+        }
+        for reason, expected in cases.items():
+            with self.subTest(reason=reason):
+                self.assertEqual(
+                    m.disposition_code_for({"verdict": "PASS", "reason": reason}),
+                    expected,
+                )
+        self.assertEqual(
+            m.disposition_code_for({"verdict": "REVIEW"}, delivered=True),
+            "DELIVERED",
+        )
+        self.assertEqual(
+            m.disposition_code_for({"verdict": "DELIVERY_FAILED"}),
+            "DELIVERY_FAILED",
+        )
 
     def test_append_preserves_existing_history_bytes(self):
         tmpdir = pathlib.Path(tempfile.mkdtemp())

@@ -1,68 +1,8 @@
 {
+  "OWNER_TIMEZONE": "America/New_York",
+  "QUIET_HOURS_START": "23:00",
+  "QUIET_HOURS_END": "07:00",
   "SAVED_SEARCHES": [
-    {
-      "query": "peter millar merino sweater",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 25,
-      "enabled": false,
-      "profile": "fast"
-    },
-    {
-      "query": "peter millar quarter zip merino",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 25,
-      "enabled": false,
-      "profile": "fast"
-    },
-    {
-      "query": "tom james merino",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 20,
-      "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "johnstons elgin cashmere",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 50,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "11484"
-    },
-    {
-      "query": "alan paine merino lambswool",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 25,
-      "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "pringle scotland merino cashmere",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 120,
-      "enabled": false,
-      "profile": "slow"
-    },
     {
       "query": "hickey freeman blazer",
       "size": [
@@ -71,7 +11,9 @@
       "max_price": 40,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-hickey-freeman-blazer",
+      "category": "tailoring"
     },
     {
       "query": "brooks brothers golden fleece blazer",
@@ -81,7 +23,9 @@
       "max_price": 30,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-brooks-brothers-golden-fleece-blazer",
+      "category": "tailoring"
     },
     {
       "query": "canali blazer",
@@ -91,38 +35,9 @@
       "max_price": 50,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "allen edmonds -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "max_price": 50,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "alden shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "max_price": 80,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "peter millar summer comfort polo",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 20,
-      "enabled": false,
-      "profile": "slow"
+      "category_id": "3001",
+      "id": "tailoring-canali-blazer",
+      "category": "tailoring"
     },
     {
       "query": "loro piana cashmere sweater -scarf",
@@ -133,7 +48,9 @@
       ],
       "max_price": 150,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "knitwear-loro-piana-cashmere-sweater",
+      "category": "knitwear"
     },
     {
       "query": "brunello cucinelli sweater -scarf",
@@ -144,7 +61,9 @@
       ],
       "max_price": 150,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "knitwear-brunello-cucinelli-sweater",
+      "category": "knitwear"
     },
     {
       "query": "loro piana jacket -scarf",
@@ -155,7 +74,9 @@
       ],
       "max_price": 250,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "outerwear-loro-piana-jacket",
+      "category": "outerwear"
     },
     {
       "query": "brunello cucinelli jacket -scarf",
@@ -166,7 +87,9 @@
       ],
       "max_price": 250,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "outerwear-brunello-cucinelli-jacket",
+      "category": "outerwear"
     },
     {
       "query": "kiton sport coat",
@@ -176,7 +99,9 @@
       "max_price": 120,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-kiton-sport-coat",
+      "category": "tailoring"
     },
     {
       "query": "cesare attolini blazer",
@@ -186,7 +111,9 @@
       "max_price": 120,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-cesare-attolini-blazer",
+      "category": "tailoring"
     },
     {
       "query": "belvest blazer",
@@ -196,107 +123,9 @@
       "max_price": 70,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "william lockie cashmere",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 50,
-      "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "ballantyne cashmere",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 50,
-      "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "edward green shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 180,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "john lobb shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 180,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "crockett jones shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 120,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "church's shoes -chicken -restaurant -franchise -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 90,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "santoni shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "max_price": 100,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "ferragamo loafers -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "max_price": 100,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
+      "category_id": "3001",
+      "id": "tailoring-belvest-blazer",
+      "category": "tailoring"
     },
     {
       "query": "ferragamo belt -scarf",
@@ -307,17 +136,9 @@
       "max_price": 60,
       "enabled": true,
       "profile": "slow",
-      "category_id": "2993"
-    },
-    {
-      "query": "gucci loafers -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "max_price": 150,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
+      "category_id": "2993",
+      "id": "leather-goods-ferragamo-belt",
+      "category": "leather-goods"
     },
     {
       "query": "gucci belt",
@@ -328,7 +149,9 @@
       "max_price": 80,
       "enabled": false,
       "profile": "fast",
-      "category_id": "2993"
+      "category_id": "2993",
+      "id": "leather-goods-gucci-belt",
+      "category": "leather-goods"
     },
     {
       "query": "bottega veneta belt -scarf",
@@ -339,7 +162,9 @@
       "max_price": 80,
       "enabled": true,
       "profile": "slow",
-      "category_id": "2993"
+      "category_id": "2993",
+      "id": "leather-goods-bottega-veneta-belt",
+      "category": "leather-goods"
     },
     {
       "query": "anderson's belt -sheppard -little -jw -ord -navajo -parkett -scarf",
@@ -350,7 +175,9 @@
       "max_price": 60,
       "enabled": true,
       "profile": "slow",
-      "category_id": "2993"
+      "category_id": "2993",
+      "id": "leather-goods-anderson-s-belt",
+      "category": "leather-goods"
     },
     {
       "query": "peter millar crown crafted polo -scarf",
@@ -359,7 +186,9 @@
       ],
       "max_price": 30,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "golf-peter-millar-crown-crafted-polo",
+      "category": "golf"
     },
     {
       "query": "peter millar crown crafted quarter zip -scarf",
@@ -369,7 +198,9 @@
       ],
       "max_price": 35,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "knitwear-peter-millar-crown-crafted-quarter-zip",
+      "category": "knitwear"
     },
     {
       "query": "peter millar gamecocks polo -scarf",
@@ -386,7 +217,9 @@
         "shopgoodwill",
         "vinted",
         "facebook"
-      ]
+      ],
+      "id": "school-peter-millar-polo",
+      "category": "school-gear"
     },
     {
       "query": "peter millar gamecocks quarter zip -scarf",
@@ -403,45 +236,9 @@
         "shopgoodwill",
         "vinted",
         "facebook"
-      ]
-    },
-    {
-      "query": "peter millar gamecocks jacket",
-      "size": [
-        "L",
-        "XL"
       ],
-      "max_price": 50,
-      "enabled": false,
-      "profile": "fast",
-      "platforms": [
-        "grailed",
-        "poshmark",
-        "shopgoodwill",
-        "vinted",
-        "facebook"
-      ]
-    },
-    {
-      "query": "barbour jacket",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 65,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "57988"
-    },
-    {
-      "query": "rancourt loafers -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "max_price": 70,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
+      "id": "school-peter-millar-quarter-zip",
+      "category": "school-gear"
     },
     {
       "query": "hickey freeman suit",
@@ -451,7 +248,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-hickey-freeman-suit",
+      "category": "tailoring"
     },
     {
       "query": "canali suit",
@@ -461,7 +260,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-canali-suit",
+      "category": "tailoring"
     },
     {
       "query": "brooks brothers golden fleece suit",
@@ -471,7 +272,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-brooks-brothers-golden-fleece-suit",
+      "category": "tailoring"
     },
     {
       "query": "kiton suit -scarf",
@@ -479,9 +282,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-kiton-suit",
+      "category": "tailoring"
     },
     {
       "query": "cesare attolini suit -scarf",
@@ -489,9 +294,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-cesare-attolini-suit",
+      "category": "tailoring"
     },
     {
       "query": "belvest suit",
@@ -501,7 +308,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-belvest-suit",
+      "category": "tailoring"
     },
     {
       "query": "brioni sport coat -bianco",
@@ -511,7 +320,9 @@
       "max_price": 150,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-brioni-sport-coat",
+      "category": "tailoring"
     },
     {
       "query": "isaia sport coat",
@@ -521,7 +332,9 @@
       "max_price": 150,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-isaia-sport-coat",
+      "category": "tailoring"
     },
     {
       "query": "ralph lauren \"purple label\" -scarf",
@@ -532,21 +345,27 @@
       ],
       "max_price": 60,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-ralph-lauren-purple-label",
+      "category": "other"
     },
     {
       "query": "ferragamo cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 60,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-ferragamo-cardholder",
+      "category": "other"
     },
     {
       "query": "bottega veneta cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 80,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-bottega-veneta-cardholder",
+      "category": "other"
     },
     {
       "query": "tissot watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -mathey -matthey -mathew -marcel -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -554,7 +373,9 @@
       "max_price": 60,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-tissot",
+      "category": "watches"
     },
     {
       "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -musical -broadway -lin-manuel -playbill -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -562,7 +383,9 @@
       "max_price": 80,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-hamilton",
+      "category": "watches"
     },
     {
       "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -570,69 +393,45 @@
       "max_price": 90,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-shinola",
+      "category": "watches"
     },
     {
       "query": "tumi briefcase",
       "size": null,
       "max_price": 60,
       "enabled": false,
-      "profile": "fast"
+      "profile": "fast",
+      "id": "other-tumi-briefcase",
+      "category": "other"
     },
     {
       "query": "loro piana cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-loro-piana-cardholder",
+      "category": "other"
     },
     {
       "query": "brunello cucinelli cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-brunello-cucinelli-cardholder",
+      "category": "other"
     },
     {
       "query": "berluti cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
       "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "\"peter millar\" gamecocks polo",
-      "size": [
-        "M",
-        "L"
-      ],
-      "max_price": 25,
-      "enabled": false,
       "profile": "slow",
-      "platforms": [
-        "grailed",
-        "poshmark",
-        "shopgoodwill",
-        "vinted",
-        "facebook"
-      ]
-    },
-    {
-      "query": "\"peter millar\" gamecocks quarter zip",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 50,
-      "enabled": false,
-      "profile": "slow",
-      "platforms": [
-        "grailed",
-        "poshmark",
-        "shopgoodwill",
-        "vinted",
-        "facebook"
-      ]
+      "id": "other-berluti-cardholder",
+      "category": "other"
     },
     {
       "query": "j press blazer",
@@ -642,10 +441,12 @@
       "max_price": 40,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-j-press-blazer",
+      "category": "tailoring"
     },
     {
-      "query": "zegna sweater -\"zegna sport\" -scarf",
+      "query": "zegna sweater -\"zegna sport\" -\"z zegna\" -scarf",
       "size": [
         "M",
         "L",
@@ -653,7 +454,9 @@
       ],
       "max_price": 90,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "knitwear-zegna-sweater",
+      "category": "knitwear"
     },
     {
       "query": "zegna sport coat",
@@ -663,32 +466,9 @@
       "max_price": 100,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "cheaney shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 130,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "drake's london sweater -scarf",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 50,
-      "enabled": true,
-      "profile": "slow"
+      "category_id": "3001",
+      "id": "tailoring-zegna-sport-coat",
+      "category": "tailoring"
     },
     {
       "query": "charvet shirt -scarf",
@@ -697,8 +477,10 @@
         "XL"
       ],
       "max_price": 150,
-      "enabled": true,
-      "profile": "slow"
+      "enabled": false,
+      "profile": "slow",
+      "id": "other-charvet-shirt",
+      "category": "other"
     },
     {
       "query": "huntsman suit -hunter -scarf",
@@ -706,9 +488,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-huntsman-suit",
+      "category": "tailoring"
     },
     {
       "query": "gieves & hawkes suit -scarf",
@@ -716,31 +500,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "pringle of scotland sweater",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 120,
-      "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "n peal sweater",
-      "size": [
-        "M",
-        "L",
-        "XL"
-      ],
-      "max_price": 120,
-      "enabled": false,
-      "profile": "slow"
+      "category_id": "3001",
+      "id": "tailoring-gieves-hawkes-suit",
+      "category": "tailoring"
     },
     {
       "query": "rolex watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -755,7 +519,9 @@
         "shopgoodwill",
         "vinted",
         "facebook"
-      ]
+      ],
+      "id": "watch-rolex",
+      "category": "watches"
     },
     {
       "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -joan -rivers -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -770,7 +536,9 @@
         "shopgoodwill",
         "vinted",
         "facebook"
-      ]
+      ],
+      "id": "watch-omega",
+      "category": "watches"
     },
     {
       "query": "trafalgar belt -square -tours -battle -london -scarf",
@@ -781,33 +549,9 @@
       "max_price": 40,
       "enabled": true,
       "profile": "slow",
-      "category_id": "2993"
-    },
-    {
-      "query": "alfred sargent shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 100,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "cordings jacket",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 60,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "57988"
+      "category_id": "2993",
+      "id": "leather-goods-trafalgar-belt",
+      "category": "leather-goods"
     },
     {
       "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -815,7 +559,9 @@
       "max_price": 150,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-longines",
+      "category": "watches"
     },
     {
       "query": "bills khakis trousers -scarf",
@@ -823,18 +569,22 @@
         "34"
       ],
       "max_price": 30,
-      "enabled": true,
-      "profile": "slow"
+      "enabled": false,
+      "profile": "slow",
+      "id": "other-bills-khakis-trousers",
+      "category": "other"
     },
     {
-      "query": "zegna quarter zip -\"zegna sport\" -scarf",
+      "query": "zegna quarter zip -\"zegna sport\" -\"z zegna\" -scarf",
       "size": [
         "L",
         "XL"
       ],
       "max_price": 90,
       "enabled": true,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "knitwear-zegna-quarter-zip",
+      "category": "knitwear"
     },
     {
       "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -court -manor -dynasty -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -849,7 +599,9 @@
         "shopgoodwill",
         "vinted",
         "facebook"
-      ]
+      ],
+      "id": "watch-tudor",
+      "category": "watches"
     },
     {
       "query": "\"universal geneve\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -857,7 +609,9 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-universal-geneve",
+      "category": "watches"
     },
     {
       "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -865,7 +619,9 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-heuer",
+      "category": "watches"
     },
     {
       "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -doorbell -chime -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -873,7 +629,9 @@
       "max_price": 250,
       "enabled": false,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-zenith",
+      "category": "watches"
     },
     {
       "query": "iwc watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -881,7 +639,9 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-iwc",
+      "category": "watches"
     },
     {
       "query": "brioni suit -bianco -scarf",
@@ -889,9 +649,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-brioni-suit",
+      "category": "tailoring"
     },
     {
       "query": "isaia suit -scarf",
@@ -899,9 +661,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-isaia-suit",
+      "category": "tailoring"
     },
     {
       "query": "ermenegildo zegna suit -scarf",
@@ -909,9 +673,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-ermenegildo-zegna-suit",
+      "category": "tailoring"
     },
     {
       "query": "corneliani suit",
@@ -921,7 +687,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-corneliani-suit",
+      "category": "tailoring"
     },
     {
       "query": "borrelli suit",
@@ -931,7 +699,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-borrelli-suit",
+      "category": "tailoring"
     },
     {
       "query": "oxxford suit",
@@ -941,21 +711,27 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-oxxford-suit",
+      "category": "tailoring"
     },
     {
       "query": "\"maison margiela\" hat -scarf",
       "size": null,
       "max_price": 60,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-maison-margiela-hat",
+      "category": "other"
     },
     {
       "query": "\"maison margiela\" cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 80,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-maison-margiela-cardholder",
+      "category": "other"
     },
     {
       "query": "loro piana suit -scarf",
@@ -963,9 +739,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-loro-piana-suit",
+      "category": "tailoring"
     },
     {
       "query": "brunello cucinelli suit -scarf",
@@ -973,9 +751,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-brunello-cucinelli-suit",
+      "category": "tailoring"
     },
     {
       "query": "rubinacci suit -scarf",
@@ -983,9 +763,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-rubinacci-suit",
+      "category": "tailoring"
     },
     {
       "query": "caruso suit",
@@ -995,7 +777,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-caruso-suit",
+      "category": "tailoring"
     },
     {
       "query": "\"patek philippe\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1003,7 +787,9 @@
       "max_price": 1500,
       "enabled": false,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-patek-philippe",
+      "category": "watches"
     },
     {
       "query": "\"audemars piguet\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1011,7 +797,9 @@
       "max_price": 1500,
       "enabled": false,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-audemars-piguet",
+      "category": "watches"
     },
     {
       "query": "\"vacheron constantin\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1019,7 +807,9 @@
       "max_price": 1200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-vacheron-constantin",
+      "category": "watches"
     },
     {
       "query": "\"jaeger lecoultre\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1027,7 +817,9 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-jaeger-lecoultre",
+      "category": "watches"
     },
     {
       "query": "cartier watch -perfume -cologne -necklace -bracelet -ring -sunglasses -scarf -pen -lighter -wallet -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant",
@@ -1042,7 +834,9 @@
         "shopgoodwill",
         "vinted",
         "facebook"
-      ]
+      ],
+      "id": "watch-cartier",
+      "category": "watches"
     },
     {
       "query": "\"grand seiko\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1050,7 +844,9 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-grand-seiko",
+      "category": "watches"
     },
     {
       "query": "\"paul stuart\" suit",
@@ -1060,66 +856,27 @@
       "max_price": 200,
       "enabled": false,
       "profile": "fast",
-      "category_id": "3001"
-    },
-    {
-      "query": "carmina shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 150,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "vass shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 150,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
-    },
-    {
-      "query": "\"gaziano\" \"girling\" shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 150,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
+      "category_id": "3001",
+      "id": "tailoring-paul-stuart-suit",
+      "category": "tailoring"
     },
     {
       "query": "valextra cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-valextra-cardholder",
+      "category": "other"
     },
     {
       "query": "marinella tie -scarf",
       "size": null,
       "max_price": 40,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "neckwear-marinella-tie",
+      "category": "neckwear"
     },
     {
       "query": "seiko watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
@@ -1127,7 +884,9 @@
       "max_price": 150,
       "enabled": false,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-seiko",
+      "category": "watches"
     },
     {
       "query": "\"king seiko\" -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1135,7 +894,9 @@
       "max_price": 400,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "other-king-seiko",
+      "category": "other"
     },
     {
       "query": "seiko 6139 -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1143,7 +904,9 @@
       "max_price": 350,
       "enabled": true,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "other-seiko-6139",
+      "category": "other"
     },
     {
       "query": "seiko alpinist -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1151,7 +914,9 @@
       "max_price": 350,
       "enabled": true,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "other-seiko-alpinist",
+      "category": "other"
     },
     {
       "query": "seiko \"cocktail time\" -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1159,7 +924,9 @@
       "max_price": 300,
       "enabled": true,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "other-seiko-cocktail-time",
+      "category": "other"
     },
     {
       "query": "seiko 6105 -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1167,7 +934,9 @@
       "max_price": 500,
       "enabled": true,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "other-seiko-6105",
+      "category": "other"
     },
     {
       "query": "seiko 6309 -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
@@ -1175,7 +944,9 @@
       "max_price": 300,
       "enabled": false,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "other-seiko-6309",
+      "category": "other"
     },
     {
       "query": "bulova watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
@@ -1183,7 +954,9 @@
       "max_price": 100,
       "enabled": false,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-bulova",
+      "category": "watches"
     },
     {
       "query": "movado watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\"",
@@ -1191,7 +964,9 @@
       "max_price": 100,
       "enabled": false,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-movado",
+      "category": "watches"
     },
     {
       "query": "zodiac watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1199,7 +974,9 @@
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-zodiac",
+      "category": "watches"
     },
     {
       "query": "doxa watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1207,7 +984,9 @@
       "max_price": 200,
       "enabled": true,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-doxa",
+      "category": "watches"
     },
     {
       "query": "eterna watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1215,7 +994,9 @@
       "max_price": 150,
       "enabled": true,
       "profile": "slow",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-eterna",
+      "category": "watches"
     },
     {
       "query": "panerai watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1223,28 +1004,36 @@
       "max_price": 800,
       "enabled": false,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-panerai",
+      "category": "watches"
     },
     {
       "query": "smythson cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-smythson-cardholder",
+      "category": "other"
     },
     {
       "query": "ettinger cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-ettinger-cardholder",
+      "category": "other"
     },
     {
       "query": "goyard cardholder -\"zip wallet\" -\"zip around\" -\"long wallet\" -bifold -checkbook -trifold -\"passport holder\" -scarf",
       "size": null,
       "max_price": 100,
       "enabled": false,
-      "profile": "slow"
+      "profile": "slow",
+      "id": "other-goyard-cardholder",
+      "category": "other"
     },
     {
       "query": "turnbull asser shirt -scarf",
@@ -1253,8 +1042,10 @@
         "XL"
       ],
       "max_price": 15,
-      "enabled": true,
-      "profile": "slow"
+      "enabled": false,
+      "profile": "slow",
+      "id": "other-turnbull-asser-shirt",
+      "category": "other"
     },
     {
       "query": "hermes tie -scarf -cufflinks -clip -bar -box -case -square",
@@ -1262,7 +1053,9 @@
       "max_price": 60,
       "enabled": false,
       "profile": "slow",
-      "category_id": "2993"
+      "category_id": "2993",
+      "id": "neckwear-hermes-tie",
+      "category": "neckwear"
     },
     {
       "query": "henry poole suit",
@@ -1272,7 +1065,9 @@
       "max_price": 250,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-henry-poole-suit",
+      "category": "tailoring"
     },
     {
       "query": "stile latino suit -scarf",
@@ -1280,9 +1075,11 @@
         "42"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-stile-latino-suit",
+      "category": "tailoring"
     },
     {
       "query": "\"ring jacket\" suit",
@@ -1292,7 +1089,9 @@
       "max_price": 200,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
+      "category_id": "3001",
+      "id": "tailoring-ring-jacket-suit",
+      "category": "tailoring"
     },
     {
       "query": "anderson sheppard suit",
@@ -1302,47 +1101,9 @@
       "max_price": 350,
       "enabled": false,
       "profile": "slow",
-      "category_id": "3001"
-    },
-    {
-      "query": "malo cashmere sweater -scarf",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 60,
-      "enabled": true,
-      "profile": "slow"
-    },
-    {
-      "query": "agnona cashmere -scarf",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 60,
-      "enabled": true,
-      "profile": "slow"
-    },
-    {
-      "query": "john smedley merino",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 40,
-      "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "fedeli cashmere",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 60,
-      "enabled": false,
-      "profile": "slow"
+      "category_id": "3001",
+      "id": "tailoring-anderson-sheppard-suit",
+      "category": "tailoring"
     },
     {
       "query": "hilditch & key shirt",
@@ -1352,44 +1113,9 @@
       ],
       "max_price": 30,
       "enabled": false,
-      "profile": "slow"
-    },
-    {
-      "query": "\"private white\" jacket",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 200,
-      "enabled": false,
       "profile": "slow",
-      "category_id": "57988"
-    },
-    {
-      "query": "valstar jacket",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 200,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "57988"
-    },
-    {
-      "query": "berluti shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
-      "size": [
-        "13"
-      ],
-      "size_equivalents": [
-        "12",
-        "46",
-        "47"
-      ],
-      "max_price": 250,
-      "enabled": false,
-      "profile": "slow",
-      "category_id": "53120"
+      "id": "other-hilditch-key-shirt",
+      "category": "other"
     },
     {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1400,7 +1126,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-golf-club-set",
+      "category": "golf-equipment"
     },
     {
       "query": "complete golf iron set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1411,7 +1139,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-complete-iron",
+      "category": "golf-equipment"
     },
     {
       "query": "golf clubs -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1422,7 +1152,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-golf-clubs",
+      "category": "golf-equipment"
     },
     {
       "query": "golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1433,7 +1165,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-golf-set",
+      "category": "golf-equipment"
     },
     {
       "query": "mens golf clubs -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1444,7 +1178,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-mens",
+      "category": "golf-equipment"
     },
     {
       "query": "golf irons set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1455,7 +1191,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "golf bag clubs -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1466,7 +1204,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-bag",
+      "category": "golf-equipment"
     },
     {
       "query": "complete golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1477,7 +1217,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-complete",
+      "category": "golf-equipment"
     },
     {
       "query": "adams golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1488,7 +1230,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-adams",
+      "category": "golf-equipment"
     },
     {
       "query": "cobra golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1499,7 +1243,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-cobra",
+      "category": "golf-equipment"
     },
     {
       "query": "ping golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1510,7 +1256,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping",
+      "category": "golf-equipment"
     },
     {
       "query": "taylormade golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -1521,7 +1269,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-taylormade",
+      "category": "golf-equipment"
     },
     {
       "query": "oris watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1529,7 +1279,9 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-oris",
+      "category": "watches"
     },
     {
       "query": "sinn watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1537,7 +1289,9 @@
       "max_price": 400,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-sinn",
+      "category": "watches"
     },
     {
       "query": "nomos watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1545,7 +1299,9 @@
       "max_price": 250,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-nomos",
+      "category": "watches"
     },
     {
       "query": "piaget watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -perfume -cologne -necklace -bracelet -ring -pen -pendant -scarf",
@@ -1553,7 +1309,9 @@
       "max_price": 400,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-piaget",
+      "category": "watches"
     },
     {
       "query": "\"girard perregaux\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1561,7 +1319,9 @@
       "max_price": 400,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-girard-perregaux",
+      "category": "watches"
     },
     {
       "query": "\"ulysse nardin\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1569,7 +1329,9 @@
       "max_price": 400,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-ulysse-nardin",
+      "category": "watches"
     },
     {
       "query": "blancpain watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1577,7 +1339,9 @@
       "max_price": 500,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-blancpain",
+      "category": "watches"
     },
     {
       "query": "breguet watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1585,7 +1349,9 @@
       "max_price": 500,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-breguet",
+      "category": "watches"
     },
     {
       "query": "\"glashutte original\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1593,7 +1359,9 @@
       "max_price": 400,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-glashutte-original",
+      "category": "watches"
     },
     {
       "query": "\"a lange sohne\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1601,7 +1369,9 @@
       "max_price": 1500,
       "enabled": false,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-a-lange-sohne",
+      "category": "watches"
     },
     {
       "query": "\"h moser\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
@@ -1609,7 +1379,9 @@
       "max_price": 1200,
       "enabled": true,
       "profile": "fast",
-      "category_id": "31387"
+      "category_id": "31387",
+      "id": "watch-h-moser",
+      "category": "watches"
     },
     {
       "query": "TaylorMade M2 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1620,7 +1392,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-taylormade-m2-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "TaylorMade M4 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1631,7 +1405,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-taylormade-m4-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "Callaway XR irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1642,7 +1418,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-callaway-xr-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "Callaway Rogue irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1653,7 +1431,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-callaway-rogue-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "Callaway Mavrik irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1664,7 +1444,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-callaway-mavrik-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "Ping G30 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1675,7 +1457,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping-g30-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "Ping G400 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1686,7 +1470,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping-g400-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "Cobra F8 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1697,7 +1483,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-cobra-f8-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "game improvement irons regular flex -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1708,7 +1496,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-game-improvement-irons-regular-flex",
+      "category": "golf-equipment"
     },
     {
       "query": "golf stand bag -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1719,7 +1509,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-stand-bag",
+      "category": "golf-equipment"
     },
     {
       "query": "TaylorMade driver -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1730,7 +1522,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-taylormade-driver",
+      "category": "golf-equipment"
     },
     {
       "query": "Ping golf driver -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1741,7 +1535,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping-driver",
+      "category": "golf-equipment"
     },
     {
       "query": "taylormade burner 2.0 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1752,7 +1548,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-taylormade-burner-2-0-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "taylormade rocketballz irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1763,7 +1561,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-taylormade-rocketballz-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "taylormade rbz irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1774,7 +1574,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-taylormade-rbz-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "callaway x-20 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1785,7 +1587,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-callaway-x-20-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "callaway x-22 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1796,7 +1600,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-callaway-x-22-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "callaway x-24 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1807,7 +1613,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-callaway-x-24-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "callaway diablo edge irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1818,7 +1626,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-callaway-diablo-edge-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "ping g10 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1829,7 +1639,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping-g10-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "ping g15 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1840,7 +1652,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping-g15-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "ping g20 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1851,7 +1665,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping-g20-irons",
+      "category": "golf-equipment"
     },
     {
       "query": "golf driver taylormade rbz OR callaway x-hot -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1862,7 +1678,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-driver-taylormade-rbz-or-callaway-x-hot",
+      "category": "golf-equipment"
     },
     {
       "query": "odyssey white hot putter -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1873,7 +1691,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-odyssey-white-hot-putter",
+      "category": "golf-equipment"
     },
     {
       "query": "ping karsten putter -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1884,7 +1704,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-ping-karsten-putter",
+      "category": "golf-equipment"
     },
     {
       "query": "cleveland rtx wedge 56 -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1895,7 +1717,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-cleveland-rtx-wedge-56",
+      "category": "golf-equipment"
     },
     {
       "query": "sun mountain OR ogio golf stand bag -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1906,7 +1730,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-sun-mountain-or-ogio-stand-bag",
+      "category": "golf-equipment"
     },
     {
       "query": "golf clubs and bag -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1917,7 +1743,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-and-bag",
+      "category": "golf-equipment"
     },
     {
       "query": "mens golf set used -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1928,7 +1756,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-mens-used",
+      "category": "golf-equipment"
     },
     {
       "query": "full golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1939,7 +1769,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-full",
+      "category": "golf-equipment"
     },
     {
       "query": "golf clubs garage -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
@@ -1950,7 +1782,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "golf-garage",
+      "category": "golf-equipment"
     },
     {
       "query": "casino poker chips set",
@@ -1961,7 +1795,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "poker-set",
+      "category": "poker-chips"
     },
     {
       "query": "paulson poker chips",
@@ -1972,7 +1808,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "poker-paulson",
+      "category": "poker-chips"
     },
     {
       "query": "vintage casino chip set",
@@ -1983,7 +1821,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "poker-vintage-set",
+      "category": "poker-chips"
     },
     {
       "query": "clay poker chips lot",
@@ -1994,7 +1834,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "poker-clay-lot",
+      "category": "poker-chips"
     },
     {
       "query": "poker chip set vintage",
@@ -2005,7 +1847,9 @@
       "platforms": [
         "shopgoodwill",
         "facebook"
-      ]
+      ],
+      "id": "poker-set-vintage",
+      "category": "poker-chips"
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [

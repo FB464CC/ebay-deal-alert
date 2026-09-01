@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const AUTH_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_BACKOFF_AFTER = 3;
 const AUTH_MAX_BACKOFF_SECONDS = 60;
+const MAX_AUTH_CLIENTS = 1000;
 const authAttempts = new Map();
 
 const githubHeaders = () => ({
@@ -78,6 +79,9 @@ const authRetryAfter = (ip, now = Date.now()) => {
 
 const recordAuthFailure = (ip, now = Date.now()) => {
   const prior = authAttempts.get(ip);
+  if (!prior && authAttempts.size >= MAX_AUTH_CLIENTS) {
+    authAttempts.delete(authAttempts.keys().next().value);
+  }
   const failures = !prior || now - prior.lastFailure > AUTH_WINDOW_MS ? 1 : prior.failures + 1;
   const retryAfter = failures < AUTH_BACKOFF_AFTER
     ? 0
@@ -113,6 +117,18 @@ const validateStringArrayField = (body, field) => {
   return null;
 };
 
+const SEARCH_PROFILES = new Set(["fast", "slow"]);
+const SEARCH_CATEGORIES = new Set([
+  "school-gear", "watches", "knitwear", "tailoring", "outerwear",
+  "poker-chips", "golf-equipment", "golf", "footwear", "neckwear",
+  "leather-goods", "other"
+]);
+const SEARCH_PLATFORMS = new Set([
+  "ebay", "grailed", "poshmark", "shopgoodwill", "vinted", "offerup",
+  "depop", "facebook"
+]);
+const CATEGORY_PRICE_CAPS = { "golf-equipment": 300, "poker-chips": 150 };
+
 const validateConfig = (body) => {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return "Config body must be a JSON object";
@@ -121,12 +137,24 @@ const validateConfig = (body) => {
   if (!Array.isArray(body.SAVED_SEARCHES) || body.SAVED_SEARCHES.length === 0) {
     return "SAVED_SEARCHES must be a non-empty array";
   }
+  const activeQueries = new Map();
+  const searchIds = new Set();
   for (const [index, search] of body.SAVED_SEARCHES.entries()) {
     if (!search || typeof search !== "object" || Array.isArray(search)) {
       return `SAVED_SEARCHES[${index}] must be an object`;
     }
     if (typeof search.query !== "string" || !search.query.trim()) {
       return `SAVED_SEARCHES[${index}].query must be a non-empty string`;
+    }
+    if (typeof search.id !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(search.id)) {
+      return `SAVED_SEARCHES[${index}].id must be a stable lowercase slug`;
+    }
+    if (searchIds.has(search.id)) {
+      return `SAVED_SEARCHES[${index}].id duplicates ${search.id}`;
+    }
+    searchIds.add(search.id);
+    if (typeof search.category !== "string" || !SEARCH_CATEGORIES.has(search.category)) {
+      return `SAVED_SEARCHES[${index}].category is not supported`;
     }
     if (typeof search.max_price !== "number" || !Number.isFinite(search.max_price) || search.max_price < 0) {
       return `SAVED_SEARCHES[${index}].max_price must be a non-negative finite number`;
@@ -143,11 +171,29 @@ const validateConfig = (body) => {
     if ("enabled" in search && typeof search.enabled !== "boolean") {
       return `SAVED_SEARCHES[${index}].enabled must be a boolean`;
     }
-    if ("profile" in search && typeof search.profile !== "string") {
-      return `SAVED_SEARCHES[${index}].profile must be a string`;
+    if ("profile" in search && !SEARCH_PROFILES.has(search.profile)) {
+      return `SAVED_SEARCHES[${index}].profile must be fast or slow`;
     }
     if ("category_id" in search && typeof search.category_id !== "string") {
       return `SAVED_SEARCHES[${index}].category_id must be a string`;
+    }
+    if ("platforms" in search) {
+      if (!Array.isArray(search.platforms) || search.platforms.some((name) => typeof name !== "string")) {
+        return `SAVED_SEARCHES[${index}].platforms must be a string array`;
+      }
+      const unknown = search.platforms.find((name) => !SEARCH_PLATFORMS.has(name));
+      if (unknown) return `SAVED_SEARCHES[${index}].platforms contains unknown platform ${unknown}`;
+    }
+    const hardCap = CATEGORY_PRICE_CAPS[search.category];
+    if (hardCap !== undefined && search.max_price > hardCap) {
+      return `SAVED_SEARCHES[${index}].max_price exceeds ${search.category} hard gate ${hardCap}`;
+    }
+    if (search.enabled !== false) {
+      const queryKey = search.query.trim().replace(/\s+/g, " ").toLowerCase();
+      if (activeQueries.has(queryKey)) {
+        return `SAVED_SEARCHES[${index}].query duplicates active search ${activeQueries.get(queryKey)}`;
+      }
+      activeQueries.set(queryKey, search.id);
     }
   }
 
@@ -173,6 +219,14 @@ const validateConfig = (body) => {
   }
   if (typeof body.PIT_TO_PIT_CAP_INCHES !== "number" || Number.isNaN(body.PIT_TO_PIT_CAP_INCHES)) {
     return "PIT_TO_PIT_CAP_INCHES must be a number";
+  }
+  if (typeof body.OWNER_TIMEZONE !== "string" || !body.OWNER_TIMEZONE.trim()) {
+    return "OWNER_TIMEZONE must be a non-empty IANA timezone";
+  }
+  for (const field of ["QUIET_HOURS_START", "QUIET_HOURS_END"]) {
+    if (typeof body[field] !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(body[field])) {
+      return `${field} must use 24-hour HH:MM format`;
+    }
   }
   return null;
 };
@@ -232,6 +286,9 @@ module.exports = async (req, res) => {
   if (req.method === "POST") {
     try {
       const { config: nextConfig, baseSha } = await readBody(req);
+      if (typeof baseSha !== "string" || !baseSha.trim()) {
+        return sendJson(res, 400, { error: "baseSha must be the SHA returned by GET /api/config" });
+      }
       const validationError = validateConfig(nextConfig);
       if (validationError) {
         return sendJson(res, 400, { error: validationError });
@@ -268,7 +325,7 @@ module.exports = async (req, res) => {
         body: JSON.stringify({
           message: "Update config via mobile settings app",
           content: Buffer.from(JSON.stringify(merged, null, 2) + "\n", "utf8").toString("base64"),
-            sha: baseSha
+          sha: baseSha
         })
       });
       const body = await response.json().catch(() => ({}));

@@ -99,8 +99,17 @@ def github_file(records, sha):
 
 def valid_config():
     return {
+        "OWNER_TIMEZONE": "America/New_York",
+        "QUIET_HOURS_START": "23:00",
+        "QUIET_HOURS_END": "07:00",
         "SAVED_SEARCHES": [
-            {"query": "men's jacket", "size": ["M", "L"], "max_price": 50}
+            {
+                "id": "outerwear-mens-jacket",
+                "category": "outerwear",
+                "query": "men's jacket",
+                "size": ["M", "L"],
+                "max_price": 50,
+            }
         ],
         "GRAB_ON_SIGHT_BRANDS": ["Brioni"],
         "STANDARD_BRANDS": ["Brooks Brothers"],
@@ -396,6 +405,30 @@ const invoke=async()=>{{let text='';const res={{statusCode:0,headers:{{}},setHea
         body = valid_config()
         body["SAVED_SEARCHES"][0]["size"] = ["M", 42]
         cases.append((body, "SAVED_SEARCHES[0].size[1] must be a string"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0]["profile"] = "turbo"
+        cases.append((body, "SAVED_SEARCHES[0].profile must be fast or slow"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0]["platforms"] = ["ebay", "made-up-market"]
+        cases.append((body, "SAVED_SEARCHES[0].platforms contains unknown platform made-up-market"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"].append({
+            **body["SAVED_SEARCHES"][0],
+            "id": "outerwear-mens-jacket-copy",
+        })
+        cases.append((body, "SAVED_SEARCHES[1].query duplicates active search outerwear-mens-jacket"))
+
+        body = valid_config()
+        body["SAVED_SEARCHES"][0].update({
+            "id": "golf-club-set",
+            "category": "golf-equipment",
+            "query": "golf club set",
+            "max_price": 301,
+        })
+        cases.append((body, "SAVED_SEARCHES[0].max_price exceeds golf-equipment hard gate 300"))
 
         for body, expected_error in cases:
             with self.subTest(expected_error=expected_error):

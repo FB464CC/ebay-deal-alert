@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 from urllib.parse import quote_plus
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # ---------------------------------------------------------------------------
 # CONFIG — saved searches ported from CareerOS project instructions
@@ -50,6 +51,9 @@ def load_config():
 
 
 _CONFIG = load_config()
+CONFIG_HASH = hashlib.sha256(
+    json.dumps(_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()[:12]
 SAVED_SEARCHES = _CONFIG["SAVED_SEARCHES"]
 GRAB_ON_SIGHT_BRANDS = _CONFIG["GRAB_ON_SIGHT_BRANDS"]
 STANDARD_BRANDS = _CONFIG["STANDARD_BRANDS"]
@@ -353,6 +357,12 @@ _SCOUT_QUEUE_KEYS_BY_ITEM_ID = {}
 _SCOUT_QUEUE_PROCESSED_KEYS = set()
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
+WEEKLY_DIGEST_STATE_PATH = Path(__file__).resolve().with_name("weekly_digest_state.json")
+SEARCH_ACTIVITY_STATE_PATH = Path(__file__).resolve().with_name("search_activity_state.json")
+QUIET_ALERT_QUEUE_PATH = Path(__file__).resolve().with_name("quiet_alert_queue.json")
+OWNER_TIMEZONE = _CONFIG.get("OWNER_TIMEZONE", "America/New_York")
+QUIET_HOURS_START = _CONFIG.get("QUIET_HOURS_START")
+QUIET_HOURS_END = _CONFIG.get("QUIET_HOURS_END")
 # append_alert_log() is pure append-only now (see its docstring comment) so
 # a mid-write kill can only cost the unwritten tail, never truncate prior
 # history - but that means NOTHING caps this file's growth on the write
@@ -479,6 +489,119 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+VALID_SEARCH_PROFILES = {"fast", "slow"}
+SUPPORTED_SEARCH_PLATFORMS = {
+    "ebay", "grailed", "poshmark", "shopgoodwill", "vinted", "offerup",
+    "depop", "facebook",
+}
+SUPPORTED_SEARCH_CATEGORIES = {
+    "school-gear", "watches", "knitwear", "tailoring", "outerwear",
+    "poker-chips", "golf-equipment", "golf", "footwear", "neckwear",
+    "leather-goods", "other",
+}
+
+
+def validate_config(config=None):
+    """Return (safe_searches, warnings) without letting one bad row kill a run.
+
+    Invalid enabled rows are disabled in the returned copy.  Recoverable
+    platform mistakes are stripped, and price/category conflicts are loud
+    warnings because the final gates remain authoritative.
+    """
+    config = config or {"SAVED_SEARCHES": SAVED_SEARCHES}
+    known_platforms = set(marketplaces.available_platforms()) | SUPPORTED_SEARCH_PLATFORMS
+    warnings = []
+    safe_searches = []
+    active_queries = {}
+    active_ids = {}
+    hard_price_caps = {
+        "golf-equipment": GOLF_EQUIPMENT_MAX_PRICE,
+        "poker-chips": POKER_CHIPS_MAX_PRICE,
+    }
+    expected_category_ids = {
+        "watches": WATCH_CATEGORY_ID,
+        "tailoring": "3001",
+    }
+
+    for index, original in enumerate(config.get("SAVED_SEARCHES") or []):
+        if not isinstance(original, dict):
+            warnings.append(f"ERROR SAVED_SEARCHES[{index}] is not an object; skipped")
+            continue
+        search = dict(original)
+        label = search.get("id") or f"SAVED_SEARCHES[{index}]"
+        enabled = search.get("enabled", True)
+        query = str(search.get("query") or "").strip()
+        if not query:
+            warnings.append(f"ERROR {label}: enabled search has no query; disabled")
+            search["enabled"] = False
+
+        profile = search.get("profile", "slow")
+        if profile not in VALID_SEARCH_PROFILES:
+            warnings.append(
+                f"ERROR {label}: invalid profile {profile!r}; expected fast/slow; disabled"
+            )
+            search["enabled"] = False
+
+        raw_platforms = search.get("platforms")
+        if raw_platforms is not None:
+            if not isinstance(raw_platforms, list):
+                warnings.append(f"ERROR {label}: platforms must be a list; disabled")
+                search["enabled"] = False
+                raw_platforms = []
+            unknown = sorted({str(name) for name in raw_platforms} - known_platforms)
+            if unknown:
+                warnings.append(
+                    f"ERROR {label}: unknown platform(s) {', '.join(unknown)}; ignored"
+                )
+            search["platforms"] = [
+                name for name in raw_platforms if name in known_platforms and name != "ebay"
+            ]
+
+        category = classify_search_category(search)
+        if category not in SUPPORTED_SEARCH_CATEGORIES:
+            warnings.append(
+                f"ERROR {label}: category {category!r} has no scoring/adapter path; disabled"
+            )
+            search["enabled"] = False
+        cap = hard_price_caps.get(category)
+        try:
+            max_price = float(search.get("max_price"))
+        except (TypeError, ValueError):
+            max_price = None
+        if cap is not None and max_price is not None and max_price > cap:
+            warnings.append(
+                f"WARNING {label}: max_price ${max_price:g} exceeds {category} hard gate ${cap:g}"
+            )
+        expected_category_id = expected_category_ids.get(category)
+        configured_category_id = search.get("category_id")
+        if configured_category_id and expected_category_id and str(configured_category_id) != expected_category_id:
+            warnings.append(
+                f"WARNING {label}: category_id {configured_category_id!r} conflicts with "
+                f"category {category!r} (expected {expected_category_id})"
+            )
+
+        if enabled and search.get("enabled", True):
+            query_key = re.sub(r"\s+", " ", query).casefold()
+            if query_key in active_queries:
+                warnings.append(
+                    f"ERROR {label}: duplicate active query (already used by "
+                    f"{active_queries[query_key]}); disabled"
+                )
+                search["enabled"] = False
+            else:
+                active_queries[query_key] = label
+            search_id = str(search.get("id") or "").strip()
+            if search_id:
+                if search_id in active_ids:
+                    warnings.append(
+                        f"ERROR {label}: duplicate active search id; disabled"
+                    )
+                    search["enabled"] = False
+                else:
+                    active_ids[search_id] = label
+        safe_searches.append(search)
+    return safe_searches, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -1784,7 +1907,20 @@ def get_listing_quantity_available(listing):
     return max(quantities) if quantities else None
 
 
-def classify_search_category(query):
+def classify_search_category(search):
+    """Return the configured category, with query inference as a migration fallback.
+
+    New saved-search records are dictionaries with a stable ``id`` and explicit
+    ``category``.  Accepting a query string remains intentional for old records,
+    one-off auction searches, and callers outside the normal config path.
+    """
+    if isinstance(search, dict):
+        explicit_category = str(search.get("category") or "").strip()
+        if explicit_category:
+            return explicit_category
+        query = str(search.get("query") or "")
+    else:
+        query = str(search or "")
     query = query.lower()
     if "gamecocks" in query:
         # Explicit carve-out from the brand/knitwear rules below: school
@@ -4154,6 +4290,48 @@ def _format_estimated_usd(value):
         return None
 
 
+ALERT_LOG_SCHEMA_VERSION = 2
+
+
+def disposition_code_for(result, delivered=False, delivery_error=None):
+    """Map the bot's existing gates to compact analytics codes."""
+    if delivered:
+        return "DELIVERED"
+    verdict = str(result.get("verdict") or "").upper()
+    reason = str(result.get("reason") or "; ".join(result.get("flags", []))).lower()
+    if delivery_error or verdict == "DELIVERY_FAILED":
+        return "DELIVERY_FAILED"
+    rules = (
+        (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
+        (("counterfeit", "replica", "not authentic", "authenticity red flag"), "COUNTERFEIT"),
+        (("gender", "women's", "womens", "ladies"), "GENDER_EXCLUDE"),
+        (("over max price", "exceeds $", "price cap"), "OVER_MAX_PRICE"),
+        (("size mismatch", "wrong suit body size", "size filter", "wrong size"), "SIZE_MISMATCH"),
+        (("deal_rating", "below steal bar", "below margin", "negative margin"), "BELOW_MARGIN"),
+        (("condition hard-fail", "found damage", "unwanted logo", "corporate logo"), "CONDITION_REJECT"),
+        (("jacket only", "pants only", "part/accessory", "incomplete item", "not a timepiece"), "WRONG_ITEM"),
+        (("left hand", "left-handed", "not playable", "golf-equipment bar"), "GOLF_REJECT"),
+        (("not relevant", "excluded query", "title exclusion"), "IRRELEVANT"),
+    )
+    for phrases, code in rules:
+        if any(phrase in reason for phrase in phrases):
+            return code
+    return "GATE_REJECTED" if verdict == "PASS" else "EVALUATED"
+
+
+def _alert_search_metadata(result):
+    query = result.get("search_query")
+    matched_search = next(
+        (search for search in SAVED_SEARCHES if query and search.get("query") == query),
+        None,
+    )
+    search_id = result.get("search_id") or (matched_search or {}).get("id")
+    category = result.get("category")
+    if not category:
+        category = classify_search_category(matched_search or query or "")
+    return search_id, category
+
+
 def append_alert_log(result, delivered=False, delivery_error=None):
     """Returns True on a successful append, False if the write itself
     failed. Callers that log a real delivery (verdict already sent) must
@@ -4175,7 +4353,9 @@ def append_alert_log(result, delivered=False, delivery_error=None):
     if item_price is None:
         raw_price_value = (listing.get("price") or {}).get("value", 0)
         item_price = float(0 if raw_price_value is None else raw_price_value)
+    search_id, category = _alert_search_metadata(result)
     record = {
+        "schema_version": ALERT_LOG_SCHEMA_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "item_id": listing.get("itemId"),
         "title": listing.get("title", ""),
@@ -4184,11 +4364,27 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "item_price": item_price,
         "verdict": result.get("verdict"),
         "reason": result.get("reason") or "; ".join(result.get("flags", [])),
+        "disposition_code": disposition_code_for(
+            result, delivered=delivered, delivery_error=delivery_error
+        ),
+        "search_id": search_id,
+        "category": category,
+        "platform": listing.get("platform") or "ebay",
+        "config_hash": CONFIG_HASH,
         # REVIEW used to imply "sent", even when this record was written
         # before send_alert() and delivery then failed. Keep the state
         # explicit so every reader can distinguish evaluated from delivered.
         "delivered": bool(delivered),
+        "ai_checked": bool(
+            result.get("golf_ai_checked")
+            or result.get("poker_chips_ai_checked")
+            or result.get("price_confidence")
+            or "ai photo check" in str(result.get("reason") or "").lower()
+            or any("ai photo check" in str(flag).lower() for flag in result.get("flags", []))
+        ),
     }
+    if os.environ.get("GITHUB_SHA"):
+        record["commit_hash"] = os.environ["GITHUB_SHA"]
     if delivery_error:
         record["delivery_error"] = str(delivery_error)
     if result.get("search_query"):
@@ -4205,6 +4401,8 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "search_total_listings",
         "similar_listings_count",
         "category_id",
+        "has_sold_comps",
+        "sold_comp_count",
     ):
         value = result.get(key)
         if value is not None:
@@ -4270,6 +4468,157 @@ def ebay_sold_comps_url(query):
         "https://www.ebay.com/sch/i.html?_nkw=" + quote_plus(clean_query)
         + "&LH_Sold=1&LH_Complete=1"
     )
+
+
+def alert_urgency(result):
+    """Return ntfy (priority, urgency tags) from time, value, and confidence."""
+    try:
+        discount = float(result.get("discount_pct"))
+        if discount > 1:
+            discount /= 100
+    except (TypeError, ValueError):
+        discount = 0.0
+    confidence = str(result.get("price_confidence") or "").lower()
+    rating = str(result.get("deal_rating") or "").lower()
+    profile = result.get("profile", "slow")
+
+    if result.get("is_ending_soon_auction"):
+        return 5, ["alarm_clock", "rotating_light"]
+    if discount >= 0.70 and confidence in {"high", "medium"}:
+        return 5, ["fire", "chart_with_upwards_trend"]
+    if result.get("brand_tier") == "grab_on_sight":
+        return 4, ["moneybag", "zap"]
+    if (
+        confidence == "high"
+        and (discount >= 0.50 or rating in {"steal", "great deal"})
+    ) or (profile == "fast" and rating == "steal"):
+        return 4, ["fire", "white_check_mark"]
+    return 3, ["hourglass" if profile == "slow" else "eyes"]
+
+
+def is_quiet_hours(now=None):
+    if not QUIET_HOURS_START or not QUIET_HOURS_END:
+        return False
+    try:
+        owner_tz = ZoneInfo(OWNER_TIMEZONE)
+        current = (now or datetime.now(timezone.utc)).astimezone(owner_tz)
+        start_hour, start_minute = map(int, QUIET_HOURS_START.split(":"))
+        end_hour, end_minute = map(int, QUIET_HOURS_END.split(":"))
+    except (ValueError, AttributeError, ZoneInfoNotFoundError):
+        logger.error(
+            "Invalid quiet-hours config: timezone=%r start=%r end=%r; sending normally",
+            OWNER_TIMEZONE, QUIET_HOURS_START, QUIET_HOURS_END,
+        )
+        return False
+    minute = current.hour * 60 + current.minute
+    start = start_hour * 60 + start_minute
+    end = end_hour * 60 + end_minute
+    if start == end:
+        return False
+    return start <= minute < end if start < end else minute >= start or minute < end
+
+
+def should_queue_quiet_alert(result, now=None):
+    if not is_quiet_hours(now):
+        return False
+    priority, _tags = alert_urgency(result)
+    return bool(
+        result.get("profile", "slow") == "slow"
+        and not result.get("is_ending_soon_auction")
+        and result.get("brand_tier") != "grab_on_sight"
+        and priority <= 3
+    )
+
+
+def load_quiet_alert_queue():
+    try:
+        payload = json.loads(QUIET_ALERT_QUEUE_PATH.read_text(encoding="utf-8"))
+        alerts = payload.get("alerts", payload if isinstance(payload, list) else [])
+        return alerts if isinstance(alerts, list) else []
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+
+
+def save_quiet_alert_queue(alerts):
+    payload = {"schema_version": 1, "alerts": alerts}
+    try:
+        tmp_path = QUIET_ALERT_QUEUE_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(payload, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+        os.replace(tmp_path, QUIET_ALERT_QUEUE_PATH)
+        return True
+    except (OSError, TypeError) as exc:
+        logger.error("Unable to persist quiet-hours alert queue: %s", exc)
+        return False
+
+
+def quiet_queue_item_id(entry):
+    result = entry.get("result", entry) if isinstance(entry, dict) else {}
+    return (result.get("listing") or {}).get("itemId")
+
+
+def enqueue_quiet_alert(result, now=None):
+    item_id = (result.get("listing") or {}).get("itemId")
+    if not item_id:
+        return False
+    alerts = load_quiet_alert_queue()
+    if any(quiet_queue_item_id(entry) == item_id for entry in alerts):
+        return True
+    alerts.append({
+        "queued_at": (now or datetime.now(timezone.utc)).isoformat(),
+        "result": result,
+    })
+    return save_quiet_alert_queue(alerts)
+
+
+def flush_quiet_alert_queue(conn, now=None):
+    """Deliver persisted overnight alerts after quiet hours, oldest first."""
+    now = now or datetime.now(timezone.utc)
+    if is_quiet_hours(now):
+        return 0
+    alerts = load_quiet_alert_queue()
+    if not alerts:
+        return 0
+    remaining = list(alerts)
+    delivered_count = 0
+    activity = load_search_activity()
+    for entry in alerts:
+        result = entry.get("result", entry)
+        listing = result.get("listing") or {}
+        item_id = listing.get("itemId")
+        try:
+            send_alert(result)
+        except Exception as exc:
+            failed = dict(result)
+            failed["verdict"] = "DELIVERY_FAILED"
+            failed["reason"] = f"quiet-hours queued alert delivery failed: {exc}"
+            append_alert_log(failed, delivered=False, delivery_error=exc)
+            logger.exception("Quiet-hours queued alert delivery failed for %s", item_id)
+            continue
+
+        fingerprint = listing_fingerprint(listing)
+        try:
+            mark_seen(conn, item_id, fingerprint, result.get("price"))
+        except Exception:
+            logger.exception("Queued alert delivered but seen marker failed for %s", item_id)
+        if not append_alert_log(result, delivered=True):
+            notify_bot_down(
+                f"{item_id}: quiet-hours alert delivered but its alert-log record failed"
+            )
+        matched_search = next(
+            (search for search in SAVED_SEARCHES if search.get("id") == result.get("search_id")),
+            None,
+        )
+        if matched_search:
+            record_search_activity(activity, matched_search, now, alerted=True)
+        remaining.remove(entry)
+        save_quiet_alert_queue(remaining)
+        delivered_count += 1
+    save_search_activity(activity)
+    return delivered_count
 
 
 def send_alert(result):
@@ -4360,14 +4709,9 @@ def send_alert(result):
             "box/papers) - bot cannot detect counterfeits."
         )
 
-    # One-tap sold-comps link - per explicit user instruction, the AI's own
-    # resale/retail estimates should be independently checkable rather than
-    # trusted blindly. One short "verify:" line, the only deliberate
-    # exception to the "ntfy truncates long messages on the lock screen"
-    # note above - and kept to the single line for exactly that reason.
+    # Sold comps are exposed as a native ntfy action below. Keeping the raw
+    # URL out of the body leaves the scarce lock-screen space for evidence.
     verify_url = ebay_sold_comps_url(result.get("search_query"))
-    if verify_url:
-        message += f"\nverify: {verify_url}"
     # verdict is always "REVIEW" here (PASS results never reach send_alert -
     # they're filtered out by the steal-quality gate above), so a
     # verdict-based title was identical on every single push. Confirmed
@@ -4380,19 +4724,23 @@ def send_alert(result):
     # alert, and more useful at a glance than a constant string.
     alert_title = _ascii_safe_header(f"[{source}] {title[:60]}")
 
-    tags = ["moneybag"] if result.get("brand_tier") == "grab_on_sight" else ["eyes"]
-    tags.append("zap" if profile == "fast" else "hourglass")
+    priority, tags = alert_urgency(result)
 
     headers = {
         "Title": alert_title,
         "Click": url,
         "Tags": ",".join(tags),
+        "Priority": str(priority),
     }
+    actions = []
+    if url:
+        actions.append(f"view, Open listing, {url}")
+    if verify_url:
+        actions.append(f"view, Check sold comps, {verify_url}")
+    if actions:
+        headers["Actions"] = "; ".join(actions)
     if image_url:
         headers["Attach"] = image_url
-    if result.get("brand_tier") == "grab_on_sight":
-        headers["Priority"] = "5"
-
     last_exc = None
     for attempt in range(3):
         try:
@@ -4467,6 +4815,139 @@ def prune_alert_log_if_oversized():
         )
     except OSError as exc:
         logger.warning("Failed to prune alerts_log.jsonl: %s", exc)
+
+
+def _weekly_ai_spend(now):
+    """Return (weekly_delta, current_month_total) from the existing ledger.
+
+    The paid-AI ledger is monthly, so a tiny digest snapshot turns its
+    monotonic total into a weekly delta without altering reservation logic.
+    """
+    month = now.strftime("%Y-%m")
+    current_total = 0.0
+    try:
+        with sqlite3.connect(AI_SPEND_DB_PATH) as ledger:
+            row = ledger.execute(
+                "SELECT reserved_usd FROM ai_paid_spend WHERE month = ?", (month,)
+            ).fetchone()
+            if row:
+                current_total = float(row[0] or 0)
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        logger.warning("Unable to read paid-AI spend for weekly digest: %s", exc)
+
+    previous_total = 0.0
+    try:
+        state = json.loads(WEEKLY_DIGEST_STATE_PATH.read_text(encoding="utf-8"))
+        if state.get("month") == month:
+            previous_total = float(state.get("paid_ai_reserved_usd") or 0)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return max(0.0, current_total - previous_total), current_total
+
+
+def _persist_weekly_ai_spend_snapshot(now, current_total):
+    state = {
+        "schema_version": 1,
+        "digest_sent_at": now.isoformat(),
+        "month": now.strftime("%Y-%m"),
+        "paid_ai_reserved_usd": round(float(current_total), 6),
+    }
+    try:
+        tmp_path = WEEKLY_DIGEST_STATE_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(state, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+        os.replace(tmp_path, WEEKLY_DIGEST_STATE_PATH)
+    except OSError as exc:
+        logger.warning("Unable to persist weekly AI spend snapshot: %s", exc)
+
+
+def load_search_activity():
+    try:
+        payload = json.loads(SEARCH_ACTIVITY_STATE_PATH.read_text(encoding="utf-8"))
+        searches = payload.get("searches", payload)
+        return searches if isinstance(searches, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def save_search_activity(activity):
+    payload = {"schema_version": 1, "searches": activity}
+    try:
+        tmp_path = SEARCH_ACTIVITY_STATE_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+        os.replace(tmp_path, SEARCH_ACTIVITY_STATE_PATH)
+    except OSError as exc:
+        logger.warning("Unable to persist search activity state: %s", exc)
+
+
+def record_search_activity(activity, search, now, candidate_count=None, alerted=False):
+    search_id = search.get("id")
+    if not search_id:
+        return
+    entry = activity.setdefault(search_id, {})
+    entry["query"] = marketplaces.split_query_exclusions(search.get("query") or "")[0]
+    entry["category"] = classify_search_category(search)
+    timestamp = now.isoformat()
+    if candidate_count is not None:
+        entry.setdefault("tracking_started_at", timestamp)
+        entry["last_attempted_at"] = timestamp
+        if candidate_count > 0:
+            entry["last_nonzero_at"] = timestamp
+    if alerted:
+        entry["last_alert_at"] = timestamp
+
+
+STARVATION_HOURS_BY_CATEGORY = {
+    "golf-equipment": 36,
+    "golf": 72,
+    "school-gear": 72,
+    "watches": 24 * 7,
+    "poker-chips": 24 * 7,
+    "knitwear": 96,
+    "tailoring": 96,
+    "outerwear": 96,
+    "footwear": 120,
+}
+
+
+def starved_searches(now, searches=None, activity=None):
+    activity = load_search_activity() if activity is None else activity
+    searches = SAVED_SEARCHES if searches is None else searches
+    starved = []
+    for search in searches:
+        if not search.get("enabled", True) or not search.get("id"):
+            continue
+        entry = activity.get(search["id"]) or {}
+        if not entry.get("last_attempted_at"):
+            continue
+        baseline = entry.get("last_nonzero_at") or entry.get("tracking_started_at")
+        if not baseline:
+            continue
+        try:
+            baseline_at = datetime.fromisoformat(baseline)
+            if baseline_at.tzinfo is None:
+                baseline_at = baseline_at.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        hours_empty = (now - baseline_at).total_seconds() / 3600
+        threshold = STARVATION_HOURS_BY_CATEGORY.get(
+            classify_search_category(search), 120
+        )
+        if hours_empty >= threshold:
+            starved.append({
+                "id": search["id"],
+                "query": marketplaces.split_query_exclusions(search.get("query") or "")[0],
+                "hours_empty": hours_empty,
+                "threshold_hours": threshold,
+            })
+    return sorted(starved, key=lambda item: item["hours_empty"], reverse=True)
 
 
 def send_weekly_digest():
@@ -4556,6 +5037,40 @@ def send_weekly_digest():
     top_query = query_counts.most_common(1)
     top_label = top_query[0][0] if top_query else "n/a"
 
+    ranked_delivered = sorted(
+        (
+            record for record in delivered_records
+            if isinstance(record.get("discount_pct"), (int, float))
+        ),
+        key=lambda record: record["discount_pct"],
+        reverse=True,
+    )
+    interesting = ranked_delivered[:3]
+    verified = [
+        record for record in ranked_delivered
+        if record.get("has_sold_comps")
+        or str(record.get("price_confidence") or "").lower() == "high"
+    ]
+    biggest_verified = verified[0] if verified else None
+
+    delivered_search_ids = {
+        record.get("search_id") for record in delivered_records if record.get("search_id")
+    }
+    ai_search_labels = {}
+    for record in recent_records:
+        if not record.get("ai_checked") or not record.get("search_id"):
+            continue
+        ai_search_labels.setdefault(
+            record["search_id"],
+            marketplaces.split_query_exclusions(record.get("query") or record["search_id"])[0],
+        )
+    zero_delivery_ai_searches = sorted(
+        label
+        for search_id, label in ai_search_labels.items()
+        if search_id not in delivered_search_ids
+    )
+    weekly_ai_spend, current_ai_total = _weekly_ai_spend(now)
+
     rating_parts = []
     for label in ("Steal", "Great Deal", "Good Deal", "Fair", "Marginal"):
         count = rating_counts.get(label, 0)
@@ -4592,6 +5107,25 @@ def send_weekly_digest():
         )
         message += f"\nLatest delivery error: {latest_error}"
     message += f"\nTop brand/search: {top_label}"
+    message += f"\nAI dollars spent: ${weekly_ai_spend:.2f} (reserved estimate since prior digest)"
+    if biggest_verified:
+        message += (
+            f"\nBiggest verified discount: {biggest_verified['discount_pct']:.0%} - "
+            f"{biggest_verified.get('title') or biggest_verified.get('query') or 'listing'}"
+        )
+    if interesting:
+        message += "\nTop delivered deals: " + " | ".join(
+            f"{record['discount_pct']:.0%} {record.get('title') or record.get('query') or 'listing'}"
+            for record in interesting
+        )
+    if zero_delivery_ai_searches:
+        message += "\nAI checked, zero alerts: " + ", ".join(zero_delivery_ai_searches[:10])
+    starved = starved_searches(now)
+    if starved:
+        message += "\nStarved searches: " + ", ".join(
+            f"{item['query']} ({item['hours_empty'] / 24:.1f}d empty)"
+            for item in starved[:10]
+        )
 
     last_exc = None
     for attempt in range(3):
@@ -4603,6 +5137,7 @@ def send_weekly_digest():
                 timeout=10,
             )
             resp.raise_for_status()
+            _persist_weekly_ai_spend_snapshot(now, current_ai_total)
             return
         except requests.exceptions.RequestException as exc:
             last_exc = exc
@@ -5109,6 +5644,15 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
 
 
 def run():
+    global SAVED_SEARCHES
+    SAVED_SEARCHES, config_warnings = validate_config(
+        {"SAVED_SEARCHES": SAVED_SEARCHES}
+    )
+    for warning in config_warnings:
+        if warning.startswith("ERROR"):
+            logger.error("CONFIG PREFLIGHT: %s", warning)
+        else:
+            logger.warning("CONFIG PREFLIGHT: %s", warning)
     run_started = time.monotonic()
     hard_stop = run_started + RUN_BUDGET_SECONDS
     deadline_logged = False
@@ -5131,6 +5675,11 @@ def run():
     _SCOUT_QUEUE_PROCESSED_KEYS.clear()
     logger.info("Starting eBay deal alert run")
     conn = init_db()
+    flush_quiet_alert_queue(conn)
+    search_activity = load_search_activity()
+    quiet_queued_ids = {
+        quiet_queue_item_id(entry) for entry in load_quiet_alert_queue()
+    }
     # Once/day, not every 5-min run - VACUUM rebuilds the whole (currently
     # tens-of-MB) file, no need to pay that cost 288 times a day. Any
     # 15-minute window once daily is fine; this one has no other
@@ -5183,6 +5732,7 @@ def run():
         ebay_token_error = exc
 
     def _finish_run():
+        save_search_activity(search_activity)
         conn.close()
         _persist_scout_queue_acknowledgements()
         if ebay_token_error is not None:
@@ -5325,7 +5875,7 @@ def run():
     for saved_search in enabled_searches:
         if _run_deadline_reached("PASS 1 search collection"):
             break
-        category = classify_search_category(saved_search["query"])
+        category = classify_search_category(saved_search)
         if saved_search.get("is_auction_search"):
             # Unconditional every run - see search_ebay_ending_soon_auctions()'s
             # docstring for why this bypasses the normal ROTATION entirely.
@@ -5453,6 +6003,13 @@ def run():
         # already normalized into eBay item shape so they flow through the
         # identical scoring/AI/alert path below.
         listings = list(listings) + marketplace_listings.get(saved_search["query"], [])
+        if not saved_search.get("is_auction_search") and (
+            saved_search["query"] in ebay_this_run
+            or saved_search["query"] in marketplace_listings
+        ):
+            record_search_activity(
+                search_activity, saved_search, current_utc, candidate_count=len(listings)
+            )
 
         # Real sold prices are per-QUERY, not per-platform: what a "zegna
         # sweater" actually sells for doesn't change based on which site the
@@ -5504,6 +6061,12 @@ def run():
         for listing in listings:
             if _run_deadline_reached("PASS 1 listing scoring"):
                 break
+            if listing.get("itemId") in quiet_queued_ids:
+                logger.debug(
+                    "Skipping %s: already persisted in quiet-hours queue",
+                    listing.get("itemId"),
+                )
+                continue
             if not seller_username_presence_logged:
                 seller_username = (listing.get("seller") or {}).get("username")
                 logger.debug("First listing seller username present: %s", bool(seller_username))
@@ -5789,6 +6352,8 @@ def run():
             result["shipping_cost"] = shipping_cost
             result["profile"] = saved_search.get("profile", "slow")
             result["search_query"] = saved_search["query"]
+            result["search_id"] = saved_search.get("id")
+            result["category"] = category
             result["category_id"] = saved_search.get("category_id", "260012")
             result["seller_feedback_score"] = listing.get("seller_feedback_score")
             result["seller_feedback_percentage"] = listing.get("seller_feedback_percentage")
@@ -6660,6 +7225,19 @@ def run():
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
+        if should_queue_quiet_alert(result, current_utc):
+            if enqueue_quiet_alert(result, current_utc):
+                quiet_queued_ids.add(item_id)
+                logger.info(
+                    "Queued non-urgent alert %s until quiet hours end; not marking seen/logging delivered yet",
+                    item_id,
+                )
+                continue
+            logger.error(
+                "Quiet-hours queue persistence failed for %s; sending immediately to avoid losing it",
+                item_id,
+            )
+
         try:
             if _run_deadline_reached("before alert delivery"):
                 break
@@ -6695,6 +7273,8 @@ def run():
         # duplicate push on the next run. Each write is independent so a
         # failure in either one cannot prevent the other from being attempted.
         logger.info("Sent alert for %s", item_id)
+        record_search_activity(search_activity, saved_search, current_utc, alerted=True)
+        save_search_activity(search_activity)
         seen_markers = []
         if result.get("is_ending_soon_auction"):
             seen_markers.append((auction_alert_key, None, None))
