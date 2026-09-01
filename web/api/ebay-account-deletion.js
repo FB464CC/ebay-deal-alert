@@ -11,6 +11,14 @@ const crypto = require("crypto");
 // dedupe cache. This endpoint exists purely to satisfy the subscription
 // requirement, not because there's real user data at stake here.
 //
+// Required Vercel environment variables for this endpoint:
+//   EBAY_DELETION_VERIFICATION_TOKEN and EBAY_DELETION_ENDPOINT_URL for GET;
+//   EBAY_CLIENT_ID and EBAY_CLIENT_SECRET additionally for signed POSTs.
+// NTFY_TOPIC is strongly recommended so verification-infrastructure failures
+// reach the same monitored bot-down channel as the poller. The GET challenge
+// is intentionally public because eBay must call it before a subscription is
+// active; POSTs are authenticated by their X-EBAY-SIGNATURE.
+//
 // eBay's verification handshake (GET with ?challenge_code=X):
 //   1. eBay sends a GET with a challenge_code query param.
 //   2. Respond with {"challengeResponse": sha256hex(challengeCode + verificationToken + endpointUrl)},
@@ -29,11 +37,17 @@ const crypto = require("crypto");
 
 const MAX_BODY_BYTES = 64 * 1024;
 const PUBLIC_KEY_TTL_MS = 60 * 60 * 1000;
+const NEGATIVE_KEY_TTL_MS = 60 * 1000;
+const MAX_PUBLIC_KEY_CACHE_ENTRIES = 100;
+const MAX_KEY_LOOKUPS_PER_MINUTE = 10;
+const MAX_KEY_LOOKUP_CLIENTS = 1000;
 const TOKEN_EXPIRY_SKEW_MS = 60 * 1000;
 const publicKeyCache = new Map();
+const keyLookupAttempts = new Map();
 let tokenCache;
 
 class SignatureError extends Error {}
+class KeyLookupRateError extends Error {}
 
 const sendJson = (res, status, body) => {
   res.statusCode = status;
@@ -68,6 +82,55 @@ const parseBody = async (req) => {
 };
 
 const isNonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
+
+const clientIp = (req) => {
+  const forwarded = req.headers?.["x-forwarded-for"];
+  return String(Array.isArray(forwarded) ? forwarded[0] : forwarded || req.socket?.remoteAddress || "unknown")
+    .split(",")[0]
+    .trim();
+};
+
+const notifyBotDown = async (message) => {
+  const topic = process.env.NTFY_TOPIC;
+  if (!topic) {
+    console.error(`${message}; NTFY_TOPIC is not configured`);
+    return;
+  }
+  try {
+    const response = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+      method: "POST",
+      headers: { Title: "[ALERT-BOT DOWN]" },
+      body: message,
+    });
+    if (!response.ok) throw new Error(`ntfy returned HTTP ${response.status}`);
+  } catch (error) {
+    console.error("Unable to send eBay deletion verification alert", error);
+  }
+};
+
+const setPublicKeyCache = (keyId, entry) => {
+  const now = Date.now();
+  for (const [cachedId, cached] of publicKeyCache) {
+    if (cached.expiresAt <= now) publicKeyCache.delete(cachedId);
+  }
+  if (!publicKeyCache.has(keyId) && publicKeyCache.size >= MAX_PUBLIC_KEY_CACHE_ENTRIES) {
+    publicKeyCache.delete(publicKeyCache.keys().next().value);
+  }
+  publicKeyCache.set(keyId, entry);
+};
+
+const consumeKeyLookup = (ip, now = Date.now()) => {
+  const minute = Math.floor(now / 60000);
+  const prior = keyLookupAttempts.get(ip);
+  if (!prior && keyLookupAttempts.size >= MAX_KEY_LOOKUP_CLIENTS) {
+    keyLookupAttempts.delete(keyLookupAttempts.keys().next().value);
+  }
+  const count = prior?.minute === minute ? prior.count + 1 : 1;
+  keyLookupAttempts.set(ip, { minute, count });
+  if (count > MAX_KEY_LOOKUPS_PER_MINUTE) {
+    throw new KeyLookupRateError("Too many public-key lookups");
+  }
+};
 
 const isDeletionNotification = (body) => {
   const data = body?.notification?.data;
@@ -131,15 +194,24 @@ const getAppToken = async (clientId, clientSecret) => {
   return tokenCache.value;
 };
 
-const getPublicKey = async (keyId, clientId, clientSecret) => {
+const getPublicKey = async (keyId, clientId, clientSecret, requesterIp) => {
   const cached = publicKeyCache.get(keyId);
-  if (cached?.expiresAt > Date.now()) return cached.value;
+  if (cached?.expiresAt > Date.now()) {
+    if (cached.negative) throw new SignatureError("eBay did not recognize the signature key id");
+    return cached.value;
+  }
+  if (cached) publicKeyCache.delete(keyId);
 
+  consumeKeyLookup(requesterIp);
   const token = await getAppToken(clientId, clientSecret);
   const response = await fetch(
     `https://api.ebay.com/commerce/notification/v1/public_key/${encodeURIComponent(keyId)}`,
     { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
   );
+  if (response.status === 404) {
+    setPublicKeyCache(keyId, { negative: true, expiresAt: Date.now() + NEGATIVE_KEY_TTL_MS });
+    throw new SignatureError("eBay did not recognize the signature key id");
+  }
   if (!response.ok) throw new Error(`eBay public-key lookup failed with HTTP ${response.status}`);
 
   const body = await response.json();
@@ -154,13 +226,13 @@ const getPublicKey = async (keyId, clientId, clientSecret) => {
     "-----END PUBLIC KEY-----",
     "\n-----END PUBLIC KEY-----",
   );
-  publicKeyCache.set(keyId, { value: key, expiresAt: Date.now() + PUBLIC_KEY_TTL_MS });
+  setPublicKeyCache(keyId, { value: key, expiresAt: Date.now() + PUBLIC_KEY_TTL_MS });
   return key;
 };
 
-const verifyNotification = async (body, signatureHeader, clientId, clientSecret) => {
+const verifyNotification = async (body, signatureHeader, clientId, clientSecret, requesterIp) => {
   const signature = decodeSignatureHeader(signatureHeader);
-  const publicKey = await getPublicKey(signature.kid, clientId, clientSecret);
+  const publicKey = await getPublicKey(signature.kid, clientId, clientSecret, requesterIp);
   try {
     const verifier = crypto.createVerify("sha1");
     verifier.update(JSON.stringify(body));
@@ -176,6 +248,7 @@ module.exports = async (req, res) => {
   const endpointUrl = process.env.EBAY_DELETION_ENDPOINT_URL;
 
   if (!verificationToken || !endpointUrl) {
+    await notifyBotDown("eBay deletion endpoint is misconfigured: missing verification token or endpoint URL in Vercel");
     return sendJson(res, 500, {
       error: "Missing EBAY_DELETION_VERIFICATION_TOKEN or EBAY_DELETION_ENDPOINT_URL env var",
     });
@@ -207,19 +280,25 @@ module.exports = async (req, res) => {
     const clientId = process.env.EBAY_CLIENT_ID;
     const clientSecret = process.env.EBAY_CLIENT_SECRET;
     if (!clientId || !clientSecret) {
+      await notifyBotDown("eBay deletion notifications cannot be verified: missing Vercel EBAY_CLIENT_ID or EBAY_CLIENT_SECRET");
       return sendJson(res, 500, { error: "Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET env var" });
     }
 
     try {
       const signatureHeader = req.headers?.["x-ebay-signature"] || req.headers?.["X-EBAY-SIGNATURE"];
-      if (!(await verifyNotification(body, signatureHeader, clientId, clientSecret))) {
+      if (!(await verifyNotification(body, signatureHeader, clientId, clientSecret, clientIp(req)))) {
         return sendJson(res, 412, { error: "Invalid eBay notification signature" });
       }
     } catch (error) {
+      if (error instanceof KeyLookupRateError) {
+        res.setHeader("Retry-After", "60");
+        return sendJson(res, 429, { error: "Too many signature-key lookups" });
+      }
       if (error instanceof SignatureError) {
         return sendJson(res, 412, { error: "Invalid eBay notification signature" });
       }
       console.error("Unable to verify eBay account deletion notification", error);
+      await notifyBotDown(`eBay deletion notification verification infrastructure failed: ${error.message}`);
       return sendJson(res, 500, { error: "Unable to verify eBay notification" });
     }
 

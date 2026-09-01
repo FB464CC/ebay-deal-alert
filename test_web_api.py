@@ -1,6 +1,7 @@
 """Small Node-backed regression tests for security-critical web API helpers."""
 
 import base64
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -15,17 +16,25 @@ URL_UTILS_MODULE = (ROOT / "chrome-extension" / "url-utils.js").as_posix()
 SCOUT_MODULE = (ROOT / "web" / "api" / "scout-ingest.js").as_posix()
 CONFIG_MODULE = (ROOT / "web" / "api" / "config.js").as_posix()
 LEDGER_MODULE = (ROOT / "web" / "api" / "ledger.js").as_posix()
+DELETION_MODULE = (ROOT / "web" / "api" / "ebay-account-deletion.js").as_posix()
 INDEX_HTML = ROOT / "web" / "index.html"
 
 
 def run_node(expression):
+    # Piped via stdin (node -), NOT passed as a `-e` command-line argument.
+    # A script containing json.dumps()-escaped quotes/backslashes (real
+    # test inputs do: HTML entities, embedded double quotes) round-trips
+    # through Windows' CreateProcess argv quoting differently than POSIX
+    # shells expect, and node's own argv parser can end up seeing a
+    # mangled string - the exact same function called the same way via
+    # stdin works correctly. Mirrors run_node_script() below.
     script = (
         f"const t=require({json.dumps(TELEGRAM_MODULE)})._test;"
         f"Promise.resolve({expression}).then(v=>process.stdout.write(JSON.stringify(v)))"
         ".catch(e=>{process.stderr.write(e.message);process.exit(2)})"
     )
     completed = subprocess.run(
-        ["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True
+        ["node", "-"], cwd=ROOT, input=script, capture_output=True, text=True, check=True
     )
     return json.loads(completed.stdout)
 
@@ -114,6 +123,63 @@ def index_javascript(start_marker, end_marker):
 
 
 class TelegramUrlSafetyTests(unittest.TestCase):
+    def test_meta_attributes_keep_apostrophes_inside_double_quotes(self):
+        html = (
+            '<meta property="og:title" content="Men\'s Zegna Suit 42R">'
+            "<meta name='og:description' content='Seller said &quot;it&#x27;s clean&#x2F;ready&quot;'>"
+        )
+        self.assertEqual(
+            run_node(f"t.metas({json.dumps(html)})"),
+            [
+                ["og:title", "Men's Zegna Suit 42R"],
+                ["og:description", 'Seller said "it\'s clean/ready"'],
+            ],
+        )
+
+    def test_price_prefers_asking_context_then_last_amount(self):
+        self.assertEqual(
+            run_node("t.textAskingPrice('Retails for $1,200 — asking $180 OBO')"),
+            "180",
+        )
+        self.assertEqual(
+            run_node("t.textAskingPrice('Includes a $20 case; total $275')"),
+            "275",
+        )
+
+    def test_meta_price_wins_and_preserves_non_usd_currency(self):
+        meta = [
+            ["product:price:amount", "150"],
+            ["product:price:currency", "EUR"],
+        ]
+        expression = (
+            f"(()=>{{const p=t.extractListingPrice({json.dumps(meta)},'Retail $1200','asking $180');"
+            "return [p,t.formatListingPrice(p)]})()"
+        )
+        self.assertEqual(
+            run_node(expression),
+            [{"amount": "150", "currency": "EUR"}, "EUR 150"],
+        )
+
+    def test_category_uses_search_query_from_listing_url(self):
+        url = "https://www.ebay.com/itm/123?_skw=golf+club+set"
+        expression = (
+            f"(()=>{{const q=t.searchQueryFromUrl({json.dumps(url)},'Titleist listing {url}');"
+            "return [q,t.classify(q),t.classify('Titleist AP1 712 irons'),"
+            "t.classify('casino poker chips')]})()"
+        )
+        self.assertEqual(
+            run_node(expression),
+            ["golf club set", "golf-equipment", "golf-equipment", "poker-chips"],
+        )
+
+    def test_category_falls_back_to_user_text_not_seller_metadata(self):
+        url = "https://example.com/listing/123"
+        expression = (
+            f"(()=>{{const q=t.searchQueryFromUrl({json.dumps(url)},'golf bag {url}');"
+            "return [q,t.classify(q)]})()"
+        )
+        self.assertEqual(run_node(expression), ["golf bag", "golf-equipment"])
+
     def test_private_and_reserved_addresses_are_rejected(self):
         addresses = ["127.0.0.1", "10.2.3.4", "100.64.0.1", "169.254.1.1", "172.16.0.1", "192.168.1.1", "198.51.100.1", "203.0.113.1", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"]
         self.assertEqual(run_node(f"{json.dumps(addresses)}.map(t.isPrivateIp)"), [True] * len(addresses))
@@ -303,45 +369,138 @@ class ConfigApiTests(unittest.TestCase):
 
         for body, expected_error in cases:
             with self.subTest(expected_error=expected_error):
-                result = run_api_handler(CONFIG_MODULE, body, [])
+                result = run_api_handler(
+                    CONFIG_MODULE, {"config": body, "baseSha": "base-sha"}, []
+                )
                 self.assertEqual(result["status"], 400)
                 self.assertEqual(result["body"]["error"], expected_error)
                 self.assertEqual(result["calls"], [])
 
-    def test_config_write_retries_conflict_with_fresh_sha(self):
+    def test_config_write_merges_unmodeled_current_keys(self):
         body = valid_config()
+        body["PIT_TO_PIT_CAP_INCHES"] = 31
+        current = valid_config()
+        current["RUN_BUDGET_SECONDS"] = 390
         result = run_api_handler(
             CONFIG_MODULE,
-            body,
+            {"config": body, "baseSha": "base-sha"},
             [
-                {"status": 200, "body": {"sha": "old-sha"}},
-                {"status": 409, "body": {"message": "conflict"}},
-                {"status": 200, "body": {"sha": "fresh-sha"}},
-                {"status": 200, "body": {"content": {"sha": "saved"}}},
+                {"status": 200, "body": github_file([current], "base-sha") | {"content": base64.b64encode(json.dumps(current).encode()).decode()}},
+                {"status": 200, "body": {"content": {"sha": "saved-sha"}}},
             ],
         )
 
         self.assertEqual(result["status"], 200)
-        self.assertEqual([call["options"].get("method") for call in result["calls"]], ["GET", "PUT", "GET", "PUT"])
-        first_put = json.loads(result["calls"][1]["options"]["body"])
-        second_put = json.loads(result["calls"][3]["options"]["body"])
-        self.assertEqual(first_put["sha"], "old-sha")
-        self.assertEqual(second_put["sha"], "fresh-sha")
-        self.assertEqual(json.loads(base64.b64decode(second_put["content"])), body)
+        self.assertEqual([call["options"].get("method") for call in result["calls"]], ["GET", "PUT"])
+        put = json.loads(result["calls"][1]["options"]["body"])
+        saved = json.loads(base64.b64decode(put["content"]))
+        self.assertEqual(put["sha"], "base-sha")
+        self.assertEqual(saved["RUN_BUDGET_SECONDS"], 390)
+        self.assertEqual(saved["PIT_TO_PIT_CAP_INCHES"], 31)
+        self.assertEqual(result["body"]["sha"], "saved-sha")
 
-    def test_config_write_stops_after_two_conflict_retries(self):
-        responses = []
-        for attempt in range(3):
-            responses.extend(
-                [
-                    {"status": 200, "body": {"sha": f"sha-{attempt}"}},
-                    {"status": 409, "body": {"message": "still conflicted"}},
-                ]
-            )
-        result = run_api_handler(CONFIG_MODULE, valid_config(), responses)
+    def test_config_write_rejects_stale_snapshot_without_put(self):
+        current = valid_config()
+        current_file = {
+            "sha": "fresh-sha",
+            "content": base64.b64encode(json.dumps(current).encode()).decode(),
+        }
+        result = run_api_handler(
+            CONFIG_MODULE,
+            {"config": valid_config(), "baseSha": "stale-sha"},
+            [{"status": 200, "body": current_file}],
+        )
         self.assertEqual(result["status"], 409)
-        self.assertEqual(result["body"]["error"], "still conflicted")
-        self.assertEqual(len(result["calls"]), 6)
+        self.assertIn("changed since you loaded it", result["body"]["error"])
+        self.assertEqual(len(result["calls"]), 1)
+
+    def test_config_write_does_not_retry_a_put_conflict(self):
+        current = valid_config()
+        current_file = {
+            "sha": "base-sha",
+            "content": base64.b64encode(json.dumps(current).encode()).decode(),
+        }
+        result = run_api_handler(
+            CONFIG_MODULE,
+            {"config": valid_config(), "baseSha": "base-sha"},
+            [
+                {"status": 200, "body": current_file},
+                {"status": 409, "body": {"message": "conflict"}},
+            ],
+        )
+        self.assertEqual(result["status"], 409)
+        self.assertIn("changed while you were saving", result["body"]["error"])
+        self.assertEqual(len(result["calls"]), 2)
+
+
+class EbayAccountDeletionApiTests(unittest.TestCase):
+    def test_public_get_challenge_does_not_require_ebay_api_credentials(self):
+        challenge = "challenge-123"
+        token = "verification-token"
+        endpoint = "https://example.vercel.app/api/ebay-account-deletion"
+        script = f"""
+process.env.EBAY_DELETION_VERIFICATION_TOKEN = {json.dumps(token)};
+process.env.EBAY_DELETION_ENDPOINT_URL = {json.dumps(endpoint)};
+delete process.env.EBAY_CLIENT_ID;
+delete process.env.EBAY_CLIENT_SECRET;
+const handler = require({json.dumps(DELETION_MODULE)});
+const req = {{method:'GET',headers:{{}},query:{{challenge_code:{json.dumps(challenge)}}},url:'/?challenge_code=x'}};
+let text='';
+const res={{statusCode:0,setHeader(){{}},end(value){{text=value.toString('utf8')}}}};
+Promise.resolve(handler(req,res)).then(()=>process.stdout.write(JSON.stringify({{status:res.statusCode,body:JSON.parse(text)}})));
+"""
+        result = run_node_script(script)
+        expected = hashlib.sha256(f"{challenge}{token}{endpoint}".encode()).hexdigest()
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["body"], {"challengeResponse": expected})
+
+    def test_signed_notification_round_trips_with_ebay_public_key(self):
+        script = f"""
+const crypto=require('crypto');
+const {{publicKey,privateKey}}=crypto.generateKeyPairSync('ec',{{namedCurve:'prime256v1'}});
+const body={{notification:{{data:{{userId:'user-123'}}}}}};
+const signer=crypto.createSign('sha1');signer.update(JSON.stringify(body));signer.end();
+const signature=signer.sign(privateKey,'base64');
+const header=Buffer.from(JSON.stringify({{alg:'ecdsa',digest:'SHA1',kid:'real-key',signature}})).toString('base64');
+const key=publicKey.export({{type:'spki',format:'pem'}}).replace(/\\r?\\n/g,'');
+const calls=[];
+const responses=[
+  {{status:200,body:{{access_token:'app-token',expires_in:7200}}}},
+  {{status:200,body:{{key,algorithm:'ECDSA',digest:'SHA1'}}}}
+];
+global.fetch=async(url,options={{}})=>{{calls.push(url);const next=responses.shift();return {{status:next.status,ok:true,json:async()=>next.body}}}};
+process.env.EBAY_DELETION_VERIFICATION_TOKEN='verification-token';
+process.env.EBAY_DELETION_ENDPOINT_URL='https://example.test/api/ebay-account-deletion';
+process.env.EBAY_CLIENT_ID='client';process.env.EBAY_CLIENT_SECRET='secret';
+const handler=require({json.dumps(DELETION_MODULE)});
+const req={{method:'POST',headers:{{'x-ebay-signature':header,'x-forwarded-for':'203.0.113.8'}},body}};
+let text='';const res={{statusCode:0,headers:{{}},setHeader(k,v){{this.headers[k]=v}},end(v){{text=v.toString('utf8')}}}};
+Promise.resolve(handler(req,res)).then(()=>process.stdout.write(JSON.stringify({{status:res.statusCode,body:JSON.parse(text),calls}}))).catch(e=>{{process.stderr.write(e.stack);process.exit(2)}});
+"""
+        result = run_node_script(script)
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["body"], {"ok": True})
+        self.assertEqual(len(result["calls"]), 2)
+
+    def test_unknown_key_id_is_negative_cached_and_returns_precondition_failed(self):
+        script = f"""
+const calls=[];
+const responses=[
+  {{status:200,body:{{access_token:'app-token',expires_in:7200}}}},
+  {{status:404,body:{{message:'not found'}}}}
+];
+global.fetch=async(url,options={{}})=>{{calls.push(url);const next=responses.shift();return {{status:next.status,ok:next.status<400,json:async()=>next.body}}}};
+process.env.EBAY_DELETION_VERIFICATION_TOKEN='verification-token';
+process.env.EBAY_DELETION_ENDPOINT_URL='https://example.test/api/ebay-account-deletion';
+process.env.EBAY_CLIENT_ID='client';process.env.EBAY_CLIENT_SECRET='secret';
+const handler=require({json.dumps(DELETION_MODULE)});
+const header=Buffer.from(JSON.stringify({{alg:'ecdsa',digest:'SHA1',kid:'unknown-key',signature:'AA=='}})).toString('base64');
+const invoke=async()=>{{let text='';const req={{method:'POST',headers:{{'x-ebay-signature':header,'x-forwarded-for':'203.0.113.9'}},body:{{notification:{{data:{{userId:'u'}}}}}}}};const res={{statusCode:0,setHeader(){{}},end(v){{text=v.toString('utf8')}}}};await handler(req,res);return res.statusCode}};
+(async()=>{{const statuses=[await invoke(),await invoke()];process.stdout.write(JSON.stringify({{statuses,calls}}))}})().catch(e=>{{process.stderr.write(e.stack);process.exit(2)}});
+"""
+        result = run_node_script(script)
+        self.assertEqual(result["statuses"], [412, 412])
+        self.assertEqual(len(result["calls"]), 2)
 
 
 class LedgerApiTests(unittest.TestCase):
@@ -398,6 +557,22 @@ class LedgerApiTests(unittest.TestCase):
 
 
 class MobileSettingsUiTests(unittest.TestCase):
+    def test_history_payload_is_unwrapped_before_activity_consumers_run(self):
+        load_data = index_javascript(
+            "    async function loadData", "    function ledgerMap"
+        )
+        result = run_node_script(
+            "let historyItems=null;let ledgerItems=null;let historySkipped=0;"
+            "const responses=["
+            "{ok:true,json:async()=>({history:[{item_id:'1'}],skipped:2})},"
+            "{ok:true,json:async()=>[]}];"
+            "const apiFetch=async()=>responses.shift();"
+            + load_data
+            + "loadData().then(()=>process.stdout.write(JSON.stringify({historyItems,historySkipped})));"
+        )
+        self.assertEqual(result["historyItems"], [{"item_id": "1"}])
+        self.assertEqual(result["historySkipped"], 2)
+
     def test_number_value_preserves_missing_values_and_local_date_is_used(self):
         number_function = index_javascript(
             "    function numberValue", "    function money"

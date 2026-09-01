@@ -1,5 +1,10 @@
 const crypto = require("crypto");
 
+const AUTH_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_BACKOFF_AFTER = 3;
+const AUTH_MAX_BACKOFF_SECONDS = 60;
+const authAttempts = new Map();
+
 const githubHeaders = () => ({
   Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
   Accept: "application/vnd.github+json",
@@ -50,12 +55,51 @@ const passwordMatches = (provided) => {
   if (typeof provided !== "string" || typeof expected !== "string") {
     return false;
   }
-  const providedBuffer = Buffer.from(provided);
-  const expectedBuffer = Buffer.from(expected);
-  if (providedBuffer.length !== expectedBuffer.length) {
-    return false;
+  const providedHash = crypto.createHash("sha256").update(provided).digest();
+  const expectedHash = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(providedHash, expectedHash);
+};
+
+const clientIp = (req) => {
+  const forwarded = req.headers?.["x-forwarded-for"];
+  return String(Array.isArray(forwarded) ? forwarded[0] : forwarded || req.socket?.remoteAddress || "unknown")
+    .split(",")[0]
+    .trim();
+};
+
+const authRetryAfter = (ip, now = Date.now()) => {
+  const state = authAttempts.get(ip);
+  if (!state || now - state.lastFailure > AUTH_WINDOW_MS) {
+    authAttempts.delete(ip);
+    return 0;
   }
-  return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+  return Math.max(0, Math.ceil((state.blockedUntil - now) / 1000));
+};
+
+const recordAuthFailure = (ip, now = Date.now()) => {
+  const prior = authAttempts.get(ip);
+  const failures = !prior || now - prior.lastFailure > AUTH_WINDOW_MS ? 1 : prior.failures + 1;
+  const retryAfter = failures < AUTH_BACKOFF_AFTER
+    ? 0
+    : Math.min(AUTH_MAX_BACKOFF_SECONDS, 2 ** (failures - AUTH_BACKOFF_AFTER));
+  const state = { failures, lastFailure: now, blockedUntil: now + retryAfter * 1000 };
+  authAttempts.set(ip, state);
+  return { ...state, retryAfter };
+};
+
+const notifyAuthBurst = async (ip, failures) => {
+  const topic = process.env.NTFY_TOPIC;
+  if (!topic) return;
+  try {
+    const response = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+      method: "POST",
+      headers: { Title: "[ALERT-BOT DOWN]" },
+      body: `Settings API authentication burst: ${failures} failures from ${ip}`
+    });
+    if (!response.ok) throw new Error(`ntfy returned HTTP ${response.status}`);
+  } catch (error) {
+    console.error("Unable to send config authentication alert", error);
+  }
 };
 
 const validateStringArrayField = (body, field) => {
@@ -150,9 +194,23 @@ const fetchCurrentFile = async () => {
 };
 
 module.exports = async (req, res) => {
+  const ip = clientIp(req);
+  const blockedFor = authRetryAfter(ip);
+  if (blockedFor > 0) {
+    res.setHeader("Retry-After", String(blockedFor));
+    return sendJson(res, 429, { error: "Too many authentication attempts", retryAfterSeconds: blockedFor });
+  }
   if (!passwordMatches(req.headers["x-settings-password"])) {
+    const failure = recordAuthFailure(ip);
+    if (failure.retryAfter > 0) {
+      res.setHeader("Retry-After", String(failure.retryAfter));
+    }
+    if (failure.failures === 5) {
+      await notifyAuthBurst(ip, failure.failures);
+    }
     return sendJson(res, 401, { error: "Unauthorized" });
   }
+  authAttempts.delete(ip);
 
   const envError = requireEnv();
   if (envError) {
@@ -163,7 +221,9 @@ module.exports = async (req, res) => {
     try {
       const file = await fetchCurrentFile();
       const config = JSON.parse(Buffer.from(file.content, "base64").toString("utf8"));
-      return sendJson(res, 200, config);
+      // sha travels with the config so the client can send it back as
+      // baseSha on POST - see the concurrency check below for why.
+      return sendJson(res, 200, { config, sha: file.sha });
     } catch (error) {
       return sendJson(res, error.status || 500, { error: error.message, details: error.details });
     }
@@ -171,38 +231,59 @@ module.exports = async (req, res) => {
 
   if (req.method === "POST") {
     try {
-      const nextConfig = await readBody(req);
+      const { config: nextConfig, baseSha } = await readBody(req);
       const validationError = validateConfig(nextConfig);
       if (validationError) {
         return sendJson(res, 400, { error: validationError });
       }
 
-      const maxConflictRetries = 2;
-      for (let attempt = 0; attempt <= maxConflictRetries; attempt += 1) {
-        const currentFile = await fetchCurrentFile();
-        const response = await fetch(contentsUrl(), {
-          method: "PUT",
-          headers: {
-            ...githubHeaders(),
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            message: "Update config via mobile settings app",
-            content: Buffer.from(JSON.stringify(nextConfig, null, 2) + "\n", "utf8").toString("base64"),
-            sha: currentFile.sha
-          })
+      // No retry loop. config.json is a single shared document edited
+      // directly via git many times a day (searches added/tuned, radii
+      // changed, etc) - a stale-sha retry that just refetches and clobbers
+      // harder is a data-loss amplifier, not a fix: a real edit that landed
+      // between page-load and Save would be silently reverted with a 200
+      // "ok" response and no trace anywhere. One GET, one conditional PUT,
+      // and a real conflict is surfaced to the user instead of overwritten.
+      const currentFile = await fetchCurrentFile();
+      if (baseSha !== currentFile.sha) {
+        return sendJson(res, 409, {
+          error: "config.json changed since you loaded it - reload and re-apply your change"
         });
-        const body = await response.json().catch(() => ({}));
-        if (response.ok) {
-          return sendJson(res, 200, { ok: true });
-        }
-        if (response.status !== 409 || attempt === maxConflictRetries) {
-          return sendJson(res, response.status, {
-            error: body.message || "GitHub update failed",
-            details: body
-          });
-        }
       }
+
+      // Merge onto the current document rather than replacing it wholesale
+      // - the settings UI only models a subset of config.json's fields, so
+      // a straight overwrite would silently drop any key it doesn't know
+      // about (see web/api/ledger.js for the equivalent read-merge-write
+      // pattern on the ledger's own concurrency path).
+      const current = JSON.parse(Buffer.from(currentFile.content, "base64").toString("utf8"));
+      const merged = { ...current, ...nextConfig };
+
+      const response = await fetch(contentsUrl(), {
+        method: "PUT",
+        headers: {
+          ...githubHeaders(),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          message: "Update config via mobile settings app",
+          content: Buffer.from(JSON.stringify(merged, null, 2) + "\n", "utf8").toString("base64"),
+            sha: baseSha
+        })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (response.ok) {
+        return sendJson(res, 200, { ok: true, sha: body.content?.sha });
+      }
+      if (response.status === 409) {
+        return sendJson(res, 409, {
+          error: "config.json changed while you were saving - reload and re-apply your change"
+        });
+      }
+      return sendJson(res, response.status, {
+        error: body.message || "GitHub update failed",
+        details: body
+      });
     } catch (error) {
       return sendJson(res, error.status || 500, { error: error.message, details: error.details });
     }

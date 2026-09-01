@@ -326,18 +326,19 @@ _SCOUT_QUEUE_KEYS_BY_ITEM_ID = {}
 _SCOUT_QUEUE_PROCESSED_KEYS = set()
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
-# The settings web app reads this file via GitHub's Contents API
-# (web/api/history.js, and the same pattern in config.js/ledger.js), which
-# has a hard 1MB-per-file ceiling - past that, `file.content` comes back
-# empty instead of the base64 body, and every endpoint reading this file
-# breaks. Confirmed live: with the OLD row-count cap (1500 lines), the
-# real file was sitting at 1,027,782 bytes - 98% of that ceiling, on the
-# verge of silently breaking the settings app the next time record sizes
-# ticked up. A fixed row count can't reliably predict file size (records
-# vary 291-1258 bytes depending on how verbose the AI summary/flags text
-# is), so this caps by cumulative bytes instead, with real margin below
-# the ceiling.
-ALERTS_LOG_MAX_BYTES = 800_000
+# append_alert_log() is pure append-only now (see its docstring comment) so
+# a mid-write kill can only cost the unwritten tail, never truncate prior
+# history - but that means NOTHING caps this file's growth on the write
+# path anymore. The settings web app's GitHub Contents API read is capped
+# at 1MB (see web/api/history.js), so this file must stay under that or
+# the dashboard silently stops seeing recent alerts. Pruned rarely, in one
+# rewrite, not on every append - mirrors seen_items.db's size-triggered
+# (not clock-triggered) prune pattern.
+ALERTS_LOG_TARGET_MB = 0.7
+ALERTS_LOG_EMERGENCY_MB = 0.95
+# This history is append-only in the polling process. Destructive retention
+# maintenance must be a separate atomic operation; append_alert_log() must
+# never risk old records while recording one new result.
 EBAY_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("ebay_rate_limit_state.json")
 # Confirmed live: an eBay 429 lockout persisted for 5+ hours straight
 # through continuous every-5-min hammering (up to 15 calls/run) with no
@@ -1669,10 +1670,42 @@ GOLF_EQUIPMENT_MAX_PRICE = 300
 # worth researching by hand; it does not mean a listing below it is a steal.
 POKER_CHIPS_MAX_PRICE = 150
 GOLF_BLOCKED_BRANDS = {
-    "big brother", "gs1", "confidence", "wilson ultra", "wilson", "ram", "founders club",
-    "precise", "tour edge", "intech", "dunlop", "northwestern", "spalding", "knight",
-    "top flite", "strata", "pinseeker", "alien", "macgregor", "golden bear",
+    "big brother", "confidence", "ram", "founders club", "precise golf", "tour edge",
+    "intech", "dunlop", "northwestern", "spalding", "knight", "pinseeker", "alien",
+    "macgregor", "golden bear",
 }
+
+
+def golf_blocked_brand(identified_brand):
+    """Return the blocked golf brand tier named by the vision model, if any.
+
+    The model emits free text, so raw substring checks confuse brand names with
+    qualifiers (for example ``precise model illegible``) and cheap parent tiers
+    with wanted premium sub-lines. Wilson, Strata, and Top Flite are deliberately
+    acceptable first-set brands; the remaining list is matched at the start of a
+    reported brand segment rather than anywhere in the prose.
+    """
+    if not isinstance(identified_brand, str) or not identified_brand.strip():
+        return None
+    brand_text = identified_brand.casefold()
+
+    segments = re.split(r"[,/():]|\s+[\N{EN DASH}\N{EM DASH}-]\s+", brand_text)
+    for segment in segments:
+        segment = re.sub(r"\s+", " ", segment).strip()
+        # Canonical clone-brand spelling varies as GS.1 / GS-1 / GS 1 / GS1.
+        if re.match(r"^gs[.\s_-]*1(?:\b|$)", segment):
+            return "gs1"
+        for blocked_brand in GOLF_BLOCKED_BRANDS:
+            if re.match(rf"^{re.escape(blocked_brand)}(?:\b|$)", segment):
+                # Only the actual premium sub-line earns this carve-out.
+                # "Tour Edge base/non-Exotics" is split/matched as the base
+                # tier and cannot pass because "non-Exotics" contains the word.
+                if blocked_brand == "tour edge" and re.match(
+                    r"^tour\s+edge\s+exotics(?:\b|$)", segment
+                ):
+                    continue
+                return blocked_brand
+    return None
 
 
 def get_shipping_cost(listing):
@@ -1892,12 +1925,25 @@ WATCH_LOT_SIGNALS = re.compile(
 WATCH_NOT_A_WATCH_SIGNALS = re.compile(
     r"(?:"
     r"^(?!.*\b(?:comes?\s+with|with|includes?|including)\b.{0,40}\b(?:"
+    r"watch\s+(?:box|roll|pouch|organizer|case)|watch(?:es)?\s+(?:storage|travel)\s+case|"
+    r"(?:storage|travel)\s+case(?:\s+for)?\s+watch(?:es)?|caseback|"
     r"presentation\s+(?:set|box)|display\s+case|watch\s+display|display\s+stand|"
     r"catalog(?:ue)?|brochure|watch\s+winder|(?:single|spare|extra|replacement)\s+"
-    r"(?:\w+\s+){0,2}links?|just\s+(?:the\s+)?(?:\w+\s+){0,3}link)\b).*"
-    r"\b(?:presentation\s+(?:set|box)|display\s+case|watch\s+display|display\s+stand|"
+    r"(?:\w+\s+){0,2}links?|just\s+(?:the\s+)?(?:\w+\s+){0,3}link|"
+    r"cuff\s?links?|tie\s+(?:clip|bar|pin)|money\s+clip|key\s?chain|key\s+ring)\b).*"
+    r"\b(?:watch\s+(?:box|roll|pouch|organizer|case)|watch(?:es)?\s+(?:storage|travel)\s+case|"
+    r"(?:storage|travel)\s+case(?:\s+for)?\s+watch(?:es)?|caseback|"
+    r"presentation\s+(?:set|box)|display\s+case|watch\s+display|display\s+stand|"
     r"catalog(?:ue)?|brochure|watch\s+winder|(?:single|spare|extra|replacement)\s+"
-    r"(?:\w+\s+){0,2}links?|just\s+(?:the\s+)?(?:\w+\s+){0,3}link)\b"
+    r"(?:\w+\s+){0,2}links?|just\s+(?:the\s+)?(?:\w+\s+){0,3}link|"
+    # Real live miss: a "Patek Philippe Rose Gold Calatrava Concessionaire
+    # Cufflinks" listing ($97.50) alerted with the watch authenticity
+    # warning and a watch sold-comps verify link - it's a pair of
+    # cufflinks, not a watch, and the resale math/verification advice was
+    # nonsensical for what was actually being sold. These brand-adjacent
+    # accessories share the same "matched a watch-brand search, isn't a
+    # watch" failure mode as the box/case/link terms above.
+    r"cuff\s?links?|tie\s+(?:clip|bar|pin)|money\s+clip|key\s?chain|key\s+ring)\b"
     r"|\b(?:movement|dial|crystal|crown|parts)\s+only\b"
     r"|\bfor\s+parts\b"
     r"|(?:\b(?:watch|movement)\b.{0,24}\bcase\s+only\b|"
@@ -2031,8 +2077,8 @@ def listing_matches_size_filter(saved_search, listing):
     search to also accept a US 12.
     """
     size_tokens = list(saved_search.get("size") or [])
-    size_tokens.extend(saved_search.get("size_equivalents") or [])
-    if not size_tokens:
+    equivalent_tokens = list(saved_search.get("size_equivalents") or [])
+    if not size_tokens and not equivalent_tokens:
         return True
 
     haystack = re.sub(
@@ -2044,21 +2090,46 @@ def listing_matches_size_filter(saved_search, listing):
         ),
         flags=re.IGNORECASE,
     )
-    for size_token in size_tokens:
+    def size_pattern(size_token, qualifier_required=False):
         token = str(size_token).strip()
         if not token:
-            continue
+            return None
         if re.fullmatch(r"\d+(?:\.\d+)?", token):
             # Numeric shoe sizes are frequently glued to a width ("12E").
             # Consume that suffix so the size still matches, while keeping
             # 13 from matching 13.5/113/42mm. Width suitability is a separate
             # filter because UK makers use E as a standard rather than wide.
-            pattern = rf"(?<![\d.]){re.escape(token)}(?![\d.])(?:\s?[A-G]{{1,3}})?\b"
+            numeric = rf"(?<![\d.]){re.escape(token)}(?![\d.])(?:\s?[A-G]{{1,3}})?\b"
+            if qualifier_required:
+                # An alias is a UK/EU conversion, never another accepted US
+                # size. Requiring the unit prevents a title such as "US 12 D"
+                # from satisfying a US-13 search via its UK-12 equivalent.
+                qualifier = r"(?:uk|eu|eur|euro)"
+                return (
+                    rf"(?:\b{qualifier}(?:\s+size)?\s*{numeric}"
+                    rf"|{numeric}\s*{qualifier}\b)"
+                )
+            return numeric
         else:
-            pattern = rf"\b{re.escape(token)}\b"
-        if re.search(pattern, haystack, re.IGNORECASE):
+            return rf"\b{re.escape(token)}\b"
+
+    for size_token in size_tokens:
+        pattern = size_pattern(size_token)
+        if pattern and re.search(pattern, haystack, re.IGNORECASE):
+            return True
+    for size_token in equivalent_tokens:
+        pattern = size_pattern(size_token, qualifier_required=True)
+        if pattern and re.search(pattern, haystack, re.IGNORECASE):
             return True
     return False
+
+
+UK_EU_SHOE_MAKER_SIGNALS = re.compile(
+    r"\b(?:edward\s+green|crockett\s*(?:&|and)?\s*jones|church'?s|cheaney|"
+    r"john\s+lobb|alfred\s+sargent|gaziano\W+(?:and\W+)?girling|carmina|"
+    r"vass|berluti)\b",
+    re.IGNORECASE,
+)
 
 
 def has_excluded_single_e_shoe_width(saved_search, listing):
@@ -2070,6 +2141,11 @@ def has_excluded_single_e_shoe_width(saved_search, listing):
     such as Edward Green ``UK 12E`` remains eligible for a US-13 search.
     """
     if str(saved_search.get("category_id") or "") != "53120":
+        return False
+    # E is the normal fitting for these UK/EU sizing-convention makers. The
+    # seller may write either the tagged UK size or its US conversion (13E),
+    # so the American-width exclusion is wrong for the entire saved search.
+    if UK_EU_SHOE_MAKER_SIGNALS.search(saved_search.get("query") or ""):
         return False
     haystack = (
         f"{listing.get('title', '')} {listing.get('size') or ''} "
@@ -3460,16 +3536,8 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         if not result.get("golf_ai_checked"):
             return "golf-equipment bar: no AI price estimate yet - needs a real AI check"
         identified_brand = result.get("golf_identified_brand")
-        if isinstance(identified_brand, str) and identified_brand.strip():
-            identified_brand_lower = identified_brand.lower()
-            for blocked_brand in GOLF_BLOCKED_BRANDS:
-                if blocked_brand not in identified_brand_lower:
-                    continue
-                # Standing rule blocks Tour Edge's base tier, but not its
-                # separately branded Exotics line.
-                if blocked_brand == "tour edge" and "exotics" in identified_brand_lower:
-                    continue
-                return f"golf-equipment bar: blocked brand {identified_brand.strip()}"
+        if golf_blocked_brand(identified_brand):
+            return f"golf-equipment bar: blocked brand {identified_brand.strip()}"
         landed = result.get("price")
         if landed is not None and landed > GOLF_EQUIPMENT_MAX_PRICE:
             return f"golf-equipment bar: price ${landed} exceeds ${GOLF_EQUIPMENT_MAX_PRICE} personal-use cap"
@@ -4030,36 +4098,13 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         if value is not None:
             record[key] = value
 
-    lines = []
-    if ALERTS_LOG_PATH.exists():
-        try:
-            with ALERTS_LOG_PATH.open("r", encoding="utf-8") as log_file:
-                lines = [line.rstrip("\n") for line in log_file if line.strip()]
-        except OSError as exc:
-            logger.warning("Failed to read alerts log; rewriting with current record: %s", exc)
-            lines = []
-
-    lines.append(json.dumps(record, separators=(",", ":")))
-    # Trim from the OLDEST end by cumulative BYTE size, not a fixed row
-    # count - see ALERTS_LOG_MAX_BYTES above for why.
-    kept = []
-    total_bytes = 0
-    for line in reversed(lines):
-        line_bytes = len(line.encode("utf-8")) + 1  # +1 for the trailing newline
-        if total_bytes + line_bytes > ALERTS_LOG_MAX_BYTES:
-            break
-        kept.append(line)
-        total_bytes += line_bytes
-    lines = list(reversed(kept))
     try:
         # newline="" so Windows doesn't translate \n -> \r\n on write - the
-        # byte-budget trim above counts exactly 1 byte per line ending, and
-        # a silent +1 byte/line from CRLF translation is exactly the kind
-        # of small, invisible drift that closes the safety margin below
-        # GitHub's 1MB ceiling this whole cap exists to respect.
-        with ALERTS_LOG_PATH.open("w", encoding="utf-8", newline="") as log_file:
-            for line in lines:
-                log_file.write(line + "\n")
+        # JSONL remains byte-stable across platforms. Mode "a" maps to an
+        # append-only file descriptor: a kill or write error can lose only
+        # this new tail, never truncate or rewrite the existing history.
+        with ALERTS_LOG_PATH.open("a", encoding="utf-8", newline="") as log_file:
+            log_file.write(json.dumps(record, separators=(",", ":")) + "\n")
     except OSError as exc:
         # Don't let a disk error here abort the whole run() batch - logging
         # is best-effort, the alert itself already went out.
@@ -4267,6 +4312,48 @@ def _read_alert_log_records():
     return records
 
 
+def prune_alert_log_if_oversized():
+    """Rewrite alerts_log.jsonl once, keeping only the newest records, if
+    it's grown past ALERTS_LOG_EMERGENCY_MB. Cheap on every ordinary run
+    (just a stat() call); only reads/rewrites the file on the rare run
+    that actually crosses the threshold, so append_alert_log()'s pure
+    append-only write path (see its comment) stays the common case."""
+    try:
+        size_mb = ALERTS_LOG_PATH.stat().st_size / (1024 * 1024)
+    except OSError:
+        return
+    if size_mb < ALERTS_LOG_EMERGENCY_MB:
+        return
+    records = _read_alert_log_records()
+    if not records:
+        return
+    # Keep newest-first until the serialized size would exceed the target,
+    # then reverse back to chronological order for the rewrite.
+    kept = []
+    running_bytes = 0
+    target_bytes = ALERTS_LOG_TARGET_MB * 1024 * 1024
+    for record in reversed(records):
+        line_bytes = len(json.dumps(record, separators=(",", ":")).encode("utf-8")) + 1
+        if kept and running_bytes + line_bytes > target_bytes:
+            break
+        kept.append(record)
+        running_bytes += line_bytes
+    kept.reverse()
+    dropped = len(records) - len(kept)
+    try:
+        tmp_path = ALERTS_LOG_PATH.with_suffix(".jsonl.tmp")
+        with tmp_path.open("w", encoding="utf-8", newline="") as tmp_file:
+            for record in kept:
+                tmp_file.write(json.dumps(record, separators=(",", ":")) + "\n")
+        os.replace(tmp_path, ALERTS_LOG_PATH)
+        logger.warning(
+            "alerts_log.jsonl was %.2fMB (over %sMB) - pruned %s oldest records, kept %s (~%.2fMB)",
+            size_mb, ALERTS_LOG_EMERGENCY_MB, dropped, len(kept), running_bytes / (1024 * 1024),
+        )
+    except OSError as exc:
+        logger.warning("Failed to prune alerts_log.jsonl: %s", exc)
+
+
 def send_weekly_digest():
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=7)
@@ -4287,14 +4374,9 @@ def send_weekly_digest():
         if parsed_timestamp >= cutoff:
             recent_records.append(record)
 
-    # alerts_log.jsonl is capped by BYTE SIZE, not a fixed row count or a
-    # fixed time window (see ALERTS_LOG_MAX_BYTES) - a busy week's real
-    # volume doesn't reliably fit under the 1MB the settings app's GitHub
-    # Contents API reads are limited to, so the file can genuinely retain
-    # less than 7 days on an active week. Silently calling everything
-    # retained "this week" would overclaim on those weeks - say what's
-    # ACTUALLY covered instead of asserting a window the data might not
-    # support.
+    # A new or externally maintained history may retain less than seven days.
+    # Say what is actually covered instead of asserting a window the data
+    # does not support.
     oldest_retained = min(all_timestamps) if all_timestamps else now
     covers_full_week = oldest_retained <= cutoff
     if covers_full_week:
@@ -4306,9 +4388,38 @@ def send_weekly_digest():
             "right now, not the full week)"
         )
 
-    verdict_counts = Counter(record.get("verdict") or "unknown" for record in recent_records)
+    delivered_records = [
+        record
+        for record in recent_records
+        if record.get("delivered", record.get("verdict") == "REVIEW")
+    ]
+    failed_delivery_records = [
+        record
+        for record in recent_records
+        if not record.get("delivered", record.get("verdict") == "REVIEW")
+        and (
+            record.get("delivery_error")
+            or record.get("verdict") == "DELIVERY_FAILED"
+            or (
+                record.get("verdict") == "REVIEW"
+                and record.get("delivered") is False
+            )
+        )
+    ]
+    delivered_record_ids = {id(record) for record in delivered_records}
+    failed_record_ids = {id(record) for record in failed_delivery_records}
+    blocked_records = [
+        record
+        for record in recent_records
+        if id(record) not in delivered_record_ids and id(record) not in failed_record_ids
+    ]
+    verdict_counts = Counter(
+        record.get("verdict") or "unknown" for record in delivered_records
+    )
     rating_counts = Counter(
-        record.get("deal_rating") for record in recent_records if record.get("deal_rating")
+        record.get("deal_rating")
+        for record in delivered_records
+        if record.get("deal_rating")
     )
     # Was Counter(brand_tier OR query) - two unrelated things sharing one
     # bucket. brand_tier is a coarse 2-value field ("grab_on_sight"/
@@ -4342,19 +4453,29 @@ def send_weekly_digest():
     # received - verdict REVIEW (sent). append_alert_log() also writes PASS
     # (blocked/rejected) records to the same log, and counting them here
     # presented a week heavy on blocked junk as if those were alerts.
-    alert_count = sum(
-        1
-        for record in recent_records
-        if record.get("delivered", record.get("verdict") == "REVIEW")
-    )
-    blocked_count = len(recent_records) - alert_count
-    message = f"{alert_count} alerts {window_label}"
+    alert_count = len(delivered_records)
+    failed_count = len(failed_delivery_records)
+    blocked_count = len(blocked_records)
+    message = ""
+    if failed_count:
+        message += f"{failed_count} DELIVERY FAILURE{'' if failed_count == 1 else 'S'} - "
+    message += f"{alert_count} alerts {window_label}"
     if blocked_count:
         message += f" ({blocked_count} blocked)"
     if rating_parts:
         message += " - " + ", ".join(rating_parts)
     if verdict_parts:
         message += "\nVerdicts: " + ", ".join(verdict_parts)
+    if failed_count:
+        latest_error = next(
+            (
+                str(record.get("delivery_error"))
+                for record in reversed(failed_delivery_records)
+                if record.get("delivery_error")
+            ),
+            "delivery provider rejected the alert (no error text recorded)",
+        )
+        message += f"\nLatest delivery error: {latest_error}"
     message += f"\nTop brand/search: {top_label}"
 
     last_exc = None
@@ -4529,7 +4650,14 @@ def prefetch_marketplaces(now, conn):
     if not searches:
         return {}
     scout_listings = scout_queue.load_scout_queue()
-    active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.ADAPTERS]
+    # available_platforms() (ADAPTERS union BATCH_ADAPTERS) - NOT bare
+    # ADAPTERS. OfferUp/Depop are batch-only adapters; filtering through
+    # ADAPTERS alone silently excluded them from `active`, and
+    # batch_worker()'s `s.get("platforms", active)` default meant every
+    # OfferUp/Depop batch computed relevant=[] and fetched nothing, every
+    # run, forever - invisible because health[] still reported 0/0 (looks
+    # healthy) and counts[] never got a key for them at all.
+    active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.available_platforms()]
     # Rotate the starting point each run so that when the budget truncates the
     # tail, it is a different tail every time and every search gets covered.
     offset = ((now.hour * 60 + now.minute) // 20) % len(searches)
@@ -4582,7 +4710,14 @@ def prefetch_marketplaces(now, conn):
         def emit(self, record):
             if time.monotonic() >= hard_stop:
                 return
-            platform_name = getattr(health_context, "platform", None)
+            # record.marketplace_platform (stamped by platforms.py's own
+            # logger filter inside _run_html_batch's private worker thread)
+            # takes priority over health_context - OfferUp/Depop's inner
+            # daemon thread can't see the caller's threading.local, so
+            # without this every one of their warnings was silently
+            # discarded before reaching a counter (looked perfectly
+            # healthy: 0 requests, 0 errors, batch_worker fetched nothing).
+            platform_name = getattr(record, "marketplace_platform", None) or getattr(health_context, "platform", None)
             if platform_name not in health:
                 return
             message = record.getMessage().lower()
@@ -4599,6 +4734,10 @@ def prefetch_marketplaces(now, conn):
                     "non-json",
                     "fetch failed",
                     "search failed",
+                    "not found",
+                    "missing",
+                    "parse failed",
+                    "no flight rows",
                 )
             ) and "429" not in message and "rate limited" not in message:
                 updates.append("errors")
@@ -4689,7 +4828,6 @@ def prefetch_marketplaces(now, conn):
             if time.monotonic() >= hard_stop:
                 return
             health[platform_name]["requests"] += 1
-        started = time.monotonic()
         health_context.platform = platform_name
         try:
             results = marketplaces.BATCH_ADAPTERS[platform_name](relevant)
@@ -4702,13 +4840,6 @@ def prefetch_marketplaces(now, conn):
             return
         finally:
             health_context.platform = None
-            if (
-                deadline <= time.monotonic() < hard_stop
-                and started < deadline
-            ):
-                with results_lock:
-                    if time.monotonic() < hard_stop:
-                        health[platform_name]["timeouts"] += 1
         if time.monotonic() >= hard_stop:
             logger.warning(
                 "%s outer batch exceeded the marketplace hard stop; discarding late result",
@@ -4769,7 +4900,6 @@ def prefetch_marketplaces(now, conn):
                     work_queue.task_done()
                     return
                 health[platform_name]["requests"] += 1
-            started = time.monotonic()
             health_context.platform = platform_name
             try:
                 _platform, query, listings, raw_count, garbage_count, errors = (
@@ -4777,7 +4907,6 @@ def prefetch_marketplaces(now, conn):
                 )
             finally:
                 health_context.platform = None
-            timed_out = time.monotonic() >= deadline and started < deadline
             if time.monotonic() >= hard_stop:
                 logger.warning(
                     "%s outer worker exceeded the marketplace hard stop; discarding late result",
@@ -4792,7 +4921,6 @@ def prefetch_marketplaces(now, conn):
                 health[_platform]["raw_listings"] += raw_count
                 health[_platform]["known_garbage"] += garbage_count
                 health[_platform]["errors"] += errors
-                health[_platform]["timeouts"] += int(timed_out)
                 if listings:
                     found.setdefault(query, []).extend(listings)
                     counts[_platform] = counts.get(_platform, 0) + len(listings)
@@ -6333,21 +6461,6 @@ def run():
             if _run_deadline_reached("before alert delivery"):
                 break
             send_alert(result)
-            # A REVIEW record is an alert-history record only after the push
-            # provider accepted it. This must stay after send_alert().
-            append_alert_log(result, delivered=True)
-            logger.info("Sent alert for %s", item_id)
-            if result.get("is_ending_soon_auction"):
-                mark_seen(conn, auction_alert_key)
-            mark_seen(conn, item_id, fingerprint, total_price)
-            alerts_sent += 1
-            if alerts_sent >= MAX_ALERTS_PER_RUN:
-                logger.info(
-                    "Hit per-run alert cap (%s); stopping this run. Remaining "
-                    "listings stay unseen and will be picked up next run.",
-                    MAX_ALERTS_PER_RUN,
-                )
-                break
         except Exception as exc:
             logger.exception("Failed to send alert for %s", item_id)
             failure_message = f"{item_id}: {exc}"
@@ -6364,6 +6477,35 @@ def run():
                 f"Persistent alert delivery failure for {item_id}: {exc}. "
                 "The listing remains unseen and will retry next run."
             )
+            continue
+
+        # Everything below is post-delivery bookkeeping. A SQLite hiccup here
+        # must not relabel an already accepted push as DELIVERY_FAILED, notify
+        # that ntfy is down, or fail the workflow as a delivery outage.
+        append_alert_log(result, delivered=True)
+        logger.info("Sent alert for %s", item_id)
+        seen_markers = []
+        if result.get("is_ending_soon_auction"):
+            seen_markers.append((auction_alert_key, None, None))
+        seen_markers.append((item_id, fingerprint, total_price))
+        for seen_item_id, seen_fingerprint, seen_price in seen_markers:
+            try:
+                mark_seen(conn, seen_item_id, seen_fingerprint, seen_price)
+            except Exception:
+                logger.exception(
+                    "Alert for %s was delivered, but failed to persist seen marker %s; "
+                    "a duplicate alert is possible on the next run",
+                    item_id,
+                    seen_item_id,
+                )
+        alerts_sent += 1
+        if alerts_sent >= MAX_ALERTS_PER_RUN:
+            logger.info(
+                "Hit per-run alert cap (%s); stopping this run. Remaining "
+                "listings stay unseen and will be picked up next run.",
+                MAX_ALERTS_PER_RUN,
+            )
+            break
 
     logger.info("Finished eBay deal alert run")
     _finish_run()

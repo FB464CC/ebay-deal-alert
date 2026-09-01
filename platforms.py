@@ -37,6 +37,24 @@ import requests
 
 logger = logging.getLogger("platforms")
 
+# Batch HTML fetches run in a private daemon thread so a wedged scraper cannot
+# hold the caller past its deadline.  A caller's threading.local health context
+# cannot cross that thread boundary, so stamp the platform directly onto every
+# LogRecord emitted by the batch thread.  Health handlers can then attribute
+# transport and parser warnings without importing this module's caller.
+_marketplace_log_context = threading.local()
+
+
+class _MarketplaceLogContextFilter(logging.Filter):
+    def filter(self, record):
+        platform = getattr(_marketplace_log_context, "platform", None)
+        if platform and not hasattr(record, "marketplace_platform"):
+            record.marketplace_platform = platform
+        return True
+
+
+logger.addFilter(_MarketplaceLogContextFilter())
+
 # A normal browser UA. These endpoints serve the sites' own public web
 # frontends; a blank/python UA gets 403'd by ordinary WAF defaults. This is
 # not fingerprint spoofing - there is no rotation, no proxying, no cookie
@@ -327,7 +345,8 @@ def batch_adapter(name):
 
 
 def available_platforms():
-    return sorted(ADAPTERS)
+    """Return every registered fetch lane, regardless of dispatch strategy."""
+    return sorted(ADAPTERS.keys() | BATCH_ADAPTERS.keys())
 
 
 # "-term" in a saved search is eBay Browse search syntax meaning "exclude
@@ -1463,6 +1482,7 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
     working_lock = threading.Lock()
 
     def run():
+        _marketplace_log_context.platform = platform
         try:
             for saved_search in saved_searches:
                 timeout = _batch_request_timeout(deadline)
@@ -1485,6 +1505,8 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
                             working[saved_search["query"]] = listings
         except Exception:
             logger.exception("%s batch fetch failed", platform)
+        finally:
+            _marketplace_log_context.platform = None
 
     worker = threading.Thread(target=run, daemon=True)
     worker.start()
@@ -1644,7 +1666,24 @@ def _depop_objects(html):
     return objects
 
 
+def _depop_title(description, max_length=90):
+    """Derive stable title-like text from Depop's description-only payload."""
+    if not isinstance(description, str):
+        return None
+    first_line = next((line.strip() for line in description.splitlines() if line.strip()), "")
+    # Reach hashtags belong in the searchable description, not in the title
+    # used by relevance, exclusion, and fingerprint gates.
+    title = re.sub(r"(?:^|\s)#[^\s#]+", " ", first_line)
+    title = re.sub(r"\s+", " ", title).strip()
+    if not title:
+        return None
+    if len(title) > max_length:
+        title = title[: max_length - 3].rstrip() + "..."
+    return title
+
+
 def _depop_to_listing(obj):
+    description = obj.get("description")
     pictures = obj.get("pictures") or []
     image_url = None
     if pictures and isinstance(pictures[0], dict):
@@ -1659,10 +1698,11 @@ def _depop_to_listing(obj):
     return make_listing(
         "depop",
         str(item_id) if item_id is not None else None,
-        obj.get("description"),
+        _depop_title(description),
         price,
         f"https://www.depop.com/products/{slug}/" if slug else None,
         image_url=image_url,
+        description=description,
     )
 
 

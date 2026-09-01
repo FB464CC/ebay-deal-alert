@@ -16,6 +16,7 @@ philosophy. Run with:
     python -m unittest test_platforms
 """
 import json
+import logging
 import pathlib
 import shutil
 import tempfile
@@ -91,6 +92,20 @@ class QueryExclusions(unittest.TestCase):
         self.assertEqual(excluded, ["junior", "left hand", "lefty", "left handed"])
         self.assertTrue(p.title_matches_exclusion("Mens left handed golf clubs", excluded))
         self.assertFalse(p.title_matches_exclusion("Mens right handed golf clubs", excluded))
+
+
+class AdapterRegistry(unittest.TestCase):
+    def test_available_platforms_includes_batch_only_adapters(self):
+        self.assertNotIn("offerup", p.ADAPTERS)
+        self.assertNotIn("depop", p.ADAPTERS)
+        self.assertIn("offerup", p.BATCH_ADAPTERS)
+        self.assertIn("depop", p.BATCH_ADAPTERS)
+        self.assertEqual(
+            p.available_platforms(),
+            sorted(p.ADAPTERS.keys() | p.BATCH_ADAPTERS.keys()),
+        )
+        self.assertIn("offerup", p.available_platforms())
+        self.assertIn("depop", p.available_platforms())
 
 
 class VintedLandedCost(unittest.TestCase):
@@ -588,6 +603,13 @@ def _depop_html(payload):
     return "<html><body><script>self.__next_f.push([1," + json.dumps("12:" + row) + "]);</script></body></html>"
 
 
+_DEPOP_DESCRIPTION = (
+    "Moissanite Rose Gold Luxury Watch\n"
+    "Beautiful statement piece in excellent condition. No mug or box is included.\n"
+    "#vintage #y2k #rolex #omega #luxury #watch #streetwear"
+)
+
+
 _DEPOP_PAYLOAD = {
     "state": {
         "mutations": [],
@@ -599,7 +621,7 @@ _DEPOP_PAYLOAD = {
                         "data": {
                             "objects": [{
                                 "id": 879421273,
-                                "description": "Moissanite Rose Gold Luxury Watch",
+                                "description": _DEPOP_DESCRIPTION,
                                 "pictures": [{"formats": {"P0": {"url": "https://media-photos.depop.com/P0.jpg"}}}],
                                 "pricing": {"current_price": {"total_price": "105.00"}},
                                 "location": "Garden Grove, United States",
@@ -687,6 +709,35 @@ class OfferUpAdapter(unittest.TestCase):
         self.assertEqual(set(result), {"rolex watch"})
 
 
+class HtmlBatchHealthContext(unittest.TestCase):
+    def test_parser_warnings_carry_platform_across_inner_thread(self):
+        cases = (
+            ("offerup", p.search_offerup, "<html></html>", "__NEXT_DATA__"),
+            ("depop", p.search_depop, "<html></html>", "no flight rows"),
+        )
+        for platform, search, html, expected_warning in cases:
+            with self.subTest(platform=platform):
+                records = []
+
+                class Capture(logging.Handler):
+                    def emit(self, record):
+                        records.append(record)
+
+                handler = Capture(level=logging.WARNING)
+                p.logger.addHandler(handler)
+                try:
+                    with mock.patch.object(p, "_fetch_page", return_value=html):
+                        self.assertEqual(search([{"query": "rolex watch"}]), {})
+                finally:
+                    p.logger.removeHandler(handler)
+
+                matching = [r for r in records if expected_warning in r.getMessage()]
+                self.assertTrue(matching)
+                self.assertTrue(
+                    all(getattr(r, "marketplace_platform", None) == platform for r in matching)
+                )
+
+
 class DepopAdapter(unittest.TestCase):
     def test_extracts_real_listing_from_fixture(self):
         with mock.patch.object(p, "_fetch_page", return_value=_depop_html(_DEPOP_PAYLOAD)):
@@ -698,9 +749,30 @@ class DepopAdapter(unittest.TestCase):
         l = listings[0]
         self.assertEqual(l["itemId"], "depop:879421273")
         self.assertEqual(l["title"], "Moissanite Rose Gold Luxury Watch")
+        self.assertEqual(l["description"], _DEPOP_DESCRIPTION)
+        self.assertNotIn("#rolex", l["title"])
         self.assertEqual(l["price"], {"value": 105.0, "currency": "USD"})
         self.assertEqual(l["itemWebUrl"], "https://www.depop.com/products/jayusfinds-moissanite-rose-gold-luxury-watch-d1ca/")
         self.assertEqual(l["image"]["imageUrl"], "https://media-photos.depop.com/P0.jpg")
+
+    def test_single_line_title_is_bounded_and_reach_hashtags_are_removed(self):
+        description = (
+            "Rare rose gold statement watch #rolex #omega with a very long seller blurb "
+            "that continues well beyond the title boundary and should not become fingerprint text"
+        )
+        obj = {
+            "id": 1,
+            "description": description,
+            "pricing": {"current_price": {"total_price": "40.00"}},
+            "slug": "rare-watch",
+        }
+
+        listing = p._depop_to_listing(obj)
+
+        self.assertLessEqual(len(listing["title"]), 90)
+        self.assertNotIn("#rolex", listing["title"])
+        self.assertNotIn("#omega", listing["title"])
+        self.assertEqual(listing["description"], description)
 
     def test_missing_product_search_cache_returns_empty_dict(self):
         payload = {"state": {"queries": [{"queryKey": ["some_other_query", {}], "state": {"data": {"pages": []}}}]}}

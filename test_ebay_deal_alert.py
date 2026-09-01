@@ -463,7 +463,7 @@ class GolfEquipmentGate(unittest.TestCase):
         )
 
     def test_blocked_brands_are_rejected_even_when_every_other_check_passes(self):
-        for brand in ("Wilson", "Golden Bear"):
+        for brand in ("Golden Bear boxed set", "GS.1", "GS-1", "Tour Edge base/non-Exotics line"):
             with self.subTest(brand=brand):
                 reason = m.is_blocked_by_steal_quality_gate(
                     self._result(
@@ -482,6 +482,32 @@ class GolfEquipmentGate(unittest.TestCase):
                 self.assertIn("blocked brand", reason)
                 self.assertIn(brand.lower(), reason.lower())
 
+    def test_acceptable_first_set_brands_and_free_text_are_not_blocked(self):
+        for brand in (
+            "Wilson",
+            "Wilson Staff",
+            "Wilson Staff Model",
+            "Callaway/Strata",
+            "Top Flite",
+            "Titleist (precise model illegible)",
+        ):
+            with self.subTest(brand=brand):
+                reason = m.is_blocked_by_steal_quality_gate(
+                    self._result(
+                        golf_ai_checked=True,
+                        golf_is_playable_first_set=True,
+                        golf_is_starter_kit=True,
+                        golf_is_left_handed=False,
+                        golf_handedness_confirmed=True,
+                        golf_brand_claims_confirmed=True,
+                        golf_identified_brand=brand,
+                        golf_counterfeit_suspected=False,
+                        damage_found=False,
+                    ),
+                    category="golf-equipment",
+                )
+                self.assertIsNone(reason)
+
     def test_tour_edge_exotics_preserves_the_premium_line_carve_out(self):
         reason = m.is_blocked_by_steal_quality_gate(
             self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
@@ -491,6 +517,17 @@ class GolfEquipmentGate(unittest.TestCase):
             category="golf-equipment",
         )
         self.assertIsNone(reason)
+
+    def test_tour_edge_exotics_does_not_hide_another_blocked_brand_tier(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
+                         golf_is_starter_kit=True, golf_is_left_handed=False,
+                         golf_handedness_confirmed=True, golf_brand_claims_confirmed=True,
+                         golf_identified_brand="Golden Bear / Tour Edge Exotics",
+                         golf_counterfeit_suspected=False, damage_found=False),
+            category="golf-equipment",
+        )
+        self.assertIn("blocked brand", reason)
 
     def test_counterfeit_suspected_is_blocked(self):
         reason = m.is_blocked_by_steal_quality_gate(
@@ -833,6 +870,23 @@ class WatchNotAWatchSignals(unittest.TestCase):
             "Cartier Extra Bracelet Link",
             "Omega Replacement Steel Link",
             "Tissot - Just the Gold Link",
+            "Rolex Oyster Watch Box",
+            "Rolex Green Watch Box with Outer Card",
+            "Omega Watch Roll Travel Pouch",
+            "Rolex Watch Organizer Storage Case",
+            "Watch Travel Case Empty",
+            "Storage Case for Watches",
+            "Omega Caseback Genuine Part",
+            # Real live miss: "Patek Philippe Rose Gold Calatrava
+            # Concessionaire Cufflinks" ($97.50) alerted with the watch
+            # authenticity warning and a watch sold-comps verify link -
+            # brand-adjacent accessories from a watch-brand search, same
+            # failure mode as the box/case/link terms above.
+            "Patek Philippe Rose Gold Calatrava Concessionaire Cufflinks",
+            "Zenith x Bhindi Leather Watch Travel Case in Tiffany Blue",
+            "Tiffany Tie Clip",
+            "Cartier Money Clip",
+            "Omega Keychain",
         )
         for title in bad_titles:
             with self.subTest(title=title):
@@ -844,8 +898,12 @@ class WatchNotAWatchSignals(unittest.TestCase):
             "Rolex Submariner With Display Stand",
             "Cartier Tank Includes Original Catalog and Brochure",
             "Tissot PRX Includes One Extra Link",
+            "Omega Seamaster Includes Original Watch Box and Watch Roll",
+            "Rolex Submariner Comes With Travel Case and Watch Pouch",
+            "Omega Speedmaster Automatic Watch With Signed Caseback",
             "Vintage Omega Seamaster Automatic Watch",
             "Leather Travel Case Only",
+            "Rolex Datejust 41mm With Cufflinks Included",
         )
         for title in good_titles:
             with self.subTest(title=title):
@@ -948,6 +1006,7 @@ class SizeMatching(unittest.TestCase):
             "Edward Green Chelsea Boot UK 12E",
             "Crockett & Jones Connaught UK 12 E",
             "John Lobb Oxford EU 46",
+            "John Lobb Oxford 46 EU",
             "Carmina Rain Last EU 47",
             "Vass Budapest Size 13 D",
         ):
@@ -956,7 +1015,17 @@ class SizeMatching(unittest.TestCase):
 
     def test_shoe_aliases_do_not_accept_wrong_or_half_size(self):
         search = {"size": ["13"], "size_equivalents": ["12", "46", "47"]}
-        for title in ("Edward Green UK 11E", "Carmina EU 45", "Gucci Loafer 13.5"):
+        for title in (
+            "Edward Green UK 11E",
+            "Carmina EU 45",
+            "Gucci Loafer 13.5",
+            "Crockett & Jones Coniston US 12 D",
+            "Church's Consul Size 12 Mens US",
+            "Berluti Alessandro US Size 12",
+            "Vass Peter Last 12 US",
+            "Edward Green 12 US D",
+            "Crockett & Jones Coniston 12 D",
+        ):
             with self.subTest(title=title):
                 self.assertFalse(m.listing_matches_size_filter(search, {"title": title}))
 
@@ -999,6 +1068,25 @@ class SizeMatching(unittest.TestCase):
         self.assertFalse(
             m.has_excluded_single_e_shoe_width(non_shoe, {"title": "Vintage Model 13 E"})
         )
+
+    def test_single_e_is_standard_for_uk_eu_sizing_makers(self):
+        makers = (
+            "edward green", "crockett jones", "church's", "cheaney", "john lobb",
+            "alfred sargent", '"gaziano" "girling"', "carmina", "vass", "berluti",
+        )
+        for maker in makers:
+            search = {
+                "query": f"{maker} shoes -wide",
+                "size": ["13"],
+                "size_equivalents": ["12", "46", "47"],
+                "category_id": "53120",
+            }
+            with self.subTest(maker=maker):
+                self.assertFalse(
+                    m.has_excluded_single_e_shoe_width(
+                        search, {"title": f"{maker} Chelsea Boot 13E"}
+                    )
+                )
 
 
 class OversizedFittedShirt(unittest.TestCase):
@@ -3262,6 +3350,43 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         ).fetchone()
         self.assertEqual(recorded, (8, 2, 1, 12, 12))
 
+    def test_successful_request_straddling_shared_budget_is_not_a_timeout(self):
+        now = datetime.now(timezone.utc)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def slow_but_successful(_search):
+            time.sleep(0.03)
+            return ([{"itemId": "poshmark:late", "title": "test item", "seller": {}}], 1)
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS["poshmark"] = slow_but_successful
+            m.MARKETPLACES_ENABLED = ["poshmark"]
+            m.SAVED_SEARCHES = [
+                {"query": "test watch", "enabled": True, "platforms": ["poshmark"]}
+            ]
+            with mock.patch.object(m, "MARKETPLACE_FETCH_BUDGET_SECONDS", 0.01), \
+                 mock.patch.object(m, "HTTP_TIMEOUT_MARGIN", 0.1), \
+                 mock.patch.object(m, "notify_bot_down") as mock_notify:
+                found = m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertEqual([item["itemId"] for item in found["test watch"]], ["poshmark:late"])
+        mock_notify.assert_not_called()
+        recorded = self.conn.execute(
+            "SELECT request_count, timeout_count, count FROM marketplace_counts "
+            "WHERE platform = 'poshmark' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (1, 0, 1))
+
     def test_prefetch_captures_adapter_429_warning_count(self):
         self._seed_history("vinted", [45] * 10)
         now = datetime.now(timezone.utc)
@@ -4106,6 +4231,36 @@ class RunIntegration(unittest.TestCase):
         self.assertIs(failure_record["delivered"], False)
         self.assertIn("ntfy unavailable", failure_record["delivery_error"])
 
+    def test_seen_db_failure_after_send_is_not_a_delivery_failure(self):
+        item_id = "v1|555444333222|0"
+        item = self._ebay_item(
+            item_id, "Loro Piana Cashmere Sweater Mens Medium Navy", 180.0
+        )
+        self._serve({
+            "query": "loro piana sweater", "max_price": 400,
+            "category_id": "11484", "enabled": True, "profile": "fast",
+        }, [item])
+        real_mark_seen = m.mark_seen
+
+        def mark_seen_with_one_db_hiccup(conn, seen_item_id, *args):
+            if seen_item_id == item_id:
+                raise sqlite3.OperationalError("database is temporarily locked")
+            return real_mark_seen(conn, seen_item_id, *args)
+
+        self._patch("mark_seen", mark_seen_with_one_db_hiccup)
+        notify_failure = self._patch("notify_bot_down", mock.Mock())
+
+        with self.assertLogs("ebay_deal_alert", level="ERROR") as captured:
+            m.run()
+
+        self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [item_id])
+        notify_failure.assert_not_called()
+        (record,) = self._alert_log_records()
+        self.assertEqual(record["verdict"], "REVIEW")
+        self.assertIs(record["delivered"], True)
+        self.assertNotIn("delivery_error", record)
+        self.assertTrue(any("failed to persist seen marker" in line for line in captured.output))
+
     def test_max_alerts_exit_only_acknowledges_scout_rows_already_sent(self):
         self._patch("SCOUT_AI_CHECK_LIMIT", 2)
         self._patch("MAX_ALERTS_PER_RUN", 1)
@@ -4608,6 +4763,34 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
         self.assertIn("0 alerts", message)
         self.assertIn("2 blocked", message)
 
+    def test_delivery_failures_are_separate_and_loudest_bucket(self):
+        ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        records = [
+            {"timestamp": ts, "verdict": "REVIEW", "delivered": True,
+             "deal_rating": "Steal", "query": "canali suit"},
+            {"timestamp": ts, "verdict": "DELIVERY_FAILED", "delivered": False,
+             "delivery_error": "ntfy HTTP 503", "deal_rating": "Great Deal",
+             "query": "alden shoes"},
+            {"timestamp": ts, "verdict": "REVIEW", "delivered": False,
+             "delivery_error": "ntfy rate limited", "deal_rating": "Good Deal",
+             "query": "omega watch"},
+            {"timestamp": ts, "verdict": "PASS", "delivered": False,
+             "reason": "excluded gender keyword", "query": "canali suit"},
+            {"timestamp": ts, "verdict": "PASS", "delivered": False,
+             "reason": "brand on pass list", "query": "barbour jacket"},
+        ]
+
+        message = self._digest_message(records)
+
+        self.assertTrue(message.startswith("2 DELIVERY FAILURES - 1 alerts"), message)
+        self.assertIn("(2 blocked)", message)
+        self.assertIn("1 Steal", message)
+        self.assertNotIn("Great Deal", message)
+        self.assertNotIn("Good Deal", message)
+        self.assertIn("Verdicts: REVIEW: 1", message)
+        self.assertNotIn("DELIVERY_FAILED:", message)
+        self.assertIn("Latest delivery error: ntfy rate limited", message)
+
 
 class EbayTokenCacheWriteFailure(unittest.TestCase):
     """A token-cache WRITE failure used to propagate straight out of
@@ -4679,6 +4862,28 @@ class AlertLogPriceSemantics(unittest.TestCase):
         record = self._write_and_read(result)
         self.assertEqual(record["price"], 100.0)
         self.assertEqual(record["item_price"], 80.0)
+
+    def test_append_preserves_existing_history_bytes(self):
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        log_path = tmpdir / "alerts_log.jsonl"
+        existing = b'{"historic":1}\n\nnot-json-but-still-history\n'
+        log_path.write_bytes(existing)
+        result = {
+            "listing": {
+                "itemId": "v1|3|0", "title": "Canali Suit",
+                "price": {"value": 80.0, "currency": "USD"},
+            },
+            "verdict": "PASS",
+            "reason": "test record",
+        }
+
+        with mock.patch.object(m, "ALERTS_LOG_PATH", log_path):
+            m.append_alert_log(result)
+
+        after = log_path.read_bytes()
+        self.assertTrue(after.startswith(existing))
+        self.assertGreater(len(after), len(existing))
+        self.assertEqual(json.loads(after[len(existing):].decode("utf-8"))["item_id"], "v1|3|0")
 
 
 class CircuitBreakerCorruptTimestampSelfHeals(unittest.TestCase):

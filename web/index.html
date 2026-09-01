@@ -560,9 +560,11 @@
     const activityTab = document.getElementById("activityTab");
     const runStatus = document.getElementById("runStatus");
     let config = null;
+    let configSha = null;
     let loadedSnapshot = "";
     let activeTab = "settings";
     let historyItems = null;
+    let historySkipped = 0;
     let ledgerItems = null;
     let activityFilters = { query: "all", rating: "all", title: "" };
 
@@ -897,7 +899,9 @@
         throw new Error(error.error || "Failed to load ledger");
       }
       if (historyResponse) {
-        historyItems = await historyResponse.json();
+        const payload = await historyResponse.json();
+        historyItems = Array.isArray(payload?.history) ? payload.history : [];
+        historySkipped = Number.isInteger(payload?.skipped) && payload.skipped > 0 ? payload.skipped : 0;
       }
       if (ledgerResponse) {
         ledgerItems = await ledgerResponse.json();
@@ -1224,11 +1228,15 @@
     function renderActivity(focusTitle = false) {
       setActiveTab("activity");
       const filtered = filterHistory(historyItems || []);
+      const skippedNote = historySkipped
+        ? `<p class="activity-meta">${historySkipped} malformed histor${historySkipped === 1 ? "y entry was" : "y entries were"} skipped.</p>`
+        : "";
       app.className = "";
       app.innerHTML = `
         <section><h2>Stats</h2>${renderStatsSection(historyItems || [], ledgerItems || [], true)}</section>
         <section>
           <h2>Recent Activity</h2>
+          ${skippedNote}
           ${renderActivityFilters(historyItems || [])}
           ${renderHistoryItems(filtered)}
         </section>
@@ -1308,7 +1316,12 @@
           const error = await response.json().catch(() => ({ error: "Failed to load config" }));
           throw new Error(error.error || "Failed to load config");
         }
-        config = await response.json();
+        const payload = await response.json();
+        config = payload.config;
+        configSha = payload.sha;
+        if (!config || typeof config !== "object" || !configSha) {
+          throw new Error("Config API returned an invalid snapshot");
+        }
         if (!Array.isArray(config.SAVED_SEARCHES)) {
           config.SAVED_SEARCHES = [];
         }
@@ -1338,13 +1351,15 @@
         const response = await apiFetch("/api/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(nextConfig)
+          body: JSON.stringify({ config: nextConfig, baseSha: configSha })
         });
         if (!response.ok) {
           const error = await response.json().catch(() => ({ error: "Failed to save config" }));
           throw new Error(error.error || error.message || "Failed to save config");
         }
-        config = nextConfig;
+        const payload = await response.json();
+        config = payload.config || nextConfig;
+        configSha = payload.sha || configSha;
         loadedSnapshot = stableStringify(config);
         showStatus("Settings saved.", "success");
         updateDirtyState();
