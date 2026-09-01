@@ -847,7 +847,7 @@
       "query": "zenith watch -tv -remote -vcr -electronics -brooch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -doorbell -chime -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "category_id": "31387"
     },
