@@ -1785,6 +1785,31 @@ class ScoreListingHardFails(unittest.TestCase):
             self.assertNotEqual(result["verdict"], "PASS", title)
             self.assertNotIn("packaging", result.get("reason", ""))
 
+    def test_button_down_shirts_hard_fail_except_kiton(self):
+        # Real live miss: "Ermenegildo Zegna Button Down Shirt 16.5 42 Pink
+        # Purple Plaid Regular Fit Cotton" alerted through a "zegna sweater"
+        # search - eBay's own search does loose relevance matching, not
+        # literal phrase matching, and is_relevant_marketplace_listing()
+        # explicitly exempts eBay listings, so a real, correctly-branded
+        # item of the wrong garment type sailed through. Explicit user
+        # instruction: "no button downs at all. except kiton".
+        for title in (
+            "Ermenegildo Zegna Button Down Shirt 16.5 42 Pink Purple Plaid Regular Fit Cotton",
+            "Brooks Brothers Button-Down Oxford Shirt",
+            "Charvet Button Up Dress Shirt",
+        ):
+            result = m.score_listing(self._listing(title), gap_report=None)
+            self.assertEqual(result["verdict"], "PASS", title)
+            self.assertIn("button-down", result["reason"])
+
+    def test_kiton_button_down_shirt_is_not_blocked(self):
+        result = m.score_listing(
+            self._listing("Kiton Napoli Button Down Dress Shirt 16.5 Cotton"),
+            gap_report=None,
+        )
+        self.assertNotEqual(result["verdict"], "PASS")
+        self.assertNotIn("button-down", result.get("reason", ""))
+
     # ---- STRENGTHENED DAMAGE DETECTION (real miss: "heavily damaged" LV wallet) ----
 
     def test_heavily_damaged_terms_hard_fail(self):

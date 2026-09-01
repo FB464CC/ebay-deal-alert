@@ -173,6 +173,17 @@ EMPTY_PACKAGING_SIGNALS = re.compile(
     r"|\bno\s+watch\b(?:\s+included)?(?=\s*[.,;!)-]|\s*$)",
     re.IGNORECASE,
 )
+# Real live miss: "Ermenegildo Zegna Button Down Shirt" alerted through a
+# "zegna sweater"/"zegna quarter zip" search - eBay's own search engine
+# does loose relevance matching, not literal phrase matching, and
+# is_relevant_marketplace_listing() explicitly exempts eBay listings (its
+# own docstring: "eBay listings arrive already scoped by category_id +
+# query"), so nothing else in the pipeline catches a real, correctly-
+# brand-matched item of the WRONG garment type. Explicit user instruction:
+# "no button downs at all. except kiton" - Kiton's own shirting is
+# exempted, every other brand's button-down/button-up dress shirt is a
+# hard-fail regardless of which search surfaced it.
+BUTTON_DOWN_SHIRT_SIGNALS = re.compile(r"\bbutton[\s-]?(down|up)\b", re.IGNORECASE)
 # Real live miss: a "fake goyard wallet" (counterfeit, plainly spelled
 # "Goyard") alerted as a genuine deal - a seller openly advertising a
 # replica in replica-marketing vocabulary, which the obfuscated-brand check
@@ -2597,6 +2608,8 @@ def _text_safety_hard_fails(haystack):
         return "pet product, not menswear"
     if EMPTY_PACKAGING_SIGNALS.search(haystack):
         return "packaging/accessory-only listing, not the item"
+    if BUTTON_DOWN_SHIRT_SIGNALS.search(haystack) and not brand_in(haystack, ("kiton",)):
+        return "button-down/button-up dress shirt not wanted (Kiton exempted)"
     if COUNTERFEIT_SIGNALS.search(haystack):
         return "counterfeit/replica listing language in title/description"
     obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
