@@ -30,6 +30,7 @@ import re
 import threading
 import time
 from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -1390,6 +1391,80 @@ _OFFERUP_NEXT_DATA_RE = re.compile(
 _FLIGHT_PUSH_RE = re.compile(
     r'self\.__next_f\.push\(\[1,"((?:\\.|[^"\\])*)"\]\)', re.DOTALL
 )
+OFFERUP_PLACEHOLDER_MAX_PRICE = 1.50
+_OFFERUP_CONTEXTUAL_PRICE_PATTERNS = (
+    re.compile(
+        r"\b(?:asking(?:\s+price)?|price(?:d)?(?:\s+at)?|listed(?:\s+at)?|"
+        r"bin|buy\s+it\s+now)\s*(?:is|:|at|for)?\s*\$\s*"
+        r"([\d,]+(?:\.\d{1,2})?)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\$\s*([\d,]+(?:\.\d{1,2})?)\s*(?:obo|or\s+best\s+offer)\b",
+        re.IGNORECASE,
+    ),
+)
+_OFFERUP_ANY_DOLLAR_PRICE_RE = re.compile(r"\$\s*([\d,]+(?:\.\d{1,2})?)")
+
+
+def offerup_text_asking_price(text):
+    """Extract the seller's asking price from OfferUp free text."""
+    text = text or ""
+    contextual = []
+    for pattern in _OFFERUP_CONTEXTUAL_PRICE_PATTERNS:
+        contextual.extend(pattern.finditer(text))
+    matches = contextual or list(_OFFERUP_ANY_DOLLAR_PRICE_RE.finditer(text))
+    if not matches:
+        return None
+    match = max(matches, key=lambda candidate: candidate.start())
+    return _to_float(match.group(1))
+
+
+def reconcile_offerup_placeholder_price(listing):
+    """Prefer a real description ask over a nominal OfferUp card price."""
+    if not listing or listing.get("platform") != "offerup":
+        return listing
+    price = _to_float((listing.get("price") or {}).get("value"))
+    if price is None or price > OFFERUP_PLACEHOLDER_MAX_PRICE:
+        return listing
+    listing["offerup_search_price"] = price
+    asking_price = offerup_text_asking_price(listing.get("description"))
+    if asking_price is not None and asking_price > OFFERUP_PLACEHOLDER_MAX_PRICE:
+        listing["price"]["value"] = asking_price
+        listing["offerup_price_from_description"] = True
+        listing.pop("offerup_placeholder_price", None)
+    else:
+        listing["offerup_placeholder_price"] = True
+    return listing
+
+
+class _OfferUpDescriptionMetaParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.description = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "meta" or self.description is not None:
+            return
+        values = {str(key).lower(): value for key, value in attrs if key}
+        meta_name = str(values.get("property") or values.get("name") or "").lower()
+        if meta_name == "og:description" and values.get("content"):
+            self.description = values["content"]
+
+
+def fetch_offerup_listing_description(item_url):
+    """Fetch one public OfferUp detail page and return its og description."""
+    page = _fetch_page("offerup", item_url)
+    if not page:
+        return None
+    parser = _OfferUpDescriptionMetaParser()
+    try:
+        parser.feed(page)
+    except Exception as exc:
+        logger.info("Could not parse OfferUp description for %s: %s", item_url, exc)
+        return None
+    description = re.sub(r"\s+", " ", parser.description or "").strip()
+    return description or None
 
 
 def _fetch_page(platform, url, timeout=15):
@@ -1450,14 +1525,29 @@ def _offerup_listings(html):
 def _offerup_to_listing(listing):
     image = listing.get("image")
     image_url = image.get("url") if isinstance(image, dict) else None
-    return make_listing(
+    description = listing.get("description")
+    search_price = _to_float(listing.get("price"))
+    description_price = (
+        offerup_text_asking_price(description)
+        if search_price is not None and search_price <= OFFERUP_PLACEHOLDER_MAX_PRICE
+        else None
+    )
+    normalized = make_listing(
         "offerup",
         listing.get("listingId"),
         (listing.get("title") or "").strip(),
-        listing.get("price"),
+        description_price or search_price,
         f"https://offerup.com/item/detail/{listing.get('listingId')}",
         image_url=image_url,
+        description=description,
     )
+    if normalized and search_price is not None and search_price <= OFFERUP_PLACEHOLDER_MAX_PRICE:
+        normalized["offerup_search_price"] = search_price
+        if description_price is not None and description_price > OFFERUP_PLACEHOLDER_MAX_PRICE:
+            normalized["offerup_price_from_description"] = True
+        else:
+            normalized["offerup_placeholder_price"] = True
+    return normalized
 
 
 def _batch_request_timeout(deadline):

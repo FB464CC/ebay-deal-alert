@@ -1433,6 +1433,21 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("condition hard-fail keyword", result["reason"])
 
+    def test_reported_not_working_description_is_a_condition_hard_fail(self):
+        result = m.score_listing(
+            self._listing(
+                "Vintage Longines watch",
+                price=90,
+                description="Vintage watch in nice cosmetic shape, but it is not working.",
+            ),
+            gap_report=None,
+            category="watches",
+        )
+
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("condition hard-fail keyword", result["reason"])
+        self.assertIn("not working", result["reason"])
+
     def test_fabric_recognized_from_description_not_just_title(self):
         # Same principle, the other direction: a description that states
         # the fabric should clear the "fabric not stated" flag even when
@@ -3784,6 +3799,7 @@ class RunIntegration(unittest.TestCase):
         self._patch("fetch_gap_report", lambda: None)
         self._patch("fetch_ebay_item_description", lambda token, item_id: None)
         self._patch("fetch_vinted_item_description", lambda url: None)
+        self._patch("fetch_offerup_item_description", lambda url: None)
         self._patch("prefetch_marketplaces", lambda now, conn: {})
         self._patch("search_ebay_ending_soon_auctions", lambda token, search: ([], None))
         self._patch("notify_bot_down", lambda message: None)
@@ -4001,6 +4017,64 @@ class RunIntegration(unittest.TestCase):
         m.run()
 
         fetch_description.assert_called_once_with(listing["itemWebUrl"])
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), listing["itemId"]))
+
+    def test_offerup_one_dollar_watch_uses_450_description_ask(self):
+        saved_search = {
+            "query": "tissot watch", "max_price": 700,
+            "category_id": "31387", "enabled": True, "profile": "fast",
+        }
+        listing = p.make_listing(
+            "offerup", "tissot-divers-automatic-watch",
+            "Tissot Divers Automatic Watch", 1,
+            "https://offerup.com/item/detail/tissot-divers-automatic-watch",
+        )
+        listing["offerup_placeholder_price"] = True
+        self._serve(saved_search, [])
+        self._patch("prefetch_marketplaces", lambda now, conn: {
+            saved_search["query"]: [listing]
+        })
+        fetch_description = mock.Mock(return_value=(
+            "Tissot divers automatic watch. Retail about $650; asking price is $450."
+        ))
+        self._patch("fetch_offerup_item_description", fetch_description)
+        self.ai_result = dict(self.AI_STEAL, estimated_retail_price=650,
+                              estimated_resale_value=250)
+
+        m.run()
+
+        fetch_description.assert_called_once_with(listing["itemWebUrl"])
+        self.assertEqual(listing["price"]["value"], 450.0)
+        self.assertEqual(listing["offerup_search_price"], 1.0)
+        self.assertEqual(self.ai_calls, [listing["itemId"]])
+        self.assertEqual(self.alerts, [])
+
+    def test_offerup_description_alone_blocks_reported_ladies_not_working_watch(self):
+        saved_search = {
+            "query": "longines watch", "max_price": 500,
+            "category_id": "31387", "enabled": True, "profile": "fast",
+        }
+        listing = p.make_listing(
+            "offerup", "vintage-longines-watch",
+            "Vintage Longines watch", 90,
+            "https://offerup.com/item/detail/vintage-longines-watch",
+        )
+        self._serve(saved_search, [])
+        self._patch("prefetch_marketplaces", lambda now, conn: {
+            saved_search["query"]: [listing]
+        })
+        fetch_description = mock.Mock(return_value=(
+            "This is a ladies' Longines watch. It is not working and is sold as-is."
+        ))
+        self._patch("fetch_offerup_item_description", fetch_description)
+
+        m.run()
+
+        fetch_description.assert_called_once_with(listing["itemWebUrl"])
+        self.assertIn("ladies", listing["description"].lower())
+        self.assertIn("not working", listing["description"].lower())
         self.assertEqual(self.ai_calls, [])
         self.assertEqual(self.alerts, [])
         self.assertFalse(m.is_new(self._db(), listing["itemId"]))

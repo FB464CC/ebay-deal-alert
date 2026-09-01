@@ -662,6 +662,45 @@ class OfferUpAdapter(unittest.TestCase):
         self.assertEqual(l["itemWebUrl"], "https://offerup.com/item/detail/97415bd5-6ba9-3c3c-b357-b06f9301dd75")
         self.assertEqual(l["image"]["imageUrl"], "https://images.offerup.com/abc.jpg")
 
+    def test_real_reported_placeholder_price_prefers_450_description_ask(self):
+        listing = p._offerup_to_listing({
+            "listingId": "tissot-divers-automatic-watch",
+            "title": "Tissot Divers Automatic Watch",
+            "price": "1",
+            "description": (
+                "Tissot divers automatic watch in excellent condition. "
+                "Retail was about $650. Asking price is $450."
+            ),
+            "image": {"url": "https://images.offerup.com/tissot.jpg"},
+        })
+
+        self.assertEqual(listing["price"], {"value": 450.0, "currency": "USD"})
+        self.assertEqual(listing["offerup_search_price"], 1.0)
+        self.assertTrue(listing["offerup_price_from_description"])
+        self.assertNotIn("offerup_placeholder_price", listing)
+        self.assertIn("Asking price is $450", listing["description"])
+
+    def test_unresolved_one_dollar_price_is_marked_suspicious(self):
+        listing = p._offerup_to_listing({
+            "listingId": "placeholder-only",
+            "title": "Tissot Divers Automatic Watch",
+            "price": "1",
+        })
+
+        self.assertTrue(listing["offerup_placeholder_price"])
+
+    def test_detail_page_description_parser_handles_attribute_order(self):
+        page = (
+            '<html><head><meta content="Seller says asking $450 &amp; firm" '
+            'property="og:description"></head></html>'
+        )
+        with mock.patch.object(p, "_fetch_page", return_value=page):
+            description = p.fetch_offerup_listing_description(
+                "https://offerup.com/item/detail/tissot-divers-automatic-watch"
+            )
+
+        self.assertEqual(description, "Seller says asking $450 & firm")
+
     def test_missing_next_data_returns_empty_dict(self):
         with mock.patch.object(p, "_fetch_page", return_value="<html><body>no data</body></html>"):
             with self.assertLogs("platforms", level="WARNING") as cm:

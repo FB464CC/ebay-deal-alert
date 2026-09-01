@@ -108,7 +108,13 @@ PETER_MILLAR_TOP_SIGNALS = re.compile(
     re.IGNORECASE,
 )
 CORPORATE_LOGO_KEYWORDS = _CONFIG["CORPORATE_LOGO_KEYWORDS"]
-CONDITION_HARD_FAIL_KEYWORDS = _CONFIG["CONDITION_HARD_FAIL_KEYWORDS"]
+# The live OfferUp Longines report used the exact seller disclosure "not
+# working". It was absent from the configured hard-fail vocabulary entirely,
+# so description enrichment alone would still leave a gender-neutral version
+# of the same broken watch eligible for AI/alerting.
+CONDITION_HARD_FAIL_KEYWORDS = list(_CONFIG["CONDITION_HARD_FAIL_KEYWORDS"])
+if "not working" not in CONDITION_HARD_FAIL_KEYWORDS:
+    CONDITION_HARD_FAIL_KEYWORDS.append("not working")
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
 FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
 GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
@@ -1186,6 +1192,11 @@ def fetch_vinted_item_description(item_url):
     if not match:
         return None
     return html.unescape(match.group(1)).strip() or None
+
+
+def fetch_offerup_item_description(item_url):
+    """Use OfferUp's WAF-compatible adapter fetcher for seller text."""
+    return marketplaces.fetch_offerup_listing_description(item_url)
 
 
 # ---------------------------------------------------------------------------
@@ -2407,6 +2418,16 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     price = (float(0 if price_value is None else price_value) + shipping_cost) * (1 + SALES_TAX_RATE)
     flags = []
     verdict = "REVIEW"  # default: don't auto-decide, surface it
+
+    # OfferUp permits nominal $0/$1-style prices whose real ask exists only
+    # in seller text. The run path first tries to reconcile that description;
+    # an unresolved placeholder must never become a fabricated 100%-off deal.
+    if listing.get("platform") == "offerup" and listing.get("offerup_placeholder_price"):
+        return {
+            "verdict": "PASS",
+            "reason": "suspicious OfferUp placeholder price with no real description asking price",
+            "listing": listing,
+        }
 
     # 0. Gender - hard disqualifier, checked before anything else. Backstop
     # for search_ebay()'s query-level exclusion, in case a listing slips
@@ -5450,6 +5471,17 @@ def run():
             if listing.get("is_ending_soon_auction") and not is_new(conn, f"auction-alerted:{item_id}"):
                 _mark_scout_queue_item_processed(item_id)
                 continue
+
+            # OfferUp search cards omit seller descriptions. Fetch the public
+            # detail-page text for each genuinely new candidate before price,
+            # fingerprint, max-price, gender, or condition decisions. A $0/$1
+            # card price may be a placeholder whose real ask is only here.
+            if listing.get("platform") == "offerup" and not listing.get("description"):
+                description = fetch_offerup_item_description(listing.get("itemWebUrl"))
+                if description:
+                    listing["description"] = description
+            if listing.get("platform") == "offerup":
+                marketplaces.reconcile_offerup_placeholder_price(listing)
 
             price_value = (listing.get("price") or {}).get("value", 999999)
             item_price = float(999999 if price_value is None else price_value)
