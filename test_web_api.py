@@ -17,6 +17,7 @@ SCOUT_MODULE = (ROOT / "web" / "api" / "scout-ingest.js").as_posix()
 CONFIG_MODULE = (ROOT / "web" / "api" / "config.js").as_posix()
 LEDGER_MODULE = (ROOT / "web" / "api" / "ledger.js").as_posix()
 DELETION_MODULE = (ROOT / "web" / "api" / "ebay-account-deletion.js").as_posix()
+HISTORY_MODULE = (ROOT / "web" / "api" / "history.js").as_posix()
 INDEX_HTML = ROOT / "web" / "index.html"
 
 
@@ -73,6 +74,47 @@ const req = {{
   method: 'POST',
   headers: {{'x-settings-password': 'test-password'}},
   body: {json.dumps(body)}
+}};
+let responseText = '';
+const res = {{
+  statusCode: 0,
+  headers: {{}},
+  setHeader(name, value) {{ this.headers[name] = value; }},
+  end(value) {{ responseText = Buffer.isBuffer(value) ? value.toString('utf8') : String(value); }}
+}};
+Promise.resolve(handler(req, res)).then(() => {{
+  process.stdout.write(JSON.stringify({{
+    status: res.statusCode,
+    body: JSON.parse(responseText),
+    calls
+  }}));
+}}).catch(error => {{ process.stderr.write(error.stack); process.exit(2); }});
+"""
+    return run_node_script(script)
+
+
+def run_history_handler(fetch_responses):
+    script = f"""
+const calls = [];
+const responses = {json.dumps(fetch_responses)};
+global.fetch = async (url, options = {{}}) => {{
+  calls.push({{url, options}});
+  const next = responses.shift();
+  if (!next) throw new Error('Unexpected fetch call');
+  return {{
+    status: next.status,
+    ok: next.status >= 200 && next.status < 300,
+    json: async () => next.body,
+    text: async () => next.text
+  }};
+}};
+process.env.GITHUB_TOKEN = 'test-token';
+process.env.GITHUB_REPO = 'owner/repo';
+process.env.SETTINGS_PASSWORD = 'test-password';
+const handler = require({json.dumps(HISTORY_MODULE)});
+const req = {{
+  method: 'GET',
+  headers: {{'x-settings-password': 'test-password'}}
 }};
 let responseText = '';
 const res = {{
@@ -494,6 +536,68 @@ const invoke=async()=>{{let text='';const res={{statusCode:0,headers:{{}},setHea
         self.assertEqual(result["status"], 409)
         self.assertIn("changed while you were saving", result["body"]["error"])
         self.assertEqual(len(result["calls"]), 2)
+
+
+class HistoryApiTests(unittest.TestCase):
+    def test_inline_base64_content_is_decoded(self):
+        records = [{"item_id": "older"}, {"item_id": "newer"}]
+        text = "".join(json.dumps(record) + "\n" for record in records)
+        result = run_history_handler([
+            {
+                "status": 200,
+                "body": {
+                    "encoding": "base64",
+                    "content": base64.b64encode(text.encode()).decode(),
+                },
+            }
+        ])
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["body"], {"history": list(reversed(records)), "skipped": 0})
+        self.assertEqual(len(result["calls"]), 1)
+        self.assertEqual(
+            result["calls"][0]["url"],
+            "https://api.github.com/repos/owner/repo/contents/alerts_log.jsonl",
+        )
+
+    def test_missing_inline_content_follows_download_url(self):
+        download_url = "https://raw.githubusercontent.test/owner/repo/alerts_log.jsonl"
+        records = [{"item_id": "large-file-record"}]
+        raw_text = json.dumps(records[0]) + "\n"
+        result = run_history_handler([
+            {
+                "status": 200,
+                "body": {
+                    "encoding": "none",
+                    "content": None,
+                    "download_url": download_url,
+                },
+            },
+            {"status": 200, "text": raw_text},
+        ])
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["body"], {"history": records, "skipped": 0})
+        self.assertEqual([call["url"] for call in result["calls"]], [
+            "https://api.github.com/repos/owner/repo/contents/alerts_log.jsonl",
+            download_url,
+        ])
+
+    def test_missing_content_and_download_url_returns_clear_error(self):
+        result = run_history_handler([
+            {
+                "status": 200,
+                "body": {"encoding": "none", "content": None},
+            }
+        ])
+
+        self.assertEqual(result["status"], 502)
+        self.assertEqual(
+            result["body"]["error"],
+            "alerts_log.jsonl has no inline content and no download_url - "
+            "unexpected GitHub API response shape",
+        )
+        self.assertEqual(len(result["calls"]), 1)
 
 
 class EbayAccountDeletionApiTests(unittest.TestCase):

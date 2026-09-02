@@ -6083,6 +6083,11 @@ def run():
 
         logger.info("Found %s listings for query: %s", len(listings), saved_search["query"])
         for listing in listings:
+            # A heavy marketplace search can append hundreds of PASS records
+            # in this loop. Check before every candidate so an append that
+            # crosses the emergency threshold is pruned before the next one;
+            # the stat-first helper makes the ordinary case just one stat().
+            prune_alert_log_if_oversized()
             if _run_deadline_reached("PASS 1 listing scoring"):
                 break
             if listing.get("itemId") in quiet_queued_ids:
@@ -6479,6 +6484,10 @@ def run():
         if _run_deadline_reached("PASS 1 listing scoring"):
             break
 
+    # Catch an append from the final PASS 1 candidate, which has no next
+    # iteration to trigger the per-candidate check above.
+    prune_alert_log_if_oversized()
+
     if ebay_searches_attempted:
         try:
             # eBay is fetched outside prefetch_marketplaces(), so it needs
@@ -6621,6 +6630,9 @@ def run():
     scout_budget_logged = False
     delivery_failures = []
     for candidate in review_candidates:
+        # PASS 3 has its own PASS/delivery append paths. Keep the same
+        # within-run bound here after PASS 1 has finished collecting.
+        prune_alert_log_if_oversized()
         if _run_deadline_reached("PASS 3 AI scoring"):
             break
         item_id = candidate["item_id"]
@@ -7363,6 +7375,9 @@ def run():
             )
             break
 
+    # Catch the final candidate's append (including delivery failures and
+    # successful alerts) before this run exits.
+    prune_alert_log_if_oversized()
     logger.info("Finished eBay deal alert run")
     _finish_run()
     if delivery_failures:

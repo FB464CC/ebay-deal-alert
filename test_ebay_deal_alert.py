@@ -4283,6 +4283,46 @@ class RunIntegration(unittest.TestCase):
         self.assertFalse(m.is_new(self._db(), "v1|297183440152|0"),
                          "a hard-failed listing is a final disposition - mark it seen")
 
+    def test_alert_log_prune_is_checked_during_candidate_processing(self):
+        listings = [
+            self._ebay_item(
+                f"v1|periodic-prune-{index}|0",
+                f"Loro Piana Cashmere Sweater {index} - moth holes on sleeve",
+                95.0 + index,
+            )
+            for index in range(3)
+        ]
+        self._serve(
+            {
+                "query": "loro piana sweater",
+                "max_price": 400,
+                "category_id": "11484",
+                "enabled": True,
+                "profile": "fast",
+            },
+            listings,
+        )
+        record_counts_at_prune = []
+
+        def record_prune_check():
+            record_counts_at_prune.append(len(self._alert_log_records()))
+
+        self._patch("prune_alert_log_if_oversized", record_prune_check)
+
+        m.run()
+
+        self.assertIn(
+            1,
+            record_counts_at_prune,
+            "the run must check log size after its own first candidate append",
+        )
+        self.assertIn(
+            2,
+            record_counts_at_prune,
+            "periodic checks must continue while the candidate loop is still appending",
+        )
+        self.assertEqual(record_counts_at_prune[-1], 3)
+
     def test_global_deadline_stops_before_the_next_ebay_search(self):
         self._patch("RUN_BUDGET_SECONDS", 1.0)
         self._patch("EBAY_SCRAPE_ENABLED", False)

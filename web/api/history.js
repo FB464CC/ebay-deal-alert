@@ -43,6 +43,17 @@ const passwordMatches = (provided) => {
   return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
 };
 
+// Real live bug: GitHub's Contents API only inlines `content` for files
+// <=1MB - past that it returns 200 with content:null, encoding:"none", and
+// a download_url instead. alerts_log.jsonl repeatedly crosses 1MB on a
+// heavy day (golf's high junk-candidate volume in particular), so this
+// silently made the dashboard's history view go blank/stale every time,
+// with no error surfaced anywhere - Buffer.from(null, "base64") in the
+// caller used to just produce an empty buffer, not a thrown error.
+// download_url is itself a raw.githubusercontent.com link with no size
+// ceiling, so following it (unauthenticated - the file lives in this
+// public repo) fixes the read regardless of how oversized the file gets
+// between prune cycles.
 const fetchHistoryFile = async () => {
   const response = await fetch(contentsUrl(), {
     method: "GET",
@@ -59,7 +70,24 @@ const fetchHistoryFile = async () => {
     error.details = body;
     throw error;
   }
-  return body;
+  if (typeof body.content === "string" && body.encoding === "base64") {
+    return Buffer.from(body.content, "base64").toString("utf8");
+  }
+  if (!body.download_url) {
+    const error = new Error(
+      "alerts_log.jsonl has no inline content and no download_url - unexpected GitHub API response shape"
+    );
+    error.status = 502;
+    error.details = body;
+    throw error;
+  }
+  const rawResponse = await fetch(body.download_url);
+  if (!rawResponse.ok) {
+    const error = new Error(`Failed to fetch alerts_log.jsonl raw content (HTTP ${rawResponse.status})`);
+    error.status = 502;
+    throw error;
+  }
+  return rawResponse.text();
 };
 
 module.exports = async (req, res) => {
@@ -78,11 +106,10 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const file = await fetchHistoryFile();
-    if (!file) {
+    const text = await fetchHistoryFile();
+    if (text === null) {
       return sendJson(res, 200, { history: [], skipped: 0 });
     }
-    const text = Buffer.from(file.content, "base64").toString("utf8");
     const history = [];
     let skipped = 0;
     for (const [index, rawLine] of text.split("\n").entries()) {
