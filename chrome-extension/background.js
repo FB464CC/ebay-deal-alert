@@ -214,27 +214,88 @@ async function getScanWindowId() {
   return created.id;
 }
 
+// facebook-parser.js's exact extraction logic, duplicated here because a
+// service worker has no `document`/DOMParser - it walks Facebook's own
+// server-rendered `<script type="application/json">` hydration blobs, not
+// the live DOM, so it never actually needed a real browser tab in the
+// first place. Keep in sync with content-scripts/facebook-parser.js by
+// hand if that file's walk() logic changes.
+function extractFacebookListingsFromHtml(html) {
+  const found = [];
+  const seen = new Set();
+  function walk(value) {
+    if (!value || typeof value !== "object") return;
+    if (!Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "marketplace_listing_title")) {
+      const id = value.id != null ? String(value.id) : "";
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        const city = value.location?.reverse_geocode?.city;
+        const state = value.location?.reverse_geocode?.state;
+        const rawPrice = value.listing_price?.amount;
+        const parsedPrice = typeof rawPrice === "number" ? rawPrice : Number(String(rawPrice || "").replace(/[^0-9.]/g, ""));
+        found.push({
+          platform: "facebook",
+          itemId: id,
+          title: value.marketplace_listing_title || "",
+          price: Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : null,
+          itemWebUrl: `https://www.facebook.com/marketplace/item/${encodeURIComponent(id)}/`,
+          imageUrl: value.primary_listing_photo?.image?.uri || "",
+          description: city && state ? `Location: ${city}, ${state}` : ""
+        });
+      }
+    }
+    for (const child of Array.isArray(value) ? value : Object.values(value)) walk(child);
+  }
+  const scriptRe = /<script type="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
+  let match;
+  while ((match = scriptRe.exec(html)) !== null) {
+    try { walk(JSON.parse(match[1])); } catch (_error) { /* unrelated/non-JSON block */ }
+  }
+  return found.filter((listing) => listing.title && listing.price !== null);
+}
+
+// Real live complaint: opening/closing a real Chrome tab for every target
+// visibly flickered in the owner's own tab strip even after moving it to a
+// dedicated minimized window (Chrome's "minimized" window creation is not
+// always instant/invisible on every platform). facebook-parser.js only
+// ever reads Facebook's server-rendered JSON hydration blobs from the raw
+// HTML (see extractFacebookListingsFromHtml above) - it never needed a
+// live, JS-executed page at all. A plain background fetch() with
+// credentials:"include" sends the owner's facebook.com session cookies
+// the same way a tab would (host_permissions already covers
+// https://*.facebook.com/*), with zero visible UI. generic-og targets
+// (not currently used by any default target, but supported for a future
+// non-Facebook site) still use the tab-based path below, since arbitrary
+// third-party domains aren't covered by this extension's host_permissions
+// for a background fetch.
+async function scanFacebookTargetViaFetch(target, targetUrl) {
+  const response = await fetch(targetUrl, { credentials: "include" });
+  let finalPath = "";
+  try { finalPath = new URL(response.url || targetUrl).pathname; } catch (_error) { /* leave blank */ }
+  if (FACEBOOK_BLOCKED_PATH_RE.test(finalPath)) {
+    throw new Error(`Facebook redirected to a login/checkpoint page (${finalPath}) - session likely logged out`);
+  }
+  if (!response.ok) {
+    throw new Error(`Facebook search request failed: HTTP ${response.status}`);
+  }
+  const html = await response.text();
+  return extractFacebookListingsFromHtml(html).map((listing) => ({ ...listing, platform: target.platform }));
+}
+
 async function scanTarget(target) {
   if (!target || typeof target !== "object" || typeof target.searchUrl !== "string") throw new Error("Invalid watch target");
   const targetUrl = DealScoutUrls.normalizeUrl(target.searchUrl);
   const isFacebookParser = target.parser !== "generic-og";
+  if (isFacebookParser) {
+    return scanFacebookTargetViaFetch(target, targetUrl);
+  }
   let tab;
   try {
     const windowId = await getScanWindowId();
     tab = await withTabRetry(() => chrome.tabs.create({ url: targetUrl, active: false, windowId }));
     await waitForTab(tab.id);
     await sleep(2500);
-    if (isFacebookParser) {
-      const finalTab = await chrome.tabs.get(tab.id).catch(() => null);
-      let finalPath = "";
-      try { finalPath = new URL(finalTab?.url || "").pathname; } catch (_error) { /* leave blank */ }
-      if (FACEBOOK_BLOCKED_PATH_RE.test(finalPath)) {
-        throw new Error(`Facebook redirected to a login/checkpoint page (${finalPath}) - session likely logged out`);
-      }
-    }
-    const file = target.parser === "generic-og"
-      ? "content-scripts/generic-og-parser.js"
-      : "content-scripts/facebook-parser.js";
+    const file = "content-scripts/generic-og-parser.js";
     const results = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [file] });
     const extracted = Array.isArray(results?.[0]?.result) ? results[0].result : [];
     return extracted.map((listing) => ({ ...listing, platform: target.platform }));
