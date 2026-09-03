@@ -20,6 +20,10 @@ concurrency:
 
 permissions:
   contents: write
+  # Needed only by the cache prune step below: a sealed cache entry can
+  # never be rewritten, so every run creates a new one and old ones must be
+  # deleted explicitly or the 10GB per-repo cache budget is gone in a day.
+  actions: write
 
 jobs:
   poll:
@@ -34,6 +38,60 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
+
+      # seen_items.db is a ~90MB binary SQLite file that git cannot delta-
+      # compress, and it was committed on every 5-min run: 2491 commits took
+      # .git to 4.58GB against GitHub's ~5GB practical repo ceiling, while
+      # the file itself is closing on the HARD 100MB per-file push limit
+      # (it already touched 100.09MB once - see ebay_deal_alert.py:1231).
+      # When that push starts being rejected it takes down the `if: always()`
+      # commit step, and with it ai_spend.db and scout_queue.jsonl
+      # persistence. So the dedupe DB lives in the Actions cache now.
+      #
+      # A cache entry is immutable once sealed, so a fixed key would pin run
+      # 1's state forever and silently rot the dedupe table. Instead: save
+      # under a key that is unique per run, and restore by PREFIX, which
+      # returns the most recently created match - i.e. the previous run.
+      - name: Restore seen_items.db
+        id: seen-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: seen_items.db
+          key: seen-items-db-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            seen-items-db-v1-
+
+      # Fail closed. Running with an empty dedupe table does not error - it
+      # re-alerts every listing the bot has ever seen, and there is no undo
+      # for that notification storm. exit 1 here routes to the healthchecks
+      # failure ping below instead.
+      #
+      # MIGRATION PHASE 1: seen_items.db is still tracked in git, so on a
+      # cache miss actions/checkout has already put the last committed copy
+      # in the workspace and it is used verbatim as the one-time seed. No
+      # special-case seeding code needed. Once phase 2 untracks the file, a
+      # miss here means the state really is gone and the run fails loudly.
+      - name: Verify dedupe state is present
+        run: |
+          if [ ! -s seen_items.db ]; then
+            echo "::error::seen_items.db missing from both the Actions cache and the checkout - refusing to run with an empty dedupe table"
+            exit 1
+          fi
+          # BUG FIX: cache-hit only reports an EXACT primary-key match, and
+          # the restore key above is unique per run (embeds run_id/attempt),
+          # so an exact match is structurally impossible here - every restore
+          # that actually works does so via the restore-keys PREFIX match
+          # instead. Checking cache-hit made this branch permanently dead:
+          # every single run (a normal, working restore included) logged the
+          # misleading "cache miss" ::warning::, 288x/day, which both spams
+          # the Actions UI and makes a genuine cache miss indistinguishable
+          # from normal operation. cache-matched-key is set on a prefix
+          # restore too, so it actually reflects what happened.
+          if [ -n "${{ steps.seen-cache.outputs.cache-matched-key }}" ]; then
+            echo "Restored seen_items.db from cache key '${{ steps.seen-cache.outputs.cache-matched-key }}' ($(stat -c%s seen_items.db) bytes)"
+          else
+            echo "::warning::seen_items.db cache miss - seeding from the git-tracked copy ($(stat -c%s seen_items.db) bytes)"
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -58,18 +116,90 @@ jobs:
           SHOPGOODWILL_PROXY_URL: ${{ secrets.SHOPGOODWILL_PROXY_URL }}
         run: python ebay_deal_alert.py
 
-      - name: Commit seen item updates
+      # Saved before the git step on purpose: the commit step below discards
+      # the working-tree copy of seen_items.db, so the cache must already
+      # hold this run's state by then. `if: always()` mirrors the commit
+      # step - a partial run's dedupe state is still worth keeping, exactly
+      # as the old commit-on-always behaviour kept it.
+      - name: Save seen_items.db
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: seen_items.db
+          key: seen-items-db-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # 288 runs/day x ~90MB would blow the 10GB per-repo cache budget in
+      # well under a day. LRU eviction would keep this technically working
+      # (the newest entry is also the most recently accessed, so it
+      # survives) but it would evict the setup-python pip cache as
+      # collateral on every run. Delete every entry with our prefix except
+      # the one this run just wrote: steady state stays at ~90MB.
+      - name: Prune superseded seen_items.db caches
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_KEY: seen-items-db-v1-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          gh cache list --limit 100 --order asc --sort created_at --json id,key \
+            --jq ".[] | select(.key | startswith(\"seen-items-db-v1-\")) | select(.key != env.CURRENT_KEY) | .id" \
+            | while read -r cache_id; do
+                [ -n "$cache_id" ] && gh cache delete "$cache_id" || true
+              done
+
+      # web/api/scout-ingest.js used to dedup extension submissions by
+      # downloading the whole 90MB seen_items.db over the Contents API on
+      # every cold start (fetchSeenKeys, scout-ingest.js:139). With that file
+      # leaving git it would 404 and every ingest request would 500, and
+      # background.js has no retry queue for that path - every Facebook scan
+      # would be silently discarded. Export just the rows the extension can
+      # collide with instead: same `seen` schema, so findSeenKeysInDatabase()
+      # is unchanged and only the SEEN_DB_FILE constant moves.
+      #
+      # 'facebook:%' matches chrome-extension/background.js DEFAULT_TARGETS
+      # (all platform: "facebook") and listingKey()'s `platform:itemId`.
+      # Add a prefix here if a non-facebook watch target is ever shipped.
+      - name: Export scout dedupe snapshot
         if: always()
         run: |
-          if [ -n "$(git status --porcelain seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl search_activity_state.json quiet_alert_queue.json weekly_digest_state.json)" ]; then
+          rm -f scout_seen.db.tmp
+          if sqlite3 seen_items.db "
+                ATTACH DATABASE 'scout_seen.db.tmp' AS snapshot;
+                CREATE TABLE snapshot.seen (item_id TEXT PRIMARY KEY, seen_at TEXT);
+                INSERT INTO snapshot.seen SELECT item_id, seen_at FROM seen WHERE item_id LIKE 'facebook:%';
+              "; then
+            mv scout_seen.db.tmp scout_seen.db
+            snapshot_bytes=$(stat -c%s scout_seen.db)
+            echo "scout_seen.db: ${snapshot_bytes} bytes"
+            # Guard against re-creating the exact bloat this change removes.
+            if [ "$snapshot_bytes" -gt 5242880 ]; then
+              echo "::warning::scout_seen.db is ${snapshot_bytes} bytes (>5MB) - it is committed every run, prune it or move it out of git"
+            fi
+          else
+            echo "::warning::scout dedupe snapshot export failed - keeping the previously committed copy"
+            rm -f scout_seen.db.tmp
+          fi
+
+      - name: Commit poll state updates
+        if: always()
+        run: |
+          # MIGRATION PHASE 1 ONLY - delete this line once seen_items.db is
+          # untracked. The file is still tracked but no longer staged, so the
+          # run leaves an unstaged ~90MB modification and `git pull --rebase`
+          # below refuses to start ("cannot rebase: You have unstaged
+          # changes"), which would break ai_spend.db and scout_queue.jsonl
+          # persistence on EVERY run. Safe to discard: the Save step above
+          # already wrote this run's authoritative copy to the cache.
+          git checkout -- seen_items.db 2>/dev/null || true
+          if [ -n "$(git status --porcelain ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            for file in seen_items.db ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
+            for file in ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
               if [ -e "$file" ]; then
                 git add "$file"
               fi
             done
-            git commit -m "chore: update seen items [skip ci]"
+            git commit -m "chore: update poll state [skip ci]"
             if git pull --rebase origin main; then
               git push
             else
@@ -77,7 +207,7 @@ jobs:
               # origin on a conflict. ai_spend.db is deliberately excluded:
               # losing its local reservation could breach the monthly cap.
               echo "Rebase conflict on retryable state files - keeping origin copies while preserving ai_spend.db"
-              for file in seen_items.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
+              for file in alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
                 if git cat-file -e "origin/main:$file" 2>/dev/null; then
                   git checkout origin/main -- "$file"
                   git add "$file"
