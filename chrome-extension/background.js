@@ -183,23 +183,44 @@ function waitForTab(tabId, timeoutMs = 30000) {
 // actually ended up. Lightweight post-load URL check, not a full DOM signal.
 const FACEBOOK_BLOCKED_PATH_RE = /\/(login|checkpoint|recover|two_step_verification|confirmemail|consent)(?:[/?]|$)/i;
 
+const SCAN_WINDOW_ID_KEY = "scanWindowId";
+
+// Real live complaint: reusing chrome.windows.getAll()[0] as the scan
+// window meant every scheduled scan opened its tabs in whatever window
+// happened to be first in Chrome's list - in practice, the owner's own
+// actively-used window, since that's normally the only "normal" window
+// open. Up to 9 targets create+remove a tab there every 10 minutes, so
+// Facebook tabs kept visibly flickering open and closed in the owner's
+// tab strip while they were using Chrome for something else entirely -
+// "opening and closing 20 times... distracting from everything else."
+// `active: false` stopped it from stealing focus, but never stopped the
+// tab strip churn itself from being visible and disruptive.
+//
+// Fix: keep one dedicated, always-minimized window for scanning, reused
+// across every target and every scan cycle (not recreated each time), and
+// never touch the owner's own window(s) at all. Its id is persisted so it
+// survives a service-worker restart; validated with a real windows.get()
+// before reuse in case the owner (or Chrome) closed it, in which case a
+// fresh one is created transparently.
+async function getScanWindowId() {
+  const stored = await localGet([SCAN_WINDOW_ID_KEY]);
+  const storedId = stored[SCAN_WINDOW_ID_KEY];
+  if (typeof storedId === "number") {
+    const stillOpen = await chrome.windows.get(storedId).catch(() => null);
+    if (stillOpen) return storedId;
+  }
+  const created = await chrome.windows.create({ focused: false, state: "minimized", url: "about:blank" });
+  await localSet({ [SCAN_WINDOW_ID_KEY]: created.id });
+  return created.id;
+}
+
 async function scanTarget(target) {
   if (!target || typeof target !== "object" || typeof target.searchUrl !== "string") throw new Error("Invalid watch target");
   const targetUrl = DealScoutUrls.normalizeUrl(target.searchUrl);
   const isFacebookParser = target.parser !== "generic-og";
   let tab;
-  let createdWindowId = null;
   try {
-    // chrome.tabs.create with no windowId targets the "current" window, and
-    // an alarm-driven service worker often has none (all windows closed, or
-    // only a devtools/app window open) - which throws "No current window"
-    // and silently fails every scheduled scan. Pick a window explicitly.
-    const windows = await chrome.windows.getAll({ windowTypes: ["normal"] });
-    let windowId = windows[0]?.id;
-    if (windowId === undefined) {
-      const created = await chrome.windows.create({ focused: false, state: "minimized" });
-      windowId = createdWindowId = created.id;
-    }
+    const windowId = await getScanWindowId();
     tab = await withTabRetry(() => chrome.tabs.create({ url: targetUrl, active: false, windowId }));
     await waitForTab(tab.id);
     await sleep(2500);
@@ -218,9 +239,9 @@ async function scanTarget(target) {
     const extracted = Array.isArray(results?.[0]?.result) ? results[0].result : [];
     return extracted.map((listing) => ({ ...listing, platform: target.platform }));
   } finally {
+    // Only the tab is per-scan disposable - the scan window itself is
+    // shared and persists across targets/cycles, never removed here.
     if (tab?.id) await withTabRetry(() => chrome.tabs.remove(tab.id)).catch(() => {});
-    // only tear down a window we opened ourselves - never the user's
-    if (createdWindowId !== null) await chrome.windows.remove(createdWindowId).catch(() => {});
   }
 }
 
