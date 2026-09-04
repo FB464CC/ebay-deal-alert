@@ -317,13 +317,11 @@ EBAY_SCRAPE_ENABLED = bool(_CONFIG.get("EBAY_SCRAPE_ENABLED", True))
 # Dollar ceiling, per explicit user instruction ("ideally $0 or less a
 # month, IF this works as perfectly intended"): the lane can spend at most
 # 1 check/run, at ~300 runs/day (measured real GH Actions cadence) that's
-# ~9,000 checks/month worst case, a full 4-photo DeepSeek fallback check
-# costs ~$0.0008 (~$0.0002/photo x 4, the image cap) -> ~$7/month ABSOLUTE
-# worst case, and only if Gemini's free tier failed every single time. Real
-# expected cost is ~$0: AI_PHOTO_PROVIDER is Gemini-primary with DeepSeek as
-# automatic fallback, and one extra call/run is trivially inside Gemini's
-# free-tier headroom (the same headroom the main GEMINI_CALL_LIMIT is paced
-# to spread across), so the paid fallback should almost never fire.
+# ~9,000 checks/month worst case. DeepSeek is now primary because Gemini's
+# free tier proved persistently unhealthy, so this lane normally makes a paid
+# request. Its reservation still shares the hard AI_PAID_MONTHLY_BUDGET_USD
+# ledger with every other paid call; this counter isolates throughput, not
+# spend, and cannot bypass the monthly dollar ceiling.
 EBAY_SCRAPE_AI_CHECK_LIMIT = int(_CONFIG.get("EBAY_SCRAPE_AI_CHECK_LIMIT", 1))
 # Same reasoning, same fix pattern, applied to the Scout browser-extension
 # queue: load_scout_queue() returns the WHOLE queue unbounded (it's only
@@ -422,6 +420,13 @@ EBAY_BACKOFF_MAX_MINUTES = 120
 # plausible per-run budget), "raise the limit to match demand" no longer
 # applies the way it did on Aug 9; the only lever left is pacing.
 GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
+# Soft fairness guard for the shared official-API/marketplace pool. Golf can
+# still use every otherwise-idle slot, but while other categories are queued
+# it cannot occupy more than this many of the normal per-run slots. Ending-
+# soon auctions are exempt, and Scout/eBay-scrape never enter this scheduler.
+GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP = int(
+    _CONFIG.get("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 6)
+)
 # 3 calls in a few seconds is trivially under any plausible RPM ceiling, so
 # the old 5s inter-call sleep wasn't buying RPM safety, just wall-clock -
 # which matters given GitHub bills Actions minutes rounded up per job.
@@ -434,6 +439,12 @@ GEMINI_INTER_CALL_SLEEP_SECONDS = float(_CONFIG.get("GEMINI_INTER_CALL_SLEEP_SEC
 # so a DeepSeek outage/name-change can never silently degrade the "every
 # alert must be AI-vetted" rule into a blind trust.
 AI_PHOTO_PROVIDER = _CONFIG.get("AI_PHOTO_PROVIDER", "deepseek")  # "deepseek" | "gemini"
+GEMINI_VISION_TIMEOUT_SECONDS = float(
+    _CONFIG.get("GEMINI_VISION_TIMEOUT_SECONDS", 20)
+)
+DEEPSEEK_VISION_TIMEOUT_SECONDS = float(
+    _CONFIG.get("DEEPSEEK_VISION_TIMEOUT_SECONDS", 30)
+)
 DEEPSEEK_MODEL = _CONFIG.get("DEEPSEEK_MODEL", "deepseek-v4-flash-vision-exp")
 DEEPSEEK_BASE_URL = _CONFIG.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 # Paid-provider safety valve. Per-run call caps are throughput controls, not
@@ -3143,7 +3154,7 @@ def _deepseek_second_opinion(listing, ai_result, category, hard_stop=None):
     }
 
 
-def _call_photo_check(prompt, images, timeout=20, hard_stop=None):
+def _call_photo_check(prompt, images, timeout=None, hard_stop=None):
     # Provider router for the vision check. The provider named by
     # AI_PHOTO_PROVIDER is primary (DeepSeek is cheap, no free-tier 429
     # ceiling); the other provider is the automatic fallback whenever the
@@ -3152,8 +3163,23 @@ def _call_photo_check(prompt, images, timeout=20, hard_stop=None):
     # provider outage - the check degrades to the backup, never to a blind
     # trust.
     gemini_parts = [_make_gemini_inline_part(content, mime_type) for content, mime_type in images]
+
+    def provider_timeout(provider):
+        # `timeout` remains an explicit all-provider override for focused
+        # callers/tests. Normal production calls leave it unset so the slower
+        # image-payload DeepSeek route gets its own ceiling rather than
+        # inheriting Gemini's 20-second limit. Both remain deadline-clamped.
+        maximum = timeout
+        if maximum is None:
+            maximum = (
+                DEEPSEEK_VISION_TIMEOUT_SECONDS
+                if provider == "deepseek"
+                else GEMINI_VISION_TIMEOUT_SECONDS
+            )
+        return _deadline_timeout(hard_stop, maximum)
+
     if AI_PHOTO_PROVIDER == "deepseek":
-        call_timeout = _deadline_timeout(hard_stop, timeout)
+        call_timeout = provider_timeout("deepseek")
         if call_timeout is None:
             logger.warning("Run deadline reached before DeepSeek photo check")
             return None
@@ -3164,7 +3190,7 @@ def _call_photo_check(prompt, images, timeout=20, hard_stop=None):
             logger.warning("DeepSeek photo check returned no result; falling back to Gemini")
         except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
             logger.warning("DeepSeek photo check failed (%s); falling back to Gemini", exc)
-        call_timeout = _deadline_timeout(hard_stop, timeout)
+        call_timeout = provider_timeout("gemini")
         if call_timeout is None:
             logger.warning("Run deadline reached before Gemini photo fallback")
             return None
@@ -3174,7 +3200,7 @@ def _call_photo_check(prompt, images, timeout=20, hard_stop=None):
             logger.warning("Photo check failed (both providers); proceeding without AI result: %s", exc)
             return None
     # Gemini is primary: try it first, then fall back to DeepSeek.
-    call_timeout = _deadline_timeout(hard_stop, timeout)
+    call_timeout = provider_timeout("gemini")
     if call_timeout is None:
         logger.warning("Run deadline reached before Gemini photo check")
         return None
@@ -3185,7 +3211,7 @@ def _call_photo_check(prompt, images, timeout=20, hard_stop=None):
         logger.warning("Gemini photo check returned no result; falling back to DeepSeek")
     except (requests.exceptions.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
         logger.warning("Gemini photo check failed (%s); falling back to DeepSeek", exc)
-    call_timeout = _deadline_timeout(hard_stop, timeout)
+    call_timeout = provider_timeout("deepseek")
     if call_timeout is None:
         logger.warning("Run deadline reached before DeepSeek photo fallback")
         return None
@@ -3333,9 +3359,7 @@ def check_photos_with_gemini(
             "assessment by itself. summary should briefly state the visual evidence and "
             "any uncertainty, without making a price or resale-value judgment."
         )
-        return _call_photo_check(
-            poker_chips_prompt, images, timeout=20, hard_stop=hard_stop
-        )
+        return _call_photo_check(poker_chips_prompt, images, hard_stop=hard_stop)
 
     if category == "golf-equipment":
         # Entirely different prompt/JSON shape from the clothing one below -
@@ -3421,9 +3445,7 @@ def check_photos_with_gemini(
             "stock-looking photos. Explain briefly in counterfeit_reason, or leave it "
             "empty if not suspected."
         )
-        return _call_photo_check(
-            golf_prompt, images, timeout=20, hard_stop=hard_stop
-        )
+        return _call_photo_check(golf_prompt, images, hard_stop=hard_stop)
 
     if category == "watches":
         # Real live miss: an "Oris Star Automatic" ($149.99) was genuinely
@@ -3496,9 +3518,7 @@ def check_photos_with_gemini(
             "Explain briefly in counterfeit_reason, or leave it empty if not "
             "suspected."
         )
-        return _call_photo_check(
-            watch_prompt, images, timeout=20, hard_stop=hard_stop
-        )
+        return _call_photo_check(watch_prompt, images, hard_stop=hard_stop)
 
     prompt = (
         "Inspect these secondhand clothing or footwear listing photos to help build "
@@ -3589,7 +3609,7 @@ def check_photos_with_gemini(
         "counterfeit_reason, or leave it empty if not suspected."
     )
 
-    return _call_photo_check(prompt, images, timeout=20, hard_stop=hard_stop)
+    return _call_photo_check(prompt, images, hard_stop=hard_stop)
 
 
 def draft_resale_listing(image_paths):
@@ -5713,6 +5733,75 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     return found_snapshot
 
 
+def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
+    """Soft-cap golf in the normal shared AI window without wasting slots.
+
+    `candidates` has already been priority-sorted. Ending-soon auctions and
+    the two isolated-budget lanes stay in their exact positions. Among the
+    remaining shared candidates, at most `golf_soft_cap` golf-equipment rows
+    are selected into the initial normal-budget window while non-golf rows
+    are available. If there are too few non-golf rows, deferred golf rows
+    immediately backfill the unused capacity.
+    """
+    ordered = list(candidates)
+    shared_limit = max(0, int(shared_limit))
+    golf_soft_cap = max(0, int(golf_soft_cap))
+    if shared_limit == 0 or not ordered:
+        return ordered
+
+    def is_isolated(candidate):
+        listing = candidate.get("listing") or {}
+        return bool(
+            listing.get("_from_scrape_lane") or listing.get("_from_scout_queue")
+        )
+
+    ending_shared = sum(
+        1
+        for candidate in ordered
+        if not is_isolated(candidate)
+        and bool((candidate.get("result") or {}).get("is_ending_soon_auction"))
+    )
+    ordinary_capacity = max(0, shared_limit - min(shared_limit, ending_shared))
+    if ordinary_capacity == 0 or golf_soft_cap >= ordinary_capacity:
+        return ordered
+
+    movable = [
+        (position, candidate)
+        for position, candidate in enumerate(ordered)
+        if not is_isolated(candidate)
+        and not bool((candidate.get("result") or {}).get("is_ending_soon_auction"))
+    ]
+    selected = []
+    deferred_golf = []
+    golf_selected = 0
+    for entry in movable:
+        if len(selected) >= ordinary_capacity:
+            break
+        _position, candidate = entry
+        if candidate.get("category") == "golf-equipment" and golf_selected >= golf_soft_cap:
+            deferred_golf.append(entry)
+            continue
+        selected.append(entry)
+        if candidate.get("category") == "golf-equipment":
+            golf_selected += 1
+
+    # The cap is soft: once every available non-golf candidate has been
+    # promoted, golf reclaims otherwise-idle shared capacity.
+    for entry in deferred_golf:
+        if len(selected) >= ordinary_capacity:
+            break
+        selected.append(entry)
+
+    selected_positions = {position for position, _candidate in selected}
+    fair_movable = [candidate for _position, candidate in selected]
+    fair_movable.extend(
+        candidate for position, candidate in movable if position not in selected_positions
+    )
+    for (position, _candidate), replacement in zip(movable, fair_movable):
+        ordered[position] = replacement
+    return ordered
+
+
 def run():
     global SAVED_SEARCHES
     SAVED_SEARCHES, config_warnings = validate_config(
@@ -6664,6 +6753,11 @@ def run():
         )
 
     review_candidates = sorted(review_candidates.values(), key=_ai_check_priority)
+    review_candidates = _apply_shared_ai_category_fairness(
+        review_candidates,
+        shared_limit=GEMINI_CALL_LIMIT,
+        golf_soft_cap=GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP,
+    )
 
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
     # then alert (cap-gated), in priority order.

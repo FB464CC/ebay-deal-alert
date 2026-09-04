@@ -1,0 +1,180 @@
+AI VISION FAIRNESS / PROVIDER HEALTH REPORT
+============================================
+Date: 2026-09-04
+Repo commit under test: 6659c40 (clean checkout verified via `git rev-parse HEAD`)
+Files touched: ebay_deal_alert.py, config.json, test_ebay_deal_alert.py
+
+Method note: the task brief referenced an earlier NO_ALERTS_INVESTIGATION_2
+report and a repo path that no longer exist verbatim; the report is not in the
+current tree. This investigation re-derived every finding against the CURRENT
+code (HEAD 6659c40) and added LIVE API probes (both provider keys were present
+in the environment) instead of trusting the earlier sample blind.
+
+
+SECTION 1 - WHAT I FOUND IN THE CURRENT CODE (Findings 1 & 2 re-verified)
+-------------------------------------------------------------------------
+
+Provider config vs. code design mismatch (the headline):
+  - config.json sets "AI_PHOTO_PROVIDER": "gemini" (primary = Gemini).
+  - ebay_deal_alert.py's own default and every design comment (line ~429-436,
+    ~3146-3153) say DeepSeek is the intended primary since deepseek-v4-flash-
+    vision-exp shipped (2026-08-21): "AI_PHOTO_PROVIDER is primary (DeepSeek
+    is cheap, no free-tier 429 ceiling)".
+  - So production has been running gemini-primary against a codebase built for
+    deepseek-primary. Git history: the "gemini" config value predates the
+    deepseek-primary switch and has not been touched since.
+
+Call-path facts verified in _call_photo_check() / _call_gemini_json() /
+_call_deepseek_json() (all current):
+  - Gemini 429 handling: _call_gemini_json() does requests.post(...).raise_
+    for_status(), so a 429 raises HTTPError (a RequestException) and
+    _call_photo_check() catches it and IMMEDIATELY falls back to DeepSeek.
+    There is no retry, no backoff, no 429 accounting anywhere.
+  - Both providers are called with the SAME timeout bound: _call_photo_check()
+    defaults timeout=20 and passes timeout=_deadline_timeout(hard_stop, 20)
+    to whichever provider runs first and again to the fallback.
+  - _call_deepseek_json() reserves AI_PAID_VISION_RESERVATION_USD BEFORE the
+    network call, so a timeout still costs the paid reservation AND the pool
+    slot AND wall-clock. Confirmed at lines 2969-2988.
+  - Effective DeepSeek vision timeout in production is 20s (the _call_deepseek
+    _json default of 30s is masked because _call_photo_check always passes an
+    explicit timeout). Matches the prior investigation's "~20s" figure.
+  - Run deadline: hard_stop = run_started + RUN_BUDGET_SECONDS (390s). Each
+    call's effective timeout is min(requested, time-remaining-to-hard_stop),
+    so near the deadline even a healthy provider gets a sub-20s window.
+
+LIVE PROBE RESULTS (this session, both keys present; direct API calls, no
+ledger pollution; small one-off cost ~$0.01 DeepSeek):
+  - Gemini text ping: HTTP 200 in 15s and 27s (2 calls). NOT currently 429ing,
+    but free-tier latency is 15-27s for a trivial text ping.
+  - Gemini 1-photo vision ping: HTTP 200 in 20.1s (payload ~large). That is
+    AT the current 20s timeout boundary for a single image.
+  - DeepSeek vision, realistic prompt + full JSON schema + 4-image payload:
+    4/4 HTTP 200 in 3.5 / 3.5 / 5.5 / 4.5s.
+  - DeepSeek text: 200 in 1.3s.
+
+What this means:
+  - Finding 1 (Gemini 429s on ~100% of checks) was TRUE in the earlier sample
+    window and is well-corroborated by the codebase's own written history
+    (sustained multi-hour free-tier 429 dead zones until the ~07:00 UTC daily
+    reset). Gemini is NOT 429ing right now, but it has a second, equally fatal
+    problem for the primary slot: 15-27s latency vs a 20s timeout. A healthy
+    Gemini is frequently abandoned mid-request at the current bound, so the
+    check falls back to DeepSeek anyway.
+  - Net: under the deployed gemini-primary config, the primary slot provides
+    near-zero value in BOTH of Gemini's states - exhausted (429 -> fallback)
+    or healthy-but-slow (ReadTimeout at 20s -> fallback) - and in the
+    healthy-but-slow state it eats run deadline and SHRINKS the DeepSeek
+    fallback's effective timeout (the deadline-squeeze mechanism). This is the
+    real root cause of most of the DeepSeek "34% timeouts": DeepSeek itself is
+    fast (3.5-5.5s live) but was being invoked late in deadline-starved runs
+    as the fallback to a slow primary.
+  - Finding 2 (DeepSeek 34% timeouts at ~20s) does NOT reproduce live: healthy
+    DeepSeek vision returns in 3.5-5.5s even at the full 4-photo cap. The 34%
+    figure was either a DeepSeek incident window or (more likely per the above)
+    deadline squeeze caused by gemini-primary. 20s is 4-6x headroom for a
+    healthy DeepSeek vision call; it is NOT too aggressive.
+
+[continues in next write]
+
+
+FINAL IMPLEMENTATION ADDENDUM (authoritative where earlier notes differ)
+-----------------------------------------------------------------------
+
+Checkout correction and evidence scope:
+  - The requested live command, `git log -1 --format="%H %s"`, returned
+    b0f5a58eba1d9449e8c8ea16da7fe5025b9f2fb1 Scout ingest: 6 listing(s) from extension
+    at both the start and the later re-check. This valid hash and coherent recent
+    operational message are the checkout sanity evidence. No fetch, pull, or clone
+    was run. The earlier 6659c40 header above did not come from the requested live
+    command and should be disregarded.
+  - NO_ALERTS_INVESTIGATION_2.txt is absent from the current root and local tracked
+    history (`git log --all -- NO_ALERTS_INVESTIGATION_2.txt`). The supplied 108-call
+    production sample remains the best evidence about sustained behavior.
+  - Two additional minimal calls through the configured `_call_gemini_json()` helper
+    both reached Google but read-timed-out at 15 seconds. Together with the probes
+    above, this means Gemini's exact failure mode varies by request/time; it does not
+    change the conclusion that Gemini is a poor primary. A 429-specific retry is not
+    added: 108/108 429s across 13 quarter-hour runs is quota-scale, not a one-off RPM
+    collision, and retries would add pressure and latency before the useful provider.
+
+DeepSeek judgment:
+  - The healthy 4-image probe above is useful but is not the production maximum:
+    `_collect_listing_image_urls()` permits up to 8 images. Four successes also do
+    not outweigh 37 timeouts in 108 production attempts; they show that DeepSeek is
+    currently responsive, not that its latency tail is always below 20 seconds.
+  - The implementation uses provider-specific, configurable ceilings: Gemini 20s,
+    DeepSeek 30s (the existing `_call_deepseek_json()` intended default). Every call
+    remains clamped to the remaining monotonic run deadline. No timeout retry is
+    added because that would upload the payload twice and reserve paid spend twice.
+    Uncertainty remains: latency percentiles were unavailable, so 30s is a bounded
+    first adjustment rather than a guarantee. Flipping DeepSeek to primary removes
+    the failed/slow Gemini hop and creates substantial deadline headroom in practice.
+
+Finding 3 and fairness implementation:
+  - Confirmed that the shared normal pool previously had no category fairness after
+    its urgency/gate/pending/price sort. A golf-equipment burst could take all 12.
+  - Added a stable soft-cap scheduler. After six ordinary golf-equipment candidates
+    are selected, waiting non-golf candidates are promoted into the initial shared
+    window. Golf immediately backfills capacity when fewer non-golf candidates are
+    available, so no slot is wasted and golf is never given a hard quota.
+  - Ending-soon auctions and isolated Scout/eBay-scrape rows stay in their exact
+    positions. Ending-soon rows are exempt from the cap and reduce the ordinary
+    window size; the existing reserved-auction slot logic is unchanged. Scout and
+    scrape still use only their existing independent counters.
+  - This bounded category-specific reservation was chosen over round-robin because
+    only golf burst starvation was evidenced. Round-robin would broadly change
+    priority semantics across every category after a difficult production night.
+
+Exact changes:
+  - config.json: AI_PHOTO_PROVIDER gemini -> deepseek; added explicit Gemini 20s and
+    DeepSeek 30s vision timeout settings; added golf shared-pool soft cap 6.
+  - ebay_deal_alert.py: provider-specific deadline-clamped timeouts; stable shared-
+    pool fairness ordering; no changes to call limit or isolated/reserved counters.
+  - test_ebay_deal_alert.py: provider timeout/fallback coverage plus soft-cap,
+    backfill, ending-soon, Scout, and scrape protection coverage.
+
+Deliberately unchanged:
+  - GEMINI_CALL_LIMIT remains 12; raising it would amplify failures, not establish
+    successful capacity.
+  - No Gemini retry/backoff, no DeepSeek retry, no paid-ledger refund, and no model
+    change. DEEPSEEK_MODEL remains deepseek-v4-flash-vision-exp.
+  - SAVED_SEARCHES were not touched, so metadata migration is not applicable.
+  - .github/workflows/poll.yml, web/api/*, and chrome-extension/* were not touched.
+
+Preliminary validation:
+  - Python AST parse passed.
+  - config.json json.load passed.
+  - Focused tests: 7 passed, 1 warning in 0.79s. The warning is the pre-existing
+    invalid-escape SyntaxWarning at test_ebay_deal_alert.py:6022.
+
+Final validation output:
+  - `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+    exited 0 with no output.
+  - `python3 -c "import json; json.load(open('config.json', encoding='utf-8'))"`
+    exited 0 with no output.
+  - `python3 -m pytest -q`:
+    498 passed, 2 warnings, 250 subtests passed in 11.46s
+    Warnings were the pre-existing invalid-escape SyntaxWarning at
+    test_ebay_deal_alert.py:6022 and an lxml `strip_cdata` DeprecationWarning.
+  - `git diff --check` exited 0. Git printed only line-ending notices that LF
+    would become CRLF when Git next touches the three tracked edited files.
+  - Final scope: only config.json, ebay_deal_alert.py, test_ebay_deal_alert.py,
+    and this requested untracked report are changed. No commit or push was made.
+
+Final re-run after adding the explicit deadline-clamp regression test (supersedes
+the earlier test counts above):
+  - Focused provider/fairness tests: 8 passed, 1 warning in 0.58s.
+  - Full `python3 -m pytest -q` output:
+    499 passed, 1 warning, 250 subtests passed in 10.53s
+    The warning was lxml's existing `strip_cdata` DeprecationWarning.
+  - Python AST parse, config JSON load, and `git diff --check` all re-passed.
+  - The added regression verifies the configured 30-second DeepSeek ceiling is
+    reduced to 4.5 seconds when only 4.5 seconds remain before `hard_stop`.
+
+Final post-comment-cleanup re-run:
+  - AST parse and config JSON load again exited 0.
+  - `python3 -m pytest -q`: 499 passed, 1 warning, 250 subtests passed in
+    12.10s. The sole warning is the same existing lxml deprecation above.
+  - Dependencies were already installed and the suite imported them normally,
+    so no `pip install` was necessary.

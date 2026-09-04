@@ -6101,3 +6101,138 @@ class PhotoCheckProviderFallback(unittest.TestCase):
         self.assertIs(result, deepseek_result)
         gemini_mock.assert_called_once()
         deepseek_mock.assert_called_once()
+
+    def test_deepseek_vision_uses_longer_provider_timeout_then_gemini_fallback(self):
+        gemini_result = {"damage_found": False, "looks_good": True}
+        with mock.patch.object(m, "AI_PHOTO_PROVIDER", "deepseek"), \
+             mock.patch.object(m, "DEEPSEEK_VISION_TIMEOUT_SECONDS", 30), \
+             mock.patch.object(m, "GEMINI_VISION_TIMEOUT_SECONDS", 20), \
+             mock.patch.object(
+                 m,
+                 "_call_deepseek_json",
+                 side_effect=requests.exceptions.Timeout("deepseek slow"),
+             ) as deepseek_mock, \
+             mock.patch.object(
+                 m, "_call_gemini_json", return_value=gemini_result
+             ) as gemini_mock:
+            result = m._call_photo_check("prompt", [(b"img-bytes", "image/jpeg")])
+
+        self.assertIs(result, gemini_result)
+        self.assertEqual(deepseek_mock.call_args.kwargs["timeout"], 30)
+        self.assertEqual(gemini_mock.call_args.kwargs["timeout"], 20)
+        deepseek_mock.assert_called_once()
+        gemini_mock.assert_called_once()
+
+    def test_explicit_photo_timeout_remains_an_all_provider_override(self):
+        with mock.patch.object(m, "AI_PHOTO_PROVIDER", "deepseek"), \
+             mock.patch.object(
+                 m,
+                 "_call_deepseek_json",
+                 side_effect=requests.exceptions.Timeout("deepseek slow"),
+             ) as deepseek_mock, \
+             mock.patch.object(m, "_call_gemini_json", return_value={}) as gemini_mock:
+            m._call_photo_check(
+                "prompt", [(b"img-bytes", "image/jpeg")], timeout=7
+            )
+
+        self.assertEqual(deepseek_mock.call_args.kwargs["timeout"], 7)
+        self.assertEqual(gemini_mock.call_args.kwargs["timeout"], 7)
+
+    def test_deepseek_vision_timeout_is_clamped_to_run_deadline(self):
+        deepseek_result = {"damage_found": False, "looks_good": True}
+        with mock.patch.object(m, "AI_PHOTO_PROVIDER", "deepseek"), \
+             mock.patch.object(m, "DEEPSEEK_VISION_TIMEOUT_SECONDS", 30), \
+             mock.patch.object(m.time, "monotonic", return_value=95.5), \
+             mock.patch.object(
+                 m, "_call_deepseek_json", return_value=deepseek_result
+             ) as deepseek_mock, \
+             mock.patch.object(m, "_call_gemini_json") as gemini_mock:
+            result = m._call_photo_check(
+                "prompt", [(b"img-bytes", "image/jpeg")], hard_stop=100
+            )
+
+        self.assertIs(result, deepseek_result)
+        self.assertEqual(deepseek_mock.call_args.kwargs["timeout"], 4.5)
+        gemini_mock.assert_not_called()
+
+
+class SharedAiCategoryFairness(unittest.TestCase):
+    @staticmethod
+    def _candidate(name, category, *, ending=False, scout=False, scrape=False):
+        listing = {"name": name}
+        if scout:
+            listing["_from_scout_queue"] = True
+        if scrape:
+            listing["_from_scrape_lane"] = True
+        return {
+            "name": name,
+            "category": category,
+            "listing": listing,
+            "result": {"is_ending_soon_auction": ending},
+        }
+
+    def test_golf_is_soft_capped_when_six_non_golf_candidates_are_waiting(self):
+        candidates = [
+            self._candidate(f"golf-{index}", "golf-equipment")
+            for index in range(12)
+        ] + [
+            self._candidate(f"watch-{index}", "watches")
+            for index in range(6)
+        ]
+
+        ordered = m._apply_shared_ai_category_fairness(candidates, 12, 6)
+        first_window = ordered[:12]
+
+        self.assertEqual(
+            sum(row["category"] == "golf-equipment" for row in first_window), 6
+        )
+        self.assertEqual(sum(row["category"] == "watches" for row in first_window), 6)
+        self.assertEqual(
+            [row["name"] for row in first_window[:6]],
+            [f"golf-{index}" for index in range(6)],
+            "fairness must preserve the original priority order within golf",
+        )
+
+    def test_golf_backfills_capacity_after_all_non_golf_is_promoted(self):
+        candidates = [
+            self._candidate(f"golf-{index}", "golf-equipment")
+            for index in range(15)
+        ] + [
+            self._candidate(f"watch-{index}", "watches")
+            for index in range(2)
+        ]
+
+        ordered = m._apply_shared_ai_category_fairness(candidates, 12, 6)
+        first_window = ordered[:12]
+
+        self.assertEqual(len(first_window), 12)
+        self.assertEqual(sum(row["category"] == "watches" for row in first_window), 2)
+        self.assertEqual(
+            sum(row["category"] == "golf-equipment" for row in first_window), 10
+        )
+
+    def test_ending_soon_and_isolated_lane_positions_are_untouched(self):
+        ending = self._candidate("ending", "golf-equipment", ending=True)
+        scout = self._candidate("scout", "golf-equipment", scout=True)
+        scrape = self._candidate("scrape", "golf-equipment", scrape=True)
+        candidates = [ending, scout, scrape] + [
+            self._candidate(f"golf-{index}", "golf-equipment")
+            for index in range(12)
+        ] + [
+            self._candidate(f"watch-{index}", "watches")
+            for index in range(6)
+        ]
+
+        ordered = m._apply_shared_ai_category_fairness(candidates, 12, 6)
+
+        self.assertIs(ordered[0], ending)
+        self.assertIs(ordered[1], scout)
+        self.assertIs(ordered[2], scrape)
+        self.assertEqual(
+            sum(
+                row["category"] == "golf-equipment"
+                for row in ordered[3:14]
+            ),
+            6,
+            "the ending auction consumes one normal shared slot but is exempt from the cap",
+        )
