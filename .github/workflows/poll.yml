@@ -200,28 +200,56 @@ jobs:
               fi
             done
             git commit -m "chore: update poll state [skip ci]"
-            if git pull --rebase origin main; then
-              git push
-            else
-              # The dedupe/log/backoff/queue state is safe to take from
-              # origin on a conflict. ai_spend.db is deliberately excluded:
-              # losing its local reservation could breach the monthly cap.
-              echo "Rebase conflict on retryable state files - keeping origin copies while preserving ai_spend.db"
-              for file in alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
-                if git cat-file -e "origin/main:$file" 2>/dev/null; then
-                  git checkout origin/main -- "$file"
-                  git add "$file"
-                else
-                  git rm -f --ignore-unmatch "$file"
+
+            # scout-ingest.js also writes main directly. It can land after a
+            # successful fetch/rebase but before this push, making the push
+            # non-fast-forward. Retry that narrow race a few times; network
+            # calls are time-bounded so this unattended job cannot loop or
+            # consume the full eight-minute job timeout here.
+            push_succeeded=false
+            for attempt in 1 2 3; do
+              echo "Poll-state push attempt ${attempt}/3"
+              if ! timeout 30s git fetch origin main:refs/remotes/origin/main; then
+                echo "::warning::Could not refresh origin/main on attempt ${attempt}/3"
+              elif GIT_EDITOR=true git rebase origin/main; then
+                if timeout 30s git push origin HEAD:main; then
+                  push_succeeded=true
+                  break
                 fi
-              done
-              if GIT_EDITOR=true git rebase --continue; then
-                git push
+                echo "::warning::Push attempt ${attempt}/3 failed; origin may have advanced again"
               else
-                echo "Could not preserve the paid-AI ledger during rebase; failing closed"
-                git rebase --abort || true
-                exit 1
+                # The dedupe/log/backoff/queue state is safe to take from
+                # origin on a real content conflict. ai_spend.db is
+                # deliberately excluded: losing its local reservation could
+                # breach the monthly cap.
+                echo "Rebase conflict on retryable state files - keeping origin copies while preserving ai_spend.db"
+                for file in alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
+                  if git cat-file -e "origin/main:$file" 2>/dev/null; then
+                    git checkout origin/main -- "$file"
+                    git add "$file"
+                  else
+                    git rm -f --ignore-unmatch "$file"
+                  fi
+                done
+                if ! GIT_EDITOR=true git rebase --continue; then
+                  echo "Could not preserve the paid-AI ledger during rebase; failing closed"
+                  git rebase --abort || true
+                  exit 1
+                fi
+                if timeout 30s git push origin HEAD:main; then
+                  push_succeeded=true
+                  break
+                fi
+                echo "::warning::Push attempt ${attempt}/3 failed after conflict fallback; origin may have advanced again"
               fi
+
+              if [ "$attempt" -lt 3 ]; then
+                sleep $((attempt * 2))
+              fi
+            done
+            if [ "$push_succeeded" != true ]; then
+              echo "::error::Could not push poll state after 3 bounded attempts"
+              exit 1
             fi
           else
             echo "poll state files unchanged"
