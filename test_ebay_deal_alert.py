@@ -228,7 +228,10 @@ class PokerChipsGate(unittest.TestCase):
             "poker_chips_ai_checked": True,
             "poker_chips_chip_type": "compression-molded clay",
             "poker_chips_is_genuine_clay": True,
+            "poker_chips_is_genuine_ceramic": False,
             "poker_chips_has_inlay_not_sticker": True,
+            "poker_chips_has_hot_stamp_not_sticker": False,
+            "poker_chips_ceramic_design_embedded_not_sticker": False,
             "poker_chips_edge_spots_consistent": True,
             "poker_chips_recolor_suspected": False,
             "poker_chips_recolor_reason": "",
@@ -243,6 +246,46 @@ class PokerChipsGate(unittest.TestCase):
             )
         )
 
+    def test_genuine_clay_with_hot_stamp_and_no_inlay_passes(self):
+        self.assertIsNone(
+            m.is_blocked_by_steal_quality_gate(
+                self._result(
+                    poker_chips_has_inlay_not_sticker=False,
+                    poker_chips_has_hot_stamp_not_sticker=True,
+                ),
+                category="poker-chips",
+            )
+        )
+
+    def test_genuine_ceramic_with_embedded_design_passes(self):
+        self.assertIsNone(
+            m.is_blocked_by_steal_quality_gate(
+                self._result(
+                    poker_chips_chip_type="ceramic",
+                    poker_chips_is_genuine_clay=False,
+                    poker_chips_is_genuine_ceramic=True,
+                    poker_chips_has_inlay_not_sticker=False,
+                    poker_chips_ceramic_design_embedded_not_sticker=True,
+                ),
+                category="poker-chips",
+            )
+        )
+
+    def test_ceramic_with_unconfirmed_embedded_design_blocks(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                poker_chips_chip_type="ceramic",
+                poker_chips_is_genuine_clay=False,
+                poker_chips_is_genuine_ceramic=True,
+                poker_chips_has_inlay_not_sticker=False,
+            ),
+            category="poker-chips",
+        )
+        self.assertEqual(
+            reason,
+            "poker-chips bar: ceramic design not confirmed embedded (sticker/label risk)",
+        )
+
     def test_abs_novelty_chip_type_blocks(self):
         reason = m.is_blocked_by_steal_quality_gate(
             self._result(
@@ -251,7 +294,9 @@ class PokerChipsGate(unittest.TestCase):
             ),
             category="poker-chips",
         )
-        self.assertEqual(reason, "poker-chips bar: not genuine clay chips")
+        self.assertEqual(
+            reason, "poker-chips bar: not confirmed compression clay or ceramic"
+        )
 
     def test_sticker_not_inlay_blocks(self):
         reason = m.is_blocked_by_steal_quality_gate(
@@ -260,7 +305,8 @@ class PokerChipsGate(unittest.TestCase):
         )
         self.assertEqual(
             reason,
-            "poker-chips bar: no confirmed inlay (sticker/printed label risk)",
+            "poker-chips bar: no confirmed molded inlay or authentic hot stamp "
+            "(sticker/label risk)",
         )
 
     def test_inconsistent_edge_spots_block(self):
@@ -269,7 +315,7 @@ class PokerChipsGate(unittest.TestCase):
             category="poker-chips",
         )
         self.assertEqual(
-            reason, "poker-chips bar: inconsistent edge spots across the set"
+            reason, "poker-chips bar: inconsistent edge treatment across the set"
         )
 
     def test_recolor_suspected_blocks_with_reason(self):
@@ -317,10 +363,16 @@ class PokerChipsGate(unittest.TestCase):
         prompt = photo_check.call_args.args[0]
         for required_text in (
             '"chip_type": string',
+            '"is_genuine_ceramic": bool',
             '"has_inlay_not_sticker": bool',
+            '"has_hot_stamp_not_sticker": bool',
+            '"ceramic_design_embedded_not_sticker": bool',
             '"edge_spots_consistent": bool',
             '"recolor_suspected": bool',
             "Paulson",
+            "CHIPCO",
+            "dye-sublimated CERAMIC",
+            "Bud Jones and B&G",
             "obsolete casino-issued sets",
             "Do not estimate resale value",
             "use false for boolean fields",
@@ -338,6 +390,19 @@ class PokerChipsConfiguration(unittest.TestCase):
             "vintage casino chip set",
             "clay poker chips lot",
             "poker chip set vintage",
+            "ceramic poker chips set",
+            "casino chips lot",
+            "chipco poker chips",
+            "nevada jacks poker chips",
+            "sunfly poker chips",
+            "br pro poker chips",
+            "asm poker chips",
+            "classic poker chips",
+            "cpc poker chips",
+            "bcc poker chips",
+            "tr king poker chips",
+            "hot stamp poker chips",
+            "top hat cane poker chips",
         }
         searches = {
             search["query"]: search
@@ -357,15 +422,14 @@ class PokerChipsConfiguration(unittest.TestCase):
                 self.assertEqual(search["category"], "poker-chips")
                 self.assertIsNone(search["size"])
                 self.assertEqual(search["max_price"], 150)
-                # Not asserting a specific enabled value here: owner turned
-                # these off 2026-09-01 (already bought a set), so pinning
-                # True would just force accidental re-enables through as a
-                # passing test. Shape/category/price are the real invariant.
-                self.assertIsInstance(search["enabled"], bool)
+                self.assertTrue(search["enabled"])
                 self.assertEqual(search["profile"], "fast")
                 # `platforms` scopes non-eBay adapters only. The Browse API
                 # lane consumes all enabled SAVED_SEARCHES independently.
-                self.assertEqual(search["platforms"], ["shopgoodwill", "facebook"])
+                self.assertEqual(
+                    search["platforms"],
+                    ["shopgoodwill", "vinted", "offerup", "facebook"],
+                )
 
 
 class GolfEquipmentGate(unittest.TestCase):
@@ -3107,7 +3171,10 @@ class MultiUnitCounterfeitSignal(unittest.TestCase):
                     self.assertIn("handmade tribute", prompt)
                     self.assertIn("regardless of how convincing the photos look", prompt)
                     if category == "poker-chips":
-                        self.assertIn("set is_genuine_clay false", prompt)
+                        self.assertIn(
+                            "set both is_genuine_clay and is_genuine_ceramic false",
+                            prompt,
+                        )
 
 
 class AsciiSafeHeader(unittest.TestCase):

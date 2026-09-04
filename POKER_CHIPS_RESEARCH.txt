@@ -1,0 +1,458 @@
+POKER CHIPS RESEARCH — 2026-09-04
+=================================
+
+Scope
+-----
+Research target: genuine compression-molded clay and genuine ceramic poker-chip
+sets, excluding injection-molded ABS/plastic and mass-market “clay composite” or
+“clay-feel” products. The bot remains a conservative photo-authenticity triage;
+it does not appraise resale value.
+
+Repository baseline
+-------------------
+Before research or edits, both `git rev-parse HEAD` and
+`git rev-parse origin/main` returned:
+  a999a43626a798226a9e22b7594b5eabb0d1a836
+The working tree was clean before this research file was created.
+
+Part 1 — Findings (increment 1: materials, makers, and new-retail baseline)
+---------------------------------------------------------------------------
+
+Material distinction
+
+* “Clay” in the casino/collector market means a proprietary composite formed
+  by thermo/compression molding, not literal pottery clay. Classic Poker Chips
+  says modern American-style clay has been a mixed composition for 75+ years
+  and is pressed one chip at a time at 10,000 psi and 300°F. It explicitly says
+  injection-molded chips advertised as clay are plastic, even when they contain
+  clay-like filler. GPI's 2018 Form 10-K independently calls Paulson and Blue
+  Chip thermo-compression products “clay chips” and distinguishes them from its
+  injection-molded plastic lines.
+  Sources: https://classicpokerchips.com/custom.html
+           https://www.annualreports.com/HostedData/AnnualReports/PDF/NASDAQ_GPIC_2018.pdf
+
+* Genuine ceramic is a separate acceptable path, not a subtype of
+  compression-molded clay. BR Pro describes ceramic chips as a ceramic/high-
+  density-polymer blend with full-face and edge artwork dye-sublimated into the
+  blank rather than an inlay, sticker, or label; CHIPCO likewise says the image
+  becomes part of the chip via high-heat transfer and can cover face and edge.
+  Therefore the existing clay-only AI path does NOT implicitly cover ceramic:
+  its `is_genuine_clay=true` plus embedded-inlay requirements necessarily reject
+  the legitimate ceramic construction.
+  Sources: https://brpropoker.com/pages/frequently-asked-questions
+           https://www.chipco.com/chipco-faq
+
+Maker/brand tier correction
+
+* Keep Paulson, ASM, BCC/Blue Chip, CPC, and TR King/TRK as meaningful names for
+  compression-molded clay. CPC documents that today's operation continues the
+  historic Burt/ASM production lineage and says it is the only current maker
+  offering genuine compression-molded clay to retail customers. GPI's filing
+  confirms Paulson and Blue Chip as thermo-compression-molded lines. The current
+  prompt's “GPIC” should not be presented as another maker tier: GPIC was the
+  corporate owner (Gaming Partners International Corporation), while Paulson
+  and Blue Chip were its clay brands. A collector history also identifies the
+  Burt→ASM→CPC lineage, TRK, Paulson, and BCC as the principal compression-clay
+  makers.
+  Sources: https://classicpokerchips.com/about.html
+           https://www.annualreports.com/HostedData/AnnualReports/PDF/NASDAQ_GPIC_2018.pdf
+           https://www.pokerchipforum.com/threads/is-there-room-for-a-new-clay-chip-manufacturer-in-na-or-eu.79767/
+
+* Do not add Bud Jones or B&G to the accepted material tier. They can be
+  valuable casino-grade collectibles, but GPI's own filing classifies Bud
+  Jones, B&G, and Dolphin American-style currencies as plastic injection-
+  molded, often with a central metal piece. They are outside this buyer's stated
+  clay-or-ceramic scope. “House of Cards” also should not be treated as a maker
+  without an independently visible manufacturer/mold; the research found no
+  manufacturer evidence supporting it as a material-authentication brand.
+  Source: https://www.annualreports.com/HostedData/AnnualReports/PDF/NASDAQ_GPIC_2018.pdf
+
+* Add genuine ceramic makers/lines as a parallel tier: CHIPCO, BR Pro Poker,
+  SUN-FLY, Nevada Jacks, and SLOWPLAY's ceramic lines. CHIPCO identifies itself as the original ceramic-chip maker;
+  BR Pro manufactures casino-quality ceramic sets in California; SUN-FLY's
+  current catalog calls its POLYCHROM line pure ceramic with face-and-edge
+  printing and no inserts/decals. Maker identity is supportive context only;
+  the photos must still show the correct embedded full-surface print rather
+  than a stickered injection-molded chip.
+  Sources: https://www.chipco.com/
+           https://brpropoker.com/pages/casino-quality-poker-chips
+           https://www.sunflycasinochips.com/_files/ugd/245739_9b9694c637df4bafaccb5a9ee4877220.pdf
+           https://brpropoker.com/collections/nevada-jacks
+           https://www.slowplay.store/collections/all
+
+Current retail prices and what “a set” means
+
+* In current supplier listings, the user's $250–300 expectation maps well to a
+  500-chip genuine ceramic set. BBO lists a 500-piece, 10g dye-sublimated
+  ceramic set with case and cards at $229 sale/$399 regular. Apache lists
+  ceramic Mirage chips at $0.55 each ($275 for 500) and 43mm Monaco ceramics at
+  $0.59 each ($295 for 500). BR Pro's current 500–999 tier is $0.70 per chip
+  ($350 for 500). These figures are for 500 chips, not 100.
+  Sources: https://www.bbopokertables.com/casino-poker-chips
+           https://www.apachepokerchips.com/product/mirage-casino-poker-chips/
+           https://www.apachepokerchips.com/product/monaco-ceramic-poker-chips/
+           https://brpropoker.com/products/8-bit-poker-chips
+
+* New compression-molded clay is materially dearer. CPC's price list effective
+  2026-07-01 has a 300-chip minimum; plain chips start at $1.35 ($405/300) and
+  inlaid chips at $1.90 ($570/300), before electronic-payment fees and shipping.
+  Retired casino Paulsons also exceed the user's generic figure in concrete
+  dealer examples: Apache shows 300 new Casino de Mexico Paulsons at $799 and
+  500 used Aztar Paulsons at $599 (both out of stock), while its remaining
+  500-chip Indiana Grand listing is $2,500.
+  Sources: https://classicpokerchips.com/custom.html
+           https://www.apachepokerchips.com/product/casino-de-mexico-paulson-poker-chips/
+           https://www.apachepokerchips.com/product/aztar-paulson-poker-chips/
+           https://www.apachepokerchips.com/product-category/paulson-poker-chips/
+
+* Current eBay completed/sold evidence reinforces the size/material split. A
+  500-chip genuine SLOWPLAY Nash ceramic set sold for $160 plus $22.24 shipping
+  (open-box), while a 500-chip “Day of the Dead” ceramic set sold for $310 plus
+  $54.28 shipping. A 300-chip Nevada Jacks ceramic set displayed $285 plus
+  $50.35 shipping, although eBay says a best offer was accepted and does not
+  reveal the actual accepted price. By contrast, a 110-chip Paulson THC set sold
+  at a displayed $1,500, and even 10 Paulson Starburst hot stamps sold for
+  $49.99. SLOWPLAY's own store identifies Nash as a true 10g ceramic line and
+  currently starts its ceramic sets at $189. These are observed comps, not a
+  promise that every set bearing the name/material is authentic.
+  Sources: https://www.ebay.com/itm/336556115634
+           https://www.ebay.com/itm/306733607923
+           https://www.ebay.com/itm/397717846371
+           https://www.ebay.com/itm/306895396371
+           https://www.ebay.com/itm/253958911168
+           https://www.slowplay.store/collections/all
+
+* Recommendation: retain the $150 LANDED-price hard cap. Relative to the live
+  500-chip ceramic benchmarks above, $150 is 34.5% below BBO's $229 sale price,
+  45.5% below Apache's $275 equivalent, 49.2% below Apache's $295 equivalent,
+  and 57.1% below BR Pro's $350 equivalent. It is also 73.7% below the cheapest
+  possible new 300-chip inlaid CPC order. That is a meaningful steal threshold,
+  while raising it would admit ordinary retail ceramic deals. Because listings
+  vary in chip count, $150 remains a research ceiling rather than proof of value;
+  a 100-chip lot at that price is not automatically a steal.
+
+* Status of the legacy clay names as of 2026: ASM is not a separate current
+  producer—CPC documents the Burt assets becoming Atlantic Standard Molding in
+  1988, retirement in 2012, and relaunch as CPC in 2014; CPC moved the same
+  presses/molds to Washington and resumed orders in June 2026. TR King is a
+  closed 1924–2006 maker. GPI bought BCC/Blue Chip manufacturing assets in 2013.
+  These remain worthwhile provenance/search terms precisely because older sets
+  circulate secondhand, but the only current retail compression-clay maker in
+  this group is CPC; Paulson remains casino-facing rather than public retail.
+  Sources: https://classicpokerchips.com/about.html
+           https://chipguide.themogh.org/cg_chip2.php?id=CALATR&v=405458783
+           https://www.prnewswire.com/news-releases/gaming-partners-international-corporation-acquires-the-blue-chip-companys-manufacturing-assets-as-part-of-its-on-going-product-growth-strategy-210580371.html
+           https://www.apachepokerchips.com/about-us/
+
+Part 1 — Findings (increment 2: search tactics, platforms, and photo tells)
+----------------------------------------------------------------------------
+
+How under-described listings are titled
+
+* The productive “seller does not know the maker” vocabulary is ordinary and
+  object-based: “poker chip set,” “casino chips,” “poker chips with case,”
+  “vintage poker chip set,” and “casino chips lot.” Current examples include
+  ShopGoodwill pages titled “Vintage Poker Chip And Playing Card Set With Brown
+  Carrying Case” and “Poker Chip Set Collection With Cards,” plus Vinted rows
+  titled simply “Poker chips,” “Bundle of casino chips,” and “Poker Chip Set
+  with Aluminum Case.” These examples support broad discovery queries; the AI
+  photo gate, not the seller's adjectives, must determine material.
+  Sources: https://shopgoodwill.com/item/239642465
+           https://shopgoodwill.com/item/262349999
+           https://www.vinted.com/brand/4773-casino
+
+* Evaluation of the five current queries: “casino poker chips set,” “vintage
+  casino chip set,” and “poker chip set vintage” match the generic/estate title
+  pattern well; “paulson poker chips” covers the seller-who-knows-the-brand
+  case; and “clay poker chips lot” is useful but especially noisy. For example,
+  an eBay sold listing titled itself “Vintage Clay Poker Chip Set” yet disclosed
+  China origin, and current OfferUp listings call a solid-iron-core double-
+  injection product “Casino Grade 14g Clay” and a 13g clay-composite case set
+  “real casino-style.” No existing query should be dropped: their different
+  use of poker/casino, set/lot, and vintage/clay covers materially different
+  seller wording, while the conservative photo gate removes the marketing
+  false positives.
+  Sources: https://www.ebay.com/itm/176978568804
+           https://offerup.com/item/detail/43db49af-8e29-33f8-aa7e-bd654105b3d6
+           https://offerup.com/item/detail/e95a16f3-ce0a-30ab-9878-d3100f3014cc
+
+* Add direct searches for the names a partly informed seller may use: ASM,
+  Classic Poker Chips/CPC, BCC/Blue Chip Company, TR King, CHIPCO, and Nevada
+  Jacks, in addition to the existing Paulson query. Add “ceramic poker chips
+  set” for the newly accepted material, “casino chips lot” for unidentified
+  mixed/estate lots, and “hot stamp poker chips” because genuine clay need not
+  have an inlay. CPC currently sells authentic hot-stamped clay, and its mold
+  page identifies hot-stamp-capable molds. Nevada Jacks is a long-running,
+  currently sold ceramic line; its 800-chip set was recently offered on eBay at
+  $450, making a sub-$150 resale listing worth triage.
+  Sources: https://classicpokerchips.com/stock/index.htm
+           https://classicpokerchips.com/pokerchips/realclay/hotstamps.htm
+           https://brpropoker.com/collections/nevada-jacks
+           https://www.ebay.com/itm/127645317046
+
+* Useful mold terms for manual follow-up (and prompt context) are Paulson's Top
+  Hat & Cane variants THC/RHC/IHC and house molds; TR King's Small Crown/Large
+  Crown; and the historic Burt/ASM/current CPC family such as A-Crest/A-mold,
+  Horsehead, Circle Square, Diamond Square, Cards & Dice, Hourglass, H-mold,
+  Jockey, Elephant & Crown, Scroll, and FDL. Mold evidence narrows provenance
+  but is not sufficient by itself: CPC now owns crown molds associated with TRK,
+  and historic ownership/manufacture of molds changed. Search the maker names
+  rather than creating a high-volume saved search for every mold.
+  Sources: https://www.pokerchipforum.com/threads/teach-me-how-to-be-a-chipper.78607/page-2
+           https://classicpokerchips.com/custom.html
+
+* Casino/property names useful in a listing or manual lookup include Aztar,
+  Garden City, Grand Victoria, JACK Cincinnati, Casino de Isthmus, Casino de
+  Mexico, and Majestic Star. These are examples of documented retired/casino
+  Paulson sets, not an exhaustive whitelist and not proof of authenticity.
+  Sources: https://www.apachepokerchips.com/product/aztar-paulson-poker-chips/
+           https://www.apachepokerchips.com/product/500-garden-city-casino-paulson-poker-chips/
+           https://www.apachepokerchips.com/product/grand-victoria-primary-paulson-poker-chips/
+           https://www.pokerchipforum.com/threads/jack-cincinnati-poker-chip-set-from-paulson.133043/
+           https://www.apachepokerchips.com/product/casino-de-mexico-paulson-poker-chips/
+           https://www.ebay.com/itm/177906855233
+
+* “House of Cards” is not a reliable maker search. The phrase appears as names
+  of unrelated custom/fantasy home sets: ChipGuide records McLaughlin's House
+  of Cards as a fantasy DieCar set, while the PCF hall-of-fame entry identifies
+  Circus City House of Cards as a 2010 ASM-made custom set. Accept it only when
+  photos independently establish a qualifying mold/material.
+  Sources: https://chipguide.themogh.org/cg_chip2.php?id=HPDIMH&v=1003797847
+           https://www.pokerchipforum.com/threads/official-2018-custom-chip-set-hof-voting-thread.26568/
+
+Platform targeting
+
+* Keep eBay as the main lane. It has a deep dedicated casino-chip market and
+  current/sold evidence across unidentified sets, Paulsons, ceramics, and
+  antique clay; examples include a sold generic 500-chip “clay” case set at
+  $59.99 plus $30.90 shipping, a sold antique clay set in a walnut box at $119,
+  and a current Paulson-set search with dozens of listings. In this repository,
+  eBay is implicit for every enabled saved search, so adding the literal string
+  `ebay` to `platforms` would be wrong and unnecessary.
+  Sources: https://www.ebay.com/itm/176978568804
+           https://www.ebay.com/itm/406931327904
+           https://www.ebay.com/sch/i.html?_nkw=paulson+poker+chip+set
+
+* Keep ShopGoodwill and the Facebook scout lane. ShopGoodwill demonstrably
+  receives generically titled cased poker sets, while Facebook officially
+  supports person-to-person sales through Marketplace and buy/sell groups—both
+  fit household-clearout discovery better than specialist collector inventory.
+  Sources: https://shopgoodwill.com/item/239642465
+           https://shopgoodwill.com/item/261665123
+           https://www.facebook.com/help/550954179351183/
+
+* Add the already-integrated Vinted and OfferUp adapters to each poker search.
+  Vinted currently exposes generic poker-chip bundles and cased sets, including
+  a 100-chip Bicycle box at $3 and a generic aluminum-case set at $30. OfferUp
+  has current generic “clay” sets at $10–$120; most examples are false-positive
+  plastic/composite, but that is precisely where photo triage can find an
+  under-described exception. Do not add Grailed: the research returned a
+  fashion/designer 300-metal-chip set at $350 rather than genuine clay/ceramic.
+  Do not add Poshmark or Depop: current results were overwhelmingly $16–$63
+  novelty/11.5g/composite kits, and adding every broad query would spend adapter
+  budget mainly on known noise.
+  Sources: https://www.vinted.com/items/9475409992-bicycle-poker-chips-set-of-100-casino-colors-made-in-usa-in-box
+           https://www.vinted.com/catalog/4881-gry-planszowe/brand/4773-casino
+           https://offerup.com/item/detail/88293d93-8718-3ddf-8bfb-ba43c8f643ac
+           https://offerup.com/item/detail/e95a16f3-ce0a-30ab-9878-d3100f3014cc
+           https://www.grailed.com/listings/79631614-designer-ben-baller-limited-edition-poker-set
+           https://poshmark.com/listing/Las-Vegas-Poker-Chip-Set-6a90b2f44941b5bc910a2698
+
+Photo/listing tells for conservative AI triage
+
+* Compression clay: look for a visibly impressed rim mold; actual contrasting
+  clay edge inserts continuing through the rolling edge; an embedded inlay OR
+  a legitimate foil hot stamp; and coherent wear, colors, mold, face finish,
+  and spot pattern within each denomination. CPC states that the mold is the
+  signature rim relief, that edge spots are contrasting clay pressed into the
+  rim rather than paint/print, and that inlays are molded into the body rather
+  than stickers. CPC also sells authentic hot-stamped clay, so “must have an
+  inlay” is a false-negative rule and should be replaced with an accepted-face-
+  finish path.
+  Sources: https://classicpokerchips.com/custom.html
+           https://classicpokerchips.com/stock/index.htm
+           https://classicpokerchips.com/pokerchips/realclay/hotstamps.htm
+
+* Ceramic: look for a single-composition blank with dye-sublimated, continuous
+  full-face/edge artwork and no peelable label, separate inlay, or metal insert.
+  Do not demand clay edge inserts or a clay mold. BR Pro says its standard 39mm
+  ceramics are about 9.5g, while the artwork is heat-pressed into originally
+  white blanks; a small amount of edge-print registration variation can be
+  normal and must not be treated like mismatched clay inserts.
+  Sources: https://brpropoker.com/pages/frequently-asked-questions
+           https://brpropoker.com/
+
+* Negative tells: seller-only “clay,” “casino grade,” “clay composite,” or
+  “clay feel” claims; 11.5g–14g weight marketing; a central metal slug/iron core;
+  injection seams/nubs; peelable center labels; uniformly mass-produced dice/
+  suit patterns; and shrink-wrapped stacks in a generic home-game kit. GPI
+  confirms that its injection-molded lines commonly use a central metal piece;
+  CPC says every injection-molded chip is plastic even with clay-like filler;
+  and live eBay/OfferUp examples show 13g–14g “clay” claims on metal-core or
+  composite case sets. Weight is only a warning signal, never proof by itself.
+  Sources: https://www.annualreports.com/HostedData/AnnualReports/PDF/NASDAQ_GPIC_2018.pdf
+           https://classicpokerchips.com/custom.html
+           https://www.ebay.com/shop/poker-chip-set-with-case?_nkw=poker+chip+set+with+case
+           https://offerup.com/item/detail/43db49af-8e29-33f8-aa7e-bd654105b3d6
+
+* A case is discovery context, not authentication. Both a $59.99 China-origin
+  set and common 14g Claytec-style kits use aluminum cases, while real antique
+  clay can appear in walnut/wooden boxes. Ask the model to count racks/stacks
+  when possible: casino terminology is 20 chips per barrel and 100 per rack,
+  which helps distinguish a playable 300/500-chip set from a costly handful.
+  Sources: https://www.ebay.com/itm/176978568804
+           https://www.ebay.com/itm/173323403144
+           https://www.ebay.com/itm/406931327904
+           https://www.apachepokerchips.com/product-category/barrels-and-racks/
+
+Part 2 — Changes applied and why
+--------------------------------
+
+1. Re-enabled every existing poker-chip search. No current query was dropped:
+   all five map to evidenced seller language, and the photo gate is the right
+   place to reject “clay” marketing noise.
+
+   Existing searches enabled:
+   - casino poker chips set (`poker-set`)
+   - paulson poker chips (`poker-paulson`)
+   - vintage casino chip set (`poker-vintage-set`)
+   - clay poker chips lot (`poker-clay-lot`)
+   - poker chip set vintage (`poker-set-vintage`)
+
+2. Added 13 fast, enabled poker-chip searches at the same $150 maximum:
+   - ceramic poker chips set (`poker-ceramic-set`): broad ceramic discovery
+   - casino chips lot (`poker-lot`): under-described/mixed estate lots
+   - chipco poker chips (`poker-chipco`): genuine ceramic maker
+   - nevada jacks poker chips (`poker-nevada-jacks`): established ceramic line
+   - sunfly poker chips (`poker-sunfly`): genuine ceramic maker spelling likely
+     to occur in marketplace titles
+   - br pro poker chips (`poker-br-pro`): genuine ceramic maker
+   - asm poker chips (`poker-asm`): retired compression-clay provenance
+   - classic poker chips (`poker-classic`): current retail compression clay
+   - cpc poker chips (`poker-cpc`): acronym spelling of Classic Poker Chips
+   - bcc poker chips (`poker-bcc`): retired Blue Chip compression clay
+   - tr king poker chips (`poker-tr-king`): retired collectible clay maker
+   - hot stamp poker chips (`poker-hot-stamp`): authentic non-inlay clay path
+   - top hat cane poker chips (`poker-top-hat-cane`): common Paulson mold wording
+
+3. Retained implicit eBay coverage and expanded only the poker rows' auxiliary
+   platform scopes from ShopGoodwill+Facebook to
+   ShopGoodwill+Vinted+OfferUp+Facebook. No `ebay` string was added because the
+   bot's main Browse API loop already consumes all enabled saved searches.
+   Grailed, Poshmark, and Depop were deliberately not added for the researched
+   noise/budget reasons above.
+
+4. Kept `POKER_CHIPS_MAX_PRICE = 150` and every poker row's `max_price = 150`.
+   Current 500-chip genuine ceramic retail/sold comparisons make this a real
+   discount threshold; the gate continues to treat it only as a maximum landed
+   cost worthy of human research, not an automatic appraisal.
+
+5. Corrected and expanded the AI photo prompt:
+   - separated compression-molded clay from dye-sublimated ceramic;
+   - corrected GPIC/GPI from “maker” to corporate provenance;
+   - retained Paulson, BCC/Blue Chip, Burt/ASM/CPC, and TRK clay context;
+   - added CHIPCO, BR Pro, SUN-FLY, Nevada Jacks, and SLOWPLAY ceramic context;
+   - explicitly excluded Bud Jones/B&G injection-molded plastic for this buyer;
+   - stopped treating roughness alone as mandatory clay proof;
+   - added mold/through-edge clay-insert, metal-core/injection-nub, ceramic
+     embedded-print, replaced-label, and chip-count guidance;
+   - allowed authentic hot-stamped compression clay rather than requiring every
+     genuine clay chip to have an inlay;
+   - preserved conservative unknown/false behavior and the prohibition on AI
+     price/resale judgments.
+
+6. Added and wired three AI fields used by the gate:
+   `is_genuine_ceramic`, `has_hot_stamp_not_sticker`, and
+   `ceramic_design_embedded_not_sticker`. The gate now accepts exactly:
+   - visually confirmed compression clay with molded inlay OR authentic hot
+     stamp; or
+   - visually confirmed ceramic with an embedded/dye-sublimated design.
+   Both still require coherent edge treatment and no suspected alteration.
+   ABS, metal-core, composite, sticker/label, unknown, over-$150, and unverified
+   results remain blocked.
+
+7. Extended the natural existing poker test classes for ceramic acceptance,
+   missing-embedded-design rejection, hot-stamp acceptance, updated schema and
+   prompt language, all 18 enabled searches, and the expanded platform scope.
+   No non-poker behavior/configuration was changed.
+
+Validation output
+-----------------
+
+Metadata migration (required after adding saved searches):
+
+  > python3 migrate_saved_search_metadata.py
+  Migrated 209 saved searches
+
+It produced 18 poker-chip rows with unique generated IDs and retained category
+`poker-chips` for all 18. `git diff` confirms the migration changed no config
+rows outside the poker-chip block.
+
+JSON validation:
+
+  > python3 -c "import json; json.load(open('config.json'))"
+  [exit 0; no output]
+
+Config preflight:
+
+  > python3 -c "import ebay_deal_alert as m; safe,w=m.validate_config({'SAVED_SEARCHES':m.SAVED_SEARCHES}); print('safe',len(safe),'warnings',len(w)); print('\\n'.join(w))"
+  safe 209 warnings 0
+
+Focused poker/prompt tests:
+
+  > python3 -m pytest -q test_ebay_deal_alert.py -k "PokerChips or poker_chip or seller_disclosure"
+  .............                  [100%]
+  13 passed, 352 deselected, 1 warning, 42 subtests passed in 0.64s
+
+The focused run's sole warning was the repository's pre-existing
+`SyntaxWarning: invalid escape sequence '\\d'` at test_ebay_deal_alert.py:6022.
+
+Full required suite (literal result):
+
+  > python3 -m pytest -q
+  ................... [  3%]
+  ............................. [  9%]
+  ...................................................................... [ 23%]
+  ........................................ [ 32%]
+  .................................................................. [ 45%]
+  ................................................................. [ 58%]
+  .................................................................. [ 72%]
+  .............................................................. [ 84%]
+  ............................................................................ [100%]
+  ============================== warnings summary ===============================
+  test_ebay_deal_alert.py::RunIntegration::test_mid_run_429_also_stops_the_auction_lane
+    C:\\Users\\frost\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python313\\site-packages\\lxml\\html\\__init__.py:1891: DeprecationWarning: The 'strip_cdata' option of HTMLParser() has never done anything and will eventually be removed.
+      super().__init__(**kwargs)
+
+  -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+  493 passed, 1 warning, 250 subtests passed in 11.73s
+
+Additional checks completed before the full suite:
+
+  > python3 -m py_compile ebay_deal_alert.py test_ebay_deal_alert.py migrate_saved_search_metadata.py
+  [exit 0]
+
+  > git diff --check
+  [exit 0; only Git's informational LF→CRLF working-copy warnings]
+
+Final integrity/scope check:
+
+  > python3 -c "import json; json.load(open('config.json'))"
+  [exit 0; no output]
+
+  non_poker_searches_unchanged True
+  other_config_keys_unchanged True
+
+  > git rev-parse HEAD
+  a999a43626a798226a9e22b7594b5eabb0d1a836
+  > git rev-parse origin/main
+  a999a43626a798226a9e22b7594b5eabb0d1a836
+
+Final intended working-tree scope:
+
+   M config.json
+   M ebay_deal_alert.py
+   M test_ebay_deal_alert.py
+  ?? POKER_CHIPS_RESEARCH.txt
+
+No commit or push was performed.

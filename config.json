@@ -1778,10 +1778,12 @@
       "query": "casino poker chips set",
       "size": null,
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
+        "vinted",
+        "offerup",
         "facebook"
       ],
       "id": "poker-set",
@@ -1791,10 +1793,12 @@
       "query": "paulson poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
+        "vinted",
+        "offerup",
         "facebook"
       ],
       "id": "poker-paulson",
@@ -1804,10 +1808,12 @@
       "query": "vintage casino chip set",
       "size": null,
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
+        "vinted",
+        "offerup",
         "facebook"
       ],
       "id": "poker-vintage-set",
@@ -1817,10 +1823,12 @@
       "query": "clay poker chips lot",
       "size": null,
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
+        "vinted",
+        "offerup",
         "facebook"
       ],
       "id": "poker-clay-lot",
@@ -1830,13 +1838,210 @@
       "query": "poker chip set vintage",
       "size": null,
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
+        "vinted",
+        "offerup",
         "facebook"
       ],
       "id": "poker-set-vintage",
+      "category": "poker-chips"
+    },
+    {
+      "query": "ceramic poker chips set",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-ceramic-set",
+      "category": "poker-chips"
+    },
+    {
+      "query": "casino chips lot",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-lot",
+      "category": "poker-chips"
+    },
+    {
+      "query": "chipco poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-chipco",
+      "category": "poker-chips"
+    },
+    {
+      "query": "nevada jacks poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-nevada-jacks",
+      "category": "poker-chips"
+    },
+    {
+      "query": "sunfly poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-sunfly",
+      "category": "poker-chips"
+    },
+    {
+      "query": "br pro poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-br-pro",
+      "category": "poker-chips"
+    },
+    {
+      "query": "asm poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-asm",
+      "category": "poker-chips"
+    },
+    {
+      "query": "classic poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-classic",
+      "category": "poker-chips"
+    },
+    {
+      "query": "cpc poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-cpc",
+      "category": "poker-chips"
+    },
+    {
+      "query": "bcc poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-bcc",
+      "category": "poker-chips"
+    },
+    {
+      "query": "tr king poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-tr-king",
+      "category": "poker-chips"
+    },
+    {
+      "query": "hot stamp poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-hot-stamp",
+      "category": "poker-chips"
+    },
+    {
+      "query": "top hat cane poker chips",
+      "size": null,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "vinted",
+        "offerup",
+        "facebook"
+      ],
+      "id": "poker-top-hat-cane",
       "category": "poker-chips"
     },
     {
