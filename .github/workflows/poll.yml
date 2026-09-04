@@ -231,6 +231,19 @@ jobs:
                     git rm -f --ignore-unmatch "$file"
                   fi
                 done
+                # ai_spend.db is deliberately left out of the loop above -
+                # we want to KEEP the local ledger, not take origin's copy -
+                # but that means its own conflict marker in the index is
+                # never resolved, and `rebase --continue` refuses to proceed
+                # while ANY path is still unmerged, even one we're happy
+                # with. During `git rebase`, HEAD is temporarily the base
+                # (origin/main) so "ours"/"theirs" are flipped from a normal
+                # merge: "theirs" is the commit being replayed, i.e. our own
+                # local ledger update. --theirs is what actually keeps it;
+                # `|| true` covers the case where ai_spend.db wasn't part of
+                # this particular conflict at all.
+                git checkout --theirs ai_spend.db 2>/dev/null || true
+                git add ai_spend.db 2>/dev/null || true
                 if ! GIT_EDITOR=true git rebase --continue; then
                   echo "Could not preserve the paid-AI ledger during rebase; failing closed"
                   git rebase --abort || true
