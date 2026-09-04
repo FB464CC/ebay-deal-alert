@@ -471,18 +471,6 @@
       "category": "tailoring"
     },
     {
-      "query": "charvet shirt -scarf",
-      "size": [
-        "L",
-        "XL"
-      ],
-      "max_price": 150,
-      "enabled": false,
-      "profile": "slow",
-      "id": "other-charvet-shirt",
-      "category": "other"
-    },
-    {
       "query": "huntsman suit -hunter -scarf",
       "size": [
         "42"
