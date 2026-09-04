@@ -52,6 +52,51 @@ def run_node_script(script):
     return json.loads(completed.stdout)
 
 
+def run_telegram_handler(message, deepseek_answer="Follow-up answer"):
+    script = f"""
+const calls = [];
+global.fetch = async (url, options = {{}}) => {{
+  calls.push({{url, options}});
+  if (url.includes('api.deepseek.com')) {{
+    return {{
+      status: 200,
+      ok: true,
+      json: async () => ({{choices: [{{message: {{content: {json.dumps(deepseek_answer)}}}}}]}})
+    }};
+  }}
+  if (url.includes('api.telegram.org')) {{
+    return {{status: 200, ok: true, json: async () => ({{ok: true}})}};
+  }}
+  throw new Error(`Unexpected fetch URL: ${{url}}`);
+}};
+process.env.TELEGRAM_BOT_TOKEN = '12345:test-token';
+process.env.DEEPSEEK_API_KEY = 'deepseek-test-key';
+process.env.TELEGRAM_WEBHOOK_SECRET = 'webhook-test-secret';
+process.env.TELEGRAM_ALLOWED_CHAT_ID = '77';
+const handler = require({json.dumps(TELEGRAM_MODULE)});
+const req = {{
+  method: 'POST',
+  headers: {{'x-telegram-bot-api-secret-token': 'webhook-test-secret'}},
+  body: {{message: {json.dumps(message)}}}
+}};
+let responseText = '';
+const res = {{
+  statusCode: 0,
+  headers: {{}},
+  setHeader(name, value) {{ this.headers[name] = value; }},
+  end(value) {{ responseText = Buffer.isBuffer(value) ? value.toString('utf8') : String(value); }}
+}};
+Promise.resolve(handler(req, res)).then(() => {{
+  process.stdout.write(JSON.stringify({{
+    status: res.statusCode,
+    body: JSON.parse(responseText),
+    calls
+  }}));
+}}).catch(error => {{ process.stderr.write(error.stack); process.exit(2); }});
+"""
+    return run_node_script(script)
+
+
 def run_api_handler(module, body, fetch_responses):
     script = f"""
 const calls = [];
@@ -210,6 +255,83 @@ class TelegramUrlSafetyTests(unittest.TestCase):
             run_node(expression),
             [{"amount": "150", "currency": "EUR"}, "EUR 150"],
         )
+
+    def test_itemprop_price_metadata_is_extracted(self):
+        html = (
+            '<meta itemprop="price" content="450.00">'
+            '<meta itemprop="priceCurrency" content="USD">'
+        )
+        expression = (
+            f"(()=>{{const m=t.metas({json.dumps(html)});"
+            "return t.extractListingPrice(m,'Poker chip set','No price in description')})()"
+        )
+        self.assertEqual(
+            run_node(expression),
+            {"amount": "450.00", "currency": "USD"},
+        )
+
+    def test_ebay_itemprop_span_price_beats_title_denominations(self):
+        html = (
+            '<span itemprop="price">US $450.00</span>'
+            '<meta itemprop="priceCurrency" content="USD">'
+        )
+        title = "Nevada Jacks set, 100 - $25, 400 - $5, 300 - $1"
+        expression = (
+            f"(()=>{{const m=t.metas({json.dumps(html)});"
+            f"return t.extractListingPrice(m,{json.dumps(title)},'')}})()"
+        )
+        self.assertEqual(
+            run_node(expression),
+            {"amount": "450.00", "currency": "USD"},
+        )
+
+    def test_reply_to_own_bot_message_keeps_prior_analysis_context(self):
+        message = {
+            "message_id": 102,
+            "chat": {"id": 77},
+            "from": {"id": 88, "is_bot": False},
+            "text": "Would you still buy it if the seller takes $100?",
+            "reply_to_message": {
+                "message_id": 101,
+                "chat": {"id": 77},
+                "from": {"id": 12345, "is_bot": True},
+                "text": "Listed price: $150\nFAIR - reasonable, not a standout",
+            },
+        }
+        result = run_telegram_handler(message, "Yes, $100 changes this to a buy.")
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["body"], {"ok": True})
+        self.assertEqual(len(result["calls"]), 2)
+        deepseek_request = json.loads(result["calls"][0]["options"]["body"])
+        prompt = deepseek_request["messages"][0]["content"][0]["text"]
+        self.assertIn("Listed price: $150", prompt)
+        self.assertIn("seller takes $100", prompt)
+        self.assertNotIn("response_format", deepseek_request)
+        telegram_request = json.loads(result["calls"][1]["options"]["body"])
+        self.assertEqual(telegram_request["text"], "Yes, $100 changes this to a buy.")
+        self.assertEqual(telegram_request["reply_to_message_id"], 102)
+
+    def test_reply_to_own_bot_caption_is_also_a_follow_up(self):
+        message = {
+            "message_id": 202,
+            "chat": {"id": 77},
+            "from": {"id": 88, "is_bot": False},
+            "text": "What if it is missing one club?",
+            "reply_to_message": {
+                "message_id": 201,
+                "chat": {"id": 77},
+                "from": {"id": 12345, "is_bot": True},
+                "caption": "Golf set analysis: playable starter set at $125.",
+            },
+        }
+        result = run_telegram_handler(message, "A missing club makes it less attractive.")
+
+        self.assertEqual(len(result["calls"]), 2)
+        deepseek_request = json.loads(result["calls"][0]["options"]["body"])
+        prompt = deepseek_request["messages"][0]["content"][0]["text"]
+        self.assertIn("playable starter set at $125", prompt)
+        self.assertIn("missing one club", prompt)
 
     def test_category_uses_search_query_from_listing_url(self):
         url = "https://www.ebay.com/itm/123?_skw=golf+club+set"

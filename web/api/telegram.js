@@ -176,10 +176,36 @@ const metas = (html) => {
   const re = /<meta\b[^>]*>/gi;
   let m;
   while ((m = re.exec(html))) {
-    const key = (m[0].match(/(?:property|name)\s*=\s*(["'])([\s\S]*?)\1/i) || [])[2];
+    const key = (m[0].match(/(?:property|name|itemprop)\s*=\s*(["'])([\s\S]*?)\1/i) || [])[2];
     const content = (m[0].match(/content\s*=\s*(["'])([\s\S]*?)\1/i) || [])[2];
     if (key && content) {
       out.push([key.toLowerCase(), decodeEntities(content)]);
+    }
+  }
+
+  // eBay and other commerce pages also expose schema.org microdata on
+  // ordinary elements, e.g. <span itemprop="price">US $450.00</span>.
+  // Scan opening tags without consuming their children so nested Offer
+  // containers do not hide the actual price span.
+  const itempropRe = /<([a-z][\w:-]*)\b[^>]*\bitemprop\s*=\s*(["'])([\s\S]*?)\2[^>]*>/gi;
+  while ((m = itempropRe.exec(html))) {
+    const tagName = m[1].toLowerCase();
+    if (tagName === "meta") continue; // already captured above
+    const content = (m[0].match(/content\s*=\s*(["'])([\s\S]*?)\1/i) || [])[2];
+    let value = content;
+    if (!value) {
+      const closing = new RegExp(`</${tagName}\\s*>`, "gi");
+      closing.lastIndex = itempropRe.lastIndex;
+      const end = closing.exec(html);
+      if (end) {
+        value = html.slice(itempropRe.lastIndex, end.index)
+          .replace(/<[^>]*>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+    }
+    if (value) {
+      out.push([m[3].toLowerCase(), decodeEntities(value)]);
     }
   }
   return out;
@@ -190,7 +216,10 @@ const allMeta = (list, key) => list.filter(([k]) => k === key).map(([, v]) => v)
 
 const normalizePriceAmount = (value) => {
   if (value == null) return null;
-  const amount = String(value).replace(/,/g, "").trim();
+  const raw = String(value).trim();
+  const match = raw.match(/^(?:(?:US|CA|AU)\s*)?(?:USD|CAD|AUD|EUR|GBP)?\s*[$€£]?\s*([\d,]+(?:\.\d{1,2})?)\s*(?:USD|CAD|AUD|EUR|GBP)?$/i);
+  if (!match) return null;
+  const amount = match[1].replace(/,/g, "");
   const number = Number(amount);
   return Number.isFinite(number) && number >= 0 ? amount : null;
 };
@@ -213,11 +242,13 @@ const textAskingPrice = (text) => {
 
 const extractListingPrice = (meta, title, description) => {
   const metaAmount = normalizePriceAmount(
-    firstMeta(meta, "product:price:amount") || firstMeta(meta, "og:price:amount")
+    firstMeta(meta, "product:price:amount") || firstMeta(meta, "og:price:amount") ||
+      firstMeta(meta, "price")
   );
   if (metaAmount !== null) {
     const currency = (
-      firstMeta(meta, "product:price:currency") || firstMeta(meta, "og:price:currency") || "USD"
+      firstMeta(meta, "product:price:currency") || firstMeta(meta, "og:price:currency") ||
+        firstMeta(meta, "pricecurrency") || "USD"
     ).trim().toUpperCase();
     return { amount: metaAmount, currency };
   }
@@ -460,6 +491,8 @@ Answer their follow-up directly and concisely in plain conversational text (no m
 // reply to some OTHER bot's message in a group chat isn't mistaken for
 // follow-up context.
 const botId = () => (process.env.TELEGRAM_BOT_TOKEN || "").split(":")[0];
+const repliedMessageText = (message) =>
+  message?.reply_to_message?.text || message?.reply_to_message?.caption || "";
 
 // ponytail: follow-ups are text-only (no images re-sent to DeepSeek) since
 // reply-threading only recovers the prior message's text, not the original
@@ -469,7 +502,7 @@ const botId = () => (process.env.TELEGRAM_BOT_TOKEN || "").split(":")[0];
 const isFollowUpReply = (message) => {
   const prior = message?.reply_to_message;
   const id = botId();
-  return !!(prior && prior.text && prior.from?.is_bot && id && String(prior.from.id) === id);
+  return !!(prior && repliedMessageText(message) && prior.from?.is_bot && id && String(prior.from.id) === id);
 };
 
 const buildPrompt = (category, title, description, month, price) => {
@@ -621,7 +654,7 @@ module.exports = async (req, res) => {
   if (!url) {
     if (isFollowUpReply(message)) {
       try {
-        const priorText = message.reply_to_message.text || message.reply_to_message.caption || "";
+        const priorText = repliedMessageText(message);
         const answer = await callDeepSeek(followUpPrompt(priorText, text), [], false);
         await reply(answer.slice(0, 4000));
       } catch (error) {

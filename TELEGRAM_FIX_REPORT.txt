@@ -1,0 +1,40 @@
+Telegram webhook fix investigation
+
+Checkout verification
+- Confirmed local HEAD without network access: efcaf77b9bf08e5b978e1697301df68761e98d4a (AI vision: flip DeepSeek to primary, per-provider timeouts, golf soft-cap fairness in the shared AI-check pool).
+- The commit hash and subject are well-formed and sane. No fetch, pull, or clone was run.
+
+Pre-fix findings and reproduction
+- Read web/api/telegram.js completely (707 lines) and traced the request flow from environment/auth/body validation through Telegram dispatch, scraping, price/category/prompt construction, image fetching, DeepSeek, and response rendering.
+- Follow-up root cause: isFollowUpReply at pre-fix lines 469-473 required reply_to_message.text, even though Telegram messages can carry their visible text in caption and the handling code at line 624 already tried to read text OR caption. A reply to an earlier bot media/caption message therefore failed follow-up detection and was handled as a fresh, context-free message.
+- Price root cause: metas at pre-fix lines 174-185 recognized only property/name attributes, while schema.org marketplace price metadata commonly uses itemprop="price" and itemprop="priceCurrency". extractListingPrice at lines 214-226 also did not recognize the corresponding price/pricecurrency keys. Consequently valid numeric price metadata was discarded and the fallback could return no price (or choose an unrelated dollar amount from title/description).
+- Added regression tests before changing production code. Command: python -m pytest test_web_api.py -q -k "itemprop_price_metadata_is_extracted or reply_to_own_bot". Real result: 2 failed, 1 passed, 35 deselected. The itemprop test returned None instead of USD 450.00; the caption follow-up made one Telegram call instead of a DeepSeek context call plus the Telegram answer. The ordinary text reply integration test already passed, confirming the partial text-only implementation worked.
+- A second price regression using eBay-style `<span itemprop="price">US $450.00</span>` and a poker-chip title containing `$25`, `$5`, and `$1` failed before the production fix: the old title fallback reported USD 1 instead of USD 450.00.
+
+Changes made
+- Extended metadata parsing to recognize schema.org itemprop attributes on meta elements and on ordinary elements such as eBay price spans. Nested itemprop tags are scanned independently so an outer Offer element cannot hide a price span.
+- Extended numeric price normalization to accept marketplace-formatted values such as `US $450.00` while still rejecting strings that are not solely a price.
+- Added `price` and `pricecurrency` as structured metadata fallbacks after the existing product/OG keys; structured asking price continues to win over ambiguous dollar amounts in seller text.
+- Centralized replied-message text extraction (`text` or `caption`) and used it both to identify bot replies and to build the DeepSeek follow-up prompt.
+- Added Node-backed webhook integration coverage proving that a plain-text reply to this bot sends both the prior analysis and the new question to DeepSeek in plain-text mode, then replies to the current Telegram message. Added equivalent caption-context coverage and both itemprop price variants.
+- Targeted post-fix check: 9 passed, 30 deselected, 6 subtests passed (`python -m pytest test_web_api.py -q -k "price or reply_to_own_bot or meta_attributes"`).
+
+Final line references and before/after
+- Follow-ups: final lines 494-505 now derive context from either reply_to_message.text or reply_to_message.caption and still verify the replied-to sender is this exact bot. Final lines 654-663 feed that prior response plus the new question to DeepSeek in plain-text mode. Before: caption-backed bot context missed the branch and produced the fresh-message "couldn't find a link" response (one Telegram call). After: it makes the DeepSeek call with prior context, then sends the answer as a reply to the current message (two calls). The ordinary text reply path is also covered end to end.
+- Prices: final lines 174-213 retain OG meta parsing and add schema.org itemprop meta/element parsing; final lines 217-224 accept formatted marketplace amounts; final lines 243-256 prioritize product/OG/schema asking-price metadata. Before: itemprop meta yielded no price and an eBay-style span plus a denomination-heavy title yielded `$1`. After: both yield the actual `USD 450.00`, which renders as `$450.00` and is passed into the AI prompt/verdict flow.
+- Tests are at test_web_api.py lines 259-334, with the webhook harness at lines 55-99.
+
+Final validation
+- `node --check web/api/telegram.js`: exit 0, no syntax-error output.
+- `python -m pytest test_web_api.py -q`: `39 passed, 17 subtests passed in 3.00s`.
+- `git diff --check`: exit 0. Git printed only its configured LF-to-CRLF working-copy warnings, not whitespace errors.
+- Working tree intentionally left uncommitted. Modified: web/api/telegram.js and test_web_api.py. Added: TELEGRAM_FIX_REPORT.txt. No other files touched.
+
+Reviewed but not changed
+- A photo-only follow-up is explicitly acknowledged but not vision-analyzed (final lines 640-647); supporting that correctly requires Telegram getFile/download handling and deciding whether to re-fetch the original listing photos, which is a larger feature than these two bug fixes. Captioned follow-up information is handled.
+- Conversation context intentionally relies on Telegram reply_to_message because this project has no keyed per-chat store. A new message that is not sent with Telegram's Reply action therefore remains a fresh request. Persisting implicit chat history would require a storage/lifetime/privacy design, so it was not added speculatively.
+- telegramSend does not inspect Telegram's HTTP response status. Changing that alone could turn a send failure into webhook retries and duplicate paid AI calls, so this reliability behavior was flagged rather than changed without a retry/idempotency design.
+
+
+Additional pre-fix reproduction detail
+- A second price regression uses eBay-style non-meta microdata and a title containing poker-chip denominations: <span itemprop="price">US $450.00</span> versus title amounts $25/$5/$1. Pre-fix command: python -m pytest test_web_api.py -q -k "ebay_itemprop_span_price_beats_title_denominations". Real result: 1 failed, 38 deselected; the webhook extracted $1 from the title rather than the actual $450 listing price. This isolates both gaps: metas scanned only <meta> tags, and normalizePriceAmount rejected the formatted microdata value "US $450.00".
