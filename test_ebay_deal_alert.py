@@ -80,6 +80,36 @@ class CategoryClassification(unittest.TestCase):
         search = {"query": "rolex watch", "category": "golf-equipment"}
         self.assertEqual(m.classify_search_category(search), "golf-equipment")
 
+    def test_seiko_model_queries_without_watch_word_are_watches(self):
+        required_queries = {
+            "king seiko",
+            "seiko 6105",
+            "seiko 6139",
+            "seiko alpinist",
+            "seiko cocktail time",
+        }
+        configured = {
+            re.split(r"\s+-", search["query"], maxsplit=1)[0]
+            .replace('"', "")
+            .strip(): search
+            for search in m.SAVED_SEARCHES
+        }
+        for query in required_queries:
+            with self.subTest(query=query):
+                self.assertIn(query, configured)
+                self.assertEqual(configured[query]["category"], "watches")
+                self.assertEqual(m.classify_search_category(query), "watches")
+
+    def test_bare_seiko_brand_match_is_token_bound_and_covers_future_models(self):
+        self.assertEqual(m.classify_search_category("seiko presage"), "watches")
+        self.assertEqual(m.classify_search_category("seikosha wall clock"), "other")
+
+        disabled_6309 = next(
+            search for search in m.SAVED_SEARCHES
+            if search["query"].startswith("seiko 6309 ")
+        )
+        self.assertEqual(disabled_6309["category"], "watches")
+
     def test_every_saved_search_has_unique_stable_id_and_category(self):
         ids = [search.get("id") for search in m.SAVED_SEARCHES]
         self.assertTrue(all(ids))

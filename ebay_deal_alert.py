@@ -1945,7 +1945,13 @@ def classify_search_category(search):
         # Steal/Great Deal required, no blind trust) - not a free pass,
         # just not held to the knitwear-specific/brand-specific bars.
         return "school-gear"
-    if "watch" in query:
+    # Some watch-model searches intentionally omit the generic product word
+    # (for example, "king seiko" and "seiko 6105").  The metadata migration
+    # delegates to this fallback classifier after stripping exclusions, so
+    # those searches were stamped as "other" despite using eBay's watches
+    # category.  Keep the brand match token-boundary-safe and watch-specific;
+    # no other category inference changes.
+    if "watch" in query or re.search(r"\bseiko\b", query):
         return "watches"
     if any(kw in query for kw in ("sweater", "cashmere", "merino", "quarter zip")):
         return "knitwear"
