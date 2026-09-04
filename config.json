@@ -895,7 +895,7 @@
       "enabled": true,
       "profile": "fast",
       "category_id": "31387",
-      "id": "other-king-seiko",
+      "id": "watch-king-seiko",
       "category": "watches"
     },
     {
@@ -905,7 +905,7 @@
       "enabled": true,
       "profile": "slow",
       "category_id": "31387",
-      "id": "other-seiko-6139",
+      "id": "watch-seiko-6139",
       "category": "watches"
     },
     {
@@ -915,7 +915,7 @@
       "enabled": true,
       "profile": "slow",
       "category_id": "31387",
-      "id": "other-seiko-alpinist",
+      "id": "watch-seiko-alpinist",
       "category": "watches"
     },
     {
@@ -925,7 +925,7 @@
       "enabled": true,
       "profile": "slow",
       "category_id": "31387",
-      "id": "other-seiko-cocktail-time",
+      "id": "watch-seiko-cocktail-time",
       "category": "watches"
     },
     {
@@ -935,7 +935,7 @@
       "enabled": true,
       "profile": "slow",
       "category_id": "31387",
-      "id": "other-seiko-6105",
+      "id": "watch-seiko-6105",
       "category": "watches"
     },
     {
@@ -945,7 +945,7 @@
       "enabled": false,
       "profile": "slow",
       "category_id": "31387",
-      "id": "other-seiko-6309",
+      "id": "watch-seiko-6309",
       "category": "watches"
     },
     {
@@ -1850,6 +1850,580 @@
       ],
       "id": "poker-set-vintage",
       "category": "poker-chips"
+    },
+    {
+      "query": "peter millar merino sweater",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 25,
+      "enabled": false,
+      "profile": "fast",
+      "id": "knitwear-peter-millar-merino-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "peter millar quarter zip merino",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 25,
+      "enabled": false,
+      "profile": "fast",
+      "id": "knitwear-peter-millar-quarter-zip-merino",
+      "category": "knitwear"
+    },
+    {
+      "query": "tom james merino",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 20,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-tom-james-merino",
+      "category": "knitwear"
+    },
+    {
+      "query": "johnstons elgin cashmere",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": false,
+      "profile": "slow",
+      "category_id": "11484",
+      "id": "knitwear-johnstons-elgin-cashmere",
+      "category": "knitwear"
+    },
+    {
+      "query": "alan paine merino lambswool",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 25,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-alan-paine-merino-lambswool",
+      "category": "knitwear"
+    },
+    {
+      "query": "pringle scotland merino cashmere",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 120,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-pringle-scotland-merino-cashmere",
+      "category": "knitwear"
+    },
+    {
+      "query": "allen edmonds -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-allen-edmonds",
+      "category": "footwear"
+    },
+    {
+      "query": "alden shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 80,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-alden-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "peter millar summer comfort polo",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 20,
+      "enabled": false,
+      "profile": "slow",
+      "id": "golf-peter-millar-summer-comfort-polo",
+      "category": "golf"
+    },
+    {
+      "query": "william lockie cashmere",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-william-lockie-cashmere",
+      "category": "knitwear"
+    },
+    {
+      "query": "ballantyne cashmere",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-ballantyne-cashmere",
+      "category": "knitwear"
+    },
+    {
+      "query": "edward green shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 180,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-edward-green-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "john lobb shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 180,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-john-lobb-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "crockett jones shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-crockett-jones-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "church's shoes -chicken -restaurant -franchise -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-church-s-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "santoni shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-santoni-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "ferragamo loafers -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-ferragamo-loafers",
+      "category": "footwear"
+    },
+    {
+      "query": "gucci loafers -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-gucci-loafers",
+      "category": "footwear"
+    },
+    {
+      "query": "peter millar gamecocks jacket",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": false,
+      "profile": "fast",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ],
+      "id": "school-peter-millar-jacket",
+      "category": "school-gear"
+    },
+    {
+      "query": "barbour jacket",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 65,
+      "enabled": false,
+      "profile": "slow",
+      "category_id": "57988",
+      "id": "outerwear-barbour-jacket",
+      "category": "outerwear"
+    },
+    {
+      "query": "rancourt loafers -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 70,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-rancourt-loafers",
+      "category": "footwear"
+    },
+    {
+      "query": "\"peter millar\" gamecocks polo",
+      "size": [
+        "M",
+        "L"
+      ],
+      "max_price": 25,
+      "enabled": false,
+      "profile": "slow",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ],
+      "id": "school-peter-millar-polo-2",
+      "category": "school-gear"
+    },
+    {
+      "query": "\"peter millar\" gamecocks quarter zip",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": false,
+      "profile": "slow",
+      "platforms": [
+        "grailed",
+        "poshmark",
+        "shopgoodwill",
+        "vinted",
+        "facebook"
+      ],
+      "id": "school-peter-millar-quarter-zip-2",
+      "category": "school-gear"
+    },
+    {
+      "query": "zegna sweater -\"zegna sport\" -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "slow",
+      "id": "knitwear-zegna-sweater-2",
+      "category": "knitwear"
+    },
+    {
+      "query": "cheaney shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 130,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-cheaney-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "drake's london sweater -scarf",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "slow",
+      "id": "knitwear-drake-s-london-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "pringle of scotland sweater",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 120,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-pringle-of-scotland-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "n peal sweater",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 120,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-n-peal-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "alfred sargent shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-alfred-sargent-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "cordings jacket",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": false,
+      "profile": "slow",
+      "category_id": "57988",
+      "id": "outerwear-cordings-jacket",
+      "category": "outerwear"
+    },
+    {
+      "query": "zegna quarter zip -\"zegna sport\" -scarf",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "slow",
+      "id": "knitwear-zegna-quarter-zip-2",
+      "category": "knitwear"
+    },
+    {
+      "query": "carmina shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-carmina-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "vass shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-vass-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "\"gaziano\" \"girling\" shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-gaziano-girling-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
+    },
+    {
+      "query": "malo cashmere sweater -scarf",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow",
+      "id": "knitwear-malo-cashmere-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "agnona cashmere -scarf",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": true,
+      "profile": "slow",
+      "id": "knitwear-agnona-cashmere",
+      "category": "knitwear"
+    },
+    {
+      "query": "john smedley merino",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 40,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-john-smedley-merino",
+      "category": "knitwear"
+    },
+    {
+      "query": "fedeli cashmere",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 60,
+      "enabled": false,
+      "profile": "slow",
+      "id": "knitwear-fedeli-cashmere",
+      "category": "knitwear"
+    },
+    {
+      "query": "\"private white\" jacket",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 200,
+      "enabled": false,
+      "profile": "slow",
+      "category_id": "57988",
+      "id": "outerwear-private-white-jacket",
+      "category": "outerwear"
+    },
+    {
+      "query": "valstar jacket",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 200,
+      "enabled": false,
+      "profile": "slow",
+      "category_id": "57988",
+      "id": "outerwear-valstar-jacket",
+      "category": "outerwear"
+    },
+    {
+      "query": "berluti shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "size": [
+        "13"
+      ],
+      "max_price": 250,
+      "enabled": true,
+      "profile": "slow",
+      "category_id": "53120",
+      "id": "footwear-berluti-shoes",
+      "category": "footwear",
+      "size_equivalents": [
+        "12",
+        "46",
+        "47"
+      ]
     }
   ],
   "GRAB_ON_SIGHT_BRANDS": [
