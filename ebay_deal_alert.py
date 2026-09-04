@@ -1821,6 +1821,26 @@ SOLD_COMP_HIGH_CONFIDENCE = 10
 # well under this (82-401 for typical brand/category queries); a search
 # clearing 500 is a real outlier, not just a popular brand.
 MARKET_SATURATION_LISTINGS_THRESHOLD = 500
+# Ordinary Zegna knitwear is a broad used category, not one homogeneous
+# luxury price tier. Real user correction after a delivered alert: a mainline
+# wool quarter-zip that had sat at $67.99 was appraised at $250 and called a
+# 71%-under-resale Steal, while ordinary examples commonly trade around $50.
+# $100 is deliberately a generous CEILING (not a claimed exact value): it
+# leaves room above that observed market, but prevents the model from borrowing
+# Su Misura/couture/cashmere prices for an ordinary wool/merino piece. Explicit
+# exceptional line/fabric evidence opts out below.
+ZEGNA_MAINLINE_KNITWEAR_RESALE_CEILING = 100.0
+ZEGNA_EXCEPTIONAL_KNITWEAR_SIGNALS = re.compile(
+    r"\b(?:su\s+misura|couture|xxx|oasi\s+cashmere|cashmere|cashseta|"
+    r"vicu(?:n|ñ)a|silk|centoventimila|trofeo|high\s+performance|"
+    r"1[245]\s*milmil\s*1[245])\b",
+    re.IGNORECASE,
+)
+# A month is long enough for a fixed-price listing to receive meaningful market
+# exposure while staying conservative about week-to-week noise. Applied only
+# when the AI itself calls liquidity slow and no real sold comps support its
+# valuation; see the gate for the other fail-open boundaries.
+STALE_FIXED_PRICE_LISTING_DAYS = 30
 # Landed price above which a suit can no longer alert on brand tier alone
 # (see the suit bar's blind-trust branch in
 # is_blocked_by_steal_quality_gate()). Set from the user's own stated
@@ -2249,6 +2269,66 @@ def clamp_watch_resale_estimate(estimate, band):
     floor-clamp destroys."""
     _low, _avg, high = band
     return min(high, estimate)
+
+
+def clamp_zegna_mainline_knitwear_resale_estimate(estimate, listing, ai_result, category):
+    """Ceiling-only calibration for ordinary Zegna knitwear.
+
+    The brand name, "luxury", "Made in Italy", and ordinary wool/merino are
+    not evidence that a piece belongs to Zegna's exceptional resale tier.
+    Explicit line or fiber evidence in seller text or photo-derived tag/
+    branding fields opts out. Like the watch clamp, this can only lower an
+    estimate; it never manufactures value by raising one.
+    """
+    if estimate is None or category != "knitwear":
+        return estimate
+    listing = listing or {}
+    ai_result = ai_result or {}
+    title = listing.get("title") or ""
+    if not brand_in(title[:BRAND_TITLE_WINDOW_CHARS].lower(), ("zegna",)):
+        return estimate
+    evidence = " ".join(
+        str(value)
+        for value in (
+            title,
+            listing.get("description"),
+            ai_result.get("fabric_from_tag"),
+            ai_result.get("visible_brand_evidence"),
+        )
+        if value
+    )
+    if ZEGNA_EXCEPTIONAL_KNITWEAR_SIGNALS.search(evidence):
+        return estimate
+    return min(estimate, ZEGNA_MAINLINE_KNITWEAR_RESALE_CEILING)
+
+
+def ebay_fixed_price_listing_age_days(listing, now=None):
+    """Age of an eBay fixed-price listing, or None when not trustworthy.
+
+    Browse API search results already carry itemCreationDate. Missing, malformed,
+    future-dated, non-eBay, and auction listings deliberately fail open.
+    """
+    listing = listing or {}
+    if listing.get("platform") not in (None, "ebay"):
+        return None
+    if listing.get("is_ending_soon_auction") or "AUCTION" in (listing.get("buyingOptions") or []):
+        return None
+    created_raw = listing.get("itemCreationDate")
+    if not created_raw:
+        return None
+    try:
+        created = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    seconds = (reference.astimezone(timezone.utc) - created.astimezone(timezone.utc)).total_seconds()
+    if seconds < 0:
+        return None
+    return int(seconds // 86400)
 
 
 def is_oversized_fitted_shirt(haystack):
@@ -3126,8 +3206,12 @@ def _deepseek_second_opinion(listing, ai_result, category, hard_stop=None):
         "keys: {\"estimated_resale_value\": number|null, \"reasoning\": string}. "
         "estimated_resale_value is the item's typical resale/secondhand market "
         "value in USD as a positive number, or null if the text evidence is too "
-        "thin to estimate it. reasoning is one short sentence justifying the "
-        "number.\n"
+        "thin to estimate it. Do not transfer a luxury brand's couture, made-to-"
+        "measure, rare-line, or exceptional-fiber prices onto an ordinary mainline "
+        "item. In particular, ordinary Zegna wool/merino knitwear is not priced like "
+        "Zegna Su Misura/couture/cashmere: require explicit line or fiber evidence "
+        "before using those premium comparisons. 'Luxury' and 'Made in Italy' are "
+        "not tier evidence. reasoning is one short sentence justifying the number.\n"
         f"Category: {category}\n"
         f"Title: {title}\n"
         f"Description: {description}\n"
@@ -3557,7 +3641,14 @@ def check_photos_with_gemini(
         "price when new in USD, or null if you cannot reasonably estimate it. "
         "estimated_resale_value is the item's typical resale/secondhand market "
         "value in similar used condition right now in USD, or null if you cannot "
-        "reasonably estimate it. price_confidence must be one of \"high\", "
+        "reasonably estimate it. Do not infer the maker's couture, made-to-measure, "
+        "rare-line, or exceptional-fiber tier from the luxury brand name alone. "
+        "Price the exact garment type, construction tier, and tag-confirmed fabric. "
+        "For Zegna specifically, ordinary mainline wool/merino knitwear has a much "
+        "lower secondhand market than Su Misura/couture/cashmere pieces; do not use "
+        "those premium comparisons without explicit line or fiber evidence. Words "
+        "like 'luxury' and 'Made in Italy' are not that evidence. "
+        "price_confidence must be one of \"high\", "
         "\"medium\", or \"low\". damage_found means visible holes, stains, moth "
         "damage, heavy pilling, tears, or other undisclosed damage beyond normal "
         "light wear. Examine every photo closely, including sleeves, chest, and "
@@ -3802,6 +3893,27 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # test_gamecocks_bar_always_alerts_even_with_no_ai_check.
     search_query_lower = (result.get("search_query") or "").lower()
     listing_title_lower = (result.get("listing") or {}).get("title", "").lower()
+
+    # LISTING AGE AS CONTRADICTORY MARKET EVIDENCE. A fixed-price item that
+    # has remained purchasable for a month is not necessarily bad, but when
+    # the AI itself says the item is slow-moving and calls it a Steal with no
+    # completed-sale evidence, the market has directly contradicted that
+    # urgency claim. Real report: an ordinary Zegna wool quarter-zip had been
+    # sitting at $67.99 yet alerted as 71% under a guessed $250 resale value.
+    # eBay Browse search already supplies itemCreationDate. Other adapters do
+    # not normalize a trustworthy creation timestamp, so missing/non-eBay
+    # data fails open rather than fabricating an age. Auctions are separately
+    # governed by their end time and bid count and are excluded by the helper.
+    has_real_comps = result.get("has_sold_comps") or any(
+        "sold comps" in (flag or "").lower() for flag in (result.get("flags") or [])
+    )
+    if deal_rating == "Steal" and liquidity == "slow" and not has_real_comps:
+        listing_age_days = ebay_fixed_price_listing_age_days(result.get("listing"))
+        if listing_age_days is not None and listing_age_days >= STALE_FIXED_PRICE_LISTING_DAYS:
+            return (
+                f"stale fixed-price listing ({listing_age_days} days old) contradicts "
+                "slow-liquidity AI-only Steal claim"
+            )
 
     # POKER CHIPS - photo-based authenticity triage only. Specific casino,
     # set, and rarity can move value enormously, so this branch never trusts
@@ -7117,6 +7229,22 @@ def run():
             result["estimated_resale_value"] = _sane_ai_price(ai_result.get("estimated_resale_value"))
             result["price_confidence"] = ai_result.get("price_confidence")
 
+            original_zegna_estimate = result["estimated_resale_value"]
+            calibrated_zegna_estimate = clamp_zegna_mainline_knitwear_resale_estimate(
+                original_zegna_estimate, listing, ai_result, category
+            )
+            if calibrated_zegna_estimate != original_zegna_estimate:
+                result["estimated_resale_value"] = calibrated_zegna_estimate
+                ai_result["estimated_resale_value"] = calibrated_zegna_estimate
+                result.setdefault("flags", []).append(
+                    f"ordinary Zegna knitwear resale ceiling: ${original_zegna_estimate} "
+                    f"reduced to ${calibrated_zegna_estimate} (no exceptional line/fiber evidence)"
+                )
+                logger.info(
+                    "Calibrating %s ordinary Zegna knitwear resale estimate $%s -> $%s",
+                    item_id, original_zegna_estimate, calibrated_zegna_estimate,
+                )
+
             if category == "watches" and result["estimated_resale_value"] is not None:
                 # Live miss: 3 Movado listings alerted off AI resale guesses
                 # of $595-795 while real comps for those exact models
@@ -7249,6 +7377,16 @@ def run():
                     f"${result.get('estimated_resale_value')}"
                 )
             result["estimated_resale_value"] = comp_median
+            calibrated_comp_median = clamp_zegna_mainline_knitwear_resale_estimate(
+                result["estimated_resale_value"], listing, ai_result, category
+            )
+            if calibrated_comp_median != result["estimated_resale_value"]:
+                original_comp_median = result["estimated_resale_value"]
+                result["estimated_resale_value"] = calibrated_comp_median
+                result.setdefault("flags", []).append(
+                    f"ordinary Zegna knitwear resale ceiling: sold median ${original_comp_median} "
+                    f"reduced to ${calibrated_comp_median} (query comps mix product tiers)"
+                )
             # Real completed sales, so this is genuinely better-evidenced
             # than the medium it used to be labelled.
             result["price_confidence"] = "high" if comp_count >= SOLD_COMP_HIGH_CONFIDENCE else "medium"

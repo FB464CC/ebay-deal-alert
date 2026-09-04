@@ -1203,6 +1203,84 @@ class WatchPriceBand(unittest.TestCase):
         self.assertEqual(m.clamp_watch_resale_estimate(10, band), 10, "must stay at the AI's real number, not jump to the floor")
 
 
+class ZegnaKnitwearValuationCalibration(unittest.TestCase):
+    EXACT_TITLE = (
+        "Ermenegildo Zegna Sweater Quarter Zip Wool Mens XL Black "
+        "Made in Italy Luxury"
+    )
+
+    def test_exact_reported_mainline_wool_listing_cannot_keep_250_resale(self):
+        listing = {"title": self.EXACT_TITLE}
+        ai_result = {
+            "fabric_from_tag": "100% wool",
+            "visible_brand_evidence": "Ermenegildo Zegna neck label",
+        }
+        calibrated = m.clamp_zegna_mainline_knitwear_resale_estimate(
+            250, listing, ai_result, "knitwear"
+        )
+
+        self.assertEqual(calibrated, 100)
+        self.assertEqual(
+            m.compute_deal_rating(72.06, calibrated),
+            ("Fair", 28),
+            "the delivered 71%-under-resale Steal must no longer be possible",
+        )
+
+    def test_ceiling_never_raises_a_lower_appraisal(self):
+        calibrated = m.clamp_zegna_mainline_knitwear_resale_estimate(
+            50, {"title": self.EXACT_TITLE}, {}, "knitwear"
+        )
+        self.assertEqual(calibrated, 50)
+
+    def test_explicit_exceptional_line_or_fiber_evidence_opts_out(self):
+        cases = (
+            ({"title": "Ermenegildo Zegna Su Misura Wool Sweater"}, {}),
+            ({"title": "Zegna Couture XXX Knit Cardigan"}, {}),
+            ({"title": "Zegna Oasi Cashmere Sweater"}, {}),
+            ({"title": "Zegna Crewneck Sweater"}, {"fabric_from_tag": "100% cashmere"}),
+            ({"title": "Zegna 15 Milmil 15 Knit Pullover"}, {}),
+        )
+        for listing, ai_result in cases:
+            with self.subTest(title=listing["title"], ai_result=ai_result):
+                self.assertEqual(
+                    m.clamp_zegna_mainline_knitwear_resale_estimate(
+                        250, listing, ai_result, "knitwear"
+                    ),
+                    250,
+                )
+
+    def test_other_brands_and_other_zegna_categories_are_untouched(self):
+        cases = (
+            ({"title": "Loro Piana Wool Quarter Zip"}, "knitwear"),
+            ({"title": "Ermenegildo Zegna Wool Two Piece Suit"}, "tailoring"),
+        )
+        for listing, category in cases:
+            with self.subTest(title=listing["title"], category=category):
+                self.assertEqual(
+                    m.clamp_zegna_mainline_knitwear_resale_estimate(
+                        250, listing, {}, category
+                    ),
+                    250,
+                )
+
+    def test_vision_prompt_requires_product_tier_evidence(self):
+        listing = {
+            "title": self.EXACT_TITLE,
+            "image": {"imageUrl": "https://example.test/zegna.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(m, "_call_photo_check", return_value={}) as photo_check:
+            m.check_photos_with_gemini(
+                listing, category="knitwear", current_month_name="September"
+            )
+
+        prompt = photo_check.call_args.args[0]
+        self.assertIn("ordinary mainline wool/merino knitwear", prompt)
+        self.assertIn("Su Misura/couture/cashmere", prompt)
+        self.assertIn("'Made in Italy'", prompt)
+
+
 class SizeMatching(unittest.TestCase):
     """Size normalization and per-search footwear aliases."""
 
@@ -1986,6 +2064,57 @@ class ScoreListingHardFails(unittest.TestCase):
 
 
 class StealQualityGate(unittest.TestCase):
+    def _aged_zegna_result(self, age_days=45):
+        created = datetime.now(timezone.utc) - timedelta(days=age_days)
+        return {
+            "deal_rating": "Steal",
+            "discount_pct": 71,
+            "price_confidence": "medium",
+            "liquidity": "slow",
+            "brand_tier": "grab_on_sight",
+            "search_query": "zegna quarter zip",
+            "listing": {
+                "title": (
+                    "Ermenegildo Zegna Sweater Quarter Zip Wool Mens XL Black "
+                    "Made in Italy Luxury"
+                ),
+                "buyingOptions": ["FIXED_PRICE"],
+                "itemCreationDate": created.isoformat().replace("+00:00", "Z"),
+            },
+        }
+
+    def test_exact_old_slow_zegna_ai_only_steal_is_blocked(self):
+        # Independent defense for the second half of the real complaint:
+        # even if a future model bypasses the valuation calibration and again
+        # says $250/Steal, 45 days of market exposure contradicts the urgency.
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._aged_zegna_result(), category="knitwear"
+        )
+        self.assertIsNotNone(reason)
+        self.assertIn("stale fixed-price listing", reason)
+        self.assertIn("45 days", reason)
+
+    def test_fresh_listing_does_not_get_the_stale_market_block(self):
+        self.assertIsNone(
+            m.is_blocked_by_steal_quality_gate(
+                self._aged_zegna_result(age_days=7), category="knitwear"
+            )
+        )
+
+    def test_real_sold_comps_override_listing_age_contradiction(self):
+        result = self._aged_zegna_result()
+        result["has_sold_comps"] = True
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+
+    def test_auction_and_unusable_age_fail_open(self):
+        result = self._aged_zegna_result()
+        result["listing"]["buyingOptions"] = ["AUCTION"]
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+
+        result = self._aged_zegna_result()
+        result["listing"]["itemCreationDate"] = "not-a-date"
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+
     def test_narrow_category_grab_on_sight_searches_never_blind_trust(self):
         # Root issue this mechanism exists for: "montblanc pen"
         # (grab_on_sight tier) fired alerts for an umbrella, perfume, an
@@ -5407,6 +5536,60 @@ class RunIntegration(unittest.TestCase):
         (delivered_record,) = self._alert_log_records()
         self.assertIs(delivered_record["delivered"], True)
         self.assertFalse(m.is_new(self._db(), item_id), "an alerted item is seen")
+
+    def test_reported_zegna_wool_quarter_zip_false_steal_is_suppressed(self):
+        # Faithful production regression: $67.99 + tax = $72.06, while the
+        # vision result says $800 retail / $250 resale and slow liquidity.
+        # The mainline-wool calibration must change the $250 estimate before
+        # compute_deal_rating and the knitwear gate must suppress the alert.
+        self.ai_result = {
+            "damage_found": False,
+            "weird_logo_found": False,
+            "looks_good": True,
+            "summary": "Black Ermenegildo Zegna wool quarter-zip in used condition",
+            "visible_brand_evidence": "Ermenegildo Zegna neck label",
+            "estimated_retail_price": 800,
+            "estimated_resale_value": 250,
+            "price_confidence": "medium",
+            "fabric_from_tag": "100% wool",
+            "fabric_confidence": "high",
+            "liquidity": "slow",
+            "peter_millar_back_crown_visible": None,
+        }
+        item_id = "v1|zegna-quarter-zip-regression|0"
+        item = self._ebay_item(
+            item_id,
+            "Ermenegildo Zegna Sweater Quarter Zip Wool Mens XL Black Made in Italy Luxury",
+            67.99,
+        )
+        item["itemCreationDate"] = (
+            datetime.now(timezone.utc) - timedelta(days=45)
+        ).isoformat().replace("+00:00", "Z")
+        # A garment-matched query median still mixes ordinary wool with
+        # couture/cashmere tiers. It must not undo the item-level ceiling.
+        item["sold_comp_median"] = 250
+        item["sold_comp_count"] = 6
+        self._serve(
+            {
+                "query": "zegna quarter zip",
+                "max_price": 100,
+                "category_id": "11484",
+                "category": "knitwear",
+                "enabled": True,
+                "profile": "slow",
+            },
+            [item],
+        )
+
+        m.run()
+
+        self.assertEqual(self.alerts, [], "the reported false Steal must not send again")
+        (record,) = self._alert_log_records()
+        self.assertEqual(record["estimated_retail_price"], 800)
+        self.assertEqual(record["estimated_resale_value"], 100)
+        self.assertEqual(record["deal_rating"], "Fair")
+        self.assertIs(record["has_sold_comps"], True)
+        self.assertIn("knitwear bar", record["reason"])
 
     def test_deepseek_sanity_suppresses_part_accessory_only(self):
         # The vision AI check passed (self.ai_result is AI_STEAL), but the

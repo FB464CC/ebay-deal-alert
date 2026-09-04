@@ -1,0 +1,136 @@
+Zegna valuation investigation report
+====================================
+
+Progress log
+------------
+- Verified the existing checkout without network access. HEAD is
+  a422b138230ec2bf3c85dc158ff3fc919774358b ("Fix Telegram bot: follow-ups on caption replies, and itemprop/microdata prices"), a normal-looking recent repository commit.
+- Confirmed the worktree was clean at the start of this task.
+
+Investigation findings (before changes)
+---------------------------------------
+- Signal 1 is real. The generic clothing vision prompt (ebay_deal_alert.py
+  lines 3523-3612 before this change) asks for current typical resale and
+  visible pricing evidence, but it gives the model no instruction to separate
+  ordinary mainline Zegna knitwear from Su Misura/couture or exceptional-fiber
+  pieces. "zegna" is in GRAB_ON_SIGHT_BRANDS (loaded at lines 57-63), and the
+  knitwear gate (lines 4066-4081) accepts a medium/high-confidence AI "Steal"
+  without any Zegna product-tier calibration. Thus an AI value of $250 against
+  the alert's roughly $72 landed cost computes as (250-72)/250 = about 71%,
+  which compute_deal_rating() (lines 3699-3731) labels "Steal". The notification
+  simply prints those fields (lines 4742-4762). The reported $800/$250/71%
+  numbers therefore came directly from an unbounded AI appraisal, not from a
+  deterministic Zegna valuation table.
+- Existing precedent supports a ceiling-only correction: watch estimates are
+  clamped down to known brand/model ceilings but never raised to a floor
+  (lines 7120-7150), and weaker AI estimates can be replaced by conservative
+  second opinions or real sold medians (lines 7152-7264). Sold comps are only
+  query/garment matched, not construction-tier matched (lines 6173-6217), so
+  they do not by themselves distinguish an ordinary wool Zegna sweater from a
+  couture/cashmere example. The existing Loro Piana/Cucinelli treatment raises
+  the alert threshold to Steal and confirms the title brand, but it does not
+  calibrate product-line/fabric valuation. The watch ceiling-only pattern was
+  therefore the closer precedent to reuse for this pricing error.
+- Signal 2 is real and actionable for eBay. search_ebay() returns each raw
+  Browse item_summary dictionary unchanged apart from adding seller feedback
+  (lines 744-898). eBay's official Browse API release notes state that search
+  returns itemCreationDate, but the bot never reads it. Consequently an old
+  fixed-price listing and a fresh one are treated identically. Auctions do use
+  itemEndDate/bidCount and closing-window rules; ShopGoodwill similarly uses
+  remainingTime/numBids. The current normalized adapters for Grailed, Poshmark,
+  Vinted, OfferUp, and Depop do not carry a creation timestamp, likes, saves,
+  or watcher history into make_listing(); ShopGoodwill does not carry a start
+  time either. Grailed's search index is newest-first by date added, but its
+  adapter does not extract a per-hit date field. No current source supplies movement
+  history, so this change must not pretend to measure likes/saves movement.
+- The requested bd35e3d0 example is not present in this grafted one-commit
+  checkout, so its diff could not be inspected locally. Current source comments
+  and regression tests nevertheless show the intended production-miss pattern:
+  root-cause the exact mechanism, add a conservative hard constraint, and cover
+  the reported fixture plus nearby boundaries.
+
+Changes implemented
+-------------------
+- Added a ceiling-only ordinary-Zegna-knitwear calibration. A model or broad
+  query comp cannot value ordinary mainline Zegna knitwear above $100 without
+  explicit evidence of Su Misura/couture/XXX, a named exceptional Zegna fabric,
+  or an exceptional fiber such as cashmere/vicuna/silk. The $100 figure is an
+  intentionally generous upper bound relative to the user's observed ~$50
+  market, not a claim that every such sweater is worth exactly $100. The helper
+  never raises an estimate and does not apply to other brands/categories.
+- Applied that ceiling before deal-rating computation and again after any broad
+  query sold-comp override, because otherwise a mixed-tier "zegna sweater"
+  median could undo the correction. Added an audit flag whenever it lowers a
+  value.
+- Strengthened both the clothing vision appraisal prompt and the text-only
+  second-opinion prompt: luxury brand name, "Made in Italy", and generic
+  "luxury" wording are not product-tier evidence; the appraiser must distinguish
+  ordinary mainline construction/fabric from explicitly supported couture,
+  made-to-measure, rare-line, and exceptional-fiber pieces.
+- Added an eBay fixed-price age parser and a 30-day contradiction gate. It only
+  blocks an AI-only Steal when the AI also says liquidity is slow, the listing
+  is at least 30 days old, and no real sold comps support the claim. It fails
+  open for missing/malformed/future dates and non-eBay listings, and excludes
+  auctions because their bid/end-time gate is the relevant market signal.
+- Added unit boundaries plus an end-to-end run regression using the exact title,
+  $67.99 item price ($72.06 landed after tax), $800 retail guess, $250 resale
+  guess, slow liquidity, ordinary wool evidence, and a 45-day-old creation date.
+  It is now calibrated to $100/Fair and suppressed by the knitwear gate.
+
+Final source map
+----------------
+- Configuration is loaded at ebay_deal_alert.py:57-63. Read-only inspection of
+  config.json found enabled Zegna sweater/quarter-zip searches at lines 449 and
+  566 (with duplicate search definitions later) and "zegna" in the global
+  GRAB_ON_SIGHT_BRANDS list at line 2644. No config was changed.
+- The new constants are at ebay_deal_alert.py:1823-1843; the ceiling helper and
+  fail-open eBay age parser are at lines 2274-2333.
+- The second-opinion prompt is at ebay_deal_alert.py:3184-3220. The generic
+  clothing vision prompt and its tier-aware appraisal instructions are at lines
+  3603-3702, including the Zegna-specific distinction at lines 3647-3652.
+- Deal math remains unchanged at ebay_deal_alert.py:3790-3822: discount is
+  (resale - landed price) / resale, and 70% or more is "Steal". The age-aware
+  contradiction check is at lines 3897-3917, ahead of the existing knitwear
+  Steal-only bar at lines 4178-4193. The Loro Piana/Cucinelli query-specific
+  Steal bar is at lines 4101-4144; it is a stricter threshold, not a valuation
+  tier model.
+- AI estimates are calibrated before rating at ebay_deal_alert.py:7232-7246 and
+  query sold medians are calibrated again at lines 7380-7389. Alert rendering
+  still prints the computed rating and retail/resale fields at lines 4854-4874.
+- eBay's raw item_summary path is ebay_deal_alert.py:744-898; it preserves
+  itemCreationDate. Official eBay Browse API release notes confirm that search
+  returns this UTC creation timestamp:
+  https://www.developer.ebay.com/develop/api/browse-api/release-notes
+- Cross-platform normalization is platforms.py:260-322. The inspected adapter
+  mappings are Grailed 491-531, Poshmark 721-788, ShopGoodwill 934-1066,
+  Vinted 1315-1346, OfferUp 1545-1578, and Depop 1811-1832. None currently
+  carries creation age or engagement movement into the shared listing. Grailed
+  selects a date-added index at line 424, which orders results but is not an age
+  value consumed by the bot.
+- Regression coverage is test_ebay_deal_alert.py:1205-1282 (valuation/prompt),
+  2066-2114 (age boundaries), and 5540-5592 (full exact-listing run). The
+  run-level fixture also supplies a $250 six-sale broad query median and proves
+  it cannot undo the item-level ordinary-mainline ceiling.
+
+Validation
+----------
+- Required AST parse, run exactly with python3: PASS (exit code 0, no output).
+- Focused regressions: 10 passed, 371 deselected, 7 subtests passed in 0.66s.
+- Final full command `python3 -m pytest -q`: PASS - 513 passed, 257 subtests
+  passed in 11.42s. Its one warning is an lxml `strip_cdata` deprecation warning.
+  (The focused invocation also surfaced an existing invalid-escape SyntaxWarning
+  in test_ebay_deal_alert.py:6205.)
+- `git diff --check`: PASS (exit code 0; only Git's Windows LF-to-CRLF notices).
+- Dependencies were already installed, so no pip install was needed.
+- Final touched paths are ebay_deal_alert.py, test_ebay_deal_alert.py, and this
+  requested report only. No commit or push was made.
+
+Uncertainty and scope
+---------------------
+Resale value is inherently fuzzy. This change does not claim that every
+ordinary Zegna sweater is worth $50 or $100. It encodes the narrower evidence:
+an ordinary mainline wool/merino piece must not inherit a $250 couture/cashmere
+valuation solely from the Zegna name. Likewise, 30 days on market is not proof
+that an item has no value; it is used only as contradictory evidence against a
+slow-liquidity, AI-only Steal claim. Platforms without a trustworthy creation
+timestamp or engagement history are deliberately left unchanged.
