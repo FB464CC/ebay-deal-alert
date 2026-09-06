@@ -1285,6 +1285,93 @@ class WatchPriceBand(unittest.TestCase):
         self.assertEqual(m.clamp_watch_resale_estimate(10, band), 10, "must stay at the AI's real number, not jump to the floor")
 
 
+class WatchDescriptionValueEvidence(unittest.TestCase):
+    def test_extracts_only_explicit_value_language_and_takes_highest(self):
+        description = (
+            "Reference 166.010. Recently serviced for $350. "
+            "Appraised at $1,400; replacement value USD $2.5k with box and papers."
+        )
+        self.assertEqual(
+            m.extract_watch_description_disclosed_value(description), 2500
+        )
+
+    def test_actual_asking_price_is_extracted_but_service_receipt_is_not(self):
+        self.assertEqual(m.extract_watch_description_disclosed_value(
+            "Omega reference 166.010. Asking $450 firm; service receipt was $300."
+        ), 450)
+        self.assertIsNone(m.extract_watch_description_disclosed_value(
+            "Omega reference 166.010. Service receipt was $300."
+        ))
+
+    def test_higher_seller_claim_is_flagged_but_never_changes_bot_estimates(self):
+        result = {
+            "estimated_resale_value": 1000,
+            "estimated_retail_price": 1500,
+            "deal_rating": "Steal",
+            "discount_pct": 84,
+        }
+        listing = {"description": "Independent appraisal value: $1,400."}
+
+        self.assertEqual(m.annotate_watch_description_value(result, listing), 1400)
+        self.assertEqual(result["watch_description_disclosed_value"], 1400)
+        self.assertEqual(result["estimated_resale_value"], 1000)
+        self.assertEqual(result["estimated_retail_price"], 1500)
+        self.assertEqual(result["discount_pct"], 84)
+        self.assertEqual(
+            result["watch_description_value_basis"],
+            "appraisal/current-market value",
+        )
+        self.assertIn("unverified", result["flags"][-1])
+
+    def test_higher_description_asking_price_flags_structured_price_conflict(self):
+        result = {
+            "item_price": 53,
+            "estimated_resale_value": 1000,
+            "estimated_retail_price": 1500,
+        }
+        listing = {"description": "Actual asking price is $500, not the placeholder."}
+
+        self.assertEqual(m.annotate_watch_description_value(result, listing), 500)
+        self.assertEqual(
+            result["watch_description_value_basis"], "actual asking price"
+        )
+        self.assertEqual(result["estimated_resale_value"], 1000)
+        self.assertIn("above structured item price $53", result["flags"][-1])
+
+    def test_lower_description_claim_is_ignored(self):
+        result = {"estimated_resale_value": 1000}
+        self.assertIsNone(m.annotate_watch_description_value(
+            result, {"description": "Market value $800."}
+        ))
+        self.assertNotIn("watch_description_disclosed_value", result)
+
+    def test_watch_prompt_reconciles_description_claims_without_trusting_them(self):
+        listing = {
+            "title": "Vintage Omega Geneve",
+            "description": (
+                "Ref. 166.010, appraised at $1,400, solid 9K gold, full box and papers."
+            ),
+            "price": {"value": "218.56", "currency": "USD"},
+            "image": {"imageUrl": "https://example.test/watch.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(m, "_call_photo_check", return_value={}) as photo_check:
+            m.check_photos_with_gemini(
+                listing, category="watches", current_month_name="September"
+            )
+
+        prompt = photo_check.call_args.args[0]
+        self.assertIn("appraised at $1,400", prompt)
+        self.assertIn("Marketplace structured item price: $218.56", prompt)
+        self.assertIn("conflicts with an actual asking price", prompt)
+        self.assertIn("seller_stated_value", prompt)
+        self.assertIn("model/reference number", prompt)
+        self.assertIn("box-and-papers completeness claim", prompt)
+        self.assertIn("never proves authenticity", prompt)
+        self.assertIn("must not automatically become estimated_resale_value", prompt)
+
+
 class ZegnaKnitwearValuationCalibration(unittest.TestCase):
     EXACT_TITLE = (
         "Ermenegildo Zegna Sweater Quarter Zip Wool Mens XL Black "
@@ -3472,6 +3559,81 @@ class SendAlertRetailResaleLine(unittest.TestCase):
         }
         message = self._send_and_capture(result)
         self.assertNotIn("seller:", message)
+
+    def test_extreme_watch_discount_gets_prominent_nonblocking_warning(self):
+        result = {
+            "listing": {
+                "title": "Vintage Omega Geneve 9K Solid Gold Full Set",
+                "itemWebUrl": "https://x",
+                "platform": "vinted",
+            },
+            "category_id": m.WATCH_CATEGORY_ID,
+            "price": 218.56,
+            "estimated_resale_value": 1400,
+            "deal_rating": "Steal",
+            "discount_pct": 84,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("!!! EXTREME WATCH DISCOUNT (84% under estimate)", message)
+        self.assertIn("counterfeit/misrepresentation red flag", message)
+        self.assertIn("not proof of a steal", message)
+        self.assertIn("bot cannot detect counterfeits", message)
+        self.assertLess(
+            message.index("EXTREME WATCH DISCOUNT"), message.index("resale ~$1400")
+        )
+
+    def test_watch_below_extreme_threshold_keeps_standard_disclaimer_only(self):
+        result = {
+            "listing": {
+                "title": "Seiko Automatic",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category_id": m.WATCH_CATEGORY_ID,
+            "price": 50,
+            "estimated_resale_value": 200,
+            "deal_rating": "Steal",
+            "discount_pct": m.WATCH_EXTREME_DISCOUNT_WARNING_PCT - 1,
+        }
+        message = self._send_and_capture(result)
+        self.assertNotIn("EXTREME WATCH DISCOUNT", message)
+        self.assertIn("bot cannot detect counterfeits", message)
+
+    def test_higher_description_disclosed_value_is_visible_as_unverified_claim(self):
+        result = {
+            "listing": {
+                "title": "Vintage Oris Automatic",
+                "itemWebUrl": "https://x",
+                "platform": "depop",
+            },
+            "category_id": m.WATCH_CATEGORY_ID,
+            "price": 53,
+            "estimated_resale_value": 1000,
+            "watch_description_disclosed_value": 1500,
+            "watch_description_value_basis": "appraisal/current-market value",
+            "deal_rating": "Steal",
+            "discount_pct": 95,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn(
+            "SELLER CLAIM: description says appraisal/current-market value ~$1500",
+            message,
+        )
+        self.assertIn("unverified; deal math did not trust it", message)
+
+    def test_extreme_discount_warning_is_watch_specific(self):
+        result = {
+            "listing": {
+                "title": "Canali Suit",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category_id": "1059",
+            "price": 50,
+            "deal_rating": "Steal",
+            "discount_pct": 95,
+        }
+        self.assertNotIn("EXTREME WATCH DISCOUNT", self._send_and_capture(result))
 
     def test_ntfy_actions_open_listing_and_sold_comps_without_raw_body_url(self):
         result = {

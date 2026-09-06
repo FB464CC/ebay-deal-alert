@@ -1,0 +1,86 @@
+WATCH TRUST INVESTIGATION
+
+Progress 1 - repository verification
+- Verified the existing local checkout without network access.
+- HEAD: 86e4cad856ebfc4487456985765cc91cf16babe9 Scout ingest: 21 listing(s) from extension
+- The commit identifier and subject are structurally sane. No fetch, pull, or clone was run.
+
+Progress 2 - current watch path findings (pre-change line numbers)
+- Signal 1 confirmed. compute_deal_rating() at ebay_deal_alert.py:3823-3855 turns every discount >=70% into the positive label "Steal". The watch gate at 4384-4433 requires an AI result, rejects an AI-confirmed mismatch/low-confidence estimate, and applies available eBay feedback, but adds no scrutiny based on discount magnitude. send_alert() at 4902-4907 prints that positive percentage and 4936-4949 adds the same unconditional one-line disclaimer to every watch, whether the claimed gap is 50% or 95%.
+- The watch vision prompt does mention that a far-too-low price combined with generic/stock photos or boxes can support counterfeit_suspected (3628-3636). That is not a discount-magnitude check: the prompt does not receive the bot's computed discount, the structured gate never evaluates an extreme discount, and the fixed disclaimer does not distinguish ordinary bargains from implausible claimed gaps.
+- Signal 2 is not a missing-threading bug. check_photos_with_gemini() reads listing["description"] at 3378, builds a truncated 1500-character description_block at 3379-3383, and includes it in poker (3427), golf (3499), watches (3590), and the generic apparel branch (3649). For eBay, run() fetches the full description immediately before the vision call at 7013-7025; marketplace adapters can populate it earlier.
+- The confirmed gap is reconciliation. The watch prompt at 3601-3608 tells the model to identify brand/model/reference purely from visible evidence and 3620-3626 asks for its own condition-adjusted resale estimate, but does not ask it to extract or surface explicit description-disclosed appraisal/value evidence, model/reference, or completeness/authentication claims. Downstream at 7281-7385 accepts the AI value, applies ceiling-only watch calibration, and may keep a lower second opinion. There is no conservative description-disclosed higher-value signal. Sold-comp overrides are deliberately excluded for watches at 7409-7425 because prices cannot solve authentication risk.
+
+Progress 3 - implemented safeguards
+- Added WATCH_EXTREME_DISCOUNT_WARNING_PCT=80. This is deliberately a warning threshold, not a block or an authenticity verdict. It is above the existing 70% "Steal" boundary and was calibrated to the reported bad alerts (84%, 88%, 95%), rather than presented as a universal market statistic.
+- Added a prominent watch-only alert line at/above that threshold: the apparent gap is a counterfeit/misrepresentation red flag and is not proof of a steal. The existing unconditional movement/serial/box-papers disclaimer remains intact immediately afterward.
+- Qualitative external cross-check: eBay's own seller-fraud guidance says a too-good-to-be-true deal is suspect, while its watch Authenticity Guarantee relies on expert physical inspection and can reject a watch whose authenticity cannot be verified. Chrono24's buyer guidance likewise warns that some watch offers are too good to be true and recommends professional authentication. Sources: https://www.ebay.com/help/buying/working-sellers/seller-fraud?id=4024 ; https://www.ebay.com/help/buying/default/buying-authenticity-guarantee?id=5470 ; https://www.chrono24.com/magazine/what-to-consider-when-buying-a-watch-p_110799/
+- Expanded the watch prompt to extract seller_stated_value/value context and seller identity/completeness claims (reference, material, service/authentication, box/papers), reconcile them with visible evidence, and explicitly avoid treating seller prose or papers as authenticity proof or automatically converting a claimed appraisal into resale value.
+- Added narrow deterministic extraction for explicit appraisal/market/resale/replacement/retail/MSRP/worth language next to a dollar amount. Bare prices, service receipts, and reference numbers are ignored. When the disclosed amount is above the bot's resale estimate, the result/log gets an unverified conflict flag and the watch alert surfaces both numbers.
+- The seller-stated amount never mutates estimated_resale_value, estimated_retail_price, price confidence, deal rating, or discount percentage. This avoids manufacturing an even larger false "Steal" from untrusted seller prose.
+- Focused validation after implementation: 8 passed, 387 deselected, 1 pre-existing SyntaxWarning in 0.75s.
+
+Progress 4 - final code locations and validation
+- New warning threshold: ebay_deal_alert.py:493.
+- Conservative description-value extraction and annotation: ebay_deal_alert.py:2296-2364.
+- Watch prompt reconciliation fields/rules: ebay_deal_alert.py:3672-3703.
+- Alert rendering for the seller claim, extreme-discount warning, and unchanged unconditional disclaimer: ebay_deal_alert.py:5027-5062.
+- AI-output preservation for audit logs: ebay_deal_alert.py:7371-7383. Final post-calibration description annotation: 7579-7586.
+- Regression tests: test_ebay_deal_alert.py:1288-1348 and 3538-3591.
+- `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`: exit 0, no output.
+- `python3 -m pytest -q`: exit 0. Real summary: `527 passed, 1 warning, 275 subtests passed in 11.98s`.
+- The one warning is unrelated and pre-existing: lxml DeprecationWarning that HTMLParser's strip_cdata option has never done anything and will eventually be removed, emitted during RunIntegration::test_mid_run_429_also_stops_the_auction_lane.
+- `git diff --check`: exit 0. It printed only Git's LF-to-CRLF working-copy notices for the two edited Python files; no whitespace errors.
+
+Uncertainty / limits
+- Neither a price gap, a seller's appraisal, a reference number, box/papers, a certificate, nor compressed listing photos establish authenticity. The change deliberately does not block watches merely for being unusually cheap and does not raise the bot's resale estimate from seller prose. It gives the buyer sharper, category-specific warnings and preserves conflicting seller evidence for manual review.
+- The 80% boundary is a bounded operational heuristic tied to the actual 84-95% bad-alert cluster, not a claim that a genuine watch can never sell at that discount. Professional physical inspection and real sold-comparable research remain necessary.
+- No dependency installation was needed. No config.json, poll.yml, web/api, or chrome-extension files were touched. No commit or push was made.
+
+Progress 5 - final-state correction after last integration pass
+- The final description reconciliation was broadened to distinguish three claims instead of treating every amount as resale value: (1) an actual asking/transaction price is compared with the structured listing item price, (2) appraisal/current-market/resale value is compared with the bot resale estimate, and (3) retail/replacement/MSRP is compared with the bot retail estimate. This directly covers a seller disclosing a higher real asking price in prose without incorrectly comparing MSRP to resale. Bare service-receipt prices remain ignored.
+- The watch AI now also receives the marketplace's structured item price and is explicitly told to report a conflict with a description-disclosed actual asking price. It remains untrusted metadata and is not authenticity proof.
+- Warning order was tightened: extreme-discount risk, seller-description conflicts, and the unconditional authenticity disclaimer now render directly after the deal rating, before retail/resale and feedback lines that could otherwise push them out of a truncated lock-screen notification.
+- Superseding final code locations: extraction/reconciliation at ebay_deal_alert.py:2296-2435; structured-price plus description-aware watch prompt at 3729-3784; watch warnings at 5090-5124; final annotation at 7664-7672. Tests are at test_ebay_deal_alert.py:1288-1372 and 3563-3636.
+- Superseding final validation on the current filesystem state: AST parse exit 0 with no output; `python3 -m pytest -q` exit 0 with `529 passed, 1 warning, 275 subtests passed in 11.91s`. The warning is the same unrelated lxml strip_cdata deprecation noted above. `git diff --check` remains exit 0 with only LF-to-CRLF notices.
+
+
+Progress 3 - calibration decision
+- Chrono24's current buyer guidance says that watch prices that appear too good to be true probably are, and eBay routes eligible watches through a physical Authenticity Guarantee inspection rather than treating listing photos or price as proof. This supports treating an unusually large claimed gap as a human-review warning, not as a bot authentication decision.
+- Chosen boundary: 80% under the bot's estimated resale value. This is a deliberately bounded alert-only heuristic that catches all three reported 84-95% examples while leaving the existing 70% Steal threshold intact. It will not block a watch and it is not a claim that discounts below 80% are safe.
+- For seller-description values, the conservative policy is to surface an explicit higher current-market/resale/appraisal figure as an unverified seller claim while retaining the AI's lower estimate for deal math. Automatically raising resale to a seller-authored number would make an exaggerated description manufacture a larger discount and a stronger Steal label.
+
+Progress 4 - implementation and focused regression check
+- Added WATCH_EXTREME_DISCOUNT_WARNING_PCT = 80 at ebay_deal_alert.py:493. send_alert() now puts an all-caps extreme-discount counterfeit/misrepresentation warning immediately after the positive deal rating at 5096-5109, before valuation and feedback lines that could push it out of a truncated notification. It remains alert-only; the watches gate still does not block solely on price.
+- Added narrow description price/value extraction at 2296-2375 and reconciliation/flagging at 2378-2434. Explicit actual asking prices are compared with the structured listing item price; appraisal/current-market values with the bot's resale estimate; and retail/replacement values with the bot's retail estimate. Only a higher conflicting claim is surfaced. The seller number never changes estimated_resale_value, estimated_retail_price, discount_pct, deal_rating, or price_confidence.
+- Expanded the watch prompt at 3729-3792. It now receives the structured item price in addition to the already-present title, 1,500-character description, photos, and multi-unit signal. Its JSON contract extracts seller-stated price/value context plus model/reference, solid-gold, service/authentication, and box/papers claims; instructions explicitly keep those claims unverified and require reconciliation against visible evidence instead of automatic valuation inflation.
+- Captured the new watch description/AI context fields in the result and alert-log record, and added an alert line for a higher description claim before the unchanged unconditional authenticity disclaimer at 5110-5124.
+- Added regression coverage in test_ebay_deal_alert.py:1288-1371 and 3563-3639 for explicit-vs-bare description prices, actual asking-price conflicts, no mutation of bot estimates/deal math, prompt content and structured price, 80% boundary/scoping, warning prominence, and unverified seller-claim rendering.
+- Focused validation: AST OK; 10 passed, 387 deselected, 1 existing SyntaxWarning in 0.65s.
+
+Progress 5 - final validation
+- Research references used for calibration: Chrono24 FAQ (https://www.chrono24.com/info/faqs.htm), whose buyer guidance treats too-good-to-be-true pricing as a warning, and eBay Authenticity Guarantee for Watches (https://www.ebay.com/authenticity-guarantee/watches), which relies on eligible-item physical inspection rather than inferring authenticity from price/photos.
+- Required AST parse command completed successfully with exit code 0 and no output:
+  python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"
+- Full suite completed successfully with real output:
+  529 passed, 1 warning, 275 subtests passed in 11.83s
+  Warning: lxml DeprecationWarning in RunIntegration::test_mid_run_429_also_stops_the_auction_lane (`strip_cdata` has never done anything and will eventually be removed).
+- git diff --check completed successfully (only Git's informational LF-to-CRLF working-copy warnings were printed). No dependency install was needed. No commit, push, fetch, pull, or clone was run.
+
+Final uncertainty/limits
+- An 80% claimed gap is a heuristic warning, not proof of counterfeiting; genuine estate-sale mistakes and unusual auctions can exist, while smaller discounts can still be fake.
+- Seller descriptions, appraisals, reference numbers, box/papers, and even authentication claims can be false. The bot now makes those conflicts visible and asks the vision model to reconcile corroborated details, but intentionally keeps the lower independently reasoned estimate for deal math and still requires human/physical authentication.
+
+Progress 6 - post-cleanup validation rerun (supersedes the timing/warning count above)
+- After clarifying the comparison labels in description-conflict flags, the required AST parse again exited 0 with no output.
+- Final full-suite output: 529 passed, 2 warnings, 275 subtests passed in 11.59s.
+- Warnings were an existing SyntaxWarning at test_ebay_deal_alert.py:6449 for an invalid `\d` escape in a docstring and the existing lxml `strip_cdata` DeprecationWarning in RunIntegration::test_mid_run_429_also_stops_the_auction_lane.
+- Final git diff --check exited 0; its only output was Git's informational LF-to-CRLF working-copy warning for the two modified Python files.
+
+Final current-line map (after all insertions; use this rather than earlier pre-change ranges)
+- Description ingestion/block: ebay_deal_alert.py:3529-3539. Watch vision branch: 3721-3820.
+- Deal rating: 4005-4037. Quality gate: 4040 onward; watch-specific gate: 4566-4615.
+- Description extraction/reconciliation: 2296-2442. Extreme threshold: 493.
+- Alert rendering: send_alert() at 5050; watch warnings/claim/disclaimer at 5099-5129.
+- Pipeline result capture/reconciliation: watch AI seller fields at 7457-7468; deterministic description annotation at 7672.
+- Regression tests: test_ebay_deal_alert.py:1288-1373 and 3563-3636.
