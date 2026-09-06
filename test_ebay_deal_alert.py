@@ -235,6 +235,7 @@ class PokerChipsGate(unittest.TestCase):
             "poker_chips_edge_spots_consistent": True,
             "poker_chips_recolor_suspected": False,
             "poker_chips_recolor_reason": "",
+            "poker_chips_estimated_chip_count": 300,
         }
         result.update(poker_fields)
         return result
@@ -339,6 +340,44 @@ class PokerChipsGate(unittest.TestCase):
             reason,
             "poker-chips bar: price $150.01 exceeds $150 manual-research cap",
         )
+
+    def test_exact_reported_handful_listings_are_not_usable_sets(self):
+        reported = (
+            ("poker chips", 5, 16),
+            ("Tripp's HD Poker Chip", 1, 12.66),
+            ("Set of 3 Rare Vintage Stockmen's Casino Poker Chips", 3, 63.55),
+        )
+        for title, count, price in reported:
+            with self.subTest(title=title):
+                result = self._result(
+                    price=price,
+                    poker_chips_estimated_chip_count=count,
+                )
+                result["listing"]["title"] = title
+                reason = m.is_blocked_by_steal_quality_gate(
+                    result, category="poker-chips"
+                )
+                self.assertIn("below 100-chip usable-set minimum", reason)
+
+    def test_chip_count_fails_closed_when_missing_or_unknown(self):
+        for count in (None, "unknown", True, float("nan")):
+            with self.subTest(count=count):
+                reason = m.is_blocked_by_steal_quality_gate(
+                    self._result(poker_chips_estimated_chip_count=count),
+                    category="poker-chips",
+                )
+                self.assertIn("estimated chip count missing/unknown", reason)
+
+    def test_one_hundred_chips_is_the_minimum_allowed_set_size(self):
+        below = m.is_blocked_by_steal_quality_gate(
+            self._result(poker_chips_estimated_chip_count=99),
+            category="poker-chips",
+        )
+        self.assertIn("below 100-chip usable-set minimum", below)
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            self._result(poker_chips_estimated_chip_count=100),
+            category="poker-chips",
+        ))
 
     def test_specialized_prompt_contains_schema_and_conservative_rules(self):
         response = {
@@ -862,11 +901,54 @@ class JacketOnlySuitListing(unittest.TestCase):
         # mismatched blazer, not a real suit.
         title = "Ermenegildo Zegna Italy EU 52R/US 42R Soft 100% Silk Jacket Blue Check Jacket"
         self.assertTrue(m.is_jacket_only_suit_listing(title, "ermenegildo zegna suit"))
-        # No query, or a query that isn't suit-worded, must NOT flag it -
-        # this is exactly what keeps dedicated jacket searches (e.g. "loro
-        # piana jacket", added this session) working correctly.
+        # With no originating category/query it remains ambiguous. Under a
+        # jacket/outerwear search, however, 52R is suiting chest/cut language
+        # and no matching trousers are mentioned, so it is an incomplete suit
+        # component rather than the casual outerwear that search is for.
         self.assertFalse(m.is_jacket_only_suit_listing(title))
-        self.assertFalse(m.is_jacket_only_suit_listing(title, "loro piana jacket"))
+        self.assertTrue(m.is_jacket_only_suit_listing(title, "loro piana jacket"))
+
+    def test_exact_reported_suiting_jacket_without_trousers_is_blocked(self):
+        title = (
+            "Loro Piana Hickey Freeman Wool Jacket Men 52L Blue Pinstripe "
+            "Tasmanian Super 130"
+        )
+        self.assertTrue(m.is_jacket_only_suit_listing(
+            title,
+            "loro piana jacket -scarf",
+            category="outerwear",
+        ))
+
+    def test_suiting_language_rule_is_scoped_and_respects_trousers(self):
+        title = "Loro Piana Wool Jacket Men 52L Blue Pinstripe Super 130"
+        self.assertFalse(m.is_jacket_only_suit_listing(
+            title,
+            "loro piana jacket",
+            "Matching trousers are included.",
+            category="outerwear",
+        ))
+        self.assertFalse(m.is_jacket_only_suit_listing(
+            "Barbour Bedale Herringbone Waxed Jacket L",
+            "barbour jacket",
+            category="tailoring",
+        ))
+        self.assertFalse(m.is_jacket_only_suit_listing(
+            "Barbour Bedale Waxed Jacket L",
+            "barbour jacket",
+            category="outerwear",
+        ))
+
+    def test_each_requested_suiting_marker_is_detected_for_outerwear_jackets(self):
+        for marker in (
+            "Pinstripe", "Herringbone", "Worsted", "Super 100s", "Super 150",
+            "42L", "42R", "42S", "42 Long", "42 Regular", "42 Short",
+        ):
+            with self.subTest(marker=marker):
+                self.assertTrue(m.is_jacket_only_suit_listing(
+                    f"Hickey Freeman Wool Jacket Men {marker}",
+                    "loro piana jacket",
+                    category="outerwear",
+                ))
 
     def test_bare_jacket_word_still_allowed_when_suit_search_has_pants(self):
         # A genuine 2-piece suit from a suit-worded search must still pass -

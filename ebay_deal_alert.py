@@ -1867,6 +1867,11 @@ GOLF_EQUIPMENT_MAX_PRICE = 300
 # valuation model. This is only the buyer's landed-price ceiling for an alert
 # worth researching by hand; it does not mean a listing below it is a steal.
 POKER_CHIPS_MAX_PRICE = 150
+# The research baseline starts at 100 chips for an actual playable/collector
+# set and centers on 300-500-chip sets. Smaller lots can contain valuable
+# individual collectibles, but that is not what these set searches are for;
+# the reported 1-, 3-, and roughly 5-chip alerts were unusable noise.
+POKER_CHIPS_MIN_SET_SIZE = 100
 GOLF_BLOCKED_BRANDS = {
     "big brother", "confidence", "ram", "founders club", "precise golf", "tour edge",
     "intech", "dunlop", "northwestern", "spalding", "knight", "pinseeker", "alien",
@@ -2053,6 +2058,17 @@ SUIT_JACKET_ONLY_SIGNALS = re.compile(
     # keeps genuine outerwear (Barbour, field jackets) working.
     r"\b(sports?\s*coat|sportcoat|blazer|suit\s*jacket|"
     r"tux(?:edo)?\s*jacket|dinner\s*jacket)\b",
+    re.IGNORECASE,
+)
+# Suit-jacket evidence that sellers commonly use without saying "blazer" or
+# "suit jacket". This is deliberately not a general clothing rejection: the
+# helper below only applies it to a bare jacket found by an outerwear search,
+# and only when no pants/trousers/complete-suit signal exists. Wool alone is
+# intentionally absent because it is ordinary outerwear fabric.
+SUITING_JACKET_LANGUAGE_SIGNALS = re.compile(
+    r"\b(pin[\s-]?stripe(?:d)?|herringbone|worsted|"
+    r"super\s*[1-9]\d{2}(?:'?s)?|(?:[3-5]\d|60)\s*[LRS]|"
+    r"(?:[3-5]\d|60)\s+(?:Long|Regular|Short))\b",
     re.IGNORECASE,
 )
 # Explicit seller disclaimers that a "suit" listing is really jacket-only.
@@ -2439,7 +2455,7 @@ def has_excluded_single_e_shoe_width(saved_search, listing):
     return False
 
 
-def is_jacket_only_suit_listing(title, query=None, description=None):
+def is_jacket_only_suit_listing(title, query=None, description=None, category=None):
     """Explicit, standing user rule: no more standalone jackets, period -
     "i do NOT need any more jackets. the exception is full suits[,]...
     must have jacket+pants and both fit." Originally gated on the search
@@ -2457,9 +2473,17 @@ def is_jacket_only_suit_listing(title, query=None, description=None):
     jacket as a "blazer" even on a genuine 2-piece listing, e.g. "Blazer
     Suit Jacket Pants 2-Button"). Only rejected when a jacket-only word
     (blazer/sport coat/suit jacket) appears with no pants signal at all -
-    plain outerwear ("jacket", "coat") never matches this at all, so
-    Barbour-style outerwear (and dedicated jacket searches like "loro
-    piana jacket") is untouched.
+    plain outerwear ("jacket", "coat") never matches this branch, so
+    Barbour-style outerwear remains untouched.
+
+    A narrow second bare-jacket rule covers an outerwear-search result whose
+    available title/description uses suiting-only fabric or chest/cut language
+    (pinstripe, herringbone, worsted, Super 100s+, or 42L/42R/42S-style sizing)
+    without ever mentioning matching pants/trousers. That combination means
+    "jacket" is an incomplete suit component, while an ordinary field/waxed/
+    casual jacket from the same enabled search remains eligible. It is scoped
+    to category="outerwear" (or a query that infers that category), so it does
+    not change the semantics of existing suit/tailoring searches.
 
     `query` DOES matter for one narrow case: live miss, "Ermenegildo Zegna
     ... Soft 100% Silk Jacket Blue Check Jacket" alerted from the
@@ -2514,7 +2538,16 @@ def is_jacket_only_suit_listing(title, query=None, description=None):
         return False
     if SUIT_JACKET_ONLY_SIGNALS.search(haystack_title):
         return True
-    return bool(query and "suit" in query.lower() and BARE_JACKET_OR_COAT_WORD.search(haystack_title))
+    if query and "suit" in query.lower() and BARE_JACKET_OR_COAT_WORD.search(haystack_title):
+        return True
+    listing_category = category or (classify_search_category(query) if query else None)
+    available_text = f"{haystack_title} {description}"
+    return bool(
+        listing_category == "outerwear"
+        and re.search(r"\bjacket\b", haystack_title, re.IGNORECASE)
+        and SUITING_JACKET_LANGUAGE_SIGNALS.search(available_text)
+        and not SUIT_TWO_PIECE_SIGNALS.search(available_text)
+    )
 
 
 def is_pants_only_suit_listing(title, query=None):
@@ -3926,6 +3959,21 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             # matches "no ai price" - drifting this wording breaks that
             # analytics bucket silently, exactly what happened here before).
             return "poker-chips bar: no AI price estimate yet - needs a real AI photo check"
+        chip_count = result.get("poker_chips_estimated_chip_count")
+        if (
+            isinstance(chip_count, bool)
+            or not isinstance(chip_count, (int, float))
+            or not math.isfinite(chip_count)
+        ):
+            return (
+                "poker-chips bar: estimated chip count missing/unknown - "
+                f"at least {POKER_CHIPS_MIN_SET_SIZE} chips required for a usable set"
+            )
+        if chip_count < POKER_CHIPS_MIN_SET_SIZE:
+            return (
+                f"poker-chips bar: estimated chip count {chip_count:g} below "
+                f"{POKER_CHIPS_MIN_SET_SIZE}-chip usable-set minimum"
+            )
         landed = result.get("price")
         if landed is not None and landed > POKER_CHIPS_MAX_PRICE:
             return (
@@ -6556,7 +6604,9 @@ def run():
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
-            if is_jacket_only_suit_listing(title, saved_search["query"], listing.get("description")):
+            if is_jacket_only_suit_listing(
+                title, saved_search["query"], listing.get("description"), category=category
+            ):
                 logger.info(
                     "Skipping %s: jacket/blazer/sport-coat-only listing, no pants (standing no-jackets rule)",
                     item_id,
@@ -6983,7 +7033,8 @@ def run():
             # "Suit" title. Cheap (pure regex, no extra call) and catches
             # the exact case the user reported.
             if is_jacket_only_suit_listing(
-                listing.get("title", ""), saved_search["query"], listing.get("description")
+                listing.get("title", ""), saved_search["query"], listing.get("description"),
+                category=category,
             ):
                 logger.info(
                     "Skipping %s: description discloses jacket/blazer-only, no pants "
@@ -6991,7 +7042,9 @@ def run():
                     item_id,
                 )
                 result["verdict"] = "PASS"
-                result["reason"] = "jacket/blazer-only disclosed in listing description, no pants"
+                result["reason"] = (
+                    "incomplete item: jacket only / blazer only, no matching pants or trousers"
+                )
                 append_alert_log(result)
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue

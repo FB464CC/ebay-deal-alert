@@ -1,0 +1,138 @@
+Poker/Jacket Gate Investigation
+================================
+
+Progress 1 - checkout verification
+----------------------------------
+Confirmed the supplied checkout locally with the requested command (no fetch/pull/clone):
+  a7c3bc10795290b30013b605ffcbd6751ebda620 Disable Allen Edmonds search - per explicit user instruction ('i dont need any more allen edmonds')
+The HEAD is a well-formed commit with a specific, plausible recent change description.
+
+Progress 2 - reproduced both current leaks and established root causes
+---------------------------------------------------------------------
+Baseline reproduction before edits:
+  poker gate with estimated_chip_count=1 -> None (allowed)
+  classify configured "loro piana jacket" search -> outerwear
+  jacket-only helper for exact reported 52L title -> False (allowed)
+
+Bug 1 root cause (pre-change line numbers):
+  * check_photos_with_gemini() defines estimated_chip_count in the poker JSON schema at
+    ebay_deal_alert.py:3403 and tells the model to return the visible approximate count
+    or null at lines 3439-3440.
+  * run() faithfully copies that value to poker_chips_estimated_chip_count at line 7195.
+  * is_blocked_by_steal_quality_gate()'s complete poker branch (lines 3918-3959) checks
+    whether AI ran, price, construction, inlay/hot-stamp/embedded design, edge consistency,
+    and recoloring, then returns None. It never reads poker_chips_estimated_chip_count.
+    Therefore a visually genuine single chip, five chips, or the reported set of three
+    clears the branch whenever those other fields are favorable.
+
+Bug 2 root cause (pre-change line numbers):
+  * classify_search_category() classifies blazer/suit/sport-coat searches as tailoring
+    (lines 1990-1998), but plain jacket/coat searches as outerwear (lines 1999-2000).
+    The enabled "loro piana jacket -scarf" search is explicitly category=outerwear.
+  * SUIT_JACKET_ONLY_SIGNALS (lines 2044-2057) intentionally excludes bare "jacket".
+  * is_jacket_only_suit_listing() allows titles with trousers first, blocks an explicit
+    blazer/sport coat/suit jacket second, and only treats a bare jacket as incomplete when
+    the originating query contains "suit" (lines 2513-2517).
+  * The exact reported title contains only bare "Jacket" and came from a jacket/outerwear
+    search. Despite its 52L, pinstripe, and Super 130 suiting evidence and lack of trousers,
+    it consequently matched none of the incomplete-item branches and returned False.
+  * Existing standalone blazer/sport-coat searches are present but disabled; the two enabled
+    plain-jacket searches intentionally seek real outerwear. The new rule therefore needs to
+    distinguish suiting-language jacket components from genuine casual outerwear, not block
+    every plain jacket.
+
+Progress 3 - implementation and focused regression validation
+--------------------------------------------------------------
+Implemented a 100-chip minimum in the poker quality gate. The threshold is the lowest set
+benchmark in POKER_CHIPS_RESEARCH.txt (the document primarily discusses 300-500-chip sets),
+so it excludes handfuls without requiring the more typical 300/500-chip inventory. The gate
+now fails closed for a missing, null, nonnumeric, boolean, or non-finite AI count and blocks
+all numeric counts below 100.
+
+Extended the existing is_jacket_only_suit_listing() incomplete-item path. For an outerwear
+listing containing bare "jacket", it now recognizes pinstripe/pin-striped, herringbone,
+worsted, Super 100s+ grades, and plausible two-digit L/R/S or Long/Regular/Short suit sizing.
+It blocks only when the available title/description has no pants/trousers/complete-suit
+signal. Existing tailoring/suit handling remains authoritative and ordinary jacket searches
+without suiting evidence remain eligible. Both run() call sites now pass the already-computed
+category explicitly. The late rejection reason says "incomplete item: jacket only", which
+reuses disposition_code_for()'s existing WRONG_ITEM mapping.
+
+Focused validation after implementation:
+  python3 AST parse: exit 0, no output
+  PokerChipsGate + JacketOnlySuitListing:
+    24 passed, 1 warning, 33 subtests passed in 0.72s
+  git diff --check: exit 0; Git emitted only its normal LF-to-CRLF working-copy warnings.
+The pytest warning is pre-existing and unrelated: test_ebay_deal_alert.py's docstring has an
+invalid Python escape sequence '\\d'.
+
+Final line-number map (post-change ebay_deal_alert.py)
+-----------------------------------------------------
+Bug 1:
+  * AI count contract: check_photos_with_gemini() starts at 3342; poker schema includes
+    estimated_chip_count at 3436 and defines null-on-uncertainty at 3472-3473.
+  * AI output propagation: poker_chips_estimated_chip_count is assigned at 7248.
+  * Original leak location / fixed gate: the poker branch is 3951-4007. It previously moved
+    directly from the AI-ran check at 3956-3961 to the price/material checks (now beginning
+    at 3977), with no count read. The new fail-closed count checks are 3962-3975.
+  * Chosen threshold: POKER_CHIPS_MIN_SET_SIZE = 100 at 1874.
+
+Bug 2:
+  * Category split: classify_search_category() is 1958-2032; tailoring terms map at
+    1995-2003 and plain jacket/coat maps to outerwear at 2004-2005.
+  * Category IDs: config validation expects tailoring category 3001 at 545-548. Searches
+    without a category_id (including the enabled outerwear jacket search) use Men's Clothing
+    260012 at 821; there is no distinct jacket leaf-category constant enforcing item type.
+  * Original leak: SUIT_JACKET_ONLY_SIGNALS at 2049-2062 deliberately omits bare "jacket".
+    is_jacket_only_suit_listing() at 2458-2550 historically blocked a bare jacket only for a
+    suit-worded query (2541-2542). The reported jacket query is outerwear, so it skipped that.
+  * Fix: SUITING_JACKET_LANGUAGE_SIGNALS is 2063-2073; the outerwear-only, bare-jacket,
+    no-trousers combination is enforced at 2543-2549. Both run() calls pass the explicit
+    category at 6607-6609 and 7035-7038. The logged late reason at 7044-7047 includes
+    "incomplete item"/"jacket only", matching the existing WRONG_ITEM rule at 4551.
+
+Regression coverage (test_ebay_deal_alert.py):
+  * Exact three reported chip titles/counts: 344.
+  * Missing/unknown fail-closed count cases: 362.
+  * 99-blocked / 100-allowed threshold boundary: 371.
+  * Exact reported 52L/pinstripe/Super 130 jacket title: 911.
+  * Trouser-presence and category/ordinary-outerwear scoping: 922.
+  * Each requested fabric/grade/NNL-NNR-NNS and spelled cut marker: 941.
+
+Final required validation
+-------------------------
+1. python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"
+   Exit code 0; no output.
+
+2. python3 -m pytest -q
+   Real output summary:
+     519 passed, 1 warning, 275 subtests passed in 13.12s
+   Exit code 0.
+   The one warning was:
+     test_ebay_deal_alert.py::RunIntegration::test_mid_run_429_also_stops_the_auction_lane
+     lxml/html/__init__.py:1891 DeprecationWarning: The 'strip_cdata' option of
+     HTMLParser() has never done anything and will eventually be removed.
+
+3. git diff --check
+   Exit code 0. Git printed only LF-to-CRLF working-copy notices for the two edited Python
+   files; it reported no whitespace errors.
+
+Uncertainty / tradeoff
+----------------------
+The 100-chip floor intentionally sacrifices alerts for rare and potentially valuable
+single-chip/small collector lots. That is consistent with the complaint and the existing
+search/research goal of finding a usable set, but it would be too strict if the desired goal
+later changes to collecting individual casino chips.
+
+The jacket heuristic is text-based. Suit chest/cut sizes and worsted/Super grades are strong
+signals; pinstripe and especially herringbone can occasionally describe true casual
+outerwear. Requiring the outerwear category, the literal word "jacket", and no trousers/set
+signal limits that risk. It is still possible to suppress a genuine herringbone casual
+jacket, but the current preference and disabled blazer/sport-coat searches favor rejecting
+that ambiguity over repeating the incomplete-suit alert. Conversely, an unusually worded
+suit jacket with none of the enumerated markers can still evade this heuristic.
+
+No dependencies were installed because pytest and all required imports were already present.
+No commit or push was performed. config.json, poll.yml, web/api/*, and chrome-extension/* were
+not modified.
+
