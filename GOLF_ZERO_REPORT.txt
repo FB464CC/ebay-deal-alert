@@ -1,0 +1,196 @@
+GOLF ZERO-DELIVERY INVESTIGATION
+================================
+
+Checkpoint 1 - repository state
+--------------------------------
+Verified the supplied checkout locally as instructed (no fetch/pull/clone):
+HEAD 5708b74a1e82682ef086cd72530d70781b287a3c
+Subject: Watch alerts: extreme-discount red flag, surface seller-description price conflicts (never trusted for deal math)
+The working tree was clean at the start. This is a plausible current commit and no hardcoded SHA comparison was used.
+
+Checkpoint 2 - production log reconstruction (before any code changes)
+-----------------------------------------------------------------------
+Sources: the current main-branch alerts_log.jsonl fetched through authenticated
+`gh api repos/FB464CC/ebay-deal-alert/contents/alerts_log.jsonl` (raw media type),
+plus the unique JSON records added by all 333 locally available recent commits
+that touched alerts_log.jsonl. No fetch, pull, clone, or checkout was performed.
+
+Current remote rolling file (2026-09-06 08:27:45Z through 20:43:11Z):
+- 1,005 total rows; 386 category=golf-equipment rows; 371 unique golf items.
+- 359/386 (93.0%) were NO_AI_BUDGET; 362/386 (93.8%) had ai_checked=false.
+- Only 24/386 were AI-checked. All 386 had delivered=false.
+- The 24 checked rows: 22 GOLF_REJECT, 1 OVER_MAX_PRICE, 1 GATE_REJECTED.
+- Checked rejection reasons: 12 playability/incomplete; 10 asking price above
+  the AI's own value; 1 unconfirmed right-handedness; 1 final text sanity check.
+
+Wider exact union available from commit patches (2026-09-03 18:08:19Z through
+2026-09-06 20:43:11Z):
+- 17,969 unique log records in all categories; 14,666 golf-equipment records.
+- 1,178 unique golf item IDs. Only 148 unique items ever received an AI check;
+  1,030/1,178 (87.4%) never did. On row/attempt volume, 14,494/14,666 (98.8%)
+  were NO_AI_BUDGET and 149/14,666 (1.02%) were AI-checked.
+- Golf row dispositions: 14,494 NO_AI_BUDGET; 140 GOLF_REJECT; 13
+  OVER_MAX_PRICE; 8 CONDITION_REJECT; 7 GENDER_EXCLUDE; 2 DELIVERED; 2
+  GATE_REJECTED. There were zero BELOW_MARGIN records.
+- Among the 149 checked rows, the first/final reason buckets were: 91 (61.1%)
+  playability/incomplete; 36 (24.2%) asking price over AI value; 9 (6.0%)
+  handedness unknown; 7 (4.7%) condition; 3 (2.0%) blocked brand; 1 (0.7%)
+  hard $300 cap; 1 (0.7%) brand claim unconfirmed; 1 (0.7%) final sanity check.
+  There were zero explicit left-handed rejections and zero counterfeit rejections.
+- Retry churn is extreme: 150 unique items appeared 83-85 times; examples include
+  a putting mat, shirts/shorts, patio furniture, an iron dining set, a shaft,
+  wedges returned for iron-set searches, golf-cart lift kits, and a music box.
+- A conservative title audit of the 1,009 unique latest NO_AI_BUDGET items found
+  at least 209 unmistakable non-target/accessory/single-club items (126 obvious
+  non-club/accessory, 41 shaft/grip accessories, 42 isolated clubs with no set
+  evidence). This deliberately under-counts ambiguous titles.
+
+Important correction to the premise: production history does not show literally
+zero deliveries. It contains two category=golf-equipment, delivered=true rows:
+1. ShopGoodwill item 275743859, "Lot Of TaylorMade And One RBZ Golf Irons",
+   $32.3194 landed, AI value $150, delivered 2026-09-06 01:25:33Z.
+2. Facebook item 1628681732253621, "Ping Zing iron set", $137.80 landed,
+   AI value $150, delivered 2026-09-06 06:22:49Z.
+This does not weaken the persistent funnel failure: 2 deliveries from 14,666
+attempt records / 1,178 unique items despite 43 enabled golf-equipment searches.
+
+Checkpoint 3 - code-path findings and market calibration
+--------------------------------------------------------
+- config.json currently has 209 searches, 125 enabled, and 43 enabled
+  golf-equipment searches (all fast). Price caps: 12x $300, 9x $220, 4x $200,
+  and the remainder $40-$160. All 43 enable ShopGoodwill and Facebook; eBay is
+  polled independently for every enabled search by design.
+- Configured AI throughput is 12 shared calls/run, a golf soft ceiling of 6
+  shared calls/run, plus 1 isolated eBay-scrape call/run. The soft cap is not a
+  golf reservation; it prevents golf crowd-out while non-golf waits.
+- ebay_deal_alert.py:1964-2038 honors explicit category metadata first and routes
+  inferred club/set/bag queries to golf-equipment before the apparel "golf" branch.
+  Classification is working: production has 14,666 correctly categorized records.
+- ebay_deal_alert.py:2785-2879 exempts ordinary eBay from local relevance checks
+  and accepts a non-eBay title when any non-stopword query token matches. This
+  admits exact production junk such as golf-club neckties, iron patio furniture,
+  a cast-iron frying-pan set, headcovers, ferrules, organizers, and single
+  replacement irons. ebay_deal_alert.py:2948-2955 then sends every surviving golf
+  title to REVIEW; there is no cheap golf product/type gate before paid vision.
+- ebay_deal_alert.py:3635-3719 asks vision whether the listing is a playable first
+  set and explicitly says a bag alone or single club must return false.
+- ebay_deal_alert.py:4191-4232 requires golf_is_playable_first_set=true for every
+  golf-equipment search. That makes eight intentionally configured component hunts
+  (three drivers, two putters, one wedge, two stand bags) structurally unable to
+  alert. Production proves the collision: eight reviewed component-search rows
+  were rejected for playability, including a genuine right-handed Odyssey White
+  Hot putter at $29.15 and genuine stand bags/drivers.
+- The same gate unconditionally requires brand_claims_confirmed. The AI prompt
+  defines that as matching a brand/model claim in the title and requires false
+  when markings/claims are absent. Therefore a generic but legitimate "Golf clubs"
+  or "Golf bag" title has no claim it can confirm and can be blocked even when the
+  AI identifies a safe brand. The log only exposes the first failing gate, so this
+  hidden co-failure is not measurable from old rows.
+- Handedness conservatism is not the primary bottleneck: only 9/149 checked rows
+  stopped on unknown handedness (6.0%) and none stopped as explicitly left-handed.
+  Keeping fail-closed right-handedness for actual clubs is defensible; bags do not
+  have handedness and should not be subjected to that club-only requirement.
+- Price caps are not the observed bottleneck: zero BELOW_MARGIN rows, only 13
+  near-search-cap rows across the wide window, and just one checked hard-$300-cap
+  failure. Of checked candidates, 36 actually asked more than the AI's value.
+  Current real eBay evidence supports keeping, not raising, the deal caps: a used
+  Ping G400 4-PW sold at $440.99 and another at $549 (versus the bot's $220 cap);
+  a used Odyssey White Hot XG #9 right-handed putter sold at $76.49 (versus the
+  bot's $40 cap). Those caps represent genuine roughly-half-market steals. The
+  live TaylorMade M2 set market is commonly ~$230-$500+, while the bot caps M2 at
+  $220. Legitimate deals can exist below these thresholds (and the two production
+  deliveries did), so raising them would lower deal quality without repairing the
+  actual throughput/type mismatch.
+
+Evidence-backed root causes before implementation:
+1. Primary: AI-budget starvation caused by high-volume retry churn; 87.4% of
+   unique candidates and 98.8% of attempt rows never reached AI.
+2. Major contributor: golf has no deterministic product/type prefilter, so scarce
+   vision calls and the pending queue are filled with obvious merchandise,
+   accessories, furniture, and isolated replacement clubs.
+3. Genuine logic bug: the universal playable-set rule contradicts eight explicit
+   component searches, rejecting correct component deals by construction.
+4. Hidden overly broad requirement: a generic listing with no seller brand/model
+   claim is treated like an unverified claimed-brand listing.
+5. Not causal: category detection works; per-search maximums are economically
+   defensible; handedness ambiguity is a small minority rather than the total block.
+
+Checkpoint 4 - implemented bounded fix
+--------------------------------------
+No price cap, AI budget, soft-cap, or SAVED_SEARCHES setting was relaxed. config.json
+was not changed, so migrate_saved_search_metadata.py was not applicable.
+
+Changes in ebay_deal_alert.py (final line numbers):
+1. Lines 1892-2012: added explicit query-intent detection for the eight standalone
+   component searches and a conservative golf title/type prefilter. It rejects
+   only title-certain wrong items: non-club merchandise, obvious accessories,
+   single/replacement clubs under a set-oriented query, component-query mismatches,
+   and set queries with no multi-club/set evidence. Ambiguous titles still go to AI.
+2. Lines 3395-3459: taught the final text sanity pass that a whole driver, putter,
+   wedge, or stand bag is complete when that is what the saved search requested;
+   accessory-only variants still reject.
+3. Lines 3606-3836: passes the clean saved-search intent into the golf vision prompt
+   and adds is_wanted_component plus brand_claims_present. The model must visually
+   confirm the actual requested whole component, not a shaft/cover/grip/organizer.
+4. Lines 4329-4382 (within is_blocked_by_steal_quality_gate, defined at 4170): a
+   visually confirmed requested component may clear without pretending to be a
+   playable set. Right-handedness remains fail-closed for every actual club; only
+   stand bags skip the nonsensical handedness check. Brand confirmation is required
+   when the seller made a brand/model claim; no claim is no longer treated as a
+   mismatch. Missing new-model output still fails closed as legacy claims-present.
+5. Lines 4864-4995: added GOLF_WRONG_ITEM and logs the individual golf AI gate inputs
+   (playability, component match/type, handedness, claim presence/confirmation,
+   identified brand, counterfeit, damage) so future evidence is not limited to the
+   first gate reason that happened to return.
+6. Lines 7037-7074: installed the title/type prefilter before scoring/paid vision and
+   logs every such disposition instead of silently discarding it.
+7. Lines 7622-7638: merges the new vision fields while preserving a missing
+   brand_claims_present field as None so malformed/old AI output cannot fail open.
+
+Historical replay of the final filter:
+- It flags 376/1,178 unique historical golf items (31.9%) as title-certain wrong
+  items while preserving both real delivered rows.
+- 303 of those were previously NO_AI_BUDGET backlog items.
+- It would have prevented 67/149 (45.0%) historical AI checks from being spent on
+  deterministic wrong items.
+- Of the eight component-search rows historically rejected for "not a playable
+  set", seven are genuine requested components retained by the prefilter and now
+  get component-aware AI/gate handling. The eighth is the TaylorMade headcover
+  mismatch and is correctly rejected before AI.
+- Concrete structural miss repaired: ShopGoodwill Odyssey White Hot Mid Putter,
+  right-handed, $29.15 landed, AI-estimated $30, was rejected solely for not being
+  a set. A directly observed 2026 eBay sold comparable was $76.49:
+  https://www.ebay.com/itm/358654479382
+- Price calibration references retained for audit:
+  Ping G400 4-PW sold $440.99: https://www.ebay.com/itm/317607618739
+  Ping G400 4-PW sold/listed $549 with accepted best offer:
+  https://www.ebay.com/itm/358484911589
+
+Checkpoint 5 - regression coverage and final validation
+-------------------------------------------------------
+Added regression tests covering:
+- exact production junk titles versus known-good sets and all four component types;
+- a requested right-handed putter clearing without masquerading as a set;
+- stand bags not requiring handedness;
+- generic listings without a brand claim not becoming fake mismatches;
+- component-aware vision and final-sanity prompts;
+- GOLF_WRONG_ITEM disposition mapping;
+- durable logging of false-valued golf gate inputs (the old telemetry blind spot).
+- an end-to-end run proving a wrong-item golf title is durably logged as
+  GOLF_WRONG_ITEM and consumes zero AI calls.
+
+Validation after the final edit:
+- `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"` -> PASS
+- `python3 -c "import json; json.load(open('config.json'))"` -> PASS
+- `git diff --check` -> PASS (only Git's informational LF/CRLF working-copy warnings)
+- `python -m pytest -q` -> 538 passed, 2 warnings, 290 subtests passed in 11.20s
+  Both warnings are pre-existing: test_sane_ai_price's docstring has an invalid
+  `\d` escape warning, and lxml emits a `strip_cdata` deprecation from
+  test_mid_run_429_also_stops_the_auction_lane.
+
+Final scope/status:
+- Modified: ebay_deal_alert.py, test_ebay_deal_alert.py.
+- Added: GOLF_ZERO_REPORT.txt.
+- config.json was inspected and validated but not modified.
+- poll.yml, web/api/*, and chrome-extension/* were not touched.
+- No commit or push was made.

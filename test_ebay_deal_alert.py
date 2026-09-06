@@ -768,6 +768,118 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("excluded gender", result["reason"])
 
+    def test_title_prefilter_rejects_real_production_wrong_items(self):
+        cases = (
+            ("Golf club set", "Crooks & Creed Golf Clubs Silk Necktie"),
+            ("complete golf iron set", "3 Pc. Cast Iron Frying Pans"),
+            ("golf clubs garage", "Wooden Golf Bag Organizer Holds 2 Bags"),
+            ("Callaway Mavrik irons", "CALLAWAY MAVRIK IRONS 6 IRON STEEL REGULAR"),
+            ("TaylorMade driver", "TaylorMade British Open Fairway Wood Headcover"),
+            ("Ping G400 irons", "Ping G400 replacement 7 iron"),
+        )
+        for query, title in cases:
+            with self.subTest(query=query, title=title):
+                self.assertIsNotNone(m.golf_wrong_item_title_reason(title, query))
+
+    def test_title_prefilter_keeps_real_sets_and_requested_components(self):
+        cases = (
+            ("golf club set", "Golf clubs and bag"),
+            ("complete golf iron set", "Ping Zing iron set"),
+            ("TaylorMade RBZ irons", "Lot Of TaylorMade And One RBZ Golf Irons"),
+            ("golf clubs", "Callaway Mixed Woods and Hybrids Golf Clubs Right Handed (3)"),
+            ("TaylorMade driver", "TaylorMade Burner 9.5 Driver Reax shaft with cover"),
+            ("odyssey white hot putter", "Odyssey White Hot Mid Putter 37 Inch RH"),
+            ("cleveland rtx wedge 56", "Cleveland RTX 56 Degree Wedge Right Hand"),
+            ("sun mountain OR ogio golf stand bag", "OGIO Golf Stand Bag 5-Way Divider"),
+        )
+        for query, title in cases:
+            with self.subTest(query=query, title=title):
+                self.assertIsNone(m.golf_wrong_item_title_reason(title, query))
+
+    def test_requested_single_component_can_clear_without_being_a_set(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                price=29.15,
+                search_query="odyssey white hot putter -lefty",
+                listing={"title": "Odyssey White Hot Mid Putter 37 Inch RH"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=False,
+                golf_is_wanted_component=True,
+                golf_is_left_handed=False,
+                golf_handedness_confirmed=True,
+                golf_brand_claims_present=True,
+                golf_brand_claims_confirmed=True,
+                golf_identified_brand="Odyssey",
+                golf_counterfeit_suspected=False,
+                damage_found=False,
+                estimated_resale_value=75,
+            ),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
+    def test_stand_bag_component_does_not_require_handedness(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                price=40,
+                search_query="golf stand bag -junior",
+                listing={"title": "Golf Stand Bag"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=False,
+                golf_is_wanted_component=True,
+                golf_handedness_confirmed=False,
+                golf_brand_claims_present=False,
+                golf_brand_claims_confirmed=False,
+                golf_identified_brand="unknown",
+                golf_counterfeit_suspected=False,
+                damage_found=False,
+                estimated_resale_value=60,
+            ),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
+    def test_generic_set_without_a_brand_claim_is_not_a_fake_mismatch(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                search_query="golf club set",
+                listing={"title": "Golf clubs and bag"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_is_wanted_component=False,
+                golf_is_left_handed=False,
+                golf_handedness_confirmed=True,
+                golf_brand_claims_present=False,
+                golf_brand_claims_confirmed=False,
+                golf_identified_brand="unknown",
+                golf_counterfeit_suspected=False,
+                damage_found=False,
+            ),
+            category="golf-equipment",
+        )
+        self.assertIsNone(reason)
+
+    def test_component_prompt_uses_saved_search_intent(self):
+        response = {"is_wanted_component": True, "summary": "whole putter"}
+        listing = {
+            "title": "Odyssey White Hot Mid Putter 37 Inch RH",
+            "image": {"imageUrl": "https://example.test/putter.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(m, "_call_photo_check", return_value=response) as check:
+            actual = m.check_photos_with_gemini(
+                listing,
+                category="golf-equipment",
+                search_query="odyssey white hot putter -lefty",
+            )
+        self.assertEqual(actual, response)
+        prompt = check.call_args.args[0]
+        self.assertIn('Saved search intent: "odyssey white hot putter"', prompt)
+        self.assertIn("one standalone putter", prompt)
+        self.assertIn('"is_wanted_component": bool', prompt)
+        self.assertIn('"brand_claims_present": bool', prompt)
+
 
 class GolfRampConfiguration(unittest.TestCase):
     def test_no_box_set_brand_golf_searches_remain(self):
@@ -863,6 +975,25 @@ class GolfSanityCheck(unittest.TestCase):
         self.assertEqual(result, response)
         self.assertIn("irons-only/partial iron set can qualify", prompts[0])
         self.assertIn("Do not call clubs a part/accessory", prompts[0])
+
+    def test_requested_component_is_complete_for_final_sanity_check(self):
+        prompts = []
+        response = {"is_complete_item": True, "is_part_or_accessory": False, "reason": "whole putter"}
+        with mock.patch.object(
+            m,
+            "_call_deepseek_text_json",
+            lambda prompt: prompts.append(prompt) or response,
+        ):
+            result = m._deepseek_alert_sanity_check(
+                {"title": "Odyssey White Hot Putter", "description": "right handed"},
+                {"summary": "whole usable putter", "looks_good": True, "damage_found": False},
+                "golf-equipment",
+                search_query="odyssey white hot putter -lefty",
+            )
+
+        self.assertEqual(result, response)
+        self.assertIn("explicitly requested one standalone putter", prompts[0])
+        self.assertIn("is not a part/accessory merely because it is not a set", prompts[0])
 
 
 class JacketOnlySuitListing(unittest.TestCase):
@@ -5303,6 +5434,29 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(queue_path.read_text(encoding="utf-8"), "",
                          "successfully alerted Scout row must be acknowledged")
 
+    def test_golf_wrong_item_is_logged_without_spending_ai(self):
+        item_id = "v1|golf-tie|0"
+        saved_search = {
+            "query": "golf clubs -junior -youth -kids -ladies -womens -lefty",
+            "category": "golf-equipment",
+            "size": None,
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+        }
+        self._serve(
+            saved_search,
+            [self._ebay_item(item_id, "Vintage Silk Necktie Golf Clubs Print", 20)],
+        )
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        records = self._alert_log_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["disposition_code"], "GOLF_WRONG_ITEM")
+        self.assertIn("non-club merchandise", records[0]["reason"])
+
     def test_scout_candidate_spends_own_budget_not_gemini_calls(self):
         # Corrected after review: a single healthy extension scan (one
         # Facebook search easily returns 20-60 listings) can flood far more
@@ -6351,6 +6505,7 @@ class AlertLogPriceSemantics(unittest.TestCase):
             "wrong size filter": "SIZE_MISMATCH",
             "deal_rating 'Marginal' below steal bar": "BELOW_MARGIN",
             "condition hard-fail keyword in title": "CONDITION_REJECT",
+            "golf wrong-item title: set-oriented search matched a single club": "GOLF_WRONG_ITEM",
         }
         for reason, expected in cases.items():
             with self.subTest(reason=reason):
@@ -6366,6 +6521,38 @@ class AlertLogPriceSemantics(unittest.TestCase):
             m.disposition_code_for({"verdict": "DELIVERY_FAILED"}),
             "DELIVERY_FAILED",
         )
+
+    def test_golf_ai_gate_inputs_are_logged_for_masked_failure_analysis(self):
+        result = {
+            "listing": {
+                "itemId": "facebook:golf-telemetry",
+                "title": "Golf clubs and bag",
+                "platform": "facebook",
+                "price": {"value": 100.0, "currency": "USD"},
+            },
+            "search_query": "golf club set",
+            "category": "golf-equipment",
+            "verdict": "PASS",
+            "reason": "blocked by steal-quality gate: golf-equipment bar: AI did not confirm a playable first set or useful partial set",
+            "golf_ai_checked": True,
+            "golf_component_kind": None,
+            "golf_is_playable_first_set": False,
+            "golf_is_wanted_component": False,
+            "golf_is_left_handed": False,
+            "golf_handedness_confirmed": True,
+            "golf_brand_claims_present": False,
+            "golf_brand_claims_confirmed": False,
+            "golf_counterfeit_suspected": False,
+            "golf_identified_brand": "unknown",
+            "damage_found": False,
+        }
+        record = self._write_and_read(result)
+        self.assertTrue(record["ai_checked"])
+        self.assertFalse(record["golf_is_playable_first_set"])
+        self.assertFalse(record["golf_brand_claims_present"])
+        self.assertFalse(record["golf_brand_claims_confirmed"])
+        self.assertTrue(record["golf_handedness_confirmed"])
+        self.assertIn("damage_found", record)
 
     def test_append_preserves_existing_history_bytes(self):
         tmpdir = pathlib.Path(tempfile.mkdtemp())
