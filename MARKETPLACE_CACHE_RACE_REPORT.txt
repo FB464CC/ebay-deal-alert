@@ -1,0 +1,54 @@
+Marketplace cache-race investigation
+Started: 2026-09-04 (America/New_York)
+
+Progress 1 - checkout verification
+- HEAD: a422b138230ec2bf3c85dc158ff3fc919774358b Fix Telegram bot: follow-ups on caption replies, and itemprop/microdata prices
+- This is a normal 40-character Git commit ID with a specific recent-looking commit subject. No hardcoded SHA comparison was used.
+- The pre-investigation worktree was clean (`git status --short` produced no entries).
+- Per instruction, no fetch, pull, or clone was run.
+
+Progress 2 - static code/workflow trace
+- `DB_PATH` is `seen_items.db`; `init_db()` opens that path and creates `marketplace_anomaly_notified (platform TEXT PRIMARY KEY, last_notified_ts TEXT)` on the returned connection. The suppression state therefore lives inside `seen_items.db`.
+- `_check_marketplace_anomalies()` reads the notification timestamp by `platform`, compares it to the 24-hour window, sends one notification if eligible, writes the new timestamp, and commits immediately.
+- `notify_bot_down()` makes exactly one `requests.post()` call. It has no retry loop and cannot intentionally double-send one invocation.
+- There are exactly two production call sites: non-eBay platforms are checked once inside `prefetch_marketplaces()`; eBay alone is checked later in `run()`. OfferUp is therefore not checked by both sites in one process. Both calls reuse the single connection returned by `init_db()`; there is no suppression-state reload during a run.
+- Workflow order is restore -> verify -> bot -> save -> prune. Restore uses a per-run exact key with the prefix `seen-items-db-v1-`; save seals a unique per-run key; prune then deletes every other cache under that prefix.
+- Notable checkout fact requiring reconciliation with the migration description: `git ls-files --stage -- seen_items.db` shows the file is still tracked at this HEAD, and workflow comments/logic explicitly describe "MIGRATION PHASE 1" fallback to the tracked copy. This may affect cache-miss behavior, but does not by itself explain a prefix restore selecting stale state.
+
+Progress 3 - real incident run evidence (GitHub Actions API/logs)
+- The 09:50 and 09:54 EDT notifications align with runs 8243 (ID 33763227336) and 8244 (ID 33763353136), whose OfferUp fetches repeatedly returned HTTP 429. Their anomaly checks completed at approximately 13:50:53Z and 13:54:01Z respectively.
+- These runs definitively did NOT use the Actions cache migration. The jobs API lists checkout, Python setup, bot run, and `Commit seen item updates`; there are no Restore/Verify/Save/Prune seen-database steps.
+- Concurrency serialized job execution: run 8243's job ran 13:48:49Z-13:51:56Z; run 8244's job began 13:51:59Z. Therefore these two jobs did not execute concurrently.
+- The actual stale-state mechanism is proven by checkout logs. Both runs fetched and checked out the exact same event SHA `df40050c...`. Run 8244 had been dispatched at 13:50:08Z, before run 8243 persisted its state, so its event SHA was already fixed while it waited for concurrency.
+- Run 8243 committed the first alert's SQLite update as commit `167c04e` at 13:51:46Z and pushed it at 13:51:54Z. Seven seconds later, run 8244 checkout explicitly fetched the older `df40050c...` event SHA, not the new state commit. Its anomaly check therefore read the pre-alert SQLite database and sent the second notification. Only after sending did its commit step fetch/rebase onto `167c04e`.
+- Conclusion for the cited incident: the cache-race hypothesis is refuted on direct evidence. The duplicate predates and never traversed the seen-items cache. The real cause was queued `workflow_dispatch` runs checking out the trigger-time SHA, combined with state being read before the end-of-run `git pull --rebase`.
+
+Progress 4 - evidence about the replacement cache mechanism
+- GitHub's official dependency-caching reference says prefix matches restore the cache with the most recent creation date: https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching
+- Real post-migration logs show an unbroken immediate predecessor chain across runs 8308-8314. For example, run 8313 saved `seen-items-db-v1-33796795130-1` at 19:36:38Z and run 8314 matched/restored that exact key at 19:37:00Z, 22 seconds later. Every inspected run restored the immediately preceding completed run's key.
+- A second recent chain gives the same result: run 8600 saved `...33910184712-1` at 19:22:03Z and run 8601 matched it at 19:22:15Z; run 8601 saved `...33910627748-1` at 19:29:01Z and run 8602 matched it at 19:29:14Z. This is direct evidence against a visibility-delay race at both 12- and 13-second gaps.
+- The current cache API retained only the newest seen-items entry because the prune step intentionally removes predecessors; current inventory is therefore not historical proof by itself. The preserved per-run logs provide the key-by-key history.
+- Workflow-level concurrency prevents save/restore overlap: the next job does not start until the prior workflow finishes. GitHub's official concurrency documentation also explains why some five-minute triggers appear cancelled: only one pending run is retained by default, so a newer pending run replaces an older pending run; those cancelled runs have no job and cannot mutate or notify. See https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+- The cache migration removes the proven old failure mode because restoration happens when the serialized job actually starts and is independent of the trigger-time checkout SHA. The observed live cache chain shows that this replacement is operating as intended.
+
+Decision
+- No production code or workflow change is justified by the evidence. Moving anomaly state to a separately git-committed file would reintroduce the exact trigger-SHA staleness that caused the incident unless paired with broader synchronization changes, and would add another state path to live infrastructure.
+- No new regression test is added because no fix is being made: the reported incident is already addressed by the cache migration, and fabricating a change/test for a refuted theory would increase risk without correcting a present defect. Existing anomaly-suppression tests will be inspected and the full suite will still be run.
+
+Existing regression coverage
+- `MarketplaceAnomalyDetection.test_already_notified_within_suppression_window_does_not_notify_again` exercises a previously persisted per-platform timestamp and asserts no second call.
+- `test_notified_seven_hours_ago_still_suppressed_under_widened_window` and `test_notified_more_than_a_day_ago_notifies_again` cover the 24-hour boundary.
+- The production failure was outside the unit under test: run 8244 started from a stale copy of the whole SQLite file. The suppression implementation behaved correctly for the state it was given.
+
+Validation
+- Command: `python3 -m pytest -q`
+- Result: exit code 0; `503 passed, 1 warning, 250 subtests passed in 12.49s`.
+- Warning: one existing lxml `DeprecationWarning` about `HTMLParser(strip_cdata)` in `RunIntegration::test_mid_run_429_also_stops_the_auction_lane`.
+- `.github/workflows/poll.yml` and `ebay_deal_alert.py` were not modified, so the conditional YAML/bash and AST validations were not required. The only worktree change made by this investigation is this report.
+- No commit or push was performed.
+
+Final conclusion
+- REFUTED for the reported 2026-09-03 09:50/09:54 EDT duplicate: it was not an Actions-cache race.
+- CONFIRMED real cause: two triggers captured the same repository SHA; concurrency serialized their execution but did not refresh the queued run's trigger SHA. The second job loaded the old git-committed `seen_items.db`, alerted, and only fetched/rebased the first job's newer state afterward.
+- The subsequent cache migration is already the smallest correct fix for that cause, because each job restores state at actual execution time. Real post-migration logs show immediate, exact predecessor-key handoffs; no further production change is supported by the evidence.
+
