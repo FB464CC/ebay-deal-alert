@@ -191,10 +191,10 @@ jobs:
           # persistence on EVERY run. Safe to discard: the Save step above
           # already wrote this run's authoritative copy to the cache.
           git checkout -- seen_items.db 2>/dev/null || true
-          if [ -n "$(git status --porcelain ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json)" ]; then
+          if [ -n "$(git status --porcelain ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json platform_backoff_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            for file in ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
+            for file in ai_spend.db alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json platform_backoff_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
               if [ -e "$file" ]; then
                 git add "$file"
               fi
@@ -223,7 +223,7 @@ jobs:
                 # deliberately excluded: losing its local reservation could
                 # breach the monthly cap.
                 echo "Rebase conflict on retryable state files - keeping origin copies while preserving ai_spend.db"
-                for file in alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
+                for file in alerts_log.jsonl ebay_rate_limit_state.json shopgoodwill_rate_limit_state.json vinted_rate_limit_state.json platform_backoff_state.json scout_queue.jsonl scout_seen.db search_activity_state.json quiet_alert_queue.json weekly_digest_state.json; do
                   if git cat-file -e "origin/main:$file" 2>/dev/null; then
                     git checkout origin/main -- "$file"
                     git add "$file"

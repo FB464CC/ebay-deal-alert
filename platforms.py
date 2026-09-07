@@ -128,17 +128,80 @@ _last_call = {}
 # actually showed up in the logs for real. Doubling the effective pace on
 # every 429 (capped at _MAX_BACKOFF_MULTIPLIER) means a run backs off for
 # real instead of continuing to hammer the same wall at the same rate for
-# every remaining call to that platform. Resets naturally every run - this
-# module-level dict doesn't survive past one process, and each GH Actions
-# run is a fresh process, so there's no cross-run decay logic needed.
+# every remaining call to that platform.
 _backoff_multiplier = {}
 _MAX_BACKOFF_MULTIPLIER = 32
+
+# Comment above this dict used to read "resets naturally every run... so
+# there's no cross-run decay logic needed." Real live GitHub Actions logs
+# (checked across a full day, ~11 runs spread 03:40-21:10) falsified that:
+# OfferUp - which, unlike Vinted/ShopGoodwill, has no persistent circuit
+# breaker of its own - hit its first 429 and rode the SAME 2x/4x/8x/16x/32x
+# ladder up from scratch in literally every single run, all day, every day.
+# Each run threw away what the previous run just spent several real 429s
+# learning. Persisting the multiplier (with a decay, so one bad stretch
+# doesn't slow a platform forever) lets a run that starts 5 minutes after
+# a heavily-throttled one start already paced down instead of re-earning
+# that the hard way. Bounded to platforms already using _register_rate_limit
+# - Vinted/ShopGoodwill's own dedicated circuit breakers are unaffected.
+_BACKOFF_STATE_PATH = Path(__file__).resolve().with_name("platform_backoff_state.json")
+_BACKOFF_DECAY_SECONDS = 30 * 60
+_backoff_state_loaded = False
+
+
+def _load_backoff_state_if_needed():
+    """Lazily seed _backoff_multiplier from disk, once per process.
+
+    Must be called with _rate_lock already held. A platform's persisted
+    multiplier is only honored if it's recent (< _BACKOFF_DECAY_SECONDS
+    old) - older than that, the platform gets a clean start rather than
+    staying artificially throttled from a stretch that's long over.
+    """
+    global _backoff_state_loaded
+    if _backoff_state_loaded:
+        return
+    _backoff_state_loaded = True
+    try:
+        with _BACKOFF_STATE_PATH.open("r", encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return
+    if not isinstance(state, dict):
+        return
+    now = time.time()
+    for platform, entry in state.items():
+        if not isinstance(entry, dict):
+            continue
+        multiplier = entry.get("multiplier")
+        updated_ts = entry.get("updated_ts")
+        if not isinstance(multiplier, (int, float)) or not isinstance(updated_ts, (int, float)):
+            continue
+        if now - updated_ts > _BACKOFF_DECAY_SECONDS:
+            continue
+        _backoff_multiplier[platform] = min(int(multiplier), _MAX_BACKOFF_MULTIPLIER)
+
+
+def _save_backoff_state():
+    """Must be called with _rate_lock already held."""
+    now = time.time()
+    state = {
+        platform: {"multiplier": multiplier, "updated_ts": now}
+        for platform, multiplier in _backoff_multiplier.items()
+    }
+    try:
+        with _BACKOFF_STATE_PATH.open("w", encoding="utf-8") as f:
+            json.dump(state, f)
+            f.write("\n")
+    except OSError as exc:
+        logger.warning("Failed to persist platform backoff state: %s", exc)
 
 
 def _register_rate_limit(platform):
     with _rate_lock:
+        _load_backoff_state_if_needed()
         current = _backoff_multiplier.get(platform, 1)
         _backoff_multiplier[platform] = min(current * 2, _MAX_BACKOFF_MULTIPLIER)
+        _save_backoff_state()
         return _backoff_multiplier[platform]
 
 
@@ -148,6 +211,7 @@ def _pace(platform):
     interval = _MIN_INTERVAL.get(platform, _DEFAULT_MIN_INTERVAL)
     while True:
         with _rate_lock:
+            _load_backoff_state_if_needed()
             effective_interval = interval * _backoff_multiplier.get(platform, 1)
             now = time.monotonic()
             previous = _last_call.get(platform, 0.0)
@@ -163,33 +227,55 @@ def get_json(platform, url, params=None, headers=None, session=None, timeout=HTT
 
     Adapters must never raise into the main loop - one dead marketplace can
     not be allowed to abort a polling run for the other five.
+
+    Real live pattern this guards: unlike Vinted/ShopGoodwill (each hand-
+    rolled a retry-once for their own picky WAF), every get_json()-based
+    adapter (Poshmark, Grailed) had ZERO retry for anything - a single
+    transient blip (connection reset, a momentary 502/503) blanked that
+    whole query to 0 results for the run, which is indistinguishable from a
+    genuine listing-count collapse to _check_marketplace_anomalies(). One
+    retry after a short fixed delay for exactly the transient cases (a
+    request exception, or a 5xx) - not for 429 (already has its own
+    backoff path; hammering a rate-limited endpoint again immediately would
+    be rude and pointless) and not for other 4xx (a real client-side
+    problem retrying can't fix). Only the final failure logs a warning, so
+    this doesn't inflate the health error counter beyond the one increment
+    a hard failure already produced.
     """
     _pace(platform)
     request_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if headers:
         request_headers.update(headers)
     getter = session.get if session is not None else requests.get
-    try:
-        resp = getter(url, params=params, headers=request_headers, timeout=timeout)
-    except requests.RequestException as exc:
-        logger.warning("%s request failed: %s", platform, exc)
-        return None
-    if resp.status_code == 429:
-        multiplier = _register_rate_limit(platform)
-        logger.warning(
-            "%s rate limited (429) - backing off, next calls to this platform "
-            "paced %sx slower for the rest of this run",
-            platform, multiplier,
-        )
-        return None
-    if not resp.ok:
-        logger.warning("%s returned HTTP %s", platform, resp.status_code)
-        return None
-    try:
-        return resp.json()
-    except ValueError:
-        logger.warning("%s returned non-JSON body", platform)
-        return None
+    for attempt in range(2):
+        try:
+            resp = getter(url, params=params, headers=request_headers, timeout=timeout)
+        except requests.RequestException as exc:
+            if attempt == 0:
+                time.sleep(1)
+                continue
+            logger.warning("%s request failed: %s", platform, exc)
+            return None
+        if resp.status_code == 429:
+            multiplier = _register_rate_limit(platform)
+            logger.warning(
+                "%s rate limited (429) - backing off, next calls to this platform "
+                "paced %sx slower for the rest of this run",
+                platform, multiplier,
+            )
+            return None
+        if 500 <= resp.status_code < 600 and attempt == 0:
+            time.sleep(1)
+            continue
+        if not resp.ok:
+            logger.warning("%s returned HTTP %s", platform, resp.status_code)
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            logger.warning("%s returned non-JSON body", platform)
+            return None
+    return None
 
 
 def _dig(obj, path):
@@ -1001,6 +1087,17 @@ def search_shopgoodwill(saved_search):
                 proxy=proxy_url,
             )
         except Exception as exc:
+            # Real live evidence (GH Actions run 34167727565): "curl: (28)
+            # Operation timed out after 8002 milliseconds" - a plain
+            # connection-level timeout, not a 403/429 block. Every other
+            # failure mode in this loop gets one retry before giving up;
+            # this one used to return immediately on attempt 0, wasting the
+            # loop's own retry and losing the whole query to one transient
+            # timeout. One retry, same as the 403/429 path, before giving up.
+            if attempt == 0:
+                logger.warning("shopgoodwill request failed: %s; retrying once after 2s", exc)
+                time.sleep(2)
+                continue
             logger.warning("shopgoodwill request failed: %s", exc)
             return [], None
         status = resp.status

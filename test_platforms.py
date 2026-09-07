@@ -25,6 +25,8 @@ import time
 import unittest
 from unittest import mock
 
+import requests
+
 import platforms as p
 
 
@@ -61,6 +63,25 @@ class _FakeScraplingResp:
         if self._body is None:
             raise ValueError("no JSON body")
         return self._body
+
+
+# _register_rate_limit() now persists the backoff multiplier to disk (real
+# live bug fix: OfferUp hit 429 and rode the same 2x..32x ladder up from
+# scratch in every single GH Actions run, all day - the in-memory-only
+# multiplier never survived to the next run to save it the trouble). Every
+# test in this module that touches _register_rate_limit/_pace, directly or
+# through an adapter, must never let that hit the real repo path - redirect
+# it process-wide, once, for the whole test module.
+_module_tmpdir = tempfile.mkdtemp()
+p._BACKOFF_STATE_PATH = pathlib.Path(_module_tmpdir) / "platform_backoff_state.json"
+# No test in this file exercises cross-run persistence deliberately, so
+# treat the state as "already loaded" (a no-op empty state) by default -
+# individual tests reset this flag when they want to test loading for real.
+p._backoff_state_loaded = True
+
+
+def tearDownModule():
+    shutil.rmtree(_module_tmpdir, ignore_errors=True)
 
 
 class ListingNumberValidation(unittest.TestCase):
@@ -237,6 +258,170 @@ class VintedAdaptiveBackoff(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(p._backoff_multiplier.get("offerup"), 2)
         self.assertIn("backing off", " ".join(cm.output))
+
+
+class PersistedBackoffState(unittest.TestCase):
+    """Real live bug: OfferUp has no circuit breaker of its own (unlike
+    Vinted/ShopGoodwill), and the backoff multiplier used to live only in a
+    module-level dict - gone the moment the process exited. Checked against
+    11 real GitHub Actions runs spread across a full day: OfferUp hit its
+    first 429 and rode the SAME 2x/4x/8x/16x/32x ladder up from a cold start
+    in literally every single run. Persisting the multiplier (with a decay,
+    so a platform doesn't stay throttled forever after one bad stretch) lets
+    a run 5 minutes later start already paced down."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.path = pathlib.Path(self.tmpdir) / "state.json"
+        self.original_path = p._BACKOFF_STATE_PATH
+        self.original_loaded = p._backoff_state_loaded
+        p._BACKOFF_STATE_PATH = self.path
+        p._backoff_state_loaded = False
+        p._backoff_multiplier.clear()
+        p._last_call.clear()
+
+    def tearDown(self):
+        p._BACKOFF_STATE_PATH = self.original_path
+        p._backoff_state_loaded = self.original_loaded
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_register_rate_limit_persists_to_disk(self):
+        p._register_rate_limit("offerup")
+        p._register_rate_limit("offerup")
+        state = json.loads(self.path.read_text())
+        self.assertEqual(state["offerup"]["multiplier"], 4)
+        self.assertIn("updated_ts", state["offerup"])
+
+    def test_fresh_process_loads_recent_multiplier_from_disk(self):
+        # Simulates the next GH Actions run: a fresh process (empty
+        # in-memory dict, _backoff_state_loaded reset to False) starting up
+        # after the PRIOR run persisted a throttled multiplier moments ago.
+        self.path.write_text(json.dumps({
+            "offerup": {"multiplier": 16, "updated_ts": time.time() - 60},
+        }))
+        p._backoff_multiplier.clear()
+        p._backoff_state_loaded = False
+        p._last_call["offerup"] = 100.0  # "just called"
+        with mock.patch("platforms.time.monotonic", side_effect=[100.0] + [1000.0] * 10), \
+                mock.patch("platforms.time.sleep") as sleep_mock:
+            p._pace("offerup")
+        # 0.5s base * 16x persisted multiplier, not a cold-start 0.5s.
+        sleep_mock.assert_called_once()
+        self.assertAlmostEqual(sleep_mock.call_args[0][0], 0.5 * 16, places=3)
+
+    def test_stale_multiplier_decays_instead_of_loading(self):
+        # Real design intent: a platform must not stay artificially
+        # throttled forever because of a stretch that ended a long time ago.
+        self.path.write_text(json.dumps({
+            "offerup": {"multiplier": 32, "updated_ts": time.time() - p._BACKOFF_DECAY_SECONDS - 1},
+        }))
+        p._backoff_multiplier.clear()
+        p._backoff_state_loaded = False
+        p._last_call["offerup"] = 100.0
+        with mock.patch("platforms.time.monotonic", side_effect=[100.0] + [1000.0] * 10), \
+                mock.patch("platforms.time.sleep") as sleep_mock:
+            p._pace("offerup")
+        sleep_mock.assert_called_once()
+        self.assertAlmostEqual(sleep_mock.call_args[0][0], 0.5, places=3)
+
+    def test_corrupt_state_file_is_ignored_not_a_crash(self):
+        self.path.write_text("not json")
+        p._backoff_multiplier.clear()
+        p._backoff_state_loaded = False
+        p._last_call["offerup"] = 100.0
+        with mock.patch("platforms.time.monotonic", side_effect=[100.0] + [1000.0] * 10), \
+                mock.patch("platforms.time.sleep") as sleep_mock:
+            p._pace("offerup")
+        sleep_mock.assert_called_once()
+        self.assertAlmostEqual(sleep_mock.call_args[0][0], 0.5, places=3)
+
+
+class GetJsonTransientRetry(unittest.TestCase):
+    """Real gap: unlike Vinted/ShopGoodwill (each hand-rolled a retry-once
+    for their own picky WAF), get_json() - used by Poshmark and Grailed -
+    had ZERO retry for anything. One transient blip (a connection reset, a
+    momentary 502/503) blanked that whole query to 0 results for the run,
+    indistinguishable from a genuine listing-count collapse to
+    _check_marketplace_anomalies(). One retry after a short delay for
+    exactly the transient cases; 429 and other 4xx are untouched."""
+
+    def test_retries_once_on_request_exception_then_succeeds(self):
+        with mock.patch(
+            "platforms.requests.get",
+            side_effect=[requests.exceptions.ConnectionError("reset"), _FakeResp(200, {"ok": True})],
+        ), mock.patch.object(p, "_pace"), mock.patch("platforms.time.sleep") as sleep_mock:
+            result = p.get_json("poshmark", "https://poshmark.example/api")
+        self.assertEqual(result, {"ok": True})
+        sleep_mock.assert_called_once()
+
+    def test_retries_once_on_5xx_then_succeeds(self):
+        with mock.patch(
+            "platforms.requests.get",
+            side_effect=[_FakeResp(503), _FakeResp(200, {"ok": True})],
+        ), mock.patch.object(p, "_pace"), mock.patch("platforms.time.sleep"):
+            result = p.get_json("poshmark", "https://poshmark.example/api")
+        self.assertEqual(result, {"ok": True})
+
+    def test_gives_up_after_second_failure(self):
+        with mock.patch(
+            "platforms.requests.get",
+            side_effect=[requests.exceptions.Timeout("slow"), requests.exceptions.Timeout("slow")],
+        ), mock.patch.object(p, "_pace"), mock.patch("platforms.time.sleep"):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.get_json("poshmark", "https://poshmark.example/api")
+        self.assertIsNone(result)
+        self.assertIn("request failed", " ".join(cm.output))
+
+    def test_429_still_returns_immediately_no_retry(self):
+        # A rate-limited endpoint must not be hammered again right away -
+        # it already has its own backoff-multiplier path.
+        get_mock = mock.MagicMock(return_value=_FakeResp(429))
+        with mock.patch("platforms.requests.get", get_mock), mock.patch.object(p, "_pace"):
+            result = p.get_json("poshmark", "https://poshmark.example/api")
+        self.assertIsNone(result)
+        self.assertEqual(get_mock.call_count, 1)
+
+    def test_other_4xx_still_returns_immediately_no_retry(self):
+        # A real client-side error (bad request, not found) - retrying
+        # can't fix that, so it shouldn't cost a second call.
+        get_mock = mock.MagicMock(return_value=_FakeResp(404))
+        with mock.patch("platforms.requests.get", get_mock), mock.patch.object(p, "_pace"):
+            result = p.get_json("poshmark", "https://poshmark.example/api")
+        self.assertIsNone(result)
+        self.assertEqual(get_mock.call_count, 1)
+
+
+class ShopGoodwillTimeoutRetry(unittest.TestCase):
+    """Real live evidence (GH Actions run 34167727565, 2026-09-07): "curl:
+    (28) Operation timed out after 8002 milliseconds with 0 bytes received"
+    - a plain connection-level timeout, not a 403/429 block. Every other
+    failure mode in search_shopgoodwill's retry loop gets one retry before
+    giving up; a raised exception used to skip that same loop's retry
+    entirely and give up on attempt 0."""
+
+    def test_retries_once_on_exception_then_succeeds(self):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.side_effect = [
+            TimeoutError("Operation timed out after 8002 milliseconds"),
+            _FakeScraplingResp(200, {"searchResults": {"items": [], "itemCount": 0}}),
+        ]
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}), \
+                mock.patch.object(p.time, "sleep") as sleep_mock:
+            listings, count = p.search_shopgoodwill({"query": "test"})
+        self.assertEqual((listings, count), ([], 0))
+        self.assertEqual(fake_fetcher.post.call_count, 2)
+        sleep_mock.assert_any_call(2)
+
+    def test_gives_up_after_second_exception(self):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.side_effect = TimeoutError("Operation timed out after 8002 milliseconds")
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}), \
+                mock.patch.object(p.time, "sleep"):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_shopgoodwill({"query": "test"})
+        self.assertEqual(result, ([], None))
+        self.assertEqual(fake_fetcher.post.call_count, 2)
+        self.assertIn("request failed", " ".join(cm.output))
 
 
 class DefensiveParsing(unittest.TestCase):
