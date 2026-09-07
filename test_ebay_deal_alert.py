@@ -5572,6 +5572,34 @@ class RunIntegration(unittest.TestCase):
         self.assertTrue(m.is_new(self._db(), "facebook:scout-deferred"),
             "a Scout candidate starved of its own budget stays retry-eligible, not discarded")
 
+    def test_fresh_scout_candidate_gets_isolated_slot_ahead_of_old_backlog(self):
+        self._patch("SCOUT_AI_CHECK_LIMIT", 1)
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
+        saved_search = {"query": "loro piana sweater", "max_price": 400,
+                        "category_id": "11484", "enabled": True, "profile": "fast"}
+        self._serve(saved_search, [])
+        old = p.make_listing("facebook", "scout-old",
+            "Loro Piana Cashmere Sweater Mens Medium Grey", 300,
+            "https://www.facebook.com/marketplace/item/scout-old/")
+        old["_scout_discovered_at"] = (
+            datetime.now(timezone.utc) - timedelta(hours=1)
+        ).isoformat()
+        fresh = p.make_listing("facebook", "scout-fresh",
+            "Loro Piana Cashmere Sweater Mens Small Charcoal", 150,
+            "https://www.facebook.com/marketplace/item/scout-fresh/")
+        fresh["_scout_discovered_at"] = datetime.now(timezone.utc).isoformat()
+
+        with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[old, fresh]):
+            m.run()
+
+        self.assertEqual(
+            self.ai_calls,
+            ["facebook:scout-fresh"],
+            "recent discovery must beat a higher-priced old Scout row for the isolated slot",
+        )
+
     def test_scout_queue_keeps_deferred_unmatched_and_malformed_rows(self):
         self._patch("SCOUT_AI_CHECK_LIMIT", 1)
         self._patch("MARKETPLACES_ENABLED", [])

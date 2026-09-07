@@ -95,6 +95,12 @@ def load_scout_queue(path=None):
             # Internal transport metadata. It survives the merge into the
             # scoring pipeline but is never sent to users or providers.
             listing["_scout_queue_key"] = queue_key
+            discovered_at = row.get("discoveredAt")
+            if isinstance(discovered_at, str) and discovered_at.strip():
+                # Server-stamped by scout-ingest.js on first acceptance. Keep
+                # it as transport metadata so the poller can distinguish a
+                # just-discovered Marketplace listing from old Scout backlog.
+                listing["_scout_discovered_at"] = discovered_at.strip()
             if row.get("scoutSearchQuery"):
                 listing["_scout_search_query"] = row["scoutSearchQuery"].strip()
             if row.get("scoutSearchLabel"):

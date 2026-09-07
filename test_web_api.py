@@ -492,7 +492,7 @@ Promise.resolve(handler(req, res)).then(() => process.stdout.write(JSON.stringif
         self.assertEqual(result["body"]["accepted"], 0)
         self.assertEqual(result["body"]["duplicates"], 1)
         self.assertEqual(result["body"]["capacityDropped"], 0)
-        self.assertTrue(result["calls"][0].endswith("/contents/seen_items.db"))
+        self.assertTrue(result["calls"][0].endswith("/contents/scout_seen.db"))
         self.assertTrue(result["calls"][1].endswith("/contents/scout_queue.jsonl"))
 
     def test_queue_full_response_includes_retry_after_contract(self):

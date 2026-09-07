@@ -1,0 +1,66 @@
+GOLF SPEED LATENCY REVIEW
+=========================
+
+Progress
+--------
+- Repository initialized once from origin/main at depth 1; no further fetch, pull, or clone operations will be used.
+- Investigation started: tracing Facebook scan cadence, fetch/post latency controls, ingest queue behavior, cron drain timing, and Scout AI-check scheduling.
+
+Verified findings (in progress)
+-------------------------------
+- The extension creates `deal-scout-scan` with `periodInMinutes: 10`. Chrome alarms trigger `runScan()`, and a manual `scan-now` path exists. There are 9 enabled shipped Facebook golf queries, processed sequentially.
+- A scheduled scan waits 1.5 seconds before each target after the first (8 fixed gaps = 12 seconds per default scan). Each Facebook target uses one credentialed background `fetch()` and parses server-rendered JSON; unlike the generic target path, it has no 2.5-second render sleep and no 30-second tab-load wait. The Facebook fetch itself currently has no explicit timeout.
+- Each target is POSTed separately after its Facebook fetch. The ingest POST has a 20,000 ms abort timeout. Failed batches default to a 10-minute retry delay and are retried before new targets on a later scan.
+- The ingest endpoint stamps each accepted row with server-side `discoveredAt`, checks durable seen state, reads `scout_queue.jsonl`, re-reads it immediately before update, appends accepted JSONL rows, and PUTs the whole queue through GitHub's Contents API. Queue capacity is 2,000 lines; request capacity is 250 listings.
+- The Actions schedule is `2,7,12,...,57` (5-minute spacing, deliberately off round minutes), with `cancel-in-progress: false` and an 8-minute job timeout. Since checkout happens at job start, a queue commit just after checkout is invisible until the next run: ideal scheduler timing gives 0-5 minutes (2.5-minute average) of structural wait after ingest, before adding real GitHub Actions dispatch/checkout delay.
+- The poller loads the full Scout queue and tags routed rows `_from_scout_queue`. Scout candidates do not consume the shared `GEMINI_CALL_LIMIT`; they have an isolated `SCOUT_AI_CHECK_LIMIT`, default 1 per run. However, they remain in the same globally sorted candidate list, and the Scout slot is awarded using the generic AI priority (ending-soon auction, gate readiness, mass-market-watch, oldest AI-pending age, then highest price). No Scout-specific freshness key or fast lane exists inside that one-slot lane.
+
+Additional verified bottleneck
+------------------------------
+- `poll.yml` already exports a Facebook-only `scout_seen.db` after each run and says ingest should use it, but `web/api/scout-ingest.js` still fetched `seen_items.db`. In this checkout the files are 12,288 bytes and 22,491,136 bytes respectively: the ingest cold-start dependency was about 1,830 times larger than its purpose-built replacement. Because GitHub's Contents API does not inline a file that large, the old path also requires a second download request before queue append. That work sits inside the extension's 20-second POST deadline.
+
+Changes made
+------------
+- Pointed Scout ingest durable dedupe at the already-maintained `scout_seen.db`. Dedupe semantics are unchanged: the snapshot has the same `seen(item_id, seen_at)` schema and contains the Facebook namespace the extension submits.
+- Preserved ingest's existing server-side `discoveredAt` through `scout_queue.load_scout_queue()` as internal metadata.
+- Added a 15-minute recently-discovered Scout priority tier. It runs below ending-soon auctions but ahead of ordinary/old backlog. Scout remains capped at one isolated AI check per run and cannot consume the shared AI slots; after 15 minutes a deferred row returns to the existing oldest-pending-first ordering, preserving backlog progress.
+- Left the Facebook alarm at 10 minutes. Nine queries therefore make 54 Facebook page fetches/hour before retries; moving to 5 minutes would make 108/hour. No repository rationale or documented Marketplace-page rate ceiling establishes that doubling as safe, and the page-fetch path has no adaptive 429/checkpoint backoff, so this review does not take that account-risk gamble.
+
+Focused validation (intermediate)
+---------------------------------
+- `node --check chrome-extension/background.js`: exit 0, no output.
+- `node --check web/api/scout-ingest.js`: exit 0, no output.
+- Python AST parse command from the task: exit 0, no output.
+- Focused Scout queue, ingest, and fresh-priority tests: `12 passed in 1.13s`.
+
+Live-state evidence
+-------------------
+- The checked-out `scout_queue.jsonl` contains 61 unresolved rows (45,195 bytes). At 2026-09-07 18:07 UTC, the newest was 26.6 minutes old and the oldest 5,178.9 minutes (86.3 hours) old: 27 were 15-60 minutes old, 10 were 1-24 hours old, and 24 were over 24 hours old. This proves the queue is not merely a momentary handoff; unresolved backlog is real. Rows may remain for unmatched searches or deterministic deferral as well as AI starvation, so raw row count is not equal to AI-eligible count.
+- The newest ingest burst added 21 rows at 17:37 UTC and 6 more at 17:40 UTC. With `SCOUT_AI_CHECK_LIMIT=1`, if all 27 survived deterministic gates they could not all be AI-checked sooner than 27 successful poll runs (about 135 minutes at the intended five-minute cadence). The new priority tier cannot manufacture more slots; it ensures that one of the newest eligible rows gets the very next available Scout slot instead of automatically losing to old AI-pending age.
+- Public GitHub Actions API sample, latest 100 runs at 2026-09-07 18:00 UTC: 98 were external `workflow_dispatch` runs and 2 were native `schedule` runs. Across the 99 creation intervals, min/median/average/p95/max were 95/300/294/308/311 seconds. Thus the effective trigger cadence really is about five minutes despite native schedule sparsity; the ideal post-ingest wait to the next trigger remains 0-5 minutes (2.5-minute phase average).
+- Job-level sample of the latest 16 completed runs: trigger-to-checkout-complete was min 6s, median 10s, average 93.5s, p95 268s, max 284s. The long tail is concurrency queueing behind prior runs (`cancel-in-progress: false`), not nominal cron phase. Bot-step duration in that sample ranged 165-397s. So a queue commit just after checkout can wait roughly one trigger interval plus checkout queueing; recent observed components reached about 5 minutes + 4m44s before the next checkout in the sampled long tail.
+- Current effective config is 90s marketplace prefetch budget, 390s bot run budget, 8-minute workflow job timeout, 12 shared AI checks/run (`config.json` overrides the code default of 3), and 1 Scout AI check/run (no config override). DeepSeek is the configured primary vision provider with a 30s timeout; Gemini fallback is 20s. A Facebook row has one image download capped at 10s, the final text sanity call is capped at 15s, and ntfy delivery tries up to 3 times at 10s each with 1s/2s sleeps. These are failure-path ceilings, not claimed typical latency.
+
+End-to-end latency breakdown
+----------------------------
+1. Listing posted -> its target begins scanning: 0-10 minutes from the Chrome alarm phase, 5 minutes average if posting time is uniformly distributed. `runScan()` skips an alarm if the prior scan is still running, so 10 minutes is not a hard maximum during a wedged/slow run.
+2. Within the scan: 9 targets run serially. Targets 2-9 add a fixed 1.5s gap each (12s total across the default set), plus all earlier Facebook fetch, parse, and ingest times. Facebook uses a single credentialed page fetch and synchronous hydration-JSON parse, with no render sleep but also no explicit fetch timeout. Due retry batches are POSTed serially before new targets; each POST is capped at 20s. Each live target's POST is also capped at 20s.
+3. Ingest: validate -> durable-seen snapshot fetch -> queue read -> immediate queue re-read -> append -> GitHub Contents API PUT. `discoveredAt` is stamped before those GitHub operations. The large, incorrect 22.49MB dedupe dependency was avoidable; the change switches to the workflow-maintained 12KB snapshot.
+4. Successful queue commit -> a poll checkout that can see it: ideal trigger phase 0-5 minutes, 2.5 minutes average. A commit just after a checkout must wait for a later checkout. Recent live trigger intervals were ~5 minutes, but concurrency made trigger-to-checkout 6-284s in the job sample. The combined recent sampled long-tail components therefore reached roughly 9m44s (5m + 4m44s), before bot work.
+5. Checkout -> Scout candidate reaches AI: the Python step started 8-16s after checkout in the immediate-start examples, but the bot first performs setup, gap-report work, and a marketplace prefetch budgeted to 90s (+10s in-flight margin), then collects/scores all enabled searches. Recent whole bot steps lasted 165-397s. The global bot work budget is 390s.
+6. AI competition: Scout is isolated from the 12 shared slots but has only 1 slot of its own. Before this change, old AI-pending age outranked a fresh Scout listing, so each eligible predecessor could add another poll cycle (~5 minutes when dispatch is healthy). Deferred no-AI rows remain unseen and are retried. The 15-minute tier now gives newly discovered Scout rows the next Scout opportunity; it does not increase cost or promise that every listing in a large fresh burst can be checked immediately.
+7. Push: a passing fast-profile Facebook golf result bypasses the quiet-hours queue. Its ntfy message contains source/title and price, attaches the listing image, and provides Click/Open Listing actions. Facebook's extracted `Location: city, state` description survives into the listing but is not copied into the ntfy body, so the user must open the listing to see it. The delivery request normally returns on its first success; failure-path maximum is 3 x 10s timeouts plus 3s backoff.
+
+Nominal phase-only total before bot work is 0-15 minutes (7.5-minute average): 0-10 minutes to the extension scan plus 0-5 minutes to the next poll trigger. This intentionally excludes network calls, Actions queueing, and in-run work; the live samples above show those are substantial. There is no honest single observed listing-to-push percentile in repository state because delivered queue rows are removed and the alert log does not retain ingest `discoveredAt`.
+
+Final validation
+----------------
+- `node --check chrome-extension/background.js`: exit 0, no output.
+- `node --check web/api/scout-ingest.js`: exit 0, no output.
+- `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`: exit 0, no output.
+- `python3 -m pytest -q`: exit 0; `539 passed, 1 warning, 290 subtests passed in 13.16s`. The warning is an existing lxml `strip_cdata` deprecation warning from `test_mid_run_429_also_stops_the_auction_lane`.
+- `git diff --check`: exit 0; only Git's Windows LF-to-CRLF notices were printed.
+
+Conclusion
+----------
+The largest safe wins were not a riskier Facebook polling rate. They were removing an accidental 22.49MB ingest cold-start dependency and using the freshness timestamp already present to stop old Scout backlog from automatically taking the one time-sensitive slot. The remaining hard floor is the current 10-minute extension alarm plus approximately five-minute poll triggering and several minutes of in-run work. Moving the bot off this schedule, increasing the Scout paid-AI budget, or doubling authenticated Facebook page requests would be architecture/cost/account-risk changes and were deliberately left out.

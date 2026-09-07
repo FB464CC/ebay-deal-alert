@@ -6,7 +6,11 @@ const path = require("path");
 const MAX_QUEUE_LINES = 2000;
 const MAX_LISTINGS_PER_REQUEST = 250;
 const QUEUE_FILE = "scout_queue.jsonl";
-const SEEN_DB_FILE = "seen_items.db";
+// poll.yml exports this Facebook-only snapshot after every poll. The full
+// seen_items.db is tens of MB and requires a second Contents API download on
+// serverless cold starts; this equivalent subset is small enough to load in
+// the ingest request that the extension caps at 20 seconds.
+const SEEN_DB_FILE = "scout_seen.db";
 const RETRY_AFTER_SECONDS = 10 * 60;
 const MAX_SEEN_DB_BYTES = 100 * 1024 * 1024;
 

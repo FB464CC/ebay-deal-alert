@@ -17,7 +17,7 @@ class ScoutQueueTests(unittest.TestCase):
             json.dumps({"platform": "facebook", "itemId": "123", "title": "Titleist golf club set", "price": 125,
                         "itemWebUrl": "https://www.facebook.com/marketplace/item/123/", "imageUrl": "https://img/1.jpg",
                         "description": "Location: Columbia, SC", "scoutSearchQuery": "golf club set",
-                        "scoutSearchLabel": "Golf sets"}),
+                        "scoutSearchLabel": "Golf sets", "discoveredAt": "2026-09-07T12:34:56.000Z"}),
             json.dumps({"platform": "facebook", "itemId": "no-price", "title": "Incomplete", "price": None,
                         "itemWebUrl": "https://example.test/item", "imageUrl": "", "description": ""}),
         ]
@@ -31,6 +31,7 @@ class ScoutQueueTests(unittest.TestCase):
         self.assertEqual(listings[0]["_scout_queue_key"], "facebook:123")
         self.assertEqual(listings[0]["_scout_search_query"], "golf club set")
         self.assertEqual(listings[0]["_scout_search_label"], "Golf sets")
+        self.assertEqual(listings[0]["_scout_discovered_at"], "2026-09-07T12:34:56.000Z")
         self.assertEqual(len(logs.records), 2)
 
     def test_load_strips_mismatched_case_item_id_prefix(self):

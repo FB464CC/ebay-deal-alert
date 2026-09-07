@@ -334,6 +334,13 @@ EBAY_SCRAPE_AI_CHECK_LIMIT = int(_CONFIG.get("EBAY_SCRAPE_AI_CHECK_LIMIT", 1))
 # just with a different flooding source. Caught in review before this ever
 # shipped with live scout data.
 SCOUT_AI_CHECK_LIMIT = int(_CONFIG.get("SCOUT_AI_CHECK_LIMIT", 1))
+# `discoveredAt` is stamped by the ingest endpoint, not trusted from the
+# browser. A row accepted within this window gets the first chance at Scout's
+# one isolated AI slot; after the window it falls back to the existing
+# oldest-pending-first order so backlog still makes progress. Fifteen minutes
+# covers one ideal 5-minute checkout wait plus normal Actions/in-run delay
+# without treating old queue rows as urgent indefinitely.
+SCOUT_FRESH_PRIORITY_MINUTES = 15
 # Hard wall-clock cap on the parallel marketplace fetch. Was 30s back when
 # the repo was private and GitHub billed Actions minutes rounded up per job -
 # the repo is public now (unlimited free Actions minutes), and per_page went
@@ -6363,6 +6370,24 @@ def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
     return ordered
 
 
+def _is_fresh_scout_candidate(candidate, now):
+    """Whether ingest first accepted this Scout row within the fast window."""
+    listing = candidate.get("listing") or {}
+    if not listing.get("_from_scout_queue"):
+        return False
+    discovered_at = listing.get("_scout_discovered_at")
+    if not isinstance(discovered_at, str):
+        return False
+    try:
+        discovered = datetime.fromisoformat(discovered_at.replace("Z", "+00:00"))
+        if discovered.tzinfo is None:
+            return False
+        age = now - discovered.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    return timedelta(0) <= age <= timedelta(minutes=SCOUT_FRESH_PRIORITY_MINUTES)
+
+
 def run():
     global SAVED_SEARCHES
     SAVED_SEARCHES, config_warnings = validate_config(
@@ -7272,6 +7297,7 @@ def run():
     def _ai_check_priority(candidate):
         result = candidate["result"]
         category = candidate["category"]
+        fresh_scout = _is_fresh_scout_candidate(candidate, current_utc)
         brand_tier = result.get("brand_tier")
         # Every alert now requires a real AI check (see the "must be
         # AI-vetted" rule in PASS 3), so the old must_have_ai split -
@@ -7344,6 +7370,11 @@ def run():
         return (
             0 if is_ending_soon_auction else 1,
             result.get("auction_minutes_remaining") or 0,
+            # Recently accepted Scout rows use an isolated one-check budget,
+            # so moving them ahead cannot consume or reorder the shared AI
+            # window. It does prevent old Scout backlog from taking the only
+            # Scout check before a Facebook listing that may sell in minutes.
+            0 if fresh_scout else 1,
             0 if must_have_ai else 1,
             1 if mass_market_watch else 0,
             -pending_minutes,
