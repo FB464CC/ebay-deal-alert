@@ -1,0 +1,186 @@
+GOLF MARGIN INVESTIGATION
+=========================
+
+Progress 1 - checkout verification
+----------------------------------
+2026-09-07: Confirmed locally, without network sync, that HEAD is the sane recent commit
+ee7098e0c81168dd18ac345f3f0c1b4e874a517f ("chore: update poll state [skip ci]").
+Per the task constraints, no fetch, pull, or clone was run.
+
+Progress 2 - reconstructed production funnel
+--------------------------------------------
+Sources: authenticated `gh api` read of the current main-branch rolling
+alerts_log.jsonl (995 rows), the authenticated GitHub commits endpoint for every
+commit touching that path since 2026-09-06T19:00:00Z (132 commits), and the unique
+JSON additions from those exact local commit patches. The remote and local commit
+counts agreed at 132. Unioning exact JSON rows and applying the requested cutoff
+produced 1,994 all-category rows with zero parse errors; 903 were golf-equipment.
+
+Golf results in that window:
+- 903 attempt rows, 657 unique item IDs.
+- 39 rows / 39 unique items reached an AI check (4.3% of attempt rows; 5.9% of
+  unique items). The attempt-row reach rate is materially above the old 1.02%,
+  confirming the prefilter helped retry churn, but absolute checks/day are not
+  higher and the unique-item reach share is below the old 12.6%. This is NOT a
+  high funnel share; starvation is improved on one measure, not fully solved.
+- All dispositions: 725 NO_AI_BUDGET; 130 GOLF_WRONG_ITEM; 35 GOLF_REJECT; 6
+  OVER_MAX_PRICE; 5 CONDITION_REJECT; 2 DELIVERED; 0 BELOW_MARGIN.
+- AI-checked dispositions: 35 GOLF_REJECT; 2 OVER_MAX_PRICE; 2 DELIVERED; 0
+  BELOW_MARGIN.
+- Of the 35 GOLF_REJECT rows, 15 were explicitly "landed price exceeds the AI's
+  own resale estimate", 15 were not a playable set/partial set, 3 had an
+  unconfirmed claimed brand/model, 1 had unconfirmed right-handedness, 1 was a
+  putter cover rather than the requested putter. The two checked OVER_MAX_PRICE
+  rows exceeded the hard $300 cap.
+- The two actual delivered golf rows were a Cleveland RTX ZipCore 56-degree wedge
+  at $42.3894 landed versus $100 AI value and the $265 "Complete Golf Set". Thus
+  the production log directly contradicts the idea that every post-fix golf item
+  was undelivered: both are disposition DELIVERED/delivered=true. The user-facing
+  eyeballs tag is investigated separately below.
+
+Progress 3 - actual threshold/gate semantics
+--------------------------------------------
+- compute_deal_rating() (final lines 4148-4180) uses the site-wide buckets:
+  Steal >=70% under estimated resale; Great Deal >=50%; Good Deal >=30%; Fair
+  >=10%; Marginal below 10%.
+- Before this fix, the golf branch of is_blocked_by_steal_quality_gate() returned
+  before the generic margin branch (final lines 4794-4839). It explicitly said resale
+  margin is not a gate. Golf needs: a real AI check; non-blocked brand; landed
+  price <= $300; landed price not ABOVE a provided resale estimate; playable
+  set/useful partial or the requested standalone component; right-handedness for
+  clubs; confirmed seller brand claims when present; no counterfeit signal; and
+  no disqualifying damage. There is no hard resale-value floor, minimum-dollar
+  savings, liquidity gate, confidence gate, or 70% requirement for golf.
+- Before this fix, the merge path skipped the generic second opinion for golf and
+  skipped compute_deal_rating() for golf. Consequently a
+  normal golf result has no deal_rating/discount_pct even when it has a sound
+  resale estimate. send_alert() still sends it, but alert_urgency() (final lines
+  5088-5111) sees no rating/discount and assigns the default priority-3 `eyes`
+  tag. The eyeballs therefore mean "unrated/default priority", not "failed the
+  gate" or "was not delivered". This is the precise presentation bug behind the
+  review-only appearance.
+- The $265 complete-set row proves the separate null-estimate behavior: a real AI
+  check completed, confirmed a playable right-handed set and returned no usable
+  estimate. Because golf deliberately treats pricing as optional, the gate passed
+  and the row was delivered=true. It is not an incomplete AI call and not a render
+  bug; the model abstained and send_alert() correctly had no estimate to render.
+
+Progress 4 - current completed-sale calibration
+-----------------------------------------------
+All dollar comparisons below use completed eBay listings, not optimistic active
+asks, except where an active listing is explicitly identified as context.
+
+- Wilson Patty Berg: the model's reported $30 estimate is materially conservative.
+  A closely matched Wilson Staff Patty Berg 3-PW 8-club set, explicitly described
+  as below-average/advanced wear, sold for $74.39 with free shipping on 2026-05-25:
+  https://www.ebay.com/itm/358533015572
+  A fuller Wilson Patty Berg Cup Defender set sold for $75 plus $14.70 shipping on
+  2026-06-12:
+  https://www.ebay.com/itm/406851256998
+  At $20.66 landed against the conservative directly-matched $74.39 sale, the
+  reported ShopGoodwill candidate is about 72% under market, not 31%. Subject to
+  photos confirming the same club count/condition/right-handed adult usability,
+  this one really is Steal-tier. This is the one clear valuation miss.
+- Warrior: $60 for six ordinary cavity-back irons is plausible, not demonstrably
+  conservative. A broader Warrior set (driver, 3-wood, hybrid, 4-PW) sold for $70:
+  https://www.ebay.com/itm/326766624057
+  A larger 11-club Warrior TE group sold for $99.99 plus $40.01 shipping:
+  https://www.ebay.com/itm/126520666414
+  Those are not identical six-iron comps, but they bracket rather than contradict
+  $60. At $25.96 landed versus $60, the real fixture is 57% under and therefore an
+  honest Great Deal under the existing buckets, not a 70%-under Steal.
+- Cleveland RTX-3 56: the reported $60 estimate is generous, not conservative. A
+  same-model 56-degree RTX-3 sold for $27.99:
+  https://www.ebay.com/itm/155730604073
+  Another RTX-3 V-MG 56 was listed at $39.95 and sold via accepted best offer, so
+  its actual accepted price was no higher than $39.95:
+  https://www.ebay.com/itm/236710075421
+  A current completed-sale index reports 67 recent sales averaging $46, with a
+  $34-$50 ordinary range:
+  https://golfclubindex.com/cleveland/rtx-3
+  Therefore $42.35 landed is around current market, while the AI's $60 value
+  overstated rather than understated the bargain.
+- Cleveland 588 RTX 2.0 56: an exact-model/right-handed 56-degree Black Satin
+  wedge sold for $39.95 on 2026-05-01:
+  https://www.ebay.com/itm/127783652227
+  The AI's $45 estimate is reasonable; $38.15 landed is only about 15% under it
+  and essentially at the directly observed sold price. It is not a hidden steal.
+
+Evidence limitation on the pasted fixtures: the exact two Cleveland item URLs do
+appear in reconstructed post-cutoff Python logs, but only as NO_AI_BUDGET rows at
+2026-09-06T23:43:06Z; no later estimate-bearing AI-checked row for them exists in
+the reconstructed main log. The exact ShopGoodwill Wilson/Warrior fixtures do not
+appear in that post-cutoff Python log union. Their titles/prices/AI estimates are
+therefore treated as real user-supplied fixtures, not silently counted as logged
+Python dispositions. The $265 complete-set row is present and fully reconcilable.
+
+Progress 5 - bounded implementation
+-----------------------------------
+No price/search cap, saved search, category rule, AI budget, or $300 personal-use
+cap was relaxed. config.json is unchanged.
+
+Changes made in ebay_deal_alert.py:
+1. Golf results with a usable estimate now run through the existing
+   compute_deal_rating() buckets, so a genuine >=70% gap says Steal and receives
+   urgent fire tagging, while 50-69% says Great Deal. Personal use no longer means
+   "hide the price evidence".
+2. The golf gate now requires a usable estimate and applies the same normal
+   delivered-deal floor already used site-wide: Steal or Great Deal (>=50% under
+   current resale value), plus non-low price confidence. This RAISES the prior
+   effective golf floor from merely price<=value (0% savings); it does not lower a
+   bar to manufacture alerts. It also keeps every prior playability, component,
+   $300 cap, handedness, claim-verification, counterfeit, and damage check.
+3. A completed golf AI call that returns null value now stays retry-eligible via
+   the established "no AI price estimate" marker. The real $265 anonymous set can
+   no longer be sent as a purported deal without any evidence it is one. It also
+   receives a distinct AI_NO_PRICE disposition (rather than masquerading as
+   NO_AI_BUDGET) while retaining the same retry marker.
+4. The golf vision prompt now tells the model to match exact club count/model,
+   flex, handedness, and condition to completed-sale value; not to collapse an old
+   economy-tier matched set to near-zero purely for lacking prestige; and includes
+   the dated Wilson/Warrior/Cleveland completed-market anchors above. The anchors
+   are deliberately two-sided: Wilson is raised to real evidence, Warrior stays
+   around $60, and Cleveland wedges are not inflated.
+
+Final implementation locations: prompt calibration at lines 3833-3856;
+compute_deal_rating() at 4148-4180; the complete golf gate at 4334-4409 (new
+price-evidence checks at 4362-4380); AI_NO_PRICE telemetry at 4908;
+rating propagation at 7832-7846; alert_urgency() at 5094-5117; and send_alert()
+at 5245 onward.
+
+Historical implication against the 39 checked rows: only 23 had a usable value.
+Their computed buckets were 17 Marginal, 2 Good Deal, 1 Fair, 2 Great Deal, and 1
+Steal. The Steal and one Great Deal were independently blocked by brand/handedness;
+the other Great Deal was the Cleveland RTX ZipCore that really was delivered.
+Thus the stricter honest price gate would preserve that evidence-backed delivery
+and suppress the unpriced $265 set; it does not conjure more production steals.
+
+Regression coverage added/updated in test_ebay_deal_alert.py:
+- all four real price/value examples and their exact rating/gate outcomes;
+- Wilson $20.66 versus the $74.39 completed comp becomes Steal/72% and clears;
+- Warrior $25.96/$60 is Great Deal and clears;
+- both Cleveland examples remain below the 50% delivered-deal floor;
+- below-floor golf reasons map durably to BELOW_MARGIN;
+- the $265 no-estimate set stays retry-eligible instead of alerting unpriced;
+- prompt calibration text and end-to-end golf rating/discount propagation.
+
+Focused validation after the final edits:
+- `python3 -m pytest -q test_ebay_deal_alert.py` -> 408 passed, 1 warning,
+  266 subtests passed in 5.41s. The warning is the pre-existing lxml
+  `strip_cdata` deprecation.
+
+Final full-suite validation:
+- `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"` -> PASS
+- `python3 -c "import json; json.load(open('config.json'))"` -> PASS
+- `git diff --check` -> PASS (only informational LF-to-CRLF working-copy warnings)
+- `python3 -m pytest -q` -> 540 passed, 2 warnings, 295 subtests passed in 14.38s
+  The warnings are the pre-existing invalid `\\d` docstring escape and lxml
+  `strip_cdata` deprecation.
+
+Final scope/status:
+- Modified: ebay_deal_alert.py and test_ebay_deal_alert.py.
+- Added incrementally: GOLF_MARGIN_REPORT.txt.
+- config.json was inspected and validated but not modified, so
+  migrate_saved_search_metadata.py was not applicable.
+- poll.yml, web/api/*, and chrome-extension/* were not modified.
+- No commit or push was made.

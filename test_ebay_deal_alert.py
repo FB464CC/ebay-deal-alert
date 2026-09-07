@@ -477,6 +477,10 @@ class GolfEquipmentGate(unittest.TestCase):
             "price": price,
             "search_query": "golf club set",
             "listing": {"title": "Golf Set"},
+            # Default fixture is exactly 50% under value so tests focused on
+            # playability/brand/handedness reach those later checks.
+            "estimated_resale_value": 400 if price <= 200 else 600,
+            "price_confidence": "medium",
             "golf_handedness_confirmed": True,
             "golf_brand_claims_confirmed": True,
             "golf_identified_brand": "Titleist",
@@ -607,22 +611,75 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertIn("resale estimate", reason)
 
-    def test_price_at_or_under_resale_estimate_still_clears(self):
+    def test_positive_but_sub_50_percent_discount_is_not_a_delivered_deal(self):
         reason = m.is_blocked_by_steal_quality_gate(
             self._result(price=100, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           estimated_resale_value=120.0),
             category="golf-equipment",
         )
-        self.assertIsNone(reason)
+        self.assertIn("needs at least 50%", reason)
 
-    def test_no_resale_estimate_does_not_block(self):
-        # Golf may never get a reliable resale estimate at all; absence of
-        # one must not strand a playable personal-use candidate.
+    def test_no_resale_estimate_is_retry_eligible_instead_of_alerting_unpriced(self):
+        # Real production fixture: the $265 complete set was sent even though
+        # its completed AI check returned no usable value. That cannot support
+        # the claim that it is a deal, so keep it pending for a priced check.
         reason = m.is_blocked_by_steal_quality_gate(
-            self._result(price=250, golf_ai_checked=True, golf_is_playable_first_set=True,
+            self._result(price=265, golf_ai_checked=True, golf_is_playable_first_set=True,
                           golf_is_starter_kit=False, damage_found=False,
                           estimated_resale_value=None),
+            category="golf-equipment",
+        )
+        self.assertIn("no AI price estimate", reason)
+        self.assertIn("no usable resale value", reason)
+        self.assertEqual(m.disposition_code_for({"reason": reason}), "AI_NO_PRICE")
+
+    def test_real_review_examples_use_honest_existing_rating_buckets(self):
+        fixtures = (
+            # Reported estimate was conservative; it is only Good Deal as-is.
+            ("Wilson Patty Berg 8-piece", 20.66, 30.0, "Good Deal", True),
+            # The user's strongest reported candidate clears the normal bar.
+            ("Warrior six irons", 25.96, 60.0, "Great Deal", False),
+            # Completed-sales evidence says these estimates are fair/generous,
+            # so neither ordinary Cleveland wedge is a 50%-under-market deal.
+            ("Cleveland RTX-3 56", 42.35, 60.0, "Fair", True),
+            ("Cleveland 588 RTX 2.0 56", 38.15, 45.0, "Fair", True),
+        )
+        for title, price, resale, expected_rating, should_block in fixtures:
+            with self.subTest(title=title):
+                rating, _discount = m.compute_deal_rating(price, resale)
+                self.assertEqual(rating, expected_rating)
+                reason = m.is_blocked_by_steal_quality_gate(
+                    self._result(
+                        price=price,
+                        listing={"title": title},
+                        golf_ai_checked=True,
+                        golf_is_playable_first_set=True,
+                        estimated_resale_value=resale,
+                        damage_found=False,
+                    ),
+                    category="golf-equipment",
+                )
+                self.assertEqual(reason is not None, should_block)
+                if should_block:
+                    self.assertEqual(
+                        m.disposition_code_for({"reason": reason}),
+                        "BELOW_MARGIN",
+                    )
+
+    def test_wilson_patty_berg_completed_comp_changes_reported_buy_to_steal(self):
+        rating, discount = m.compute_deal_rating(20.66, 74.39)
+        self.assertEqual((rating, discount), ("Steal", 72))
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                price=20.66,
+                listing={"title": "Wilson Patty Berg Cup Defender Golf Club Set Of 8 Pcs"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand="Wilson Patty Berg Cup Defender",
+                estimated_resale_value=74.39,
+                damage_found=False,
+            ),
             category="golf-equipment",
         )
         self.assertIsNone(reason)
@@ -833,7 +890,7 @@ class GolfEquipmentGate(unittest.TestCase):
                 golf_identified_brand="unknown",
                 golf_counterfeit_suspected=False,
                 damage_found=False,
-                estimated_resale_value=60,
+                estimated_resale_value=80,
             ),
             category="golf-equipment",
         )
@@ -879,6 +936,10 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertIn("one standalone putter", prompt)
         self.assertIn('"is_wanted_component": bool', prompt)
         self.assertIn('"brand_claims_present": bool', prompt)
+        self.assertIn("Wilson Staff Patty Berg 3-PW 8-club set", prompt)
+        self.assertIn("$74.39 shipped", prompt)
+        self.assertIn("six-club Warrior iron group around $60 is plausible", prompt)
+        self.assertIn("$40-$50", prompt)
 
 
 class GolfRampConfiguration(unittest.TestCase):
@@ -5429,8 +5490,8 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.ai_calls, ["facebook:fb-golf-1"])
         self.assertEqual(len(self.alerts), 1)
         self.assertEqual(self.alerts[0]["listing"]["itemId"], "facebook:fb-golf-1")
-        self.assertNotIn("deal_rating", self.alerts[0],
-                         "golf eligibility must not be expressed as resale margin")
+        self.assertEqual(self.alerts[0]["deal_rating"], "Great Deal")
+        self.assertEqual(self.alerts[0]["discount_pct"], 50)
         self.assertEqual(queue_path.read_text(encoding="utf-8"), "",
                          "successfully alerted Scout row must be acknowledged")
 
@@ -6500,6 +6561,7 @@ class AlertLogPriceSemantics(unittest.TestCase):
     def test_disposition_codes_map_existing_real_gate_reasons(self):
         cases = {
             "no AI price estimate - every alert must be AI-vetted": "NO_AI_BUDGET",
+            "golf-equipment bar: no AI price estimate - AI check returned no usable resale value": "AI_NO_PRICE",
             "counterfeit/replica disclosure": "COUNTERFEIT",
             "over max price: $400 landed": "OVER_MAX_PRICE",
             "wrong size filter": "SIZE_MISMATCH",

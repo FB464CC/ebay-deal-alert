@@ -3748,8 +3748,9 @@ def check_photos_with_gemini(
         # Entirely different prompt/JSON shape from the clothing one below -
         # This is a personal-use first purchase, not a resale flip. It may be
         # irons-only or partial; the decision is whether the clubs are useful
-        # for a right-handed adult beginner and fit under the landed-price cap.
-        # Resale and starter-kit status are context, never hard gates.
+        # for a right-handed adult beginner, fit under the landed-price cap,
+        # and clear the normal evidence-backed deal threshold. Starter-kit
+        # status is context, never a hard gate; current resale value now is.
         component_kind = golf_component_search_kind(search_query)
         component_instruction = (
             f"The saved search explicitly targets one standalone {component_kind}. "
@@ -3832,10 +3833,22 @@ def check_photos_with_gemini(
             "treat unknown handedness as right-handed; explain uncertainty in summary. "
             "damage_found means visible rust, cracked/bent shafts, missing/torn "
             "grips, or heavily worn club faces beyond normal light use. looks_good "
-            "should be true only when no damage is found. estimated_resale_value is a "
-            "rough typical secondhand value for this exact set in USD if you can "
-            "reasonably estimate it (nice to have, not required), or null if you "
-            "can't - it is NOT the deciding factor here, just useful context. "
+            "should be true only when no damage is found. estimated_resale_value is the "
+            "typical current secondhand value for this exact club group in the shown "
+            "condition, using completed-sale value rather than new MSRP or optimistic "
+            "active asking prices. Match club count, model/line, handedness, shaft/flex, "
+            "and condition. Do NOT reduce a genuine older/economy-tier matched set to "
+            "near-zero merely because it lacks premium brand prestige: club count and "
+            "actual sold demand still matter. Concrete 2026 calibration: a used Wilson "
+            "Staff Patty Berg 3-PW 8-club set explicitly described as below-average sold "
+            "for $74.39 shipped, and a fuller Wilson Patty Berg Cup Defender set sold for "
+            "$75 plus $14.70 shipping; therefore a genuine comparable 8-club group is "
+            "not a $30 item absent materially worse condition or missing clubs. Keep the "
+            "same discipline in the other direction: completed sales support roughly "
+            "$40-$50, not an automatic premium, for ordinary used Cleveland RTX-3/588 "
+            "RTX 2.0 wedges, and a six-club Warrior iron group around $60 is plausible. "
+            "Return null only if the photos/title do not identify enough of the item to "
+            "make a defensible estimate. "
             "price_confidence must be one of \"high\", \"medium\", or \"low\". "
             "counterfeit_suspected is true if anything about the listing suggests "
             "these are counterfeit/replica club heads rather than genuine manufacturer "
@@ -4320,11 +4333,15 @@ def is_blocked_by_steal_quality_gate(result, category=None):
 
     # GOLF EQUIPMENT - personal-use first clubs, not a resale flip. A real AI
     # check must confirm a useful, playable first purchase, and landed price
-    # must stay at or below the hard cap. Completeness, premium branding,
-    # starter-kit status, and estimated resale margin are deliberately not
-    # gates. Right-handed/adult suitability, damage, and authenticity remain
-    # hard requirements. This returns unconditionally because golf-equipment
-    # is separate from every apparel/watch resale bar below.
+    # must stay at or below the hard cap. Completeness, premium branding, and
+    # starter-kit status are deliberately not gates. Price evidence still is:
+    # post-ea6d0a1 production showed that skipping compute_deal_rating() here
+    # made every golf delivery look like an unpriced REVIEW/eyes alert, and
+    # even allowed a $265 set through after the model returned no value at all.
+    # Use the normal site-wide delivered-deal bar (Great Deal or Steal), not a
+    # new/lower golf threshold. Right-handed/adult suitability, damage, and
+    # authenticity remain hard requirements. This returns unconditionally
+    # because golf-equipment is separate from every apparel/watch bar below.
     if category == "golf-equipment":
         if not result.get("golf_ai_checked"):
             return "golf-equipment bar: no AI price estimate yet - needs a real AI check"
@@ -4343,11 +4360,24 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         # right-handed, under the cap - whose own photo-level appraisal put it
         # at ~$100-110 (generic filler woods, missing PW, heavy sole wear).
         resale = result.get("estimated_resale_value")
+        if resale is None:
+            return (
+                "golf-equipment bar: no AI price estimate - AI check returned "
+                "no usable resale value"
+            )
         if landed is not None and resale is not None and landed > resale:
             return (
                 f"golf-equipment bar: price ${landed} exceeds the AI's own "
                 f"${resale} resale estimate - playable, but not a deal"
             )
+        golf_rating, _golf_discount_pct = compute_deal_rating(landed, resale)
+        if golf_rating not in ("Steal", "Great Deal"):
+            return (
+                f"golf-equipment bar: deal_rating '{golf_rating}' below "
+                "Great Deal - needs at least 50% under current resale value"
+            )
+        if price_confidence == "low":
+            return "golf-equipment bar: AI price estimate confidence too low to trust"
         is_wanted_component = bool(
             component_kind and result.get("golf_is_wanted_component")
         )
@@ -4870,6 +4900,12 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
     if delivery_error or verdict == "DELIVERY_FAILED":
         return "DELIVERY_FAILED"
     rules = (
+        # A completed golf vision call that abstained on price is different
+        # from a candidate that never received an AI slot. Both remain retry-
+        # eligible through the shared "no AI price" reason marker, but keeping
+        # their analytics distinct prevents the $265 null-estimate gap from
+        # disappearing into apparent budget starvation again.
+        (("ai check returned no usable resale value",), "AI_NO_PRICE"),
         (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
         (("golf wrong-item title",), "GOLF_WRONG_ITEM"),
         (("counterfeit", "replica", "not authentic", "authenticity red flag"), "COUNTERFEIT"),
@@ -7758,8 +7794,10 @@ def run():
             # the estimate untouched - this is a hedge on a guess, never a
             # required gate and never something that delays a real steal.
             if (
-                # Golf skips this appraisal because resale does not decide whether
-                # a playable personal-use first set under the hard cap can alert.
+                # Golf keeps the photo model's estimate because exact club count,
+                # markings, flex, and condition are visual; the text-only hedge
+                # can only ratchet that estimate downward and would repeat the
+                # measured Wilson economy-set underpricing this prompt now fixes.
                 category != "golf-equipment"
                 and result["estimated_resale_value"] is not None
                 and (result.get("price_confidence") or "").lower() in ("low", "medium")
@@ -7791,14 +7829,20 @@ def run():
                         item_id, original, ds_estimate, second_opinion.get("reasoning"),
                     )
 
-            if category != "golf-equipment":
-                rating_label, discount_pct = compute_deal_rating(
-                    result.get("price"),  # total landed cost: item + shipping
-                    result.get("estimated_resale_value"),
-                )
-                if rating_label is not None:
-                    result["deal_rating"] = rating_label
-                    result["discount_pct"] = discount_pct
+            # Golf used to skip this calculation because the clubs are for
+            # personal use rather than resale. That conflated purpose with
+            # evidence: without a rating, even an AI-priced golf delivery was
+            # always rendered as generic REVIEW/eyes, and the golf gate could
+            # not enforce the same honest Great-Deal-or-better bar used by the
+            # rest of the site. Rating math describes price versus market value
+            # equally well for something the buyer intends to keep.
+            rating_label, discount_pct = compute_deal_rating(
+                result.get("price"),  # total landed cost: item + shipping
+                result.get("estimated_resale_value"),
+            )
+            if rating_label is not None:
+                result["deal_rating"] = rating_label
+                result["discount_pct"] = discount_pct
 
         # Real sold prices beat a guess. Two cases use them:
         #   (a) nothing else produced a rating at all, or
