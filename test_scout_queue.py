@@ -48,11 +48,14 @@ class ScoutQueueTests(unittest.TestCase):
         self.assertEqual(len(listings), 1)
         self.assertEqual(listings[0]["itemId"], "Facebook:123")
 
-    def test_missing_empty_and_clear_are_safe(self):
+    def test_missing_queue_is_safe(self):
+        # clear_scout_queue() used to be asserted here too; it was dead code
+        # (no production caller - ebay_deal_alert.py acknowledges rows through
+        # remove_processed_scout_queue, which exists precisely so unprocessed
+        # rows are NOT wiped) and has been removed.
         self.assertEqual(scout_queue.load_scout_queue(self.path), [])
         self.assertFalse(scout_queue.scout_queue_has_data(self.path))
-        self.assertTrue(scout_queue.clear_scout_queue(self.path))
-        self.assertEqual(self.path.read_text(encoding="utf-8"), "")
+        self.assertFalse(self.path.exists())
 
     def test_remove_processed_rewrites_only_acknowledged_valid_rows(self):
         processed = {"platform": "facebook", "itemId": "done", "title": "Done", "price": 10,

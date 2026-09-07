@@ -271,6 +271,43 @@ class DefensiveParsing(unittest.TestCase):
         self.assertIsNone(listing.get("seller"))
         self.assertFalse(listing["seller_trusted"])
 
+    def test_dict_rows_tolerates_null_scalar_and_mixed_collections(self):
+        # dict.get(k, []) does NOT fall back to the default for a
+        # present-but-null key, so `for row in body.get("hits", [])` raised
+        # TypeError on {"hits": null} - and a non-dict element raised
+        # AttributeError on the next .get(). Both were swallowed by
+        # _fetch_marketplace, zeroing the whole platform for the run.
+        self.assertEqual(p._dict_rows({"hits": None}, "hits"), [])
+        self.assertEqual(p._dict_rows({"hits": "scalar"}, "hits"), [])
+        self.assertEqual(p._dict_rows({}, "hits"), [])
+        self.assertEqual(p._dict_rows(["a", "list", "body"], "hits"), [])
+        self.assertEqual(p._dict_rows(None, "hits"), [])
+        self.assertEqual(p._dict_rows({"hits": [{"a": 1}, "junk", None]}, "hits"), [{"a": 1}])
+
+    def test_grailed_search_survives_a_null_hits_collection(self):
+        with mock.patch.object(p, "get_json", return_value={"hits": None, "nbHits": None}):
+            listings, total = p.search_grailed({"query": "alden shell cordovan"})
+        self.assertEqual(listings, [])
+        self.assertIsNone(total)
+
+    def test_grailed_sold_comps_survive_a_null_hits_collection(self):
+        with mock.patch.object(p, "get_json", return_value={"hits": None}):
+            self.assertEqual(p.fetch_grailed_sold_comps("hermes tie"), (None, 0))
+
+    def test_poshmark_search_survives_a_null_data_collection(self):
+        with mock.patch.object(p, "get_json", return_value={"data": None}):
+            self.assertEqual(p.search_poshmark({"query": "brooks brothers blazer"}), ([], None))
+
+    def test_poshmark_search_skips_non_dict_rows_without_dropping_good_ones(self):
+        body = {"data": [
+            "junk-row",
+            {"id": "p1", "title": "Canali Blazer 42R", "price_amount": {"val": "88.00"}},
+        ]}
+        with mock.patch.object(p, "get_json", return_value=body):
+            listings, _ = p.search_poshmark({"query": "canali blazer"})
+        self.assertEqual([x["itemId"] for x in listings], ["poshmark:p1"])
+        self.assertEqual(listings[0]["price"], {"value": 88.0, "currency": "USD"})
+
 
 class ShopGoodwillClosingSoon(unittest.TestCase):
     def test_seconds_only_remaining_is_not_unparseable(self):

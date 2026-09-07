@@ -19,6 +19,7 @@ LEDGER_MODULE = (ROOT / "web" / "api" / "ledger.js").as_posix()
 DELETION_MODULE = (ROOT / "web" / "api" / "ebay-account-deletion.js").as_posix()
 HISTORY_MODULE = (ROOT / "web" / "api" / "history.js").as_posix()
 INDEX_HTML = ROOT / "web" / "index.html"
+BACKGROUND_JS = ROOT / "chrome-extension" / "background.js"
 
 
 def run_node(expression):
@@ -108,7 +109,8 @@ global.fetch = async (url, options = {{}}) => {{
   return {{
     status: next.status,
     ok: next.status >= 200 && next.status < 300,
-    json: async () => next.body
+    json: async () => next.body,
+    text: async () => next.text
   }};
 }};
 process.env.GITHUB_TOKEN = 'test-token';
@@ -213,6 +215,19 @@ def valid_config():
 
 def index_javascript(start_marker, end_marker):
     source = INDEX_HTML.read_text(encoding="utf-8")
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    return source[start:end]
+
+
+def background_javascript(start_marker, end_marker):
+    """Slice one function out of the extension service worker.
+
+    Same source-slicing approach index_javascript() already uses. background.js
+    cannot be require()'d directly: line 1 is importScripts() and the module
+    calls chrome.* APIs at load time.
+    """
+    source = BACKGROUND_JS.read_text(encoding="utf-8")
     start = source.index(start_marker)
     end = source.index(end_marker, start)
     return source[start:end]
@@ -402,6 +417,75 @@ class ExtensionUrlValidationTests(unittest.TestCase):
         self.assertEqual(json.loads(completed.stdout), ["https://example.com/path", "http://example.com/", "rejected", "rejected", "rejected"])
 
 
+class ExtensionFacebookExtractionTests(unittest.TestCase):
+    """extractFacebookListingsFromHtml() IS the Facebook scan after the
+    tab->fetch rewrite (it replaced the content script that used to do this in
+    a real tab, now deleted), and had no test at all."""
+
+    def _extract(self, html):
+        function_source = background_javascript(
+            "function extractFacebookListingsFromHtml(html) {",
+            "// Real live complaint: opening/closing a real Chrome tab",
+        )
+        script = (
+            f"{function_source}\n"
+            f"process.stdout.write(JSON.stringify(extractFacebookListingsFromHtml({json.dumps(html)})))"
+        )
+        return run_node_script(script)
+
+    @staticmethod
+    def _blob(payload):
+        return f'<script type="application/json" data-sjs>{json.dumps(payload)}</script>'
+
+    def test_walks_nested_hydration_blobs_and_normalizes_fields(self):
+        node = {
+            "id": 4242,
+            "marketplace_listing_title": "Full golf set with bag",
+            "listing_price": {"amount": "$185.00"},
+            "primary_listing_photo": {"image": {"uri": "https://scontent.test/a.jpg"}},
+            "location": {"reverse_geocode": {"city": "Irmo", "state": "SC"}},
+        }
+        html = (
+            "<html>"
+            + self._blob({"require": [["ScheduledServerJS", "handle", [{"result": {"edges": [{"node": node}]}}]]]})
+            + '<script type="application/json">not json at all</script>'
+            + "</html>"
+        )
+        self.assertEqual(self._extract(html), [{
+            "platform": "facebook",
+            "itemId": "4242",
+            "title": "Full golf set with bag",
+            "price": 185,
+            "itemWebUrl": "https://www.facebook.com/marketplace/item/4242/",
+            "imageUrl": "https://scontent.test/a.jpg",
+            "description": "Location: Irmo, SC",
+        }])
+
+    def test_duplicate_ids_across_blobs_are_emitted_once(self):
+        node = {"id": "7", "marketplace_listing_title": "Irons", "listing_price": {"amount": 90}}
+        html = self._blob({"a": [node]}) + self._blob({"b": {"c": node}})
+        self.assertEqual([x["itemId"] for x in self._extract(html)], ["7"])
+
+    def test_unpriced_untitled_and_zero_price_listings_are_dropped(self):
+        html = self._blob({"nodes": [
+            {"id": "1", "marketplace_listing_title": "No price key"},
+            {"id": "2", "marketplace_listing_title": "Free", "listing_price": {"amount": 0}},
+            {"id": "3", "marketplace_listing_title": "", "listing_price": {"amount": 50}},
+            {"id": "", "marketplace_listing_title": "No id", "listing_price": {"amount": 50}},
+            {"id": "5", "marketplace_listing_title": "Good", "listing_price": {"amount": "1,250"}},
+        ]})
+        listings = self._extract(html)
+        self.assertEqual([x["itemId"] for x in listings], ["5"])
+        self.assertEqual(listings[0]["price"], 1250)
+
+    def test_partial_location_does_not_produce_a_half_written_description(self):
+        html = self._blob({"n": {
+            "id": "9", "marketplace_listing_title": "Wedge", "listing_price": {"amount": 20},
+            "location": {"reverse_geocode": {"city": "Chapin"}},
+        }})
+        self.assertEqual(self._extract(html)[0]["description"], "")
+
+
 class ScoutIngestValidationTests(unittest.TestCase):
     def test_duplicate_items_are_removed_against_queue_and_request(self):
         script = (
@@ -508,6 +592,91 @@ Promise.resolve(handler(req, res)).then(() => process.stdout.write(JSON.stringif
         self.assertEqual(result["status"], 429)
         self.assertEqual(result["headers"]["Retry-After"], "600")
         self.assertEqual(result["body"]["retryAfterSeconds"], 600)
+
+    def test_existing_lines_reads_resolved_text_not_raw_base64_content(self):
+        script = (
+            f"const t=require({json.dumps(SCOUT_MODULE)})._test;"
+            "process.stdout.write(JSON.stringify(["
+            "t.existingLines(null),"
+            "t.existingLines({text:'a\\nb\\n\\n  \\nc'}),"
+            "t.existingLines({text:''})"
+            "]))"
+        )
+        completed = subprocess.run(["node", "-e", script], cwd=ROOT, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(completed.stdout), [[], ["a", "b", "c"], []])
+
+    def test_oversized_queue_follows_download_url_instead_of_being_wiped(self):
+        # Real bug this guards: GitHub's Contents API only inlines `content`
+        # for files <=1MB - past that it returns 200 with encoding:"none", an
+        # EMPTY content string and a download_url. The live queue measures
+        # ~730 bytes/row, so the MAX_QUEUE_LINES=2000 cap permits ~1.46MB.
+        # Reading it as empty defeated every duplicate check, skipped the
+        # queue-full 429 gate, and made the PUT replace the WHOLE queue with
+        # only this request's listings - with a 200 OK response.
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "seen.db"
+            connection = sqlite3.connect(database_path)
+            connection.execute("CREATE TABLE seen (item_id TEXT PRIMARY KEY, seen_at TEXT)")
+            connection.commit()
+            connection.close()
+            database_content = base64.b64encode(database_path.read_bytes()).decode()
+
+        download_url = "https://raw.githubusercontent.test/owner/repo/scout_queue.jsonl"
+        queued = [
+            {"platform": "facebook", "itemId": "already-queued", "title": "Kept"},
+            {"platform": "facebook", "itemId": "also-queued", "title": "Also kept"},
+        ]
+        raw_text = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in queued)
+        # One brand-new listing plus one that is already sitting in the queue.
+        listings = [
+            {"platform": "facebook", "itemId": "brand-new", "title": "New", "price": 10,
+             "itemWebUrl": "https://example.com/new", "imageUrl": "", "description": ""},
+            {"platform": "facebook", "itemId": "already-queued", "title": "Kept", "price": 20,
+             "itemWebUrl": "https://example.com/dup", "imageUrl": "", "description": ""},
+        ]
+        big_file = {
+            "sha": "queue-sha", "encoding": "none", "content": "", "download_url": download_url,
+        }
+        script = f"""
+const calls = [];
+const responses = [
+  {{status: 200, body: {{sha: 'seen-sha', encoding: 'base64', content: {json.dumps(database_content)}}}}},
+  {{status: 200, body: {json.dumps(big_file)}}},
+  {{status: 200, text: {json.dumps(raw_text)}}},
+  {{status: 200, body: {json.dumps(big_file)}}},
+  {{status: 200, text: {json.dumps(raw_text)}}},
+  {{status: 200, body: {{content: {{sha: 'saved'}}}}}}
+];
+global.fetch = async (url, options = {{}}) => {{
+  calls.push({{url, options}});
+  const next = responses.shift();
+  if (!next) throw new Error('Unexpected fetch call');
+  return {{status: next.status, ok: true, json: async () => next.body, text: async () => next.text}};
+}};
+process.env.GITHUB_TOKEN = 'test-token';
+process.env.GITHUB_REPO = 'owner/repo';
+process.env.SCOUT_INGEST_SECRET = 'test-secret';
+const handler = require({json.dumps(SCOUT_MODULE)});
+const req = {{method: 'POST', headers: {{'x-scout-secret': 'test-secret'}}, body: {{listings: {json.dumps(listings)}}}}};
+let responseText = '';
+const res = {{statusCode: 0, headers: {{}}, setHeader(name, value) {{this.headers[name] = value;}}, end(value) {{responseText = value.toString('utf8');}}}};
+Promise.resolve(handler(req, res)).then(() => process.stdout.write(JSON.stringify({{
+  status: res.statusCode, body: JSON.parse(responseText), calls
+}}))).catch(error => {{process.stderr.write(error.stack);process.exit(2);}});
+"""
+        result = run_node_script(script)
+        self.assertEqual(result["status"], 200)
+        # The already-queued listing was recognised as a duplicate, which is
+        # only possible if the >1MB queue was actually read.
+        self.assertEqual(result["body"]["accepted"], 1)
+        self.assertEqual(result["body"]["duplicates"], 1)
+        self.assertEqual(result["body"]["queueLines"], 3)
+        self.assertEqual(result["calls"][2]["url"], download_url)
+        put = result["calls"][-1]
+        self.assertEqual(put["options"]["method"], "PUT")
+        written = base64.b64decode(json.loads(put["options"]["body"])["content"]).decode()
+        written_ids = [json.loads(line)["itemId"] for line in written.splitlines()]
+        self.assertEqual(written_ids, ["already-queued", "also-queued", "brand-new"])
 
     def test_listing_urls_reject_credentials_and_non_http_schemes(self):
         base = {"platform": "facebook", "itemId": "1", "title": "A", "price": 1, "itemWebUrl": "https://example.com/1", "imageUrl": "", "description": ""}
@@ -843,6 +1012,49 @@ class LedgerApiTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result["body"], saved_ledger)
+
+    def test_oversized_ledger_follows_download_url_instead_of_being_overwritten(self):
+        # Real bug this guards: GitHub's Contents API only inlines `content`
+        # for files <=1MB - past that it returns 200 with encoding:"none", an
+        # EMPTY content string and a download_url. Buffer.from("", "base64") is
+        # an empty buffer, not an error, so parseLedger() used to return [] and
+        # the PUT below rewrote the file from that empty list - replacing the
+        # ENTIRE ledger with the single entry being saved. ledger.jsonl grows
+        # unbounded (one row per bought/sold item, never pruned).
+        download_url = "https://raw.githubusercontent.test/owner/repo/ledger.jsonl"
+        existing = [
+            {"item_id": "1", "title": "Kept", "bought_price": 25},
+            {"item_id": "2", "title": "Also kept", "bought_price": 10},
+        ]
+        raw_text = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in existing)
+        result = run_api_handler(
+            LEDGER_MODULE,
+            {"item_id": "3", "title": "New", "bought_price": 5},
+            [
+                {
+                    "status": 200,
+                    "body": {"sha": "big-sha", "encoding": "none", "content": "", "download_url": download_url},
+                },
+                {"status": 200, "text": raw_text},
+                {"status": 200, "body": {"content": {"sha": "saved"}}},
+            ],
+        )
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual([call["url"] for call in result["calls"]][1], download_url)
+        put = json.loads(result["calls"][2]["options"]["body"])
+        self.assertEqual(put["sha"], "big-sha")
+        saved = [json.loads(line) for line in base64.b64decode(put["content"]).decode().splitlines()]
+        self.assertEqual(saved, existing + [{"item_id": "3", "title": "New", "bought_price": 5}])
+
+    def test_oversized_ledger_without_download_url_fails_loudly(self):
+        result = run_api_handler(
+            LEDGER_MODULE,
+            {"item_id": "3"},
+            [{"status": 200, "body": {"sha": "big-sha", "encoding": "none", "content": ""}}],
+        )
+        self.assertEqual(result["status"], 502)
+        self.assertEqual(result["body"]["error"], "ledger.jsonl has no inline content and no download_url")
 
 
 class MobileSettingsUiTests(unittest.TestCase):

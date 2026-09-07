@@ -1,7 +1,8 @@
 importScripts("url-utils.js");
 
 const ALARM_NAME = "deal-scout-scan";
-const TARGETS_VERSION = 6;
+// 7: target labels corrected from a stale "+124mi" to the real radius.
+const TARGETS_VERSION = 7;
 const RETRY_QUEUE_KEY = "scoutRetryQueue";
 const FAILURE_STATE_KEY = "scoutIngestFailures";
 const MAX_INGEST_ATTEMPTS = 5;
@@ -29,6 +30,12 @@ const MAX_ABANDONED_KEYS = 2000;
 // entirely. Widen this again only if the user explicitly says they'll drive
 // further - don't re-guess it.
 const GOLF_ORIGIN = { latitude: 34.0007, longitude: -81.0348, radius: 65 };
+// The label the user actually reads in the popup must track the radius above.
+// It did not: the radius was corrected 200 -> 65 km for the reason spelled out
+// in the comment above, but the label kept saying "+124mi" (the OLD 200km),
+// advertising exactly the Charlotte-wide sweep the user said they did not
+// want. Derived, not hand-written, so the two cannot drift apart again.
+const GOLF_RADIUS_MILES = Math.round(GOLF_ORIGIN.radius / 1.609344);
 // These strings MUST each match a saved search in the bot's config.json
 // (compared after exclusion-stripping). A query with no matching saved
 // search makes every listing it finds defer forever with "did not match
@@ -57,7 +64,7 @@ const slugify = (value) => String(value).toLowerCase().trim().replace(/[^a-z0-9]
 
 const DEFAULT_TARGETS = GOLF_QUERIES.map((query) => ({
   id: `facebook-golf-${slugify(query)}`,
-  label: `${query} — Columbia +124mi`,
+  label: `${query} — Columbia +${GOLF_RADIUS_MILES}mi`,
   platform: "facebook",
   // newest-first so a 10-min alarm sees fresh posts, not page-1 staleness
   searchUrl: "https://www.facebook.com/marketplace/category/search/"
@@ -214,12 +221,14 @@ async function getScanWindowId() {
   return created.id;
 }
 
-// facebook-parser.js's exact extraction logic, duplicated here because a
-// service worker has no `document`/DOMParser - it walks Facebook's own
-// server-rendered `<script type="application/json">` hydration blobs, not
-// the live DOM, so it never actually needed a real browser tab in the
-// first place. Keep in sync with content-scripts/facebook-parser.js by
-// hand if that file's walk() logic changes.
+// THE Facebook extractor. A service worker has no `document`/DOMParser, so
+// this walks Facebook's own server-rendered `<script type="application/json">`
+// hydration blobs out of the raw HTML rather than the live DOM - which is why
+// the scan never actually needed a real browser tab in the first place (see
+// scanFacebookTargetViaFetch below). This logic used to live in a content
+// script, content-scripts/facebook-parser.js, that was copied here during the
+// tab->fetch rewrite and then left behind unreferenced; that file is deleted,
+// so there is no second copy to hand-sync any more.
 function extractFacebookListingsFromHtml(html) {
   const found = [];
   const seen = new Set();
@@ -257,7 +266,7 @@ function extractFacebookListingsFromHtml(html) {
 // Real live complaint: opening/closing a real Chrome tab for every target
 // visibly flickered in the owner's own tab strip even after moving it to a
 // dedicated minimized window (Chrome's "minimized" window creation is not
-// always instant/invisible on every platform). facebook-parser.js only
+// always instant/invisible on every platform). The Facebook parse only
 // ever reads Facebook's server-rendered JSON hydration blobs from the raw
 // HTML (see extractFacebookListingsFromHtml above) - it never needed a
 // live, JS-executed page at all. A plain background fetch() with

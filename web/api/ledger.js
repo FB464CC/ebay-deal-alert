@@ -54,6 +54,14 @@ const passwordMatches = (provided) => {
   return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
 };
 
+// Same real live bug already fixed in web/api/history.js: GitHub's Contents
+// API only inlines `content` for files <=1MB - past that it returns 200 with
+// encoding:"none", an EMPTY content string and a download_url instead, and
+// Buffer.from("", "base64") is an empty buffer, not a thrown error.
+// ledger.jsonl grows unbounded (one row per bought/sold item, never pruned),
+// so this is a matter of time - and reading it as empty does not just blank
+// the GET, it makes the POST path below rewrite the file from that empty
+// list, replacing the ENTIRE ledger with the single entry being saved.
 const fetchCurrentFile = async () => {
   const response = await fetch(contentsUrl(), {
     method: "GET",
@@ -70,15 +78,29 @@ const fetchCurrentFile = async () => {
     error.details = body;
     throw error;
   }
-  return body;
+  if (body.encoding !== "none" && typeof body.content === "string") {
+    return { ...body, text: Buffer.from(body.content, "base64").toString("utf8") };
+  }
+  if (!body.download_url) {
+    const error = new Error("ledger.jsonl has no inline content and no download_url");
+    error.status = 502;
+    error.details = body;
+    throw error;
+  }
+  const rawResponse = await fetch(body.download_url);
+  if (!rawResponse.ok) {
+    const error = new Error(`Failed to fetch ledger.jsonl raw content (HTTP ${rawResponse.status})`);
+    error.status = 502;
+    throw error;
+  }
+  return { ...body, text: await rawResponse.text() };
 };
 
 const parseLedger = (file) => {
   if (!file) {
     return [];
   }
-  const text = Buffer.from(file.content, "base64").toString("utf8");
-  return text
+  return (file.text || "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)

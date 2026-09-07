@@ -74,7 +74,34 @@ const fetchRepositoryFile = async (file) => {
   return body;
 };
 
-const fetchCurrentFile = () => fetchRepositoryFile(QUEUE_FILE);
+// Same real live bug already fixed in web/api/history.js: GitHub's Contents
+// API only inlines `content` for files <=1MB - past that it returns 200 with
+// encoding:"none", an EMPTY content string and a download_url instead, and
+// Buffer.from("", "base64") is an empty buffer, not a thrown error. The queue
+// reaches that ceiling for real: 61 live rows measure 44,513 bytes (~730
+// bytes/row), so the MAX_QUEUE_LINES=2000 cap permits ~1.46MB. Reading it as
+// empty would defeat every duplicate check, skip the queue-full 429 gate, and
+// make the PUT below replace the WHOLE queue with just this request's
+// listings - destroying every unprocessed row and answering 200 OK.
+const fetchCurrentFile = async () => {
+  const file = await fetchRepositoryFile(QUEUE_FILE);
+  if (!file) return null;
+  if (file.encoding !== "none" && typeof file.content === "string") {
+    return { ...file, text: Buffer.from(file.content, "base64").toString("utf8") };
+  }
+  if (!file.download_url) {
+    const error = new Error(`${QUEUE_FILE} has no inline content and no download_url`);
+    error.status = 502;
+    throw error;
+  }
+  const raw = await fetch(file.download_url, { headers: githubHeaders() });
+  if (!raw.ok) {
+    const error = new Error(`Failed to download ${QUEUE_FILE} raw content (HTTP ${raw.status})`);
+    error.status = 502;
+    throw error;
+  }
+  return { ...file, text: await raw.text() };
+};
 
 const seenDatabaseBytes = async (file) => {
   if (file?.encoding === "base64" && typeof file.content === "string" && file.content) {
@@ -147,9 +174,9 @@ const fetchSeenKeys = async (listings) => {
   return findSeenKeysInDatabase(databasePath, listings.map(listingKey));
 };
 
-const existingLines = (file) => file
-  ? Buffer.from(file.content, "base64").toString("utf8").split("\n").filter((line) => line.trim())
-  : [];
+// Reads the text fetchCurrentFile() already resolved (inline base64 or the
+// >1MB download_url fallback), never file.content directly.
+const existingLines = (file) => (file?.text || "").split("\n").filter((line) => line.trim());
 
 const validateListing = (listing, index) => {
   const prefix = `listings[${index}]`;
@@ -330,4 +357,4 @@ module.exports = async (req, res) => {
   }
 };
 
-module.exports._test = { validateListing, withoutDuplicates, findSeenKeysInDatabase, sendQueueFull };
+module.exports._test = { validateListing, withoutDuplicates, findSeenKeysInDatabase, sendQueueFull, existingLines };

@@ -225,6 +225,25 @@ def _dget(obj, key, default=None):
     return obj.get(key, default)
 
 
+def _dict_rows(obj, key):
+    """The dict rows of a JSON collection field, tolerating every wrong shape.
+
+    Same rationale as _dget(), one level up: ``for row in body.get("hits", [])``
+    does NOT fall back to the default when the key is present-but-null (dict.get
+    only uses the default for a MISSING key), so a ``{"hits": null}`` response
+    raises TypeError, and a non-dict element raises AttributeError on the next
+    ``.get()``.  _fetch_marketplace() swallows both, so the whole platform
+    silently returns zero listings for the run.
+
+    Vinted, ShopGoodwill, OfferUp and Depop each already guarded this their own
+    way; Grailed and Poshmark were still on the raw ``.get(key, [])`` path.
+    Route them through here so every adapter degrades identically."""
+    value = _dget(obj, key)
+    if not isinstance(value, list):
+        return []
+    return [row for row in value if isinstance(row, dict)]
+
+
 def _to_float(value, allow_zero=False):
     """Coerce the many price shapes these APIs use ('$42.00', 4200, '42.5').
 
@@ -481,7 +500,7 @@ def fetch_grailed_sold_comps(query):
     )
     if not body:
         return None, 0
-    prices = [h.get("sold_price") for h in body.get("hits", []) if h.get("sold_price")]
+    prices = [h.get("sold_price") for h in _dict_rows(body, "hits") if h.get("sold_price")]
     if len(prices) < 3:
         return None, len(prices)
     prices.sort()
@@ -555,8 +574,8 @@ def search_grailed(saved_search):
     if not body:
         return [], None
     sold_median, sold_count = fetch_grailed_sold_comps(query)
-    listings = [_grailed_hit_to_listing(hit, sold_median, sold_count) for hit in body.get("hits", [])]
-    return [x for x in listings if x], body.get("nbHits")
+    listings = [_grailed_hit_to_listing(hit, sold_median, sold_count) for hit in _dict_rows(body, "hits")]
+    return [x for x in listings if x], _dget(body, "nbHits")
 
 
 # Confirmed live: a multi-query request with 60 sub-queries returns HTTP 400
@@ -689,7 +708,7 @@ def search_grailed_batch(saved_searches, deadline=None):
         sold_median = sold_count = None
         if sold_result:
             prices = sorted(
-                h.get("sold_price") for h in sold_result.get("hits", []) if h.get("sold_price")
+                h.get("sold_price") for h in _dict_rows(sold_result, "hits") if h.get("sold_price")
             )
             if len(prices) >= 3:
                 sold_median, sold_count = prices[len(prices) // 2], len(prices)
@@ -699,7 +718,7 @@ def search_grailed_batch(saved_searches, deadline=None):
             continue
         listings = [
             _grailed_hit_to_listing(hit, sold_median, sold_count)
-            for hit in live_result.get("hits", [])
+            for hit in _dict_rows(live_result, "hits")
         ]
         out.setdefault(query, []).extend(x for x in listings if x)
 
@@ -739,7 +758,7 @@ def search_poshmark(saved_search):
     if not body:
         return [], None
     listings = []
-    for post in body.get("data", []):
+    for post in _dict_rows(body, "data"):
         post_id = post.get("id")
         title = post.get("title") or ""
         if not post_id or not title:

@@ -120,17 +120,6 @@ def scout_queue_has_data(path=None):
         return False
 
 
-def clear_scout_queue(path=None):
-    """Empty the consumed queue. Missing files and I/O failures are harmless."""
-    queue_path = Path(path) if path is not None else SCOUT_QUEUE_PATH
-    try:
-        queue_path.write_text("", encoding="utf-8")
-        return True
-    except OSError as exc:
-        logger.warning("Could not clear Scout queue %s: %s", queue_path, exc)
-        return False
-
-
 def remove_processed_scout_queue(processed_keys, path=None):
     """Atomically remove only queue rows acknowledged by the poller.
 
