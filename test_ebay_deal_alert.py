@@ -4298,12 +4298,14 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
     def _seed_history(self, platform, counts):
         """Insert prior-run rows for a platform, newest last, all strictly
         before 'now' so they count as history for the current run."""
+        m._ensure_marketplace_health_columns(self.conn)
         base = datetime.now(timezone.utc) - timedelta(minutes=10)
         for i, c in enumerate(counts):
             ts = (base - timedelta(minutes=i * 5)).isoformat()
             self.conn.execute(
-                "INSERT INTO marketplace_counts (platform, run_ts, count) VALUES (?, ?, ?)",
-                (platform, ts, c),
+                "INSERT INTO marketplace_counts "
+                "(platform, run_ts, count, request_count) VALUES (?, ?, ?, ?)",
+                (platform, ts, c, 1),
             )
         self.conn.commit()
 
@@ -4429,6 +4431,65 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         mock_notify.assert_called_once()
         self.assertIn("5 HTTP 429", mock_notify.call_args[0][0])
 
+    def test_count_collapse_is_normalized_by_logical_search_volume(self):
+        now = datetime.now(timezone.utc)
+        # Ten listings per logical request is stable. The current run only
+        # covered two requests, so its aggregate 20 is below half the old raw
+        # baseline of 100 even though scraper yield is perfectly healthy.
+        # This is the exact variable-coverage shape behind clean Poshmark runs
+        # being called collapsed.
+        m._ensure_marketplace_health_columns(self.conn)
+        for index in range(10):
+            self.conn.execute(
+                "INSERT INTO marketplace_counts "
+                "(platform, run_ts, count, request_count) VALUES (?, ?, ?, ?)",
+                (
+                    "poshmark",
+                    (now - timedelta(minutes=(index + 1) * 5)).isoformat(),
+                    100,
+                    10,
+                ),
+            )
+        self.conn.commit()
+
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn,
+                now,
+                ["poshmark"],
+                {"poshmark": 20},
+                health={"poshmark": {"requests": 2}},
+            )
+        mock_notify.assert_not_called()
+
+    def test_real_per_request_yield_collapse_still_notifies(self):
+        now = datetime.now(timezone.utc)
+        m._ensure_marketplace_health_columns(self.conn)
+        for index in range(10):
+            self.conn.execute(
+                "INSERT INTO marketplace_counts "
+                "(platform, run_ts, count, request_count) VALUES (?, ?, ?, ?)",
+                (
+                    "poshmark",
+                    (now - timedelta(minutes=(index + 1) * 5)).isoformat(),
+                    100,
+                    10,
+                ),
+            )
+        self.conn.commit()
+
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn,
+                now,
+                ["poshmark"],
+                {"poshmark": 10},
+                health={"poshmark": {"requests": 10}},
+            )
+        mock_notify.assert_called_once()
+        self.assertIn("1.0/request", mock_notify.call_args[0][0])
+        self.assertIn("baseline ~10.0/request", mock_notify.call_args[0][0])
+
     def test_timeout_error_rate_and_garbage_signals_are_persisted(self):
         now = datetime.now(timezone.utc)
         health = {
@@ -4527,6 +4588,46 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
             "WHERE platform = 'vinted' ORDER BY run_ts DESC LIMIT 1"
         ).fetchone()[0]
         self.assertEqual(rate_limits, 5)
+
+    def test_html_batch_error_denominator_counts_logical_search_requests(self):
+        now = datetime.now(timezone.utc)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def partly_failed_batch(searches, deadline=None):
+            p.logger.warning("depop request failed: one transient test failure")
+            return {
+                search["query"]: [
+                    {"itemId": f"depop:{index}", "title": "test item", "seller": {}}
+                ]
+                for index, search in enumerate(searches[1:], start=1)
+            }
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS["depop"] = partly_failed_batch
+            m.MARKETPLACES_ENABLED = ["depop"]
+            m.SAVED_SEARCHES = [
+                {"query": f"test item {index}", "enabled": True, "platforms": ["depop"]}
+                for index in range(5)
+            ]
+            with mock.patch.object(m, "notify_bot_down") as mock_notify:
+                m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        request_count, error_count = self.conn.execute(
+            "SELECT request_count, error_count FROM marketplace_counts "
+            "WHERE platform = 'depop' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual((request_count, error_count), (5, 1))
+        mock_notify.assert_not_called()
 
     def test_late_outer_worker_cannot_mutate_returned_results_or_counts(self):
         started = threading.Event()

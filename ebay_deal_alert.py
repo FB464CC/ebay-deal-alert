@@ -5902,10 +5902,10 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
             ),
         )
         conn.commit()
-        prior = [
-            row[0]
+        prior_rows = [
+            row
             for row in conn.execute(
-                "SELECT count FROM marketplace_counts "
+                "SELECT count, request_count FROM marketplace_counts "
                 "WHERE platform = ? AND run_ts >= ? AND run_ts < ?",
                 (
                     platform,
@@ -5914,18 +5914,43 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
                 ),
             ).fetchall()
         ]
+        # Aggregate counts are only comparable when the number of searches is
+        # comparable. Real healthy Poshmark runs ranged from 670 to 1,431
+        # listings solely because a different number/mix of searches finished
+        # inside the shared deadline. Compare listings per logical request
+        # whenever request telemetry exists. Count-only callers/legacy rows
+        # retain the old metric until they accumulate five instrumented runs.
+        if request_count:
+            prior = [count / requests for count, requests in prior_rows if requests]
+            today_metric = today / request_count
+        else:
+            prior = [count for count, _requests in prior_rows]
+            today_metric = today
         baseline = median(prior) if len(prior) >= 5 else None
+        prior_count_baseline = (
+            median(count for count, _requests in prior_rows)
+            if len(prior_rows) >= 5
+            else None
+        )
         count_collapse = bool(
             baseline is not None
-            and baseline >= 5
-            and today < baseline * 0.5
+            and prior_count_baseline is not None
+            and prior_count_baseline >= 5
+            and today_metric < baseline * 0.5
         )
         error_rate = error_count / request_count if request_count else 0.0
         sick_reasons = []
         if count_collapse:
-            sick_reasons.append(
-                f"{today} listings vs fixed 7-day median baseline ~{round(baseline)}/run"
-            )
+            if request_count:
+                sick_reasons.append(
+                    f"{today} listings across {request_count} request(s) "
+                    f"({today_metric:.1f}/request) vs fixed 7-day median "
+                    f"baseline ~{baseline:.1f}/request"
+                )
+            else:
+                sick_reasons.append(
+                    f"{today} listings vs fixed 7-day median baseline ~{round(baseline)}/run"
+                )
         if rate_limit_count >= 5:
             sick_reasons.append(f"{rate_limit_count} HTTP 429/rate-limit events")
         if timeout_count:
@@ -6155,7 +6180,14 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         with results_lock:
             if time.monotonic() >= hard_stop:
                 return
-            health[platform_name]["requests"] += 1
+            # OfferUp and Depop's "batch" adapters make one HTTP request per
+            # relevant search. Counting the wrapper call as one made a handful
+            # of ordinary query failures look like a 300%-plus error rate.
+            # Grailed really does combine its searches into a few Algolia
+            # multi-query calls, so its established wrapper-level count stays.
+            health[platform_name]["requests"] += (
+                len(relevant) if platform_name in {"offerup", "depop"} else 1
+            )
         health_context.platform = platform_name
         try:
             results = marketplaces.BATCH_ADAPTERS[platform_name](relevant, deadline=deadline)
@@ -7267,6 +7299,7 @@ def run():
                 current_utc,
                 ["ebay"],
                 {"ebay": ebay_results_reported},
+                health={"ebay": {"requests": ebay_searches_attempted}},
             )
         except Exception:
             logger.exception("eBay anomaly detection failed; continuing")
