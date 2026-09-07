@@ -2374,7 +2374,7 @@
         "XL"
       ],
       "max_price": 90,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-zegna-sweater-2",
       "category": "knitwear"
@@ -2471,7 +2471,7 @@
         "XL"
       ],
       "max_price": 90,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-zegna-quarter-zip-2",
       "category": "knitwear"
