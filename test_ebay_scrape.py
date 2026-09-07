@@ -85,6 +85,19 @@ def test_price_parsing_handles_comma_thousands_format():
     assert seiko["price"] == {"value": 89.99, "currency": "USD"}
 
 
+def test_title_html_entities_are_decoded():
+    html = FIXTURE_HTML.replace(
+        "Rolex Datejust 36mm Steel Watch",
+        "Rolex Datejust &amp; Oyster Bracelet",
+    ).replace(
+        "https://i.ebayimg.com/images/g/aaa/s-l500.webp",
+        "https://i.ebayimg.com/images/g/aaa/s-l500.webp?w=500&amp;fit=1",
+    )
+    (listing, *_) = _parse_listings(html)
+    assert listing["title"] == "Rolex Datejust & Oyster Bracelet"
+    assert listing["image"]["imageUrl"].endswith("?w=500&fit=1")
+
+
 def test_non_200_response_returns_empty_list():
     with patch("ebay_scrape.Fetcher") as mock_fetcher:
         mock_fetcher.get.return_value = FakeResponse(403, "")
@@ -233,3 +246,12 @@ def test_parse_time_left_minutes_handles_all_observed_formats():
     assert _parse_time_left_minutes("") is None
     assert _parse_time_left_minutes(None) is None
     assert _parse_time_left_minutes("garbage") is None
+
+
+def test_unparseable_auction_countdown_still_fails_closed_as_auction():
+    html = AUCTION_CARD_HTML.replace("2d 23h", "about three days")
+    auction = next(r for r in _parse_listings(html) if "Speedmaster" in r["title"])
+
+    assert auction["buyingOptions"] == ["AUCTION"]
+    assert auction["bidCount"] == 2
+    assert "itemEndDate" not in auction

@@ -722,7 +722,11 @@ def _algolia_multi_query(sub_requests):
             logger.warning("grailed batch returned non-JSON body")
             results.extend([None] * len(chunk))
             continue
-        chunk_results = list(body.get("results") or [])
+        if not isinstance(body, dict) or not isinstance(body.get("results"), list):
+            logger.warning("grailed batch returned JSON without a valid results array")
+            results.extend([None] * len(chunk))
+            continue
+        chunk_results = list(body["results"])
         # Defensive: if Algolia ever returns a different count than
         # requested, pad/truncate rather than let a later zip() misalign
         # and silently attribute one search's results to another.

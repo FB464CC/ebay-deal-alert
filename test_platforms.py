@@ -194,6 +194,17 @@ class GrailedBatch429(unittest.TestCase):
         self.assertIn("429", joined)
         self.assertIn("rate limited", joined)
 
+    def test_malformed_success_json_preserves_never_raise_contract(self):
+        for body in ([], {"results": "not-an-array"}):
+            with self.subTest(body=body), \
+                    mock.patch("platforms.requests.post", return_value=_FakeResp(200, body)), \
+                    mock.patch.object(p, "_pace"):
+                with self.assertLogs("platforms", level="WARNING") as cm:
+                    results = p._algolia_multi_query([{"indexName": "I", "params": "query=foo"}])
+
+            self.assertEqual(results, [None])
+            self.assertIn("valid results array", " ".join(cm.output))
+
 
 class VintedAdaptiveBackoff(unittest.TestCase):
     """Real live pattern: measured against 4 actual GitHub Actions runs,

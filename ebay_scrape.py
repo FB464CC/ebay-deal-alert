@@ -26,6 +26,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from urllib.parse import urlencode
 
 from scrapling.fetchers import Fetcher
@@ -89,7 +90,7 @@ def _parse_listings(html):
         price_match = _PRICE_RE.search(chunk)
         if not id_match or not title_match or not price_match:
             continue
-        title = title_match.group(1).strip()
+        title = unescape(title_match.group(1)).strip()
         if title == "Shop on eBay":
             continue
         item_id = id_match.group(1)
@@ -100,7 +101,7 @@ def _parse_listings(html):
             title,
             price_match.group(1),
             f"https://www.ebay.com/itm/{item_id}",
-            image_url=image_match.group(1) if image_match else None,
+            image_url=unescape(image_match.group(1)) if image_match else None,
         )
         if listing:
             # DEDUP FIX: make_listing() namespaces every itemId as
@@ -118,12 +119,16 @@ def _parse_listings(html):
             listing["itemId"] = f"v1|{item_id}|0"
             time_left_match = _TIME_LEFT_RE.search(chunk)
             if time_left_match:
+                # This marker is auction-only. Tag the format before parsing
+                # its countdown so an unfamiliar future time string fails
+                # closed in classify_stray_auction_listing() instead of being
+                # mistaken for a fixed-price listing at its current bid.
+                bid_match = _BID_COUNT_RE.search(chunk)
+                listing["buyingOptions"] = ["AUCTION"]
+                listing["bidCount"] = int(bid_match.group(1)) if bid_match else 0
                 minutes_remaining = _parse_time_left_minutes(time_left_match.group(1))
                 if minutes_remaining is not None:
-                    bid_match = _BID_COUNT_RE.search(chunk)
                     end_date = datetime.now(timezone.utc) + timedelta(minutes=minutes_remaining)
-                    listing["buyingOptions"] = ["AUCTION"]
-                    listing["bidCount"] = int(bid_match.group(1)) if bid_match else 0
                     listing["itemEndDate"] = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
             listings.append(listing)
     return listings
