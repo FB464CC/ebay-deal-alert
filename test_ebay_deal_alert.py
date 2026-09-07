@@ -3692,6 +3692,57 @@ class AsciiSafeHeader(unittest.TestCase):
         self.assertIn("Watch", safe)
 
 
+class SendAlertFacebookLocationLine(unittest.TestCase):
+    """Facebook Marketplace is local pickup only - if the item is three
+    hours away the alert is not actionable, so the location the extension
+    already extracts belongs on the lock screen, not behind a tap."""
+
+    def _send_and_capture(self, result):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured["message"] = data.decode("utf-8")
+            return fake_resp
+
+        with mock.patch("requests.post", side_effect=fake_post):
+            m.send_alert(result)
+        return captured["message"]
+
+    def _fb_result(self, description):
+        return {
+            "listing": {
+                "title": "TaylorMade Irons", "itemWebUrl": "https://fb",
+                "platform": "facebook", "description": description,
+            },
+            "price": 120.0,
+        }
+
+    def test_location_shown_for_facebook(self):
+        message = self._send_and_capture(self._fb_result("Location: Austin, TX"))
+        self.assertIn("Austin, TX", message)
+
+    def test_no_location_line_when_description_empty(self):
+        message = self._send_and_capture(self._fb_result(""))
+        self.assertNotIn("\U0001f4cd", message)
+
+    def test_non_location_description_not_treated_as_location(self):
+        message = self._send_and_capture(self._fb_result("Barely used, no scratches"))
+        self.assertNotIn("\U0001f4cd", message)
+
+    def test_other_platforms_unaffected(self):
+        result = {
+            "listing": {
+                "title": "Canali Suit", "itemWebUrl": "https://x",
+                "platform": "ebay", "description": "Location: Austin, TX",
+            },
+            "price": 120.0,
+        }
+        message = self._send_and_capture(result)
+        self.assertNotIn("Austin", message)
+
+
 class SendAlertRetailResaleLine(unittest.TestCase):
     """Per explicit user instruction: "it could be nice to see estimated
     retail + what its worth now etc. so i can see at a quick glance.\""""
@@ -3871,6 +3922,18 @@ class AlertUrgencyTests(unittest.TestCase):
             "deal_rating": "Good Deal", "discount_pct": 0.35,
             "price_confidence": "medium", "profile": "slow",
         })[0], 3)
+
+    def test_whole_number_one_percent_discount_is_not_max_priority(self):
+        # Production always stores discount_pct as compute_deal_rating()'s
+        # round(x * 100) whole-number percent, so a real 1% discount is the
+        # literal int 1 - not the fraction 0.01. `discount > 1` let that
+        # slip through unnormalized and get read as a 100% discount (max
+        # "fire" priority). Must normalize at exactly 1, not only above it.
+        priority, _tags = m.alert_urgency({
+            "deal_rating": "Marginal", "discount_pct": 1,
+            "price_confidence": "medium", "profile": "slow",
+        })
+        self.assertNotEqual(priority, 5)
 
 
 class QuietHoursTests(unittest.TestCase):

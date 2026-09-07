@@ -5102,7 +5102,7 @@ def alert_urgency(result):
     """Return ntfy (priority, urgency tags) from time, value, and confidence."""
     try:
         discount = float(result.get("discount_pct"))
-        if discount > 1:
+        if discount >= 1:
             discount /= 100
     except (TypeError, ValueError):
         discount = 0.0
@@ -5277,6 +5277,16 @@ def send_alert(result):
         # currentPrice on a live auction is a floor that climbs until close,
         # not a purchase price - do not read it as the eBay-style fixed price.
         message += "\n(auction - price climbs until close)"
+    if listing.get("platform") == "facebook":
+        # Marketplace is local pickup only, so distance decides whether an
+        # alert is even actionable. The extension already extracts
+        # "Location: city, state" into description - surface it on the lock
+        # screen instead of making the user open the listing to find out.
+        location_note = (listing.get("description") or "").strip()
+        if location_note.startswith("Location:"):
+            where = location_note[len("Location:"):].strip()
+            if where:
+                message += f"\n📍 {where}"
     if result.get("is_ending_soon_auction"):
         # Per explicit user instruction: "alerted like 15 min before it
         # ends, do some research quick, and then immediately scoop it up
