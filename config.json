@@ -72,7 +72,7 @@
         "L",
         "XL"
       ],
-      "max_price": 250,
+      "max_price": 50,
       "enabled": true,
       "profile": "slow",
       "category_id": "57988",
@@ -86,7 +86,7 @@
         "L",
         "XL"
       ],
-      "max_price": 250,
+      "max_price": 50,
       "enabled": true,
       "profile": "slow",
       "category_id": "57988",
