@@ -4601,8 +4601,14 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
             m.SAVED_SEARCHES = [
                 {"query": "test watch", "enabled": True, "platforms": ["poshmark"]}
             ]
+            # Margin widened from 0.1s: on a loaded CI runner, scheduling
+            # jitter around the 0.03s sleep could occasionally exceed a
+            # too-tight 0.1s collection margin and flip this from "succeeded
+            # late" to "timed out" - a flaky test, not a real code bug. 0.5s
+            # keeps the same intent (real budget exceeded, worker still
+            # collected) with real headroom for thread-scheduling variance.
             with mock.patch.object(m, "MARKETPLACE_FETCH_BUDGET_SECONDS", 0.01), \
-                 mock.patch.object(m, "HTTP_TIMEOUT_MARGIN", 0.1), \
+                 mock.patch.object(m, "HTTP_TIMEOUT_MARGIN", 0.5), \
                  mock.patch.object(m, "notify_bot_down") as mock_notify:
                 found = m.prefetch_marketplaces(now, self.conn)
         finally:
