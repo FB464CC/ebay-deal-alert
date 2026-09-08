@@ -171,7 +171,8 @@ class GrailedBatch429(unittest.TestCase):
         post = mock.patch("platforms.requests.post")
         sleep = mock.patch("platforms.time.sleep")
         pace = mock.patch.object(p, "_pace")
-        with post as post_mock, sleep as sleep_mock, pace:
+        register = mock.patch.object(p, "_register_rate_limit", return_value=2)
+        with post as post_mock, sleep as sleep_mock, pace, register as register_mock:
             post_mock.side_effect = [
                 _FakeResp(429, text="rate limited"),
                 _FakeResp(200, {"results": [{"hits": [{"objectID": "x"}]}]}),
@@ -180,6 +181,7 @@ class GrailedBatch429(unittest.TestCase):
 
         self.assertEqual(post_mock.call_count, 2)
         sleep_mock.assert_called_once_with(2)
+        register_mock.assert_called_once_with("grailed")
         self.assertEqual(results[0]["hits"][0]["objectID"], "x")
 
     def test_persistent_429_logs_distinctly_and_drops_chunk(self):
@@ -188,14 +190,48 @@ class GrailedBatch429(unittest.TestCase):
         post = mock.patch("platforms.requests.post", return_value=_FakeResp(429, text="rate limited"))
         sleep = mock.patch("platforms.time.sleep")
         pace = mock.patch.object(p, "_pace")
-        with post, sleep, pace:
+        register = mock.patch.object(p, "_register_rate_limit", side_effect=[2, 4])
+        with post, sleep, pace, register as register_mock:
             with self.assertLogs("platforms", level="WARNING") as cm:
                 results = p._algolia_multi_query([{"indexName": "I", "params": "query=foo"}])
 
         self.assertEqual(results, [None])
+        self.assertEqual(register_mock.call_count, 2)
         joined = " ".join(cm.output)
         self.assertIn("429", joined)
         self.assertIn("rate limited", joined)
+
+    def test_retries_once_on_request_exception_then_uses_success_body(self):
+        # The production batch POST bypasses get_json(); it needs the same
+        # one-retry protection as the single-search Grailed fallback.
+        with mock.patch(
+            "platforms.requests.post",
+            side_effect=[
+                requests.exceptions.ConnectionError("reset"),
+                _FakeResp(200, {"results": [{"hits": [{"objectID": "recovered"}]}]}),
+            ],
+        ) as post_mock, mock.patch("platforms.time.sleep") as sleep_mock, \
+                mock.patch.object(p, "_pace"):
+            results = p._algolia_multi_query([{"indexName": "I", "params": "query=foo"}])
+
+        self.assertEqual(post_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(1)
+        self.assertEqual(results[0]["hits"][0]["objectID"], "recovered")
+
+    def test_retries_once_on_5xx_then_uses_success_body(self):
+        with mock.patch(
+            "platforms.requests.post",
+            side_effect=[
+                _FakeResp(503, text="temporary"),
+                _FakeResp(200, {"results": [{"hits": []}]}),
+            ],
+        ) as post_mock, mock.patch("platforms.time.sleep") as sleep_mock, \
+                mock.patch.object(p, "_pace"):
+            results = p._algolia_multi_query([{"indexName": "I", "params": "query=foo"}])
+
+        self.assertEqual(post_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(1)
+        self.assertEqual(results, [{"hits": []}])
 
     def test_malformed_success_json_preserves_never_raise_contract(self):
         for body in ([], {"results": "not-an-array"}):
@@ -207,6 +243,65 @@ class GrailedBatch429(unittest.TestCase):
 
             self.assertEqual(results, [None])
             self.assertIn("valid results array", " ".join(cm.output))
+
+
+class GrailedSoldComps(unittest.TestCase):
+    def test_even_sample_uses_standard_median_and_ignores_invalid_prices(self):
+        hits = [
+            {"title": "Comp one", "sold_price": "10"},
+            {"title": "Comp two", "sold_price": 20},
+            {"title": "Comp three", "sold_price": "$100.00"},
+            {"title": "Comp four", "sold_price": 110.0},
+            {"title": "Malformed", "sold_price": "not-a-price"},
+            {"title": "Boolean is not money", "sold_price": True},
+            {"title": "Negative is not a sale", "sold_price": -5},
+        ]
+
+        median, count = p._grailed_sold_price_stats(hits)
+
+        self.assertEqual(count, 4)
+        self.assertEqual(median, 60.0)
+
+    def test_single_search_strips_query_exclusions_and_filters_sold_titles(self):
+        body = {"hits": [
+            {"title": "Zegna Sport Merino Sweater", "sold_price": 900},
+            {"title": "Ermenegildo Zegna Sweater Navy", "sold_price": "40"},
+            {"title": "Zegna Cashmere Sweater Gray", "sold_price": 80},
+            {"title": "Zegna Wool Sweater Black", "sold_price": "$120.00"},
+        ]}
+        with mock.patch.object(p, "get_json", return_value=body) as get_mock:
+            result = p.fetch_grailed_sold_comps('zegna sweater -"zegna sport"')
+
+        self.assertEqual(result, (80.0, 3))
+        params = get_mock.call_args.kwargs["params"]
+        self.assertEqual(params["query"], "zegna sweater")
+        self.assertNotIn("zegna sport", params["query"])
+
+    def test_batch_search_uses_same_exclusion_filtered_median(self):
+        query = 'zegna sweater -"zegna sport"'
+        live_result = {"hits": [{
+            "objectID": "live-1",
+            "title": "Ermenegildo Zegna Sweater",
+            "price": 45,
+        }]}
+        sold_result = {"hits": [
+            {"title": "Zegna Sport Sweater", "sold_price": 1000},
+            {"title": "Zegna Sweater A", "sold_price": 10},
+            {"title": "Zegna Sweater B", "sold_price": 20},
+            {"title": "Zegna Sweater C", "sold_price": 100},
+            {"title": "Zegna Sweater D", "sold_price": 110},
+        ]}
+        with mock.patch.object(
+            p, "_algolia_multi_query", return_value=[live_result, sold_result]
+        ) as multi_mock:
+            results = p.search_grailed_batch([{"query": query}])
+
+        listing = results[query][0]
+        self.assertEqual(listing["sold_comp_median"], 60.0)
+        self.assertEqual(listing["sold_comp_count"], 4)
+        sold_request = multi_mock.call_args.args[0][1]
+        self.assertIn("query=zegna+sweater", sold_request["params"])
+        self.assertNotIn("zegna+sport", sold_request["params"])
 
 
 class VintedAdaptiveBackoff(unittest.TestCase):

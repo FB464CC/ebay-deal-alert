@@ -3239,6 +3239,53 @@ class MarketplaceRelevanceTokenMatching(unittest.TestCase):
             {"platform": "poshmark", "title": "Maison Margiela Wool Beanie Hat"}, '"maison margiela" hat'))
 
 
+class GrailedPoshmarkQueryQualityConfiguration(unittest.TestCase):
+    @staticmethod
+    def _search(search_id):
+        return next(search for search in m.SAVED_SEARCHES if search.get("id") == search_id)
+
+    def test_enabled_gamecocks_searches_require_gamecocks_in_marketplace_title(self):
+        # Production evidence: Poshmark produced 29 dispositions for the
+        # quarter-zip search, but zero titles mentioned Gamecocks and only
+        # three even described a quarter zip. Quoting the distinctive team
+        # token activates the existing exact-positive-phrase relevance gate.
+        for search_id, wanted_title in (
+            ("school-peter-millar-polo", "Peter Millar Gamecocks Polo Shirt L"),
+            ("school-peter-millar-quarter-zip", "Peter Millar Gamecocks Quarter-Zip XL"),
+        ):
+            with self.subTest(search_id=search_id):
+                search = self._search(search_id)
+                self.assertIs(search["enabled"], True)
+                self.assertIn("grailed", search["platforms"])
+                self.assertIn("poshmark", search["platforms"])
+                self.assertIn('"gamecocks"', search["query"])
+                self.assertFalse(m.is_relevant_marketplace_listing(
+                    {"platform": "poshmark", "title": "Peter Millar Blue Plaid Button Down"},
+                    search["query"],
+                ))
+                self.assertTrue(m.is_relevant_marketplace_listing(
+                    {"platform": "grailed", "title": wanted_title}, search["query"]
+                ))
+
+    def test_zegna_sweater_search_excludes_zegna_baruffa_yarn_matches(self):
+        # One of only two production Poshmark dispositions for the historical
+        # equivalent query was a Toscano Firenze sweater that mentioned the
+        # unrelated Zegna Baruffa yarn maker, not an Ermenegildo Zegna item.
+        search = self._search("knitwear-zegna-sweater")
+        self.assertIn('-"zegna baruffa"', search["query"])
+        self.assertFalse(m.is_relevant_marketplace_listing(
+            {
+                "platform": "poshmark",
+                "title": "Toscano Firenze Polo Sweater Men L Blue Zegna Baruffa Merino Wool",
+            },
+            search["query"],
+        ))
+        self.assertTrue(m.is_relevant_marketplace_listing(
+            {"platform": "poshmark", "title": "Ermenegildo Zegna Cashmere Sweater L"},
+            search["query"],
+        ))
+
+
 class MarketplaceQueryExclusions(unittest.TestCase):
     def test_exclusions_stripped_from_search_query(self):
         # Regression: "-term" is eBay-only search syntax. Every other

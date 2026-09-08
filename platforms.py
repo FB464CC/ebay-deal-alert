@@ -547,18 +547,48 @@ SOLD_COMP_WINDOW_DAYS = 180
 SOLD_COMP_HITS = 50
 
 
+def _grailed_sold_price_stats(hits, excluded_terms=()):
+    """Return a standard median/count from valid, in-scope sold hits.
+
+    Grailed's sold index uses the same fuzzy text matching as its live index.
+    Saved-search exclusions are enforced on live results by the caller, so
+    they must be enforced here too or an explicitly unwanted diffusion line
+    can still set the resale benchmark.  Coercing before sorting also keeps a
+    malformed/string price from either producing a lexicographic median or
+    dropping the entire batch with a mixed-type TypeError.
+    """
+    prices = []
+    for hit in hits:
+        if title_matches_exclusion(hit.get("title"), excluded_terms):
+            continue
+        price = _to_float(hit.get("sold_price"))
+        if price is not None:
+            prices.append(price)
+    prices.sort()
+    count = len(prices)
+    if count < 3:
+        return None, count
+    midpoint = count // 2
+    if count % 2:
+        return prices[midpoint], count
+    return (prices[midpoint - 1] + prices[midpoint]) / 2.0, count
+
+
 def fetch_grailed_sold_comps(query):
     """Real recent sold prices for this query, straight from Grailed's own
     sold-comps index - genuine historical sale prices (sold_price field),
     not an estimate. Returns (median, count) or (None, count) if fewer than
     3 comps exist (too few to trust a median on). One extra call per search,
-    same pacing/cost as the main search call."""
+    same pacing/cost as the main search call. Saved-search exclusions are
+    applied locally to the returned sold titles rather than sent as literal
+    Algolia query terms."""
+    clean_query, excluded_terms = split_query_exclusions(query)
     cutoff = int(time.time()) - SOLD_COMP_WINDOW_DAYS * 86400
     body = get_json(
         "grailed",
         f"https://mnrwefss2q-dsn.algolia.net/1/indexes/{GRAILED_SOLD_INDEX}",
         params={
-            "query": query,
+            "query": clean_query,
             "hitsPerPage": SOLD_COMP_HITS,
             "numericFilters": f"sold_at_i>{cutoff}",
             # Algolia fuzzy-matches by default, which is fine for browsing
@@ -586,11 +616,7 @@ def fetch_grailed_sold_comps(query):
     )
     if not body:
         return None, 0
-    prices = [h.get("sold_price") for h in _dict_rows(body, "hits") if h.get("sold_price")]
-    if len(prices) < 3:
-        return None, len(prices)
-    prices.sort()
-    return prices[len(prices) // 2], len(prices)
+    return _grailed_sold_price_stats(_dict_rows(body, "hits"), excluded_terms)
 
 
 def _grailed_hit_to_listing(hit, sold_median, sold_count):
@@ -659,7 +685,7 @@ def search_grailed(saved_search):
     )
     if not body:
         return [], None
-    sold_median, sold_count = fetch_grailed_sold_comps(query)
+    sold_median, sold_count = fetch_grailed_sold_comps(saved_search["query"])
     listings = [_grailed_hit_to_listing(hit, sold_median, sold_count) for hit in _dict_rows(body, "hits")]
     return [x for x in listings if x], _dget(body, "nbHits")
 
@@ -679,9 +705,10 @@ def _algolia_multi_query(sub_requests):
     for i in range(0, len(sub_requests), ALGOLIA_MAX_BATCH):
         chunk = sub_requests[i:i + ALGOLIA_MAX_BATCH]
         _pace("grailed")
-        # One short retry on a 429, mirroring search_ebay(): a single retry
-        # after a brief sleep costs little and can save up to ALGOLIA_MAX_BATCH
-        # sub-queries at once if a transient burst trips Algolia's limit.
+        # One short retry on transient transport/5xx/429 failures. This POST
+        # path bypasses get_json(), so it must preserve the same retry contract
+        # itself; otherwise one connection reset can discard up to 50 paired
+        # live/sold sub-queries while the single-search fallback recovers.
         for attempt in range(2):
             try:
                 resp = requests.post(
@@ -695,11 +722,23 @@ def _algolia_multi_query(sub_requests):
                     timeout=HTTP_TIMEOUT,
                 )
             except requests.RequestException as exc:
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
                 logger.warning("grailed batch request failed: %s", exc)
                 resp = None
                 break
-            if resp.status_code == 429 and attempt == 0:
-                time.sleep(2)
+            if resp.status_code == 429:
+                multiplier = _register_rate_limit("grailed")
+                if attempt == 0:
+                    logger.warning(
+                        "grailed batch transient 429; retrying once after 2s and pacing %sx slower",
+                        multiplier,
+                    )
+                    time.sleep(2)
+                    continue
+            if 500 <= resp.status_code < 600 and attempt == 0:
+                time.sleep(1)
                 continue
             break
         if resp is None:
@@ -763,10 +802,10 @@ def search_grailed_batch(saved_searches, deadline=None):
     unused here, Grailed's Algolia batching already bounds itself with its
     own per-request timeout, not a wall-clock deadline."""
     cutoff = int(time.time()) - SOLD_COMP_WINDOW_DAYS * 86400
-    clean_queries = [split_query_exclusions(s["query"])[0] for s in saved_searches]
+    query_parts = [split_query_exclusions(s["query"]) for s in saved_searches]
 
     sub_requests = []
-    for query in clean_queries:
+    for query, _excluded_terms in query_parts:
         sub_requests.append({
             "indexName": GRAILED_INDEX,
             "params": urlencode({
@@ -795,13 +834,9 @@ def search_grailed_batch(saved_searches, deadline=None):
         live_result = raw_results[2 * i]
         sold_result = raw_results[2 * i + 1]
 
-        sold_median = sold_count = None
-        if sold_result:
-            prices = sorted(
-                h.get("sold_price") for h in _dict_rows(sold_result, "hits") if h.get("sold_price")
-            )
-            if len(prices) >= 3:
-                sold_median, sold_count = prices[len(prices) // 2], len(prices)
+        sold_median, sold_count = _grailed_sold_price_stats(
+            _dict_rows(sold_result, "hits"), query_parts[i][1]
+        )
 
         if not live_result:
             out.setdefault(query, [])

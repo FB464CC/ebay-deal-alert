@@ -203,7 +203,7 @@
       "category": "knitwear"
     },
     {
-      "query": "peter millar gamecocks polo -scarf",
+      "query": "peter millar \"gamecocks\" polo -scarf",
       "size": [
         "L",
         "XL"
@@ -222,7 +222,7 @@
       "category": "school-gear"
     },
     {
-      "query": "peter millar gamecocks quarter zip -scarf",
+      "query": "peter millar \"gamecocks\" quarter zip -scarf",
       "size": [
         "L",
         "XL"
@@ -446,7 +446,7 @@
       "category": "tailoring"
     },
     {
-      "query": "zegna sweater -\"zegna sport\" -\"z zegna\" -scarf",
+      "query": "zegna sweater -\"zegna sport\" -\"z zegna\" -\"zegna baruffa\" -scarf",
       "size": [
         "M",
         "L",
