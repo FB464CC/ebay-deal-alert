@@ -1192,13 +1192,17 @@ def search_shopgoodwill(saved_search):
 # handling, not an auth bypass.
 # ---------------------------------------------------------------------------
 
-# Vinted resolves real shipping only at checkout against the buyer's address,
-# so no catalog field exists to read (checked live) - same situation that made
-# SHOPGOODWILL_ASSUMED_SHIPPING necessary. Vinted US buyer-paid shipping tiers
-# run ~$3.99 (small) to ~$7.99 (large); the trad-menswear this bot hunts
-# (blazers, knitwear, shoes) lands mostly in the medium tier, so $5.99 is the
-# defensible midpoint. Assumed ON TOP of the buyer-protection fee below.
-VINTED_ASSUMED_SHIPPING = 5.99
+# Checked live 2026-09-07: 116 current US catalog items exposed no shipping,
+# delivery, postage, or carrier price anywhere in their item dicts. Vinted's
+# Help Center says the exact rate depends on parcel size, buyer/seller location,
+# and the provider chosen at checkout, so search_vinted() cannot read it from
+# the response it already has. The broad US free-shipping subsidy changed on
+# 2026-08-27 to $0.99 for the normal paid option across package sizes, while
+# some provider/listing/first-order options remain free (current US buyer and
+# seller reports, consistent with a live item page showing "from $0.00"). Use
+# the current paid-option price as a conservative flat estimate, ON TOP of the
+# real buyer-protection service fee below; the former $5.99 midpoint was stale.
+VINTED_ASSUMED_SHIPPING = 0.99
 VINTED_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("vinted_rate_limit_state.json")
 VINTED_BACKOFF_INITIAL_MINUTES = 30
 VINTED_BACKOFF_MAX_MINUTES = 120
@@ -1440,15 +1444,11 @@ def _vinted_item_to_listing(item):
     # exactly how a real hole/damage on a different angle got past it.
     all_photos = item.get("photos") or []
     extra_images = [p.get("url") for p in all_photos if not p.get("is_main") and p.get("url")]
-    # Real actual shipping cost isn't in the catalog response at all -
-    # Vinted only resolves that at checkout against the buyer's address.
-    # But "total_item_price" IS present and real (confirmed live): it's
-    # price + Vinted's mandatory buyer-protection service_fee, an extra
-    # cost every buyer definitely pays on top of the listed price. That
-    # delta alone still understates true landed cost by whatever shipping
-    # ends up being (~$5-10 real), which made Vinted listings win deal
-    # comparisons against Poshmark/ShopGoodwill's honest flat shipping.
-    # So add VINTED_ASSUMED_SHIPPING on top, mirroring the other two.
+    # The exact shipping cost is absent from the catalog item and resolved
+    # later from buyer/seller location and provider. "total_item_price" IS
+    # present and real (confirmed live): it is price + Vinted's mandatory
+    # buyer-protection service fee. Add the current US flat shipping estimate
+    # to that real fee so downstream landed-price math includes both costs.
     item_price = _to_float(_dget(_dget(item, "price"), "amount")) or 0.0
     total_price = _to_float(_dget(_dget(item, "total_item_price"), "amount"))
     service_fee = (total_price - item_price) if total_price is not None else 0.0

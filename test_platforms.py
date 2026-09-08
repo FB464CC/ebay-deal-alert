@@ -1,9 +1,9 @@
 """Regression tests for the three previously-audited platforms.py defects.
 
 Each guards a specific real failure mode:
-  1. Vinted landed cost was understated by ~$5-10 (only the buyer-protection
-     fee was counted as shipping), so Vinted listings won deal comparisons
-     against Poshmark/ShopGoodwill's honest flat shipping.
+  1. Vinted landed cost includes both its real buyer-protection fee and its
+     current subsidized US shipping estimate, without restoring the stale
+     $5.99 assumption that suppressed genuine Vinted deals.
   2. Grailed's Algolia batch POST bypassed get_json()'s 429 handling, so a
      single 429 blanked up to 50 sub-queries with no retry and no 429-specific
      log line.
@@ -130,13 +130,15 @@ class AdapterRegistry(unittest.TestCase):
 
 
 class VintedLandedCost(unittest.TestCase):
-    def test_assumed_shipping_constant_is_positive(self):
-        self.assertGreater(p.VINTED_ASSUMED_SHIPPING, 0)
+    def test_assumed_shipping_matches_current_us_paid_option(self):
+        # Checked 2026-09-07: current US paid shipping is normally $0.99,
+        # while some provider/listing/first-order options remain free.
+        self.assertEqual(p.VINTED_ASSUMED_SHIPPING, 0.99)
 
     def test_shipping_is_service_fee_plus_flat_assumption(self):
-        # Regression: shipping used to be the buyer-protection fee ALONE, so a
-        # Vinted item landed ~$5-10 cheaper than the same item elsewhere and
-        # won comparisons it should have lost.
+        # Regression: retain Vinted's real Buyer Protection delta, but add only
+        # today's $0.99 US shipping estimate rather than the stale $5.99 tier
+        # midpoint that could silently reject a genuine deal.
         body = {
             "items": [{
                 "id": "1",
@@ -160,6 +162,7 @@ class VintedLandedCost(unittest.TestCase):
         shipping = listings[0]["shippingOptions"][0]["shippingCost"]["value"]
         service_fee = 106.70 - 100.00
         self.assertAlmostEqual(shipping, service_fee + p.VINTED_ASSUMED_SHIPPING, places=6)
+        self.assertAlmostEqual(shipping, 7.69, places=6)
 
 
 class GrailedBatch429(unittest.TestCase):
