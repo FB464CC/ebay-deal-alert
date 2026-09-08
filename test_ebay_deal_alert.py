@@ -80,24 +80,19 @@ class CategoryClassification(unittest.TestCase):
         search = {"query": "rolex watch", "category": "golf-equipment"}
         self.assertEqual(m.classify_search_category(search), "golf-equipment")
 
-    def test_seiko_model_queries_without_watch_word_are_watches(self):
-        required_queries = {
-            "king seiko",
-            "seiko 6105",
-            "seiko 6139",
-            "seiko alpinist",
-            "seiko cocktail time",
+    def test_seiko_model_saved_searches_are_watches(self):
+        required_searches = {
+            "watch-king-seiko": "king seiko",
+            "watch-seiko-6105": "seiko 6105",
+            "watch-seiko-6139": "seiko 6139",
+            "watch-seiko-alpinist": "seiko alpinist",
+            "watch-seiko-cocktail-time": "seiko cocktail time",
         }
-        configured = {
-            re.split(r"\s+-", search["query"], maxsplit=1)[0]
-            .replace('"', "")
-            .strip(): search
-            for search in m.SAVED_SEARCHES
-        }
-        for query in required_queries:
-            with self.subTest(query=query):
-                self.assertIn(query, configured)
-                self.assertEqual(configured[query]["category"], "watches")
+        configured = {search["id"]: search for search in m.SAVED_SEARCHES}
+        for search_id, query in required_searches.items():
+            with self.subTest(search_id=search_id, query=query):
+                self.assertIn(search_id, configured)
+                self.assertEqual(configured[search_id]["category"], "watches")
                 self.assertEqual(m.classify_search_category(query), "watches")
 
     def test_bare_seiko_brand_match_is_token_bound_and_covers_future_models(self):
@@ -178,6 +173,145 @@ class CategoryClassification(unittest.TestCase):
         ):
             with self.subTest(query=query):
                 self.assertEqual(m.classify_search_category(query), "poker-chips")
+
+
+class FunnelAuditConfiguration(unittest.TestCase):
+    @staticmethod
+    def _search(search_id):
+        return next(search for search in m.SAVED_SEARCHES if search["id"] == search_id)
+
+    def test_outerwear_and_neckwear_use_verified_ebay_leaf_categories(self):
+        # Current eBay taxonomy checked during the production funnel audit:
+        # Men's Coats, Jackets & Vests = 57988; Men's Ties = 15662.
+        expected = {
+            "outerwear-loro-piana-jacket": "57988",
+            "outerwear-brunello-cucinelli-jacket": "57988",
+            "neckwear-marinella-tie": "15662",
+            "neckwear-hermes-tie": "15662",
+        }
+        for search_id, category_id in expected.items():
+            with self.subTest(search_id=search_id):
+                self.assertEqual(self._search(search_id)["category_id"], category_id)
+
+    def test_school_queries_require_both_brand_and_team_phrases(self):
+        searches = [
+            search for search in m.SAVED_SEARCHES
+            if search.get("category") == "school-gear"
+        ]
+        self.assertEqual(len(searches), 5)
+        for search in searches:
+            with self.subTest(search_id=search["id"]):
+                self.assertIn('"peter millar"', search["query"].lower())
+                self.assertIn('"gamecocks"', search["query"].lower())
+                self.assertFalse(m.is_relevant_marketplace_listing(
+                    {
+                        "platform": "poshmark",
+                        "title": "Peter Millar Crown Sport Quarter Zip Pullover Men's XL",
+                    },
+                    search["query"],
+                ))
+                self.assertTrue(m.is_relevant_marketplace_listing(
+                    {
+                        "platform": "poshmark",
+                        "title": "Peter Millar Gamecocks Quarter Zip Pullover Men's XL",
+                    },
+                    search["query"],
+                ))
+
+    def test_live_query_misses_are_excluded_without_blocking_real_items(self):
+        cases = (
+            (
+                "footwear-vass-shoes",
+                "Vass-tex all season fleece lined fishing boots size 12",
+                "Vass Budapest Handmade Oxford Shoes Men's 13",
+            ),
+            (
+                "knitwear-zegna-sweater",
+                "Toscano Firenze Polo Sweater Blue Zegna Baruffa Merino Wool",
+                "Ermenegildo Zegna Cashmere Crewneck Sweater Men's L",
+            ),
+            (
+                "other-ralph-lauren-purple-label",
+                "Ralph Lauren Purple Label Sheath Dress Women's 8",
+                "Ralph Lauren Purple Label Polo Shirt Men's L",
+            ),
+            (
+                "watch-breguet",
+                "Eterna Watch Steel Breguet Dial Quartz",
+                "Breguet Watch Classique Automatic 18K Gold",
+            ),
+            (
+                "watch-grand-seiko",
+                "Grand Seiko Watch Care Set 2pcs Men's Accessories",
+                "Grand Seiko SBGN005 GMT Stainless Steel Watch",
+            ),
+            (
+                "watch-seiko-6139",
+                "Vintage stainless steel case back from a Seiko 6139 watch",
+                "Seiko 6139 Automatic Chronograph Watch Pogue",
+            ),
+            (
+                "watch-hamilton",
+                "Peggy and Jim Hamilton Watch Ad",
+                "Hamilton Khaki Field Automatic Watch Men's 38mm",
+            ),
+            (
+                "watch-omega",
+                "Orbis Omega collaboration bear",
+                "Omega Seamaster Automatic Watch Men's 40mm",
+            ),
+            (
+                "watch-heuer",
+                "Vintage Heuer Stop Watch 60 Seconds Fully Working",
+                "Heuer Carrera Automatic Watch Men's 39mm",
+            ),
+            (
+                "watch-shinola",
+                "Shinola Detroit 14mm Genuine Watch Band Cognac Brown",
+                "Shinola Runwell Automatic Watch Men's 45mm",
+            ),
+            (
+                "watch-tudor",
+                "Limited Tudor leather card wallet",
+                "Tudor Black Bay Automatic Watch Men's 41mm",
+            ),
+            (
+                "watch-blancpain",
+                "Lamborghini Automobili Blancpain Jacket Small",
+                "Blancpain Villeret Automatic Watch Men's 40mm",
+            ),
+            (
+                "watch-universal-geneve",
+                "Mint Universal Geneve Triumph Watch Dial Part",
+                "Universal Geneve Polerouter Automatic Watch Men's 35mm",
+            ),
+            (
+                "watch-longines",
+                "Orient Manual Winding Watch Seikoelginwaltham Longines",
+                "Longines Conquest Automatic Watch Men's 39mm",
+            ),
+        )
+        for search_id, junk_title, real_title in cases:
+            query = self._search(search_id)["query"]
+            with self.subTest(search_id=search_id, kind="junk"):
+                self.assertFalse(m.is_relevant_marketplace_listing(
+                    {"platform": "vinted", "title": junk_title}, query,
+                ))
+            with self.subTest(search_id=search_id, kind="real"):
+                self.assertTrue(m.is_relevant_marketplace_listing(
+                    {"platform": "vinted", "title": real_title}, query,
+                ))
+
+    def test_every_zegna_knitwear_query_excludes_yarn_maker_collision(self):
+        searches = [
+            search for search in m.SAVED_SEARCHES
+            if search.get("category") == "knitwear"
+            and search["id"].startswith("knitwear-zegna-")
+        ]
+        self.assertEqual(len(searches), 4)
+        for search in searches:
+            with self.subTest(search_id=search["id"]):
+                self.assertIn('-"zegna baruffa"', search["query"].lower())
 
 
 class ConfigPreflight(unittest.TestCase):
@@ -2603,6 +2737,30 @@ class StealQualityGate(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertIn("never blind-trust", reason)
 
+    def test_watch_ai_abstention_is_not_mislabeled_as_budget_starvation(self):
+        # Nine live watch rows contained fields written only after a real AI
+        # response, but deal_rating stayed None because price was unusable.
+        # They must remain retryable while recording AI_NO_PRICE, not NO_AI.
+        result = {
+            "deal_rating": None,
+            "brand_tier": "grab_on_sight",
+            "watch_brand_mismatch": False,
+        }
+        reason = m.is_blocked_by_steal_quality_gate(result, category="watches")
+        self.assertIn("no AI price", reason)
+        self.assertIn("AI check returned no usable resale value", reason)
+        self.assertEqual(
+            m.disposition_code_for({"verdict": "PASS", "reason": reason}),
+            "AI_NO_PRICE",
+        )
+
+        # If that completed check positively found a brand mismatch, price
+        # abstention cannot turn the permanent evidence into a retry.
+        result["watch_brand_mismatch"] = True
+        reason = m.is_blocked_by_steal_quality_gate(result, category="watches")
+        self.assertIn("AI-confirmed brand/model mismatch", reason)
+        self.assertNotIn("no AI price", reason)
+
     def test_watches_require_steal_or_great_deal(self):
         result = {"deal_rating": "Good Deal", "discount_pct": 35, "brand_tier": "grab_on_sight"}
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="watches"))
@@ -2745,7 +2903,9 @@ class StealQualityGate(unittest.TestCase):
             # names loro piana/cucinelli, so that query legitimately hits
             # the title-mismatch bar added after a real live miss).
             self.assertTrue(
-                "brand not grab_on_sight-tier" in reason or "title names neither brand" in reason,
+                "brand not grab_on_sight-tier" in reason
+                or "title names neither brand" in reason
+                or "school-gear bar" in reason,
                 f"{category}/{tier}/{query} is permanently discarded before any AI check: {reason}",
             )
 
@@ -2909,6 +3069,43 @@ class StealQualityGate(unittest.TestCase):
             self.assertIsNotNone(reason)
             self.assertNotIn("gamecocks bar", reason, f"{title!r} must not get the loose gamecocks bar")
 
+    def test_school_gear_permanently_rejects_off_target_gamecocks_search_results(self):
+        # All 29 live school rows lacked Gamecocks in the title; seven generic
+        # Peter Millar results nevertheless consumed AI calls. School routing
+        # must reject those misses before either the crown or AI retry path.
+        for title in (
+            "Peter Millar Perth Performance Quarter Zip Men's XL",
+            "Peter Millar Crown Sport Pullover Men's L",
+            "Peter Millar Stanford Quarter Zip Men's XL",
+        ):
+            with self.subTest(title=title):
+                result = self._gamecocks_result(
+                    title, deal_rating=None, brand_tier="grab_on_sight",
+                )
+                reason = m.is_blocked_by_steal_quality_gate(
+                    result, category="school-gear",
+                )
+                self.assertIn("school-gear bar", reason)
+                self.assertNotIn("no AI price", reason)
+
+                other_reason = m.is_blocked_by_steal_quality_gate(
+                    result, category="knitwear",
+                )
+                self.assertFalse(
+                    other_reason and "school-gear bar" in other_reason,
+                )
+
+        on_target = self._gamecocks_result(
+            "Peter Millar Gamecocks Quarter Zip Men's XL",
+            deal_rating="Good Deal",
+            discount_pct=35,
+            price=40,
+            brand_tier="standard",
+        )
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            on_target, category="school-gear",
+        ))
+
     def test_gamecocks_bar_requires_peter_millar_in_the_title_too(self):
         # Real gap: this bar enforced "peter millar" at the SEARCH-QUERY
         # level only, and "gamecocks" at the listing-title level - never
@@ -2962,6 +3159,49 @@ class StealQualityGate(unittest.TestCase):
         reason = m.is_blocked_by_steal_quality_gate(result, category="other")
         self.assertIsNotNone(reason)
         self.assertNotIn("no AI price", reason)
+
+    def test_outerwear_jacket_search_requires_an_outerwear_item_title(self):
+        # Both delivered outerwear rows in the live snapshot were off-target
+        # fuzzy matches and neither title claimed to be a jacket or coat.
+        cases = (
+            (
+                "brunello cucinelli jacket",
+                "Brunello Cucinelli white cotton long sleeve top L",
+            ),
+            (
+                "loro piana jacket",
+                "Brooks Brother made by Loro Piana",
+            ),
+        )
+        for query, title in cases:
+            with self.subTest(title=title):
+                result = {
+                    "deal_rating": "Steal",
+                    "discount_pct": 75,
+                    "price_confidence": "high",
+                    "search_query": query,
+                    "listing": {"title": title},
+                }
+                reason = m.is_blocked_by_steal_quality_gate(
+                    result, category="outerwear",
+                )
+                self.assertIn("outerwear bar", reason)
+                self.assertNotIn("no AI price", reason)
+
+                self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+                    result, category="other",
+                ))
+
+        valid = {
+            "deal_rating": "Steal",
+            "discount_pct": 75,
+            "price_confidence": "high",
+            "search_query": "brunello cucinelli jacket",
+            "listing": {"title": "Brunello Cucinelli Cashmere Jacket 52"},
+        }
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            valid, category="outerwear",
+        ))
 
     def test_default_category_no_ai_data_blind_trusts_grab_on_sight_only(self):
         result = {"deal_rating": None, "brand_tier": "grab_on_sight"}

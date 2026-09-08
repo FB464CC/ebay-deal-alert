@@ -75,6 +75,7 @@
       "max_price": 250,
       "enabled": true,
       "profile": "slow",
+      "category_id": "57988",
       "id": "outerwear-loro-piana-jacket",
       "category": "outerwear"
     },
@@ -88,6 +89,7 @@
       "max_price": 250,
       "enabled": true,
       "profile": "slow",
+      "category_id": "57988",
       "id": "outerwear-brunello-cucinelli-jacket",
       "category": "outerwear"
     },
@@ -203,7 +205,7 @@
       "category": "knitwear"
     },
     {
-      "query": "peter millar \"gamecocks\" polo -scarf",
+      "query": "\"peter millar\" \"gamecocks\" polo -scarf",
       "size": [
         "L",
         "XL"
@@ -222,7 +224,7 @@
       "category": "school-gear"
     },
     {
-      "query": "peter millar \"gamecocks\" quarter zip -scarf",
+      "query": "\"peter millar\" \"gamecocks\" quarter zip -scarf",
       "size": [
         "L",
         "XL"
@@ -337,7 +339,7 @@
       "category": "tailoring"
     },
     {
-      "query": "ralph lauren \"purple label\" -scarf",
+      "query": "ralph lauren \"purple label\" -\"sheath dress\" -scarf",
       "size": [
         "M",
         "L",
@@ -378,7 +380,7 @@
       "category": "watches"
     },
     {
-      "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -musical -broadway -lin-manuel -playbill -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "hamilton watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -musical -broadway -lin-manuel -playbill -lewis -\"enamel pin\" -ad -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 80,
       "enabled": true,
@@ -388,7 +390,7 @@
       "category": "watches"
     },
     {
-      "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "shinola watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -\"watch band\" -\"watch bracelet\" -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 90,
       "enabled": true,
@@ -512,7 +514,7 @@
       "category": "watches"
     },
     {
-      "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -joan -rivers -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "omega watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -gloves -bear -orbis -story -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -joan -rivers -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -542,7 +544,7 @@
       "category": "leather-goods"
     },
     {
-      "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "longines watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -orient -seikoelginwaltham -lady -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 150,
       "enabled": true,
@@ -563,7 +565,7 @@
       "category": "other"
     },
     {
-      "query": "zegna quarter zip -\"zegna sport\" -\"z zegna\" -scarf",
+      "query": "zegna quarter zip -\"zegna sport\" -\"z zegna\" -\"zegna baruffa\" -scarf",
       "size": [
         "L",
         "XL"
@@ -575,7 +577,7 @@
       "category": "knitwear"
     },
     {
-      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -court -manor -dynasty -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "tudor watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -court -manor -dynasty -wallet -cardholder -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -592,7 +594,7 @@
       "category": "watches"
     },
     {
-      "query": "\"universal geneve\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "\"universal geneve\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -\"watch dial\" -\"watch bracelet\" -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -602,7 +604,7 @@
       "category": "watches"
     },
     {
-      "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "heuer watch -tag -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -stopwatch -\"stop watch\" -\"watch crown\" -\"watch bracelet\" -tradition -sears -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -827,7 +829,7 @@
       "category": "watches"
     },
     {
-      "query": "\"grand seiko\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "\"grand seiko\" watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -link -links -parts -shoehorn -screwdriver -tool -stand -storage -gasket -buckle -accessories -care -ballpoint -\"related item\" -\"watch band\" -\"watch box\" -\"box for watch\" -\"crystal part\" -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 250,
       "enabled": true,
@@ -863,6 +865,7 @@
       "max_price": 40,
       "enabled": false,
       "profile": "slow",
+      "category_id": "15662",
       "id": "neckwear-marinella-tie",
       "category": "neckwear"
     },
@@ -887,7 +890,7 @@
       "category": "watches"
     },
     {
-      "query": "seiko 6139 -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "\"seiko 6139\" \"watch\" -\"case back\" -\"watch case\" -\"dial ring\" -spare -repair -parts -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 350,
       "enabled": true,
@@ -1041,7 +1044,7 @@
       "max_price": 60,
       "enabled": false,
       "profile": "slow",
-      "category_id": "2993",
+      "category_id": "15662",
       "id": "neckwear-hermes-tie",
       "category": "neckwear"
     },
@@ -1322,7 +1325,7 @@
       "category": "watches"
     },
     {
-      "query": "blancpain watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "blancpain watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -jacket -coat -lamborghini -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 500,
       "enabled": true,
@@ -1332,7 +1335,7 @@
       "category": "watches"
     },
     {
-      "query": "breguet watch -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
+      "query": "\"breguet watch\" -display -mirror -cube -radio -canteen -bottle -mug -cup -thermos -keychain -hoodie -sweatshirt -tee -tshirt -shirt -hat -tote -bag -strap -caseback -spoon -booklet -advertisement -brochure -catalog -poster -pouch -winder -eyeglasses -eyeglass -sunglasses -backpack -messenger -purse -book -biography -cap -jersey -cleaner -reservoir -sign -magnet -patch -untested -\"as is\" -\"as-is\" -\"for parts\" -\"not working\" -\"needs repair\" -\"broken crystal\" -cracked -chipped -pocket -\"pocket watch\" -pendant -scarf",
       "size": null,
       "max_price": 500,
       "enabled": true,
@@ -2303,7 +2306,7 @@
       "category": "footwear"
     },
     {
-      "query": "peter millar gamecocks jacket",
+      "query": "\"peter millar\" \"gamecocks\" jacket",
       "size": [
         "L",
         "XL"
@@ -2347,7 +2350,7 @@
       "category": "footwear"
     },
     {
-      "query": "\"peter millar\" gamecocks polo",
+      "query": "\"peter millar\" \"gamecocks\" polo",
       "size": [
         "M",
         "L"
@@ -2366,7 +2369,7 @@
       "category": "school-gear"
     },
     {
-      "query": "\"peter millar\" gamecocks quarter zip",
+      "query": "\"peter millar\" \"gamecocks\" quarter zip",
       "size": [
         "L",
         "XL"
@@ -2385,7 +2388,7 @@
       "category": "school-gear"
     },
     {
-      "query": "zegna sweater -\"zegna sport\" -scarf",
+      "query": "zegna sweater -\"zegna sport\" -\"zegna baruffa\" -scarf",
       "size": [
         "M",
         "L",
@@ -2483,7 +2486,7 @@
       "category": "outerwear"
     },
     {
-      "query": "zegna quarter zip -\"zegna sport\" -scarf",
+      "query": "zegna quarter zip -\"zegna sport\" -\"zegna baruffa\" -scarf",
       "size": [
         "L",
         "XL"
@@ -2512,7 +2515,7 @@
       ]
     },
     {
-      "query": "vass shoes -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
+      "query": "vass shoes -\"vass-tex\" -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -scarf",
       "size": [
         "13"
       ],

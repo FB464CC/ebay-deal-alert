@@ -4468,6 +4468,29 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "golf-equipment bar: AI found disqualifying damage"
         return None
 
+    # SCHOOL-GEAR SEARCH RELEVANCE - the live school funnel contained 29
+    # Peter Millar quarter-zip candidates and not one title said Gamecocks.
+    # Seven of those generic-brand matches consumed an AI call before being
+    # rejected elsewhere. The marketplace relevance helper treats Gamecocks
+    # as a generic garment/team query term, so enforce the defining school
+    # phrase here before either the Peter Millar crown check or an AI-budget
+    # retry path can claim the candidate. This is permanent: another photo
+    # check cannot add the missing school/team claim to the seller's title.
+    if category == "school-gear":
+        school_gamecocks_query = (
+            "peter millar" in search_query_lower
+            and "gamecocks" in search_query_lower
+        )
+        school_gamecocks_title = (
+            brand_in(listing_title_lower, ("peter millar",))
+            and brand_in(listing_title_lower, ("gamecocks",))
+        )
+        if school_gamecocks_query and not school_gamecocks_title:
+            return (
+                "school-gear bar: listing title does not name Peter Millar Gamecocks "
+                "- likely a search-relevance mismatch"
+            )
+
     # PETER MILLAR BACK-CROWN REQUIREMENT - explicit, standing user
     # instruction: "every incoming Peter Millar top (polo, quarter-zip,
     # mid-layer) must feature the raised/metallic or silicone back crown
@@ -4590,6 +4613,27 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return (
                 "loro piana/cucinelli bar: listing title names neither brand "
                 "- likely a search-relevance mismatch, not the searched item"
+            )
+        # Both delivered outerwear rows in the live snapshot were fuzzy
+        # search misses with no jacket/coat claim in the title: a Brunello
+        # Cucinelli-looking cotton top whose photos identified American
+        # Vintage, and a Brooks Brothers item merely made with Loro Piana
+        # fabric. Keep this requirement scoped to the two outerwear jacket
+        # searches; sweaters, suits, and other brand searches retain their
+        # existing routing and bars.
+        if (
+            category == "outerwear"
+            and "jacket" in search_query_lower
+            and not re.search(
+                r"\b(?:jackets?|coats?|overcoats?|raincoats?|bombers?|blousons?|"
+                r"parkas?|anoraks?|windbreakers?|gilets?|vests?|outerwear|"
+                r"overshirts?|blazers?)\b",
+                listing_title_lower,
+            )
+        ):
+            return (
+                "outerwear bar: listing title does not name a jacket or other "
+                "outerwear item - likely a search-relevance mismatch"
             )
         # deal_rating None means the AI hasn't run YET, which is now the
         # normal pre-check state (the gate is called before the AI to
@@ -4811,6 +4855,18 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         # accessory/paperwork-only listings both mean a real AI look at
         # the photos is required before trusting a watch listing at all.
         if deal_rating is None:
+            # Presence of this watch-only field proves the photo check ran:
+            # run() writes it for every non-None watch AI response, even when
+            # the model abstains on resale price. Nine production rows had
+            # that evidence but were mislabeled NO_AI_BUDGET by the old
+            # blanket message, hiding completed calls as budget starvation.
+            if "watch_brand_mismatch" in result:
+                if result.get("watch_brand_mismatch"):
+                    return "watches bar: AI-confirmed brand/model mismatch between photos and listing"
+                return (
+                    "watches bar: no AI price estimate - "
+                    "AI check returned no usable resale value"
+                )
             return "watches bar: no AI price/authenticity check ran - never blind-trust a watch listing"
         # Real live miss: a genuine Oris was listed with its own eBay
         # item-specifics metadata mislabeled as "Seiko" - a real AI check
