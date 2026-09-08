@@ -3976,6 +3976,51 @@ def check_photos_with_gemini(
         )
         return _call_photo_check(watch_prompt, images, hard_stop=hard_stop)
 
+    # Keep the shared clothing schema, but add only category calibrations
+    # supported by this audit's production rows and completed-sale evidence.
+    # These live at the END of the common instructions so their deliberately
+    # scoped refinements cannot be diluted by the generic definitions above.
+    category_specific_guidance = ""
+    if category == "outerwear":
+        category_specific_guidance = (
+            "\n\nOuterwear-specific identity and pricing calibration: establish the "
+            "GARMENT MAKER from the permanent maker/neck label before selecting "
+            "comparables. A fabric-mill or material credit is not the garment maker: "
+            "a Brooks Brothers jacket made with Loro Piana Storm System fabric is a "
+            "Brooks Brothers jacket, not a Loro Piana-branded jacket, and must not "
+            "inherit Loro Piana garment comps. If the title claims one garment maker "
+            "but a clearly readable permanent maker label names a different, unrelated "
+            "maker, set counterfeit_suspected true and explain the seller-title brand "
+            "misrepresentation in counterfeit_reason, even when the lower-tier garment "
+            "itself may be genuine. This outerwear-only use of the safety field makes "
+            "the material identity mismatch structured and actionable. Do NOT flag a "
+            "correctly described maker-plus-fabric relationship as counterfeit. "
+            "Concrete 2026 completed-sale calibration: used Brooks Brothers outerwear "
+            "made with Loro Piana Storm System fabric displayed completed item prices "
+            "of $149.95 on February 5, $119.49 on February 11, $199.99 on March 29, "
+            "and $199.95 on July 14. Do not turn an ordinary example into a $450 item "
+            "by using broad Loro Piana-branded-jacket comparisons. In the clear-mismatch "
+            "case, an American Vintage cotton top displayed an $18 completed price on "
+            "May 8, 2026; a top visibly labeled American Vintage must not inherit "
+            "Brunello Cucinelli value merely because the seller title claims Brunello."
+        )
+    elif category == "leather-goods":
+        category_specific_guidance = (
+            "\n\nLeather-goods-specific completed-sale calibration: match the exact "
+            "product, leather type, model, hardware, size, and condition rather than "
+            "pricing from the brand name or original retail. For ordinary Trafalgar "
+            "smooth/calf-leather dress belts, 2026 completed listings displayed $19.99 "
+            "for a size-36 brown Cortina on March 19, $29.95 for a size-36 black Cortina "
+            "on June 18, and $22 for a brown size-40 Cortina on July 30; a size-36 "
+            "full-grain basketweave example displayed $31.45 on August 19. Do NOT "
+            "default an ordinary used Trafalgar/Cortina belt to $40-$50 without a "
+            "visible, specific value driver. Keep real material exceptions distinct: "
+            "genuine tag-supported Trafalgar alligator belts displayed $69.90 and $95 "
+            "in April and March 2026 completed listings. Never transfer those exotic-"
+            "leather prices to ordinary leather based on texture guesses or the "
+            "Trafalgar name alone."
+        )
+
     prompt = (
         "Inspect these secondhand clothing or footwear listing photos to help build "
         "a personal wardrobe/collection (not a resale flip - knowing typical resale "
@@ -4070,6 +4115,7 @@ def check_photos_with_gemini(
         "on its own - it's the COMBINATION with multiples/inventory-style staging "
         "or visibly wrong branding details that matters. Explain briefly in "
         "counterfeit_reason, or leave it empty if not suspected."
+        f"{category_specific_guidance}"
     )
 
     return _call_photo_check(prompt, images, hard_stop=hard_stop)

@@ -3736,6 +3736,68 @@ class MultiUnitCounterfeitSignal(unittest.TestCase):
                         )
 
 
+class EvidenceBackedCategoryPromptCalibration(unittest.TestCase):
+    @staticmethod
+    def _capture_prompt(category):
+        listing = {
+            "title": "Representative secondhand item",
+            "image": {"imageUrl": "https://example.test/item.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(m, "_call_photo_check", return_value={}) as photo_check:
+            m.check_photos_with_gemini(
+                listing, category=category, current_month_name="September"
+            )
+        return photo_check.call_args.args[0]
+
+    def test_outerwear_prompt_uses_maker_not_fabric_mill_and_exposes_mismatch(self):
+        prompt = self._capture_prompt("outerwear")
+
+        self.assertIn("Outerwear-specific identity and pricing calibration", prompt)
+        self.assertIn("GARMENT MAKER", prompt)
+        self.assertIn("fabric-mill or material credit is not the garment maker", prompt)
+        self.assertIn(
+            "Brooks Brothers jacket made with Loro Piana Storm System fabric",
+            prompt,
+        )
+        self.assertIn("set counterfeit_suspected true", prompt)
+        self.assertIn("Do NOT flag a correctly described maker-plus-fabric", prompt)
+        self.assertIn("$149.95 on February 5", prompt)
+        self.assertIn("$119.49 on February 11", prompt)
+        self.assertIn("$199.99 on March 29", prompt)
+        self.assertIn("$199.95 on July 14", prompt)
+        self.assertIn("ordinary example into a $450 item", prompt)
+        self.assertIn("American Vintage must not inherit Brunello Cucinelli", prompt)
+        self.assertNotIn("Leather-goods-specific completed-sale calibration", prompt)
+
+    def test_leather_goods_prompt_anchors_ordinary_belts_but_preserves_exotics(self):
+        prompt = self._capture_prompt("leather-goods")
+
+        self.assertIn("Leather-goods-specific completed-sale calibration", prompt)
+        self.assertIn("$19.99 for a size-36 brown Cortina on March 19", prompt)
+        self.assertIn("$29.95 for a size-36 black Cortina", prompt)
+        self.assertIn("$22 for a brown size-40 Cortina", prompt)
+        self.assertIn("full-grain basketweave example displayed $31.45", prompt)
+        self.assertIn("Do NOT default an ordinary used Trafalgar/Cortina belt to $40-$50", prompt)
+        self.assertIn("alligator belts displayed $69.90 and $95", prompt)
+        self.assertIn("Never transfer those exotic-leather prices", prompt)
+        self.assertNotIn("Outerwear-specific identity and pricing calibration", prompt)
+
+    def test_new_calibrations_do_not_leak_into_unsupported_categories(self):
+        for category in (
+            "tailoring", "footwear", "neckwear", "school-gear", "other", "knitwear"
+        ):
+            with self.subTest(category=category):
+                prompt = self._capture_prompt(category)
+                self.assertNotIn(
+                    "Outerwear-specific identity and pricing calibration", prompt
+                )
+                self.assertNotIn(
+                    "Leather-goods-specific completed-sale calibration", prompt
+                )
+
+
 class AsciiSafeHeader(unittest.TestCase):
     """Live miss: a genuine 72%-under-resale "Steal" (Allen Edmonds
     LaSalle, size 13) sat completely unsent for 6+ hours because its
