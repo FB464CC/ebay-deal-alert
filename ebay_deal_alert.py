@@ -3046,12 +3046,19 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
 
     # 1. Brand/fabric/fit are apparel concerns. Golf equipment previously
     # ran through them too, which hard-rejected every normal "golf club"
-    # title because "club" is an apparel corporate-logo keyword. Golf gets
-    # its own photo-based brand/playability/condition gate later; keep the
-    # universal safety filters above and the disclosed-condition check below.
+    # title because "club" is an apparel corporate-logo keyword. Poker chips
+    # had the same dispatch leak: live 300/500-chip sets and casino chips were
+    # rejected by corporate-logo rules (including ordinary chip/casino uses
+    # of "club"), while unrelated clothing rows exposed the fabric leak too.
+    # Neither apparel rule belongs before the clay/ceramic photo gate.
+    # Both categories get their own photo-based gate later; keep only the
+    # universal safety filters above and disclosed-condition check below.
     brand_tier = None
-    if category == "golf-equipment":
-        flags.append("golf playability, handedness, and condition require photo check")
+    if category in {"golf-equipment", "poker-chips"}:
+        if category == "golf-equipment":
+            flags.append("golf playability, handedness, and condition require photo check")
+        else:
+            flags.append("poker chip construction, set size, and authenticity require photo check")
     else:
         if brand_in(haystack, PASS_BRANDS):
             return {"verdict": "PASS", "reason": "brand on pass list", "listing": listing}

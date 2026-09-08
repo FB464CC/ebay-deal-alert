@@ -1787,7 +1787,8 @@
         "facebook"
       ],
       "id": "poker-set",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "paulson poker chips",
@@ -1802,10 +1803,11 @@
         "facebook"
       ],
       "id": "poker-paulson",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
-      "query": "vintage casino chip set",
+      "query": "vintage \"casino chip\" set",
       "size": null,
       "max_price": 150,
       "enabled": true,
@@ -1817,7 +1819,8 @@
         "facebook"
       ],
       "id": "poker-vintage-set",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "clay poker chips lot",
@@ -1832,10 +1835,11 @@
         "facebook"
       ],
       "id": "poker-clay-lot",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
-      "query": "poker chip set vintage",
+      "query": "\"poker chip\" set vintage",
       "size": null,
       "max_price": 150,
       "enabled": true,
@@ -1847,7 +1851,8 @@
         "facebook"
       ],
       "id": "poker-set-vintage",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "ceramic poker chips set",
@@ -1862,7 +1867,8 @@
         "facebook"
       ],
       "id": "poker-ceramic-set",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "casino chips lot",
@@ -1877,7 +1883,8 @@
         "facebook"
       ],
       "id": "poker-lot",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "chipco poker chips",
@@ -1892,7 +1899,8 @@
         "facebook"
       ],
       "id": "poker-chipco",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "nevada jacks poker chips",
@@ -1907,7 +1915,8 @@
         "facebook"
       ],
       "id": "poker-nevada-jacks",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "sunfly poker chips",
@@ -1922,7 +1931,8 @@
         "facebook"
       ],
       "id": "poker-sunfly",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "br pro poker chips",
@@ -1937,7 +1947,8 @@
         "facebook"
       ],
       "id": "poker-br-pro",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "asm poker chips",
@@ -1952,7 +1963,8 @@
         "facebook"
       ],
       "id": "poker-asm",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "classic poker chips",
@@ -1967,7 +1979,8 @@
         "facebook"
       ],
       "id": "poker-classic",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "cpc poker chips",
@@ -1982,7 +1995,8 @@
         "facebook"
       ],
       "id": "poker-cpc",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "bcc poker chips",
@@ -1997,10 +2011,11 @@
         "facebook"
       ],
       "id": "poker-bcc",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
-      "query": "tr king poker chips",
+      "query": "\"tr king\" poker chips",
       "size": null,
       "max_price": 150,
       "enabled": true,
@@ -2012,7 +2027,8 @@
         "facebook"
       ],
       "id": "poker-tr-king",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "hot stamp poker chips",
@@ -2027,7 +2043,8 @@
         "facebook"
       ],
       "id": "poker-hot-stamp",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "top hat cane poker chips",
@@ -2042,7 +2059,8 @@
         "facebook"
       ],
       "id": "poker-top-hat-cane",
-      "category": "poker-chips"
+      "category": "poker-chips",
+      "category_id": "166570"
     },
     {
       "query": "peter millar merino sweater",

@@ -379,6 +379,38 @@ class PokerChipsGate(unittest.TestCase):
             category="poker-chips",
         ))
 
+    def test_poker_scoring_bypasses_apparel_logo_and_fabric_rules(self):
+        # Live dispatch leak: poker rows were evaluated as menswear before
+        # reaching the specialized photo gate. "Nile Club" is a real chip
+        # line, while "poly" describes chip material rather than apparel
+        # fabric; neither belongs in an apparel rejection branch.
+        for title in (
+            "Nile Club 500 Clay Poker Chips Set",
+            "500 Poly Poker Chips Set With Case",
+        ):
+            with self.subTest(title=title):
+                result = m.score_listing(
+                    {"title": title, "price": {"value": 50}},
+                    gap_report=None,
+                    category="poker-chips",
+                )
+                self.assertEqual(result["verdict"], "REVIEW")
+                self.assertIn("construction", " ".join(result["flags"]))
+
+    def test_poker_still_uses_universal_text_safety_filters(self):
+        result = m.score_listing(
+            {
+                "title": "Women's Novelty Poker Chip Set",
+                "price": {"value": 20},
+            },
+            gap_report=None,
+            category="poker-chips",
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(
+            result["reason"], "excluded gender keyword in title/description"
+        )
+
     def test_specialized_prompt_contains_schema_and_conservative_rules(self):
         response = {
             "chip_type": "compression-molded clay",
@@ -426,9 +458,9 @@ class PokerChipsConfiguration(unittest.TestCase):
         expected_queries = {
             "casino poker chips set",
             "paulson poker chips",
-            "vintage casino chip set",
+            "vintage \"casino chip\" set",
             "clay poker chips lot",
-            "poker chip set vintage",
+            "\"poker chip\" set vintage",
             "ceramic poker chips set",
             "casino chips lot",
             "chipco poker chips",
@@ -439,7 +471,7 @@ class PokerChipsConfiguration(unittest.TestCase):
             "classic poker chips",
             "cpc poker chips",
             "bcc poker chips",
-            "tr king poker chips",
+            "\"tr king\" poker chips",
             "hot stamp poker chips",
             "top hat cane poker chips",
         }
@@ -454,11 +486,18 @@ class PokerChipsConfiguration(unittest.TestCase):
                 self.assertEqual(
                     set(search),
                     {
-                        "id", "category", "query", "size", "max_price",
-                        "enabled", "profile", "platforms",
+                        "id", "category", "category_id", "query", "size",
+                        "max_price", "enabled", "profile", "platforms",
                     },
                 )
                 self.assertEqual(search["category"], "poker-chips")
+                # eBay's real Poker Chips leaf (confirmed live 2026-09-08:
+                # https://www.ebay.com/b/Poker-Chips/166570/). Every poker
+                # saved search previously omitted category_id, so
+                # search_ebay() fell back to its documented default 260012
+                # (Men's Clothing) - the entire official Browse API lane was
+                # searching the wrong category for every poker listing.
+                self.assertEqual(search["category_id"], "166570")
                 self.assertIsNone(search["size"])
                 self.assertEqual(search["max_price"], 150)
                 self.assertTrue(search["enabled"])
@@ -469,6 +508,36 @@ class PokerChipsConfiguration(unittest.TestCase):
                     search["platforms"],
                     ["shopgoodwill", "vinted", "offerup", "facebook"],
                 )
+
+    def test_loose_vintage_and_tr_king_queries_require_poker_phrases(self):
+        queries = {
+            search["id"]: search["query"]
+            for search in m.SAVED_SEARCHES
+            if search.get("category") == "poker-chips"
+        }
+        junk_cases = (
+            ("poker-vintage-set", "Vintage 1960s Spotty Paisley Pointy Collar Dress"),
+            ("poker-set-vintage", "Vintage game pieces Set"),
+            ("poker-tr-king", "Time is Money UK Drill The Dope King Sweatshirt"),
+        )
+        for search_id, title in junk_cases:
+            with self.subTest(search_id=search_id, title=title):
+                self.assertFalse(m.is_relevant_marketplace_listing(
+                    {"platform": "vinted", "title": title},
+                    queries[search_id],
+                ))
+
+        real_cases = (
+            ("poker-vintage-set", "Vintage Casino Chips Set 300 Piece Clay"),
+            ("poker-set-vintage", "2 Boxes Vintage Mayer Poker Chips"),
+            ("poker-tr-king", "Vintage TR King Poker Chips Set of 300"),
+        )
+        for search_id, title in real_cases:
+            with self.subTest(search_id=search_id, title=title):
+                self.assertTrue(m.is_relevant_marketplace_listing(
+                    {"platform": "vinted", "title": title},
+                    queries[search_id],
+                ))
 
 
 class GolfEquipmentGate(unittest.TestCase):
