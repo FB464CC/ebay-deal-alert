@@ -791,6 +791,11 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertIn("not sold or built together as a matched or reasonably-compatible set", prompt)
         self.assertIn("Ping Eye2 irons with Callaway Big Bertha woods", prompt)
         self.assertIn("distinct from mere incompleteness", prompt)
+        self.assertIn("TaylorMade RBZ Tour drivers", prompt)
+        self.assertIn("$93.49 on April 9", prompt)
+        self.assertIn("PXG 0211 Z replacement 8- and 9-irons", prompt)
+        self.assertIn("itemize every visually verified club", prompt)
+        self.assertIn("calibration evidence, not automatic values", prompt)
 
     def test_playable_partial_set_under_cap_clears_the_gate(self):
         reason = m.is_blocked_by_steal_quality_gate(
@@ -988,6 +993,50 @@ class GolfEquipmentGate(unittest.TestCase):
         )
         self.assertIsNone(reason)
 
+    def test_confirmed_exotics_title_survives_lossy_ai_parent_brand(self):
+        # Exact production shape: vision confirmed the listing's claims but
+        # returned only the parent "Tour Edge" in identified_brand. The row
+        # is still not a deal ($296.80 versus $250), but its rejection must be
+        # the honest margin reason rather than misclassifying Exotics as the
+        # blocked base tier.
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                price=296.8,
+                listing={
+                    "title": (
+                        "Tour Edge EXOTICS CBX FORGED Blade Golf Clubs set "
+                        "Irons 4-PW w X Flex KBS Tour"
+                    )
+                },
+                estimated_resale_value=250,
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_is_left_handed=False,
+                golf_handedness_confirmed=True,
+                golf_brand_claims_confirmed=True,
+                golf_identified_brand="Tour Edge",
+                golf_counterfeit_suspected=False,
+                damage_found=False,
+            ),
+            category="golf-equipment",
+        )
+        self.assertIn("resale estimate", reason)
+        self.assertNotIn("blocked brand", reason)
+
+    def test_exotics_title_alone_cannot_bypass_unconfirmed_brand_claim(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                listing={"title": "Tour Edge EXOTICS CBX Forged iron set"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_brand_claims_confirmed=False,
+                golf_identified_brand="Tour Edge",
+                damage_found=False,
+            ),
+            category="golf-equipment",
+        )
+        self.assertIn("blocked brand", reason)
+
     def test_tour_edge_exotics_does_not_hide_another_blocked_brand_tier(self):
         reason = m.is_blocked_by_steal_quality_gate(
             self._result(golf_ai_checked=True, golf_is_playable_first_set=True,
@@ -1031,6 +1080,9 @@ class GolfEquipmentGate(unittest.TestCase):
     def test_title_prefilter_rejects_real_production_wrong_items(self):
         cases = (
             ("Golf club set", "Crooks & Creed Golf Clubs Silk Necktie"),
+            ("golf clubs", "Silver Metal Crossed Golf Clubs Belt Buckle"),
+            ("golf clubs", "Peter Millar Skull Golf Clubs Embroidered Web Belt"),
+            ("golf clubs", "Gildan Golf Skull Crossed Clubs Graphic Hoodie"),
             ("complete golf iron set", "3 Pc. Cast Iron Frying Pans"),
             ("golf clubs garage", "Wooden Golf Bag Organizer Holds 2 Bags"),
             ("Callaway Mavrik irons", "CALLAWAY MAVRIK IRONS 6 IRON STEEL REGULAR"),
@@ -1045,6 +1097,8 @@ class GolfEquipmentGate(unittest.TestCase):
         cases = (
             ("golf club set", "Golf clubs and bag"),
             ("complete golf iron set", "Ping Zing iron set"),
+            ("golf club set", "Cleaveland CG RED 3-PW + CG10 56"),
+            ("golf club set", "Cleveland TA7 4i-PW"),
             ("TaylorMade RBZ irons", "Lot Of TaylorMade And One RBZ Golf Irons"),
             ("golf clubs", "Callaway Mixed Woods and Hybrids Golf Clubs Right Handed (3)"),
             ("TaylorMade driver", "TaylorMade Burner 9.5 Driver Reax shaft with cover"),
@@ -1167,6 +1221,24 @@ class GolfRampConfiguration(unittest.TestCase):
             self.assertLessEqual(by_clean[q]["max_price"], 220)
             self.assertIs(by_clean[q]["enabled"], True)
 
+    def test_all_golf_equipment_searches_use_verified_ebay_leaf_categories(self):
+        # Current eBay taxonomy: Golf Clubs = 115280; Golf Bags = 30109.
+        # Missing IDs silently default to Men's Clothing (260012) in
+        # search_ebay() and omit _sacat entirely in the scrape adapter.
+        searches = [
+            search for search in m.SAVED_SEARCHES
+            if search.get("category") == "golf-equipment"
+        ]
+        self.assertEqual(len(searches), 43)
+        bag_search_ids = {
+            "golf-stand-bag",
+            "golf-sun-mountain-or-ogio-stand-bag",
+        }
+        for search in searches:
+            expected = "30109" if search["id"] in bag_search_ids else "115280"
+            with self.subTest(search_id=search["id"]):
+                self.assertEqual(search.get("category_id"), expected)
+
     def test_requested_golf_searches_have_exact_neighbor_schema_and_exclusions(self):
         expected_clean_queries = {
             "golf clubs",
@@ -1194,10 +1266,11 @@ class GolfRampConfiguration(unittest.TestCase):
                 set(search),
                 {
                     "id", "category", "query", "size", "max_price",
-                    "enabled", "profile", "platforms",
+                    "enabled", "profile", "platforms", "category_id",
                 },
             )
             self.assertEqual(search["category"], "golf-equipment")
+            self.assertEqual(search["category_id"], "115280")
             self.assertIsNone(search["size"])
             self.assertEqual(search["max_price"], 300)
             self.assertIs(search["enabled"], True)
@@ -4335,6 +4408,26 @@ class AlertUrgencyTests(unittest.TestCase):
             "price_confidence": "high", "profile": "fast",
         })[0], 4)
 
+    def test_medium_confidence_golf_great_deal_is_high_priority(self):
+        priority, tags = m.alert_urgency({
+            "category": "golf-equipment",
+            "deal_rating": "Great Deal",
+            "discount_pct": 55,
+            "price_confidence": "medium",
+            "profile": "fast",
+        })
+        self.assertEqual(priority, 4)
+        self.assertIn("fire", tags)
+
+    def test_medium_confidence_non_golf_great_deal_keeps_existing_priority(self):
+        self.assertEqual(m.alert_urgency({
+            "category": "watches",
+            "deal_rating": "Great Deal",
+            "discount_pct": 55,
+            "price_confidence": "medium",
+            "profile": "fast",
+        })[0], 3)
+
     def test_ordinary_slow_flip_stays_normal_priority(self):
         self.assertEqual(m.alert_urgency({
             "deal_rating": "Good Deal", "discount_pct": 0.35,
@@ -4616,6 +4709,49 @@ class ScoutPrefetchIntegration(unittest.TestCase):
             conn.close()
             m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
         self.assertEqual(result, {})
+
+    def test_untagged_golf_club_range_uses_broad_set_not_weak_component_overlap(self):
+        listing = p.make_listing(
+            "facebook", "golf-range-1", "Cleaveland CG RED 3-PW + CG10 56", 250,
+            "https://www.facebook.com/marketplace/item/golf-range-1/",
+        )
+        broad_query = (
+            'golf club set -junior -youth -kids -ladies -womens '
+            '-"left hand" -lefty -"left handed"'
+        )
+        conn = sqlite3.connect(":memory:")
+        old_searches, old_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            m.SAVED_SEARCHES = [
+                {
+                    "id": "golf-golf-club-set", "query": broad_query,
+                    "category": "golf-equipment", "enabled": True,
+                    "platforms": ["facebook"],
+                },
+                {
+                    "id": "golf-cleveland-rtx-wedge-56",
+                    "query": "cleveland rtx wedge 56", "category": "golf-equipment",
+                    "enabled": True, "platforms": ["facebook"],
+                },
+            ]
+            m.MARKETPLACES_ENABLED = []
+            with mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[listing]):
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), conn)
+        finally:
+            conn.close()
+            m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
+        self.assertEqual(result, {broad_query: [listing]})
+
+    def test_golf_scout_fallback_rejects_non_golf_grouping_noise(self):
+        searches = [{
+            "id": "golf-golf-club-set", "query": "golf club set",
+            "category": "golf-equipment", "enabled": True,
+            "platforms": ["facebook"],
+        }]
+        self.assertIsNone(m.golf_scout_fallback_query(
+            {"platform": "facebook", "title": "5pc Cast Iron Frying Pan Set"},
+            searches,
+        ))
 
 
 class PaidAiSpendLedger(unittest.TestCase):
@@ -6023,6 +6159,49 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.ai_calls, [item_id],
             "scrape-lane candidate gets its AI check from the separate budget "
             "even with GEMINI_CALL_LIMIT=0")
+
+    def test_golf_scrape_candidates_use_bounded_shared_golf_budget(self):
+        # Production evidence: 240/241 golf NO_AI_BUDGET rows came from the
+        # scrape lane, where the isolated one-call cap meant they could never
+        # use GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP. Set the scrape budget to zero
+        # as a mutation probe: both checks below can only come from the shared
+        # pool, while the golf cap still bounds their category share.
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 0)
+        self._patch("GEMINI_CALL_LIMIT", 2)
+        self._patch("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 2)
+        saved_search = {
+            "query": "golf clubs -junior -youth -kids -ladies -womens -lefty",
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+        }
+        self._serve(saved_search, [])
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        scraped = [
+            self._ebay_item(
+                "v1|golf-shared-scrape-1|0",
+                "TaylorMade RBZ Right Hand Golf Iron Set 5-PW Regular Steel",
+                180,
+            ),
+            self._ebay_item(
+                "v1|golf-shared-scrape-2|0",
+                "Ping G30 Right Hand Golf Iron Set 5-PW Regular Steel",
+                160,
+            ),
+        ]
+        with mock.patch.object(
+            m.ebay_scrape,
+            "search_ebay_scraped",
+            lambda query, max_price=None, category_id=None: scraped,
+        ):
+            m.run()
+
+        self.assertEqual(
+            self.ai_calls,
+            ["v1|golf-shared-scrape-1|0", "v1|golf-shared-scrape-2|0"],
+        )
 
     def test_facebook_golf_queue_row_reaches_golf_gate_and_alerts(self):
         # Exercise the real queue loader, Scout router, run loop, golf merge,
@@ -7480,9 +7659,34 @@ class SharedAiCategoryFairness(unittest.TestCase):
         )
         self.assertEqual(sum(row["category"] == "watches" for row in first_window), 6)
         self.assertEqual(
-            [row["name"] for row in first_window[:6]],
-            [f"golf-{index}" for index in range(6)],
-            "fairness must preserve the original priority order within golf",
+            [row["name"] for row in first_window],
+            [name for index in range(6) for name in (f"golf-{index}", f"watch-{index}")],
+            "the executable prefix must alternate categories while preserving "
+            "priority within each category",
+        )
+
+    def test_golf_share_is_reachable_when_non_golf_was_sorted_first(self):
+        candidates = [
+            self._candidate(f"watch-{index}", "watches")
+            for index in range(12)
+        ] + [
+            self._candidate(f"golf-{index}", "golf-equipment")
+            for index in range(3)
+        ]
+
+        ordered = m._apply_shared_ai_category_fairness(candidates, 12, 6)
+        first_window = ordered[:12]
+
+        self.assertEqual(
+            sum(row["category"] == "golf-equipment" for row in first_window),
+            3,
+            "available golf rows must not sit behind all twelve shared slots",
+        )
+        self.assertEqual(
+            [row["category"] for row in first_window[:2]],
+            ["watches", "golf-equipment"],
+            "keep the absolute top candidate first, then expose golf before a "
+            "slow provider can exhaust the run deadline",
         )
 
     def test_golf_backfills_capacity_after_all_non_golf_is_promoted(self):
@@ -7506,8 +7710,9 @@ class SharedAiCategoryFairness(unittest.TestCase):
     def test_ending_soon_and_isolated_lane_positions_are_untouched(self):
         ending = self._candidate("ending", "golf-equipment", ending=True)
         scout = self._candidate("scout", "golf-equipment", scout=True)
-        scrape = self._candidate("scrape", "golf-equipment", scrape=True)
-        candidates = [ending, scout, scrape] + [
+        isolated_scrape = self._candidate("scrape", "watches", scrape=True)
+        golf_scrape = self._candidate("golf-scrape", "golf-equipment", scrape=True)
+        candidates = [ending, scout, isolated_scrape, golf_scrape] + [
             self._candidate(f"golf-{index}", "golf-equipment")
             for index in range(12)
         ] + [
@@ -7519,7 +7724,12 @@ class SharedAiCategoryFairness(unittest.TestCase):
 
         self.assertIs(ordered[0], ending)
         self.assertIs(ordered[1], scout)
-        self.assertIs(ordered[2], scrape)
+        self.assertIs(ordered[2], isolated_scrape)
+        self.assertIn(
+            golf_scrape,
+            ordered[3:14],
+            "golf scrape is intentionally movable inside the shared window",
+        )
         self.assertEqual(
             sum(
                 row["category"] == "golf-equipment"

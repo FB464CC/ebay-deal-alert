@@ -427,10 +427,12 @@ EBAY_BACKOFF_MAX_MINUTES = 120
 # plausible per-run budget), "raise the limit to match demand" no longer
 # applies the way it did on Aug 9; the only lever left is pacing.
 GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
-# Soft fairness guard for the shared official-API/marketplace pool. Golf can
-# still use every otherwise-idle slot, but while other categories are queued
-# it cannot occupy more than this many of the normal per-run slots. Ending-
-# soon auctions are exempt, and Scout/eBay-scrape never enter this scheduler.
+# Soft fairness share for the normal shared pool. While both golf and non-golf
+# are waiting, up to this many normal per-run slots are kept reachable by golf
+# and the remainder by other categories. Either side can reclaim capacity the
+# other side cannot use. Ending-soon auctions are exempt; Scout and non-golf
+# eBay-scrape rows keep their isolated budgets, while golf scrape rows use this
+# bounded share (the live golf supply is overwhelmingly scrape-sourced).
 GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP = int(
     _CONFIG.get("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 6)
 )
@@ -1912,7 +1914,8 @@ GOLF_COMPONENT_TITLE_PATTERNS = {
 # These are deliberately narrow: ambiguous club condition/completeness still
 # goes to vision, while a necktie, ferrule, or storage rack never should.
 GOLF_NON_CLUB_TITLE_SIGNALS = re.compile(
-    r"\b(?:necktie|neck\s+tie|tie|polo|shirt|shorts|sweater|sweatshirt|"
+    r"\b(?:necktie|neck\s+tie|tie|polo|shirt|shorts|sweater|sweatshirt|hoodie|"
+    r"belts?|buckles?|headcovers?|"
     r"t-?shirt|cap|hat|ferrules?|organizers?|storage\s+racks?|display\s+racks?|decals?|"
     r"stickers?|ornaments?|music\s+boxes?)\b",
     re.IGNORECASE,
@@ -1926,12 +1929,18 @@ GOLF_SINGLE_CLUB_TITLE_SIGNAL = re.compile(
 GOLF_EXPLICIT_GROUP_TITLE_SIGNAL = re.compile(
     r"\b(?:set|lot|bundle|collection|complete|full)\b|"
     r"\b[3-9]\s*(?:pc|pcs|piece|pieces)\b|"
-    r"\b[3-9]\s*[-\N{EN DASH}]\s*(?:[4-9]|pw|aw|sw|gw|lw)\b",
+    r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:[4-9]|pw|aw|sw|gw|lw)\b",
     re.IGNORECASE,
 )
 GOLF_GROUP_TITLE_SIGNAL = re.compile(
     r"\b(?:clubs|irons|drivers|putters|wedges|hybrids|woods)\b|"
-    r"\b(?:golf\s+)?(?:club|iron)\s+set\b|\bgolf\s+set\b",
+    r"\b(?:golf\s+)?(?:club|iron)\s+set\b|\bgolf\s+set\b|"
+    r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:pw|aw|sw|gw|lw)\b",
+    re.IGNORECASE,
+)
+GOLF_SCOUT_IDENTITY_SIGNAL = re.compile(
+    r"\bgolf\b|\bclubs?\b|"
+    r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:pw|aw|sw|gw|lw)\b",
     re.IGNORECASE,
 )
 
@@ -2013,6 +2022,41 @@ def golf_wrong_item_title_reason(title, query):
     # equipment; the title must also identify clubs/irons or say golf set.
     if not GOLF_GROUP_TITLE_SIGNAL.search(title):
         return "set-oriented search title has no multi-club/set evidence"
+    return None
+
+
+def golf_scout_fallback_query(listing, searches):
+    """Route legacy untagged Facebook club groups to the broad golf search.
+
+    Current extension rows do not carry their originating target even though
+    the ingest format supports it. Generic token overlap can consequently map
+    a set such as ``Cleveland CG RED 3-PW + CG10 56`` to the standalone RTX
+    wedge search merely because ``cleveland`` and ``56`` overlap. Use the
+    existing title/exclusion gate to recover only title-certain multi-club
+    listings; explicit Scout attribution remains authoritative above this
+    fallback, and ambiguous/non-golf rows retain the legacy behavior.
+    """
+    if str(listing.get("platform") or "").casefold() != "facebook":
+        return None
+    title = str(listing.get("title") or "").strip()
+    if not title or not GOLF_SCOUT_IDENTITY_SIGNAL.search(title):
+        return None
+
+    for saved_search in searches:
+        if (
+            saved_search.get("category") != "golf-equipment"
+            or saved_search.get("id") != "golf-golf-club-set"
+        ):
+            continue
+        scoped_platforms = saved_search.get("platforms")
+        if scoped_platforms and "facebook" not in scoped_platforms:
+            continue
+        _clean_query, excluded = marketplaces.split_query_exclusions(saved_search["query"])
+        if marketplaces.title_matches_exclusion(title, excluded):
+            return None
+        if golf_wrong_item_title_reason(title, saved_search["query"]):
+            return None
+        return saved_search["query"]
     return None
 
 
@@ -3861,6 +3905,18 @@ def check_photos_with_gemini(
             "same discipline in the other direction: completed sales support roughly "
             "$40-$50, not an automatic premium, for ordinary used Cleveland RTX-3/588 "
             "RTX 2.0 wedges, and a six-club Warrior iron group around $60 is plausible. "
+            "Fresh September 2026 completed-sale calibration: TaylorMade RBZ Tour "
+            "drivers displayed completed prices of $93.49 on April 9, $119 on April 8, "
+            "and $158.09 on July 23, while a 10.5-degree head-only example displayed "
+            "$104.95 plus shipping on May 29. Do not default a visually verified, "
+            "complete RBZ Tour driver to $60; match loft, shaft/flex, and condition. "
+            "PXG 0211 Z replacement 8- and 9-irons displayed completed prices of "
+            "$79.19 and $109.99 on February 24 and February 16. For a partial "
+            "multi-club PXG group, itemize every visually verified club before valuing "
+            "the group instead of collapsing a driver plus several sequential irons "
+            "to a generic set estimate. Discount appropriately for incompleteness, "
+            "condition, and the difference between individual-club and whole-group "
+            "demand; these examples are calibration evidence, not automatic values. "
             "Return null only if the photos/title do not identify enough of the item to "
             "make a defensible estimate. "
             "price_confidence must be one of \"high\", \"medium\", or \"low\". "
@@ -4407,7 +4463,19 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "golf-equipment bar: no AI price estimate yet - needs a real AI check"
         component_kind = golf_component_search_kind(result.get("search_query"))
         identified_brand = result.get("golf_identified_brand")
-        if golf_blocked_brand(identified_brand):
+        blocked_brand = golf_blocked_brand(identified_brand)
+        # Real AI-checked row 377312721044: the title named "Tour Edge
+        # EXOTICS CBX FORGED" and the model confirmed the seller's brand/model
+        # claims, but summarized identified_brand as only "Tour Edge". That
+        # lossy parent-brand field incorrectly erased the existing premium
+        # Exotics carve-out. Accept the exact title sub-line only when vision
+        # also confirmed the claim; title text alone cannot bypass the tier.
+        title_confirmed_tour_edge_exotics = bool(
+            blocked_brand == "tour edge"
+            and result.get("golf_brand_claims_confirmed") is True
+            and re.search(r"\btour\s+edge\s+exotics\b", listing_title_lower)
+        )
+        if blocked_brand and not title_confirmed_tour_edge_exotics:
             return f"golf-equipment bar: blocked brand {identified_brand.strip()}"
         landed = result.get("price")
         if landed is not None and landed > GOLF_EQUIPMENT_MAX_PRICE:
@@ -5223,6 +5291,12 @@ def alert_urgency(result):
         return 5, ["alarm_clock", "rotating_light"]
     if discount >= 0.70 and confidence in {"high", "medium"}:
         return 5, ["fire", "chart_with_upwards_trend"]
+    if (
+        result.get("category") == "golf-equipment"
+        and confidence in {"high", "medium"}
+        and rating in {"steal", "great deal"}
+    ):
+        return 4, ["fire", "white_check_mark"]
     if result.get("brand_tier") == "grab_on_sight":
         return 4, ["moneybag", "zap"]
     if (
@@ -6242,24 +6316,26 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                 continue
             _order, query = max(explicit_candidates)
         else:
-            title_words = set(re.findall(r"[a-z0-9]+", listing.get("title", "").lower()))
-            candidates = []
-            for index, saved_search in enumerate(searches):
-                platform = listing.get("platform")
-                scoped_platforms = saved_search.get("platforms")
-                if scoped_platforms and platform not in scoped_platforms:
+            query = golf_scout_fallback_query(listing, searches)
+            if query is None:
+                title_words = set(re.findall(r"[a-z0-9]+", listing.get("title", "").lower()))
+                candidates = []
+                for index, saved_search in enumerate(searches):
+                    platform = listing.get("platform")
+                    scoped_platforms = saved_search.get("platforms")
+                    if scoped_platforms and platform not in scoped_platforms:
+                        continue
+                    clean_query, excluded = marketplaces.split_query_exclusions(saved_search["query"])
+                    if marketplaces.title_matches_exclusion(listing.get("title"), excluded):
+                        continue
+                    query_words = set(re.findall(r"[a-z0-9]+", clean_query.lower()))
+                    overlap = len(title_words & query_words)
+                    if overlap:
+                        candidates.append((overlap, -index, saved_search["query"]))
+                if not candidates:
+                    logger.warning("Scout listing %s did not match an enabled saved search; deferring", listing["itemId"])
                     continue
-                clean_query, excluded = marketplaces.split_query_exclusions(saved_search["query"])
-                if marketplaces.title_matches_exclusion(listing.get("title"), excluded):
-                    continue
-                query_words = set(re.findall(r"[a-z0-9]+", clean_query.lower()))
-                overlap = len(title_words & query_words)
-                if overlap:
-                    candidates.append((overlap, -index, saved_search["query"]))
-            if not candidates:
-                logger.warning("Scout listing %s did not match an enabled saved search; deferring", listing["itemId"])
-                continue
-            _overlap, _order, query = max(candidates)
+                _overlap, _order, query = max(candidates)
         # Tagged so PASS 3's budget routing (see SCOUT_AI_CHECK_LIMIT) can
         # give these their own small AI-check budget instead of competing in
         # the shared GEMINI_CALL_LIMIT pool with every other platform - a
@@ -6452,15 +6528,31 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     return found_snapshot
 
 
+def _is_golf_shared_scrape_candidate(candidate):
+    """Whether a scrape candidate belongs in golf's bounded shared share."""
+    listing = candidate.get("listing") or {}
+    return bool(
+        candidate.get("category") == "golf-equipment"
+        and listing.get("_from_scrape_lane")
+        and not listing.get("_from_scout_queue")
+    )
+
+
 def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
-    """Soft-cap golf in the normal shared AI window without wasting slots.
+    """Give golf a bounded, early share of the normal AI window.
 
     `candidates` has already been priority-sorted. Ending-soon auctions and
-    the two isolated-budget lanes stay in their exact positions. Among the
-    remaining shared candidates, at most `golf_soft_cap` golf-equipment rows
-    are selected into the initial normal-budget window while non-golf rows
-    are available. If there are too few non-golf rows, deferred golf rows
-    immediately backfill the unused capacity.
+    isolated-budget rows stay in their exact positions. Golf eBay-scrape rows
+    deliberately join this window: production showed that 240/241 golf budget
+    misses came from that source, where a separate one-call lane made the
+    configured golf share unreachable.
+
+    Select up to `golf_soft_cap` golf rows and fill the rest with non-golf,
+    allowing either side to reclaim genuinely idle capacity. The selected
+    groups are interleaved, preserving priority within each group, because a
+    slow vision provider often exhausts the run deadline before all nominal
+    calls happen. A fair *window* that leaves one category at its tail is not
+    fair in the wall-clock prefix production actually executes.
     """
     ordered = list(candidates)
     shared_limit = max(0, int(shared_limit))
@@ -6470,8 +6562,11 @@ def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
 
     def is_isolated(candidate):
         listing = candidate.get("listing") or {}
+        if listing.get("_from_scout_queue"):
+            return True
         return bool(
-            listing.get("_from_scrape_lane") or listing.get("_from_scout_queue")
+            listing.get("_from_scrape_lane")
+            and not _is_golf_shared_scrape_candidate(candidate)
         )
 
     ending_shared = sum(
@@ -6481,7 +6576,7 @@ def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
         and bool((candidate.get("result") or {}).get("is_ending_soon_auction"))
     )
     ordinary_capacity = max(0, shared_limit - min(shared_limit, ending_shared))
-    if ordinary_capacity == 0 or golf_soft_cap >= ordinary_capacity:
+    if ordinary_capacity == 0:
         return ordered
 
     movable = [
@@ -6490,26 +6585,53 @@ def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
         if not is_isolated(candidate)
         and not bool((candidate.get("result") or {}).get("is_ending_soon_auction"))
     ]
-    selected = []
-    deferred_golf = []
-    golf_selected = 0
-    for entry in movable:
-        if len(selected) >= ordinary_capacity:
-            break
-        _position, candidate = entry
-        if candidate.get("category") == "golf-equipment" and golf_selected >= golf_soft_cap:
-            deferred_golf.append(entry)
-            continue
-        selected.append(entry)
-        if candidate.get("category") == "golf-equipment":
-            golf_selected += 1
+    golf_entries = [
+        entry for entry in movable if entry[1].get("category") == "golf-equipment"
+    ]
+    non_golf_entries = [
+        entry for entry in movable if entry[1].get("category") != "golf-equipment"
+    ]
 
-    # The cap is soft: once every available non-golf candidate has been
-    # promoted, golf reclaims otherwise-idle shared capacity.
-    for entry in deferred_golf:
-        if len(selected) >= ordinary_capacity:
-            break
-        selected.append(entry)
+    golf_count = min(len(golf_entries), golf_soft_cap, ordinary_capacity)
+    non_golf_count = min(len(non_golf_entries), ordinary_capacity - golf_count)
+    remaining = ordinary_capacity - golf_count - non_golf_count
+
+    # Preserve the old soft-cap property: once one side has no candidate to
+    # offer, the other side immediately backfills rather than wasting calls.
+    if remaining:
+        extra_non_golf = min(remaining, len(non_golf_entries) - non_golf_count)
+        non_golf_count += extra_non_golf
+        remaining -= extra_non_golf
+    if remaining:
+        golf_count += min(remaining, len(golf_entries) - golf_count)
+
+    selected_golf = golf_entries[:golf_count]
+    selected_non_golf = non_golf_entries[:non_golf_count]
+    selected = []
+    golf_index = 0
+    non_golf_index = 0
+    prefer_golf = bool(
+        selected_golf
+        and (
+            not selected_non_golf
+            or selected_golf[0][0] < selected_non_golf[0][0]
+        )
+    )
+    while golf_index < len(selected_golf) or non_golf_index < len(selected_non_golf):
+        if prefer_golf and golf_index < len(selected_golf):
+            selected.append(selected_golf[golf_index])
+            golf_index += 1
+        elif not prefer_golf and non_golf_index < len(selected_non_golf):
+            selected.append(selected_non_golf[non_golf_index])
+            non_golf_index += 1
+        elif golf_index < len(selected_golf):
+            selected.append(selected_golf[golf_index])
+            golf_index += 1
+        else:
+            selected.append(selected_non_golf[non_golf_index])
+            non_golf_index += 1
+        if golf_index < len(selected_golf) and non_golf_index < len(selected_non_golf):
+            prefer_golf = not prefer_golf
 
     selected_positions = {position for position, _candidate in selected}
     fair_movable = [candidate for _position, candidate in selected]
@@ -7585,13 +7707,16 @@ def run():
         ai_result = None
         is_scrape_lane = bool(listing.get("_from_scrape_lane"))
         is_scout = bool(listing.get("_from_scout_queue"))
+        is_shared_golf_scrape = _is_golf_shared_scrape_candidate(candidate)
+        is_isolated_scrape = is_scrape_lane and not is_shared_golf_scrape
         # Once the normal Gemini budget is spent, one extra call is still
         # granted to an ending-soon auction so a closing auction can't be
         # starved out by the cap - see AUCTION_AI_RESERVED_CALLS for the
         # full tradeoff and the cap that keeps many simultaneous auctions
-        # from eating the whole day's budget. Scrape-lane/Scout candidates
-        # never qualify - they have their own budget below and must not
-        # touch the shared pool (including its reserved auction slot).
+        # from eating the whole day's budget. Scout and scrape candidates never
+        # qualify: isolated rows have their own budgets below, while golf scrape
+        # already participates in the ordinary shared pool and is not an auction
+        # feed. Neither may consume the reserved auction slot.
         use_reserved_auction_slot = (
             not is_scrape_lane
             and not is_scout
@@ -7599,14 +7724,14 @@ def run():
             and bool(result.get("is_ending_soon_auction"))
             and auction_reserved_calls < AUCTION_AI_RESERVED_CALLS
         )
-        # Scrape-lane candidates draw from their OWN tiny budget
-        # (EBAY_SCRAPE_AI_CHECK_LIMIT), Scout candidates from theirs
-        # (SCOUT_AI_CHECK_LIMIT) - never the shared GEMINI_CALL_LIMIT pool
-        # that the official-API and auction lanes live on, so a flood from
-        # either source can't starve them. The AI check itself, and
-        # everything after it, is identical; only which counter gates it
-        # changes.
-        if is_scrape_lane:
+        # Non-golf scrape candidates draw from their own tiny budget
+        # (EBAY_SCRAPE_AI_CHECK_LIMIT), and Scout candidates from theirs
+        # (SCOUT_AI_CHECK_LIMIT). Golf scrape candidates are the deliberate
+        # exception: they compete in the shared pool under the six-slot golf
+        # fairness bound above. Live data showed almost all golf supply came
+        # through scrape, so isolating it made that configured share inert.
+        # The AI check itself is identical; only which counter gates it changes.
+        if is_isolated_scrape:
             budget_granted = ebay_scrape_ai_calls < EBAY_SCRAPE_AI_CHECK_LIMIT
         elif is_scout:
             budget_granted = scout_ai_calls < SCOUT_AI_CHECK_LIMIT
@@ -7615,7 +7740,7 @@ def run():
                 gemini_calls < GEMINI_CALL_LIMIT or use_reserved_auction_slot
             )
         if budget_granted:
-            if is_scrape_lane:
+            if is_isolated_scrape:
                 ebay_scrape_ai_calls += 1
             elif is_scout:
                 scout_ai_calls += 1
@@ -7732,7 +7857,7 @@ def run():
             # the guarantee for every other ending-soon auction that run.
             if use_reserved_auction_slot:
                 auction_reserved_calls += 1
-        elif is_scrape_lane:
+        elif is_isolated_scrape:
             if not ebay_scrape_budget_logged:
                 logger.info(
                     "eBay scrape-lane AI-check budget exhausted for this run, "
