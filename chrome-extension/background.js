@@ -1,8 +1,9 @@
 importScripts("url-utils.js");
 
 const ALARM_NAME = "deal-scout-scan";
+// 8: add generic poker-chip Marketplace targets that route to saved searches.
 // 7: target labels corrected from a stale "+124mi" to the real radius.
-const TARGETS_VERSION = 7;
+const TARGETS_VERSION = 8;
 const RETRY_QUEUE_KEY = "scoutRetryQueue";
 const FAILURE_STATE_KEY = "scoutIngestFailures";
 const MAX_INGEST_ATTEMPTS = 5;
@@ -57,22 +58,54 @@ const GOLF_QUERIES = [
   "golf clubs garage"
 ];
 
+// Poker chips reuse the proven Columbia metro boundary. There is no explicit
+// authorization to widen the search, even though sets are easier to carry.
+const POKER_ORIGIN = GOLF_ORIGIN;
+const POKER_RADIUS_MILES = Math.round(POKER_ORIGIN.radius / 1.609344);
+// Keep Facebook's asking-price filter above the bot's $150 landed-price gate,
+// so Marketplace never hides a candidate the bot could accept after review.
+const POKER_MARKETPLACE_MAX_PRICE = 200;
+// Like the deliberately vague golf searches above, these hunt listings from
+// sellers who do not know the maker/value. Every string exactly matches an
+// enabled poker-chips SAVED_SEARCHES query in config.json; do not casually
+// reword one or Scout will defer every result as unmatched.
+const POKER_QUERIES = [
+  "casino poker chips set",
+  "vintage \"casino chip\" set",
+  "clay poker chips lot",
+  "\"poker chip\" set vintage",
+  "ceramic poker chips set",
+  "casino chips lot"
+];
+
 // Stable per-default id, independent of array order/text tweaks - the
 // migration merge below matches on this, never on array position, so
 // reordering/rewording GOLF_QUERIES can't misattribute a user's overrides.
 const slugify = (value) => String(value).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-const DEFAULT_TARGETS = GOLF_QUERIES.map((query) => ({
-  id: `facebook-golf-${slugify(query)}`,
-  label: `${query} — Columbia +${GOLF_RADIUS_MILES}mi`,
-  platform: "facebook",
-  // newest-first so a 10-min alarm sees fresh posts, not page-1 staleness
-  searchUrl: "https://www.facebook.com/marketplace/category/search/"
-    + `?query=${encodeURIComponent(query)}&maxPrice=350&sortBy=creation_time_descend`
-    + `&latitude=${GOLF_ORIGIN.latitude}&longitude=${GOLF_ORIGIN.longitude}&radius=${GOLF_ORIGIN.radius}`,
-  parser: "facebook-json",
-  enabled: true
-}));
+const DEFAULT_TARGETS = [
+  ...GOLF_QUERIES.map((query) => ({
+    id: `facebook-golf-${slugify(query)}`,
+    label: `${query} — Columbia +${GOLF_RADIUS_MILES}mi`,
+    platform: "facebook",
+    // newest-first so a 10-min alarm sees fresh posts, not page-1 staleness
+    searchUrl: "https://www.facebook.com/marketplace/category/search/"
+      + `?query=${encodeURIComponent(query)}&maxPrice=350&sortBy=creation_time_descend`
+      + `&latitude=${GOLF_ORIGIN.latitude}&longitude=${GOLF_ORIGIN.longitude}&radius=${GOLF_ORIGIN.radius}`,
+    parser: "facebook-json",
+    enabled: true
+  })),
+  ...POKER_QUERIES.map((query) => ({
+    id: `facebook-poker-${slugify(query)}`,
+    label: `${query} — Columbia +${POKER_RADIUS_MILES}mi`,
+    platform: "facebook",
+    searchUrl: "https://www.facebook.com/marketplace/category/search/"
+      + `?query=${encodeURIComponent(query)}&maxPrice=${POKER_MARKETPLACE_MAX_PRICE}&sortBy=creation_time_descend`
+      + `&latitude=${POKER_ORIGIN.latitude}&longitude=${POKER_ORIGIN.longitude}&radius=${POKER_ORIGIN.radius}`,
+    parser: "facebook-json",
+    enabled: true
+  }))
+];
 
 let lastRunStatus = { startedAt: null, finishedAt: null, running: false, targets: {} };
 
