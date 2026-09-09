@@ -8,6 +8,7 @@ span, and an "s-card__image" <img>, plus fake "Shop on eBay" ad cards that
 must be skipped).
 """
 
+import logging
 from unittest.mock import patch
 
 from ebay_scrape import search_ebay_scraped, _parse_listings
@@ -39,9 +40,12 @@ FIXTURE_HTML = """
 
 
 class FakeResponse:
-    def __init__(self, status, html_content=""):
+    def __init__(self, status, html_content="", *, url="", headers=None):
         self.status = status
         self.html_content = html_content
+        self.url = url
+        self.headers = headers or {}
+        self.body = html_content.encode("utf-8")
 
 
 def test_extracts_real_listings_from_fixture_html():
@@ -119,6 +123,30 @@ def test_proxy_env_var_gets_passed_to_fetcher():
     assert mock_fetcher.get.call_args.kwargs.get("proxy") == "http://user:pass@proxy.example:8888"
 
 
+def test_fetch_uses_consistent_browser_navigation_headers():
+    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+         patch.dict("os.environ", {}, clear=True):
+        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+        search_ebay_scraped("rolex")
+
+    kwargs = mock_fetcher.get.call_args.kwargs
+    headers = kwargs["headers"]
+    assert headers["Accept"].startswith("text/html,application/xhtml+xml")
+    assert headers["Accept-Language"] == "en-US,en;q=0.9"
+    assert headers["Accept-Encoding"] == "gzip, deflate, br, zstd"
+    assert headers["Referer"] == "https://www.google.com/"
+    assert headers["Sec-Fetch-Site"] == "cross-site"
+    assert headers["Sec-Fetch-Mode"] == "navigate"
+    assert headers["Sec-Fetch-Dest"] == "document"
+    assert headers["Sec-Fetch-User"] == "?1"
+    # curl_cffi must choose these alongside its TLS fingerprint; hard-coding
+    # either here could make the HTTP and TLS/browser identities disagree.
+    assert "User-Agent" not in headers
+    assert "Sec-CH-UA" not in headers
+    assert kwargs["impersonate"] == "chrome"
+    assert kwargs["retries"] == 1
+
+
 def test_no_proxy_configured_calls_fetcher_without_proxy_kwarg():
     # Optional by design - unset, this must still work exactly as before
     # (direct call, no proxy kwarg at all), not pass proxy=None.
@@ -128,6 +156,92 @@ def test_no_proxy_configured_calls_fetcher_without_proxy_kwarg():
         search_ebay_scraped("rolex")
 
     assert "proxy" not in mock_fetcher.get.call_args.kwargs
+
+
+def test_malformed_proxy_is_rejected_without_a_network_call(caplog):
+    malformed_proxy = "not-a-proxy-url"
+    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+         patch.dict("os.environ", {"EBAY_SCRAPE_PROXY_URL": malformed_proxy}), \
+         caplog.at_level(logging.WARNING, logger="ebay_scrape"):
+        results = search_ebay_scraped("rolex")
+
+    assert results == []
+    mock_fetcher.get.assert_not_called()
+    assert "proxy configuration is invalid" in caplog.text
+    assert "missing or unsupported URL scheme" in caplog.text
+    assert malformed_proxy not in caplog.text
+
+
+def test_proxy_transport_failure_logs_type_route_and_redacts_credentials(caplog):
+    proxy_url = "http://alice:s3cr%40t@proxy.example:8888"
+    error = TimeoutError(
+        "could not reach proxy.example for alice using s3cr@t " + proxy_url
+    )
+    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+         patch.dict("os.environ", {"EBAY_SCRAPE_PROXY_URL": proxy_url}), \
+         caplog.at_level(logging.WARNING, logger="ebay_scrape"):
+        mock_fetcher.get.side_effect = error
+        results = search_ebay_scraped("rolex")
+
+    assert results == []
+    assert "transport failure via configured proxy" in caplog.text
+    assert "TimeoutError" in caplog.text
+    assert "proxy.example" not in caplog.text
+    assert "alice" not in caplog.text
+    assert "s3cr" not in caplog.text
+    assert proxy_url not in caplog.text
+
+
+def test_proxied_http_403_logs_safe_response_provenance(caplog):
+    response = FakeResponse(
+        403,
+        "<html>Access denied</html>",
+        url="https://www.ebay.com/sch/i.html?_nkw=rolex",
+        headers={
+            "Server": "AkamaiGHost",
+            "Content-Type": "text/html",
+            "X-eBay-C-Request-Id": "request-123",
+        },
+    )
+    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+         patch.dict(
+             "os.environ",
+             {"EBAY_SCRAPE_PROXY_URL": "http://user:pass@proxy.example:8888"},
+         ), \
+         caplog.at_level(logging.WARNING, logger="ebay_scrape"):
+        mock_fetcher.get.return_value = response
+        results = search_ebay_scraped("rolex")
+
+    assert results == []
+    assert "received HTTP 403 via configured proxy" in caplog.text
+    assert "final_host=www.ebay.com" in caplog.text
+    assert "server=AkamaiGHost" in caplog.text
+    assert "content_type=text/html" in caplog.text
+    assert "x_ebay_c_request_id=request-123" in caplog.text
+    assert "body_bytes=26" in caplog.text
+    assert "transport failure" not in caplog.text
+    assert "proxy authentication failed" not in caplog.text
+
+
+def test_http_407_is_identified_as_proxy_authentication_failure(caplog):
+    response = FakeResponse(
+        407,
+        "proxy authentication required",
+        url="https://www.ebay.com/sch/i.html?_nkw=rolex",
+        headers={"Server": "proxy-gateway"},
+    )
+    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+         patch.dict(
+             "os.environ",
+             {"EBAY_SCRAPE_PROXY_URL": "http://user:pass@proxy.example:8888"},
+         ), \
+         caplog.at_level(logging.WARNING, logger="ebay_scrape"):
+        mock_fetcher.get.return_value = response
+        results = search_ebay_scraped("rolex")
+
+    assert results == []
+    assert "proxy authentication failed with HTTP 407" in caplog.text
+    assert "server=proxy-gateway" in caplog.text
 
 
 def test_malformed_or_empty_html_returns_empty_list():

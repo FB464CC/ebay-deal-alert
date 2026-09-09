@@ -7,19 +7,19 @@ search results page (https://www.ebay.com/sch/i.html) instead, which costs
 no API quota at all - useful as an extra, best-effort lane run alongside the
 official one, not instead of it.
 
-Uses the `scrapling` package's lightweight Fetcher (plain HTTP, no browser/
-JS rendering - confirmed live that eBay's search results are server-rendered
-HTML, itm links and prices are directly in the response body).
+Uses the `scrapling` package's lightweight Fetcher (curl_cffi HTTP with a
+browser network fingerprint, but no browser/JS rendering - confirmed live
+that eBay's search results are server-rendered HTML, itm links and prices are
+directly in the response body).
 
-Confirmed live: a single residential IP with no proxy gets a 403 on ~1-in-10
-calls from a home connection - and, measured directly against a real GitHub
-Actions run, 100% of calls from GH Actions' shared runner IP range (eBay
-blocks that range far harder than a residential IP). EBAY_SCRAPE_PROXY_URL
-routes every call through a real residential proxy instead - confirmed live
-to return real listing data - and is optional: unset, this just calls eBay
-directly (same behavior as before, still works fine from a non-CI IP). On a
-403/other failure, or any parse failure, this returns an empty list and logs a
-warning. It never raises - a scrape failure must never take down the run.
+Historical live finding: a residential IP without a proxy got a 403 on about
+1-in-10 calls, while GitHub Actions' shared runner range got 403 on every
+call. EBAY_SCRAPE_PROXY_URL was introduced to route calls through a
+residential proxy and did return real listing data. It remains optional, but
+neither a residential route nor browser-like HTTP fingerprints guarantee
+access: eBay/Akamai can still deny them. On any HTTP, transport, configuration,
+or parse failure this returns an empty list and logs a safe diagnostic. It
+never raises - a scrape failure must never take down the run.
 """
 
 import logging
@@ -27,7 +27,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlsplit
 
 from scrapling.fetchers import Fetcher
 
@@ -36,6 +36,45 @@ from platforms import make_listing
 logger = logging.getLogger(__name__)
 
 EBAY_SEARCH_URL = "https://www.ebay.com/sch/i.html"
+
+# Fetcher already uses curl_cffi's Chrome TLS/HTTP impersonation. Keep the
+# User-Agent and Sec-CH-UA values under curl_cffi's control so they match that
+# fingerprint, but make the navigation headers explicit and internally
+# consistent. Scrapling 0.4.15's defaults add a Google Referer after curl_cffi
+# chooses `Sec-Fetch-Site: none`; a real cross-origin Google navigation sends
+# `cross-site`, not `none`.
+_EBAY_NAVIGATION_HEADERS = {
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8,"
+        "application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.google.com/",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+_SUPPORTED_PROXY_SCHEMES = {
+    "http",
+    "https",
+    "socks4",
+    "socks4a",
+    "socks5",
+    "socks5h",
+}
+_RESPONSE_DIAGNOSTIC_HEADERS = (
+    "server",
+    "via",
+    "proxy-status",
+    "content-type",
+    "x-ebay-c-request-id",
+    "x-ebay-c-version",
+)
 
 # Each result card starts with this marker; splitting on it turns the page
 # into one chunk per listing. Regex over raw HTML, not html.parser - eBay's
@@ -63,6 +102,104 @@ _TIME_LEFT_RE = re.compile(r'class="s-card__time-left">([^<]+)</span>')
 _BID_COUNT_RE = re.compile(r'(\d+)\s*bids?\b', re.I)
 _TIME_COMPONENT_RE = re.compile(r'(\d+)\s*(d|h|m|s)\b')
 _TIME_UNIT_MINUTES = {"d": 1440, "h": 60, "m": 1, "s": 1 / 60}
+
+
+def _build_request_headers():
+    """Return a fresh browser-navigation header mapping for one request."""
+    return dict(_EBAY_NAVIGATION_HEADERS)
+
+
+def _proxy_config_error(proxy_url):
+    """Return a safe validation error for a proxy URL, or None if usable."""
+    if proxy_url != proxy_url.strip() or any(char.isspace() for char in proxy_url):
+        return "contains whitespace"
+    try:
+        parsed = urlsplit(proxy_url)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return "could not be parsed"
+    if parsed.scheme.lower() not in _SUPPORTED_PROXY_SCHEMES:
+        return "has a missing or unsupported URL scheme"
+    if not parsed.hostname:
+        return "has no hostname"
+    if port is not None and not 1 <= port <= 65535:
+        return "has an invalid port"
+    return None
+
+
+def _sanitize_exception_message(exc, proxy_url=None):
+    """Compact an exception message and redact configured proxy details."""
+    message = re.sub(r"\s+", " ", str(exc)).strip() or "(no message)"
+    if proxy_url:
+        replacements = {proxy_url: "<configured-proxy>"}
+        try:
+            parsed = urlsplit(proxy_url)
+            for value, placeholder in (
+                (parsed.netloc, "<proxy-endpoint>"),
+                (parsed.hostname, "<proxy-host>"),
+                (parsed.username, "<proxy-username>"),
+                (parsed.password, "<proxy-password>"),
+            ):
+                if value:
+                    replacements[value] = placeholder
+                    replacements[unquote(value)] = placeholder
+        except (TypeError, ValueError):
+            pass
+        for value in sorted(replacements, key=len, reverse=True):
+            if value:
+                message = re.sub(
+                    re.escape(value),
+                    replacements[value],
+                    message,
+                    flags=re.IGNORECASE,
+                )
+    return message[:500]
+
+
+def _log_value(value):
+    """Make response metadata safe and compact enough for one log line."""
+    if value is None:
+        return "-"
+    return re.sub(r"[\r\n\t]+", " ", str(value)).strip()[:160] or "-"
+
+
+def _response_diagnostics(response):
+    """Describe a response without logging its body, query URL, or secrets."""
+    try:
+        final_host = urlsplit(str(getattr(response, "url", ""))).hostname
+    except (TypeError, ValueError):
+        final_host = None
+
+    try:
+        raw_headers = getattr(response, "headers", {}) or {}
+        headers = {
+            str(key).lower(): value
+            for key, value in raw_headers.items()
+        }
+    except (AttributeError, TypeError, ValueError):
+        headers = {}
+
+    try:
+        body = getattr(response, "body", None)
+    except Exception:
+        body = None
+    if body is None:
+        body = getattr(response, "html_content", None)
+    if isinstance(body, str):
+        body_bytes = len(body.encode("utf-8", errors="replace"))
+    else:
+        try:
+            body_bytes = len(body) if body is not None else None
+        except TypeError:
+            body_bytes = None
+
+    fields = [f"final_host={_log_value(final_host)}"]
+    fields.extend(
+        f"{name.replace('-', '_')}={_log_value(headers.get(name))}"
+        for name in _RESPONSE_DIAGNOSTIC_HEADERS
+    )
+    fields.append(f"body_bytes={_log_value(body_bytes)}")
+    return ", ".join(fields)
 
 
 def _parse_time_left_minutes(text):
@@ -150,19 +287,53 @@ def search_ebay_scraped(query, max_price=None, category_id=None):
     url = f"{EBAY_SEARCH_URL}?{urlencode(params)}"
 
     proxy_url = os.environ.get("EBAY_SCRAPE_PROXY_URL")
+    if proxy_url and (proxy_error := _proxy_config_error(proxy_url)):
+        logger.warning(
+            "eBay scrape proxy configuration is invalid (%s); request not sent",
+            proxy_error,
+        )
+        return []
+
+    request_kwargs = {
+        "timeout": 15,
+        # This function is called repeatedly for different queries. Retrying a
+        # dead static proxy three times inside every call only delays the next
+        # observable attempt and makes Scrapling log the credential-bearing
+        # proxy URL. One bounded attempt keeps failures safe and diagnosable.
+        "retries": 1,
+        "impersonate": "chrome",
+        "headers": _build_request_headers(),
+    }
+    if proxy_url:
+        request_kwargs["proxy"] = proxy_url
+
     try:
-        response = Fetcher.get(url, timeout=15, proxy=proxy_url) if proxy_url else Fetcher.get(url, timeout=15)
+        response = Fetcher.get(url, **request_kwargs)
     except Exception as exc:
-        logger.warning("eBay scrape request failed for %r: %s", query, exc)
+        logger.warning(
+            "eBay scrape transport failure via %s for %r: %s: %s",
+            "configured proxy" if proxy_url else "direct connection",
+            query,
+            type(exc).__name__,
+            _sanitize_exception_message(exc, proxy_url),
+        )
         return []
 
     if response.status != 200:
-        logger.warning(
-            "eBay scrape got non-200 status %s for %r%s",
-            response.status,
-            query,
-            "" if proxy_url else " (no EBAY_SCRAPE_PROXY_URL configured - likely a 403 from this IP)",
-        )
+        if proxy_url and response.status == 407:
+            logger.warning(
+                "eBay scrape proxy authentication failed with HTTP 407 for %r (%s)",
+                query,
+                _response_diagnostics(response),
+            )
+        else:
+            logger.warning(
+                "eBay scrape received HTTP %s via %s for %r (%s)",
+                response.status,
+                "configured proxy" if proxy_url else "direct connection",
+                query,
+                _response_diagnostics(response),
+            )
         return []
 
     try:
