@@ -2201,7 +2201,7 @@
         "13"
       ],
       "max_price": 80,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-alden-shoes",
@@ -2250,7 +2250,7 @@
         "13"
       ],
       "max_price": 180,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-edward-green-shoes",
@@ -2267,7 +2267,7 @@
         "13"
       ],
       "max_price": 180,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-john-lobb-shoes",
@@ -2284,7 +2284,7 @@
         "13"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-crockett-jones-shoes",
@@ -2301,7 +2301,7 @@
         "13"
       ],
       "max_price": 90,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-church-s-shoes",
@@ -2318,7 +2318,7 @@
         "13"
       ],
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-santoni-shoes",
@@ -2330,7 +2330,7 @@
         "13"
       ],
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-ferragamo-loafers",
@@ -2342,7 +2342,7 @@
         "13"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-gucci-loafers",
@@ -2386,7 +2386,7 @@
         "13"
       ],
       "max_price": 70,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-rancourt-loafers",
@@ -2449,7 +2449,7 @@
         "13"
       ],
       "max_price": 130,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-cheaney-shoes",
@@ -2504,7 +2504,7 @@
         "13"
       ],
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-alfred-sargent-shoes",
@@ -2546,7 +2546,7 @@
         "13"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-carmina-shoes",
@@ -2563,7 +2563,7 @@
         "13"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-vass-shoes",
@@ -2580,7 +2580,7 @@
         "13"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-gaziano-girling-shoes",
@@ -2671,7 +2671,7 @@
         "13"
       ],
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "53120",
       "id": "footwear-berluti-shoes",
