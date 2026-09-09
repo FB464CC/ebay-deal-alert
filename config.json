@@ -136,7 +136,7 @@
         "36"
       ],
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "2993",
       "id": "leather-goods-ferragamo-belt",
@@ -162,7 +162,7 @@
         "36"
       ],
       "max_price": 80,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "2993",
       "id": "leather-goods-bottega-veneta-belt",
@@ -175,7 +175,7 @@
         "36"
       ],
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "2993",
       "id": "leather-goods-anderson-s-belt",
@@ -537,7 +537,7 @@
         "36"
       ],
       "max_price": 40,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "2993",
       "id": "leather-goods-trafalgar-belt",
