@@ -47,7 +47,7 @@
         "XL"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-loro-piana-cashmere-sweater",
       "category": "knitwear"
@@ -60,7 +60,7 @@
         "XL"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-brunello-cucinelli-sweater",
       "category": "knitwear"
@@ -73,7 +73,7 @@
         "XL"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "57988",
       "id": "outerwear-loro-piana-jacket",
@@ -87,7 +87,7 @@
         "XL"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "category_id": "57988",
       "id": "outerwear-brunello-cucinelli-jacket",
@@ -184,7 +184,7 @@
     {
       "query": "peter millar crown crafted polo -scarf",
       "size": [
-        "L"
+        "M"
       ],
       "max_price": 30,
       "enabled": true,
@@ -207,8 +207,7 @@
     {
       "query": "\"peter millar\" \"gamecocks\" polo -scarf",
       "size": [
-        "L",
-        "XL"
+        "M"
       ],
       "max_price": 50,
       "enabled": true,
@@ -346,7 +345,7 @@
         "XL"
       ],
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "other-ralph-lauren-purple-label",
       "category": "other"
@@ -455,7 +454,7 @@
         "XL"
       ],
       "max_price": 90,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-zegna-sweater",
       "category": "knitwear"
@@ -571,7 +570,7 @@
         "XL"
       ],
       "max_price": 90,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-zegna-quarter-zip",
       "category": "knitwear"
@@ -2467,7 +2466,7 @@
         "XL"
       ],
       "max_price": 50,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-drake-s-london-sweater",
       "category": "knitwear"
@@ -2598,7 +2597,7 @@
         "XL"
       ],
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-malo-cashmere-sweater",
       "category": "knitwear"
@@ -2610,7 +2609,7 @@
         "XL"
       ],
       "max_price": 60,
-      "enabled": true,
+      "enabled": false,
       "profile": "slow",
       "id": "knitwear-agnona-cashmere",
       "category": "knitwear"
@@ -2824,6 +2823,16 @@
     "cremieux"
   ],
   "WATCH_PRICE_BANDS": {
+    "6105": [
+      800,
+      2000,
+      4000
+    ],
+    "6139": [
+      500,
+      1200,
+      2500
+    ],
     "_comment": "Rough [low, avg, high] used resale $ per watch brand - sanity clamp on the AI's estimated_resale_value for the 'watches' category, not a precise valuation. Real live miss: 3 Movado listings alerted off AI resale guesses of $595-795 while real eBay/WatchCharts comps for those exact models (Bold/Museum/Series 800/Edge) cluster $150-550. Scraped from watchcharts.com (free, no-login) Aug 2026 where noted 'scraped'; brands not scraped there use rough market-knowledge ballparks marked 'estimated' - fine for this purpose since the gate only needs to catch estimates that are wildly (multiples) off, not be exact.",
     "movado": [
       100,
@@ -2834,16 +2843,6 @@
       300,
       700,
       3000
-    ],
-    "6105": [
-      800,
-      2000,
-      4000
-    ],
-    "6139": [
-      500,
-      1200,
-      2500
     ],
     "alpinist": [
       400,
@@ -3226,7 +3225,7 @@
   "AI_PHOTO_PROVIDER": "deepseek",
   "GEMINI_VISION_TIMEOUT_SECONDS": 20,
   "DEEPSEEK_VISION_TIMEOUT_SECONDS": 30,
-  "AI_PAID_MONTHLY_BUDGET_USD": 10.0,
+  "AI_PAID_MONTHLY_BUDGET_USD": 10,
   "AI_PAID_VISION_RESERVATION_USD": 0.005,
   "AI_PAID_TEXT_RESERVATION_USD": 0.001,
   "DEEPSEEK_MODEL": "deepseek-v4-flash-vision-exp",
