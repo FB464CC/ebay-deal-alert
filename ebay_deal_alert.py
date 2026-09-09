@@ -1851,11 +1851,13 @@ ZEGNA_EXCEPTIONAL_KNITWEAR_SIGNALS = re.compile(
     r"1[245]\s*milmil\s*1[245])\b",
     re.IGNORECASE,
 )
-# A month is long enough for a fixed-price listing to receive meaningful market
-# exposure while staying conservative about week-to-week noise. Applied only
-# when the AI itself calls liquidity slow and no real sold comps support its
-# valuation; see the gate for the other fail-open boundaries.
-STALE_FIXED_PRICE_LISTING_DAYS = 30
+# Real current-log replay against source timestamps found 122 Vinted rows at
+# least one day old: 120 were rejected, while the other two were duplicate
+# rows for the same 605-day-old Great Deal alert the user identified as exactly
+# the unwanted outcome. Waiting 30 days would retain half that proven waste.
+# Config-driven so this can be tuned from future logged evidence without
+# touching any saved search; one full day is the current "new listing" bound.
+STALE_FIXED_PRICE_LISTING_DAYS = int(_CONFIG.get("STALE_FIXED_PRICE_LISTING_DAYS", 1))
 # Landed price above which a suit can no longer alert on brand tier alone
 # (see the suit bar's blind-trust branch in
 # is_blocked_by_steal_quality_gate()). Set from the user's own stated
@@ -2615,18 +2617,32 @@ def clamp_zegna_mainline_knitwear_resale_estimate(estimate, listing, ai_result, 
     return min(estimate, ZEGNA_MAINLINE_KNITWEAR_RESALE_CEILING)
 
 
-def ebay_fixed_price_listing_age_days(listing, now=None):
-    """Age of an eBay fixed-price listing, or None when not trustworthy.
+def _is_fixed_price_age_eligible(listing):
+    """False for every listing governed as an auction elsewhere."""
+    listing = listing or {}
+    return not (
+        listing.get("platform") == "shopgoodwill"
+        or listing.get("is_ending_soon_auction")
+        or "AUCTION" in (listing.get("buyingOptions") or [])
+    )
 
-    Browse API search results already carry itemCreationDate. Missing, malformed,
-    future-dated, non-eBay, and auction listings deliberately fail open.
+
+def fixed_price_listing_age_days(listing, now=None):
+    """Trustworthy fixed-price age/exposure in whole days, else ``None``.
+
+    eBay Browse and timestamp-capable adapters normalize source creation times
+    into ``itemCreationDate``. Scout has no reliable Facebook post timestamp,
+    so its server-stamped first-discovery time is only a conservative known-
+    waiting lower bound, never represented as a claimed Facebook creation date.
+    Missing, malformed and future data fails open. Auctions remain governed
+    solely by their existing end-time/bid-count rules.
     """
     listing = listing or {}
-    if listing.get("platform") not in (None, "ebay"):
-        return None
-    if listing.get("is_ending_soon_auction") or "AUCTION" in (listing.get("buyingOptions") or []):
+    if not _is_fixed_price_age_eligible(listing):
         return None
     created_raw = listing.get("itemCreationDate")
+    if not created_raw and listing.get("_from_scout_queue"):
+        created_raw = listing.get("_scout_discovered_at")
     if not created_raw:
         return None
     try:
@@ -2642,6 +2658,47 @@ def ebay_fixed_price_listing_age_days(listing, now=None):
     if seconds < 0:
         return None
     return int(seconds // 86400)
+
+
+def _result_has_real_sold_comps(result):
+    """Whether a result has source-backed completed-sale price evidence."""
+    result = result or {}
+    listing = result.get("listing") or {}
+    if result.get("has_sold_comps"):
+        return True
+    if listing.get("sold_comp_median") is not None and (listing.get("sold_comp_count") or 0) > 0:
+        return True
+    return any(
+        "sold comps" in (flag or "").lower() for flag in (result.get("flags") or [])
+    )
+
+
+def stale_fixed_price_listing_age_days(result, pending_minutes=0, now=None):
+    """Return stale age for pre-AI prioritization, otherwise ``None``.
+
+    Besides a source timestamp, ``ai_pending`` supplies a trustworthy lower
+    bound for sources whose result shape has no age: if the same current item
+    is still present after first entering the AI queue, it has demonstrably sat
+    for at least that long. Real sold comps exempt the candidate before AI;
+    they are stronger evidence than age alone. Auctions always fail open.
+    """
+    result = result or {}
+    listing = result.get("listing") or {}
+    if not _is_fixed_price_age_eligible(listing) or _result_has_real_sold_comps(result):
+        return None
+    source_age_days = fixed_price_listing_age_days(listing, now=now)
+    observed_age_days = None
+    try:
+        pending = float(pending_minutes)
+    except (TypeError, ValueError):
+        pending = -1
+    if math.isfinite(pending) and pending >= 0:
+        observed_age_days = int(pending // (24 * 60))
+    ages = [age for age in (source_age_days, observed_age_days) if age is not None]
+    if not ages:
+        return None
+    age_days = max(ages)
+    return age_days if age_days >= STALE_FIXED_PRICE_LISTING_DAYS else None
 
 
 def is_oversized_fitted_shirt(haystack):
@@ -4404,25 +4461,30 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     search_query_lower = (result.get("search_query") or "").lower()
     listing_title_lower = (result.get("listing") or {}).get("title", "").lower()
 
-    # LISTING AGE AS CONTRADICTORY MARKET EVIDENCE. A fixed-price item that
-    # has remained purchasable for a month is not necessarily bad, but when
-    # the AI itself says the item is slow-moving and calls it a Steal with no
-    # completed-sale evidence, the market has directly contradicted that
-    # urgency claim. Real report: an ordinary Zegna wool quarter-zip had been
-    # sitting at $67.99 yet alerted as 71% under a guessed $250 resale value.
-    # eBay Browse search already supplies itemCreationDate. Other adapters do
-    # not normalize a trustworthy creation timestamp, so missing/non-eBay
-    # data fails open rather than fabricating an age. Auctions are separately
-    # governed by their end time and bid count and are excluded by the helper.
-    has_real_comps = result.get("has_sold_comps") or any(
-        "sold comps" in (flag or "").lower() for flag in (result.get("flags") or [])
-    )
-    if deal_rating == "Steal" and liquidity == "slow" and not has_real_comps:
-        listing_age_days = ebay_fixed_price_listing_age_days(result.get("listing"))
+    # LISTING AGE AS CONTRADICTORY MARKET EVIDENCE. This remains the post-AI
+    # backstop even though known-stale candidates are now demoted before an AI
+    # slot is spent. Current source-matched log evidence included a 605-day-old
+    # Great Deal alert (and no Steal rows at all), so restricting this to the
+    # literal Steal label missed the real failure. Any AI price tier plus slow
+    # liquidity and no completed-sale evidence is contradicted by a listing
+    # that has sat past the configured freshness window. Fast-moving or real-
+    # comps-backed items retain the established exceptions. Auctions remain
+    # governed only by their separate end-time/bid-count path.
+    has_real_comps = _result_has_real_sold_comps(result)
+    age_eligible = _is_fixed_price_age_eligible(result.get("listing"))
+    if (
+        age_eligible
+        and deal_rating is not None
+        and liquidity == "slow"
+        and not has_real_comps
+    ):
+        listing_age_days = result.get("listing_age_days")
+        if listing_age_days is None:
+            listing_age_days = fixed_price_listing_age_days(result.get("listing"))
         if listing_age_days is not None and listing_age_days >= STALE_FIXED_PRICE_LISTING_DAYS:
             return (
                 f"stale fixed-price listing ({listing_age_days} days old) contradicts "
-                "slow-liquidity AI-only Steal claim"
+                f"slow-liquidity AI-only {deal_rating} claim"
             )
 
     # POKER CHIPS - photo-based authenticity triage only. Specific casino,
@@ -5142,6 +5204,7 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
         # their analytics distinct prevents the $265 null-estimate gap from
         # disappearing into apparent budget starvation again.
         (("ai check returned no usable resale value",), "AI_NO_PRICE"),
+        (("stale fixed-price listing",), "STALE_LISTING"),
         (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
         (("golf wrong-item title",), "GOLF_WRONG_ITEM"),
         (("counterfeit", "replica", "not authentic", "authenticity red flag"), "COUNTERFEIT"),
@@ -5253,6 +5316,10 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "similar_listings_count",
         "category_id",
         "has_sold_comps",
+        # Persist source/observed age whenever the pre-AI pass could compute
+        # it, so future threshold analysis no longer has to reconstruct ages
+        # from live listings after the fact.
+        "listing_age_days",
         "sold_comp_count",
         "watch_description_disclosed_value",
         "watch_description_value_basis",
@@ -7654,6 +7721,93 @@ def run():
             conn, list(review_candidates)
         )
 
+    # Compute source/observed age before anything competes for an AI slot.
+    # This is deliberately category-agnostic: the user's rule is about real
+    # market exposure, not golf/poker/apparel business logic. Real sold comps
+    # exempt a candidate; ending-soon auctions are excluded by the helper.
+    for candidate in review_candidates.values():
+        result = candidate["result"]
+        source_age_days = fixed_price_listing_age_days(
+            candidate["listing"], now=current_utc
+        )
+        pending_minutes = pending_minutes_by_item.get(candidate["item_id"], 0)
+        stale_age_days = stale_fixed_price_listing_age_days(
+            result, pending_minutes=pending_minutes, now=current_utc
+        )
+        if source_age_days is not None:
+            result["listing_age_days"] = source_age_days
+        if stale_age_days is not None:
+            # ai_pending can be an older lower bound than a source timestamp
+            # (or the only signal for timestamp-less adapters), so preserve
+            # the strongest real exposure evidence for the post-AI backstop
+            # and audit log.
+            result["listing_age_days"] = max(
+                result.get("listing_age_days", 0), stale_age_days
+            )
+        candidate["_stale_before_ai"] = stale_age_days is not None
+        candidate["_stale_listing_age_days"] = stale_age_days
+
+    # Normal production runs have many fresh/unknown-age fixed-price options.
+    # In that ordinary case, permanently resolve known-stale, comps-free rows
+    # here instead of allowing them to consume even an otherwise-idle AI slot.
+    # If a run contains *only* stale fixed-price candidates, retain just the
+    # least-stale one at the tail. That narrow drought probe preserves a chance
+    # for the post-AI fast-liquidity exception without spending the whole run's
+    # budget on old inventory. Every other stale candidate is final-dispositioned
+    # here and never reaches the photo provider.
+    has_nonstale_fixed_price_candidate = any(
+        not candidate.get("_stale_before_ai")
+        and _is_fixed_price_age_eligible(candidate.get("listing"))
+        for candidate in review_candidates.values()
+    )
+    stale_candidates = [
+        candidate
+        for candidate in review_candidates.values()
+        if candidate.get("_stale_before_ai")
+    ]
+    stale_fallback_item_id = None
+    if stale_candidates and not has_nonstale_fixed_price_candidate:
+        stale_fallback_item_id = min(
+            stale_candidates,
+            key=lambda candidate: (
+                candidate.get("_stale_listing_age_days") or math.inf,
+                -((candidate.get("result") or {}).get("price") or 0.0),
+            ),
+        )["item_id"]
+
+    stale_item_ids = [
+        candidate["item_id"]
+        for candidate in stale_candidates
+        if candidate["item_id"] != stale_fallback_item_id
+    ]
+    for item_id in stale_item_ids:
+        candidate = review_candidates.pop(item_id)
+        result = candidate["result"]
+        age_days = candidate["_stale_listing_age_days"]
+        if has_nonstale_fixed_price_candidate:
+            suppression_context = (
+                "fresh or unknown-age fixed-price candidates are available"
+            )
+        else:
+            suppression_context = "one least-stale drought fallback was retained"
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            f"stale fixed-price listing ({age_days} days old) suppressed before AI; "
+            f"{suppression_context}"
+        )
+        logger.info(
+            "Staleness-filtered %s before spending an AI call: %s",
+            item_id,
+            result["reason"],
+        )
+        append_alert_log(result)
+        mark_seen(
+            conn,
+            item_id,
+            candidate["fingerprint"],
+            candidate["total_price"],
+        )
+
     def _ai_check_priority(candidate):
         result = candidate["result"]
         category = candidate["category"]
@@ -7720,6 +7874,7 @@ def run():
         # that was spent on the parts. Spend the budget where being wrong
         # costs the most - but never let that mean "never."
         pending_minutes = pending_minutes_by_item.get(candidate["item_id"], 0)
+        stale_before_ai = candidate.get("_stale_before_ai", False)
         # Ending-soon auctions (see search_ebay_ending_soon_auctions()) beat
         # EVERYTHING else, unconditionally - a regular candidate that misses
         # the AI budget this run just waits for the next one, but an auction
@@ -7730,6 +7885,12 @@ def run():
         return (
             0 if is_ending_soon_auction else 1,
             result.get("auction_minutes_remaining") or 0,
+            # A known-stale, comps-free fixed-price listing loses to every
+            # fresh/unknown-age candidate before an AI slot is spent. Current
+            # replay: this partitions 122 >=1-day Vinted rows behind 11 same-
+            # day rows; the previous oldest-pending-first rule did the exact
+            # opposite and caused up to 57 retries on stale non-results.
+            1 if stale_before_ai else 0,
             # Recently accepted Scout rows use an isolated one-check budget,
             # so moving them ahead cannot consume or reorder the shared AI
             # window. It does prevent old Scout backlog from taking the only
@@ -7737,7 +7898,11 @@ def run():
             0 if fresh_scout else 1,
             0 if must_have_ai else 1,
             1 if mass_market_watch else 0,
-            -pending_minutes,
+            # Preserve backlog aging inside the still-fresh cohort, but once
+            # a listing crosses the stale boundary prefer the least-old/never-
+            # retried candidate if idle capacity ever reaches this tail.
+            pending_minutes if stale_before_ai else -pending_minutes,
+            candidate.get("_stale_listing_age_days") or 0,
             -(result.get("price") or 0.0),
         )
 
@@ -7746,6 +7911,18 @@ def run():
         review_candidates,
         shared_limit=GEMINI_CALL_LIMIT,
         golf_soft_cap=GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP,
+    )
+    # Category fairness may deliberately pull golf rows forward from later in
+    # the sorted list. Reassert only the two hard global partitions afterward:
+    # auctions first (unchanged), then every non-stale candidate before stale
+    # fixed-price rows. Python's stable sort preserves fairness and all other
+    # priority decisions within each partition.
+    review_candidates.sort(
+        key=lambda candidate: (
+            0
+            if (candidate.get("result") or {}).get("is_ending_soon_auction")
+            else (2 if candidate.get("_stale_before_ai") else 1)
+        )
     )
 
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,

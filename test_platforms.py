@@ -165,6 +165,106 @@ class VintedLandedCost(unittest.TestCase):
         self.assertAlmostEqual(shipping, 7.69, places=6)
 
 
+class ListingCreationTimestamps(unittest.TestCase):
+    def test_grailed_threads_original_creation_not_later_activity(self):
+        listing = p._grailed_hit_to_listing(
+            {
+                "objectID": "105379763",
+                "title": "Ermenegildo Zegna Sweater",
+                "price": 45,
+                "created_at": "2026-09-08T23:47:09.458Z",
+                "bumped_at": "2026-09-09T01:02:03.000Z",
+                "price_updated_at": "2026-09-09T01:02:04.000Z",
+            },
+            None,
+            0,
+        )
+
+        self.assertEqual(listing["itemCreationDate"], "2026-09-08T23:47:09.458Z")
+
+    def test_poshmark_threads_first_publication_not_share_or_edit_time(self):
+        body = {
+            "data": [{
+                "id": "6aa09ad724cc871dba9a409d",
+                "title": "Omega Seamaster Watch",
+                "price_amount": {"val": "88.00"},
+                "created_at": "2026-09-08T16:31:35-07:00",
+                "first_published_at": "2026-09-08T16:36:43-07:00",
+                "updated_at": "2026-09-08T19:14:54-07:00",
+                "publish_count": 1,
+            }],
+        }
+        with mock.patch.object(p, "get_json", return_value=body):
+            listings, _ = p.search_poshmark({"query": "omega watch"})
+
+        self.assertEqual(
+            listings[0]["itemCreationDate"],
+            "2026-09-08T16:36:43-07:00",
+        )
+
+    def test_vinted_uses_earliest_valid_exact_item_photo_epoch(self):
+        item = {
+            "id": "9937293842",
+            "title": "Ferragamo Belt",
+            "price": {"amount": "40.00"},
+            "total_item_price": {"amount": "43.00"},
+            "url": "https://www.vinted.com/items/9937293842",
+            "photo": {
+                "url": "https://images.example/main.jpg",
+                "high_resolution": {"timestamp": 1788914912},
+            },
+            "photos": [
+                {
+                    "url": "https://images.example/main.jpg",
+                    "is_main": True,
+                    "high_resolution": {"timestamp": 1788914912},
+                },
+                {
+                    "url": "https://images.example/older.jpg",
+                    "is_main": False,
+                    "high_resolution": {"timestamp": 1788914800},
+                },
+                {
+                    "url": "https://images.example/bad.jpg",
+                    "is_main": False,
+                    "high_resolution": {"timestamp": "not-an-epoch"},
+                },
+            ],
+        }
+
+        listing = p._vinted_item_to_listing(item)
+
+        self.assertEqual(listing["itemCreationDate"], "2026-09-09T00:46:40Z")
+
+    def test_activity_only_or_timestamp_less_sources_do_not_invent_creation(self):
+        grailed = p._grailed_hit_to_listing(
+            {
+                "objectID": "bumped-only",
+                "title": "Alden Shoes",
+                "price": 100,
+                "bumped_at": "2026-09-09T01:02:03.000Z",
+            },
+            None,
+            0,
+        )
+        offerup = p._offerup_to_listing(
+            {"listingId": "offerup-1", "title": "Alden Shoes", "price": 100}
+        )
+        depop = p._depop_to_listing(
+            {
+                "id": 1,
+                "description": "Alden Shoes",
+                "pricing": {"current_price": {"total_price": "100.00"}},
+                "slug": "alden-shoes",
+                "boosted_at": "2026-09-09T01:02:03.000Z",
+            }
+        )
+
+        for listing in (grailed, offerup, depop):
+            with self.subTest(platform=listing["platform"]):
+                self.assertNotIn("itemCreationDate", listing)
+
+
 class GrailedBatch429(unittest.TestCase):
     def test_retries_once_on_429_then_uses_success_body(self):
         # Regression: a single 429 used to blank the whole chunk instantly.

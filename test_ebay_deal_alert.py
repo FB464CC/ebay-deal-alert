@@ -2795,6 +2795,141 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertFalse(m.COUNTERFEIT_SIGNALS.search("faux leather card holder"))
 
 
+class FixedPriceListingAge(unittest.TestCase):
+    NOW = datetime(2026, 9, 9, 2, 0, tzinfo=timezone.utc)
+
+    def test_canonical_source_timestamp_is_platform_agnostic(self):
+        created = (self.NOW - timedelta(days=2, hours=3)).isoformat()
+        for platform in ("ebay", "grailed", "poshmark", "vinted"):
+            with self.subTest(platform=platform):
+                self.assertEqual(
+                    m.fixed_price_listing_age_days(
+                        {"platform": platform, "itemCreationDate": created},
+                        now=self.NOW,
+                    ),
+                    2,
+                )
+
+    def test_scout_discovery_is_an_observed_age_not_a_facebook_post_date(self):
+        observed = (self.NOW - timedelta(days=3, minutes=1)).isoformat()
+        scout_listing = {
+            "platform": "facebook",
+            "_from_scout_queue": True,
+            "_scout_discovered_at": observed,
+        }
+
+        self.assertEqual(
+            m.fixed_price_listing_age_days(scout_listing, now=self.NOW),
+            3,
+        )
+        self.assertIsNone(
+            m.fixed_price_listing_age_days(
+                {"platform": "facebook", "_scout_discovered_at": observed},
+                now=self.NOW,
+            )
+        )
+
+    def test_sources_without_a_real_timestamp_fail_open(self):
+        for platform in ("ebay_scraped", "offerup", "facebook", "depop"):
+            with self.subTest(platform=platform):
+                self.assertIsNone(
+                    m.fixed_price_listing_age_days(
+                        {"platform": platform}, now=self.NOW
+                    )
+                )
+
+    def test_every_auction_form_is_exempt_even_with_an_old_timestamp(self):
+        old = (self.NOW - timedelta(days=100)).isoformat()
+        listings = (
+            {"platform": "shopgoodwill", "itemCreationDate": old},
+            {
+                "platform": "ebay",
+                "buyingOptions": ["AUCTION"],
+                "itemCreationDate": old,
+            },
+            {
+                "platform": "ebay_scraped",
+                "is_ending_soon_auction": True,
+                "itemCreationDate": old,
+            },
+        )
+        for listing in listings:
+            with self.subTest(listing=listing):
+                self.assertIsNone(
+                    m.fixed_price_listing_age_days(listing, now=self.NOW)
+                )
+
+    def test_bad_or_future_source_timestamps_fail_open(self):
+        for value in ("not-a-date", (self.NOW + timedelta(seconds=1)).isoformat()):
+            with self.subTest(value=value):
+                self.assertIsNone(
+                    m.fixed_price_listing_age_days(
+                        {"platform": "ebay", "itemCreationDate": value},
+                        now=self.NOW,
+                    )
+                )
+
+    def test_one_full_day_is_the_stale_boundary(self):
+        with mock.patch.object(m, "STALE_FIXED_PRICE_LISTING_DAYS", 1):
+            fresh = {
+                "listing": {
+                    "platform": "vinted",
+                    "itemCreationDate": (
+                        self.NOW - timedelta(hours=23, minutes=59)
+                    ).isoformat(),
+                }
+            }
+            stale = {
+                "listing": {
+                    "platform": "vinted",
+                    "itemCreationDate": (
+                        self.NOW - timedelta(days=1)
+                    ).isoformat(),
+                }
+            }
+
+            self.assertIsNone(
+                m.stale_fixed_price_listing_age_days(fresh, now=self.NOW)
+            )
+            self.assertEqual(
+                m.stale_fixed_price_listing_age_days(stale, now=self.NOW),
+                1,
+            )
+
+    def test_pending_queue_age_covers_timestamp_less_sources(self):
+        result = {"listing": {"platform": "offerup"}}
+        with mock.patch.object(m, "STALE_FIXED_PRICE_LISTING_DAYS", 1):
+            self.assertIsNone(
+                m.stale_fixed_price_listing_age_days(
+                    result, pending_minutes=1439, now=self.NOW
+                )
+            )
+            self.assertEqual(
+                m.stale_fixed_price_listing_age_days(
+                    result, pending_minutes=1440, now=self.NOW
+                ),
+                1,
+            )
+
+    def test_real_sold_comps_exempt_source_and_observed_age_before_ai(self):
+        result = {
+            "listing": {
+                "platform": "grailed",
+                "itemCreationDate": (
+                    self.NOW - timedelta(days=100)
+                ).isoformat(),
+                "sold_comp_median": 200,
+                "sold_comp_count": 8,
+            }
+        }
+
+        self.assertIsNone(
+            m.stale_fixed_price_listing_age_days(
+                result, pending_minutes=200000, now=self.NOW
+            )
+        )
+
+
 class StealQualityGate(unittest.TestCase):
     def _aged_zegna_result(self, age_days=45):
         created = datetime.now(timezone.utc) - timedelta(days=age_days)
@@ -2829,8 +2964,46 @@ class StealQualityGate(unittest.TestCase):
     def test_fresh_listing_does_not_get_the_stale_market_block(self):
         self.assertIsNone(
             m.is_blocked_by_steal_quality_gate(
-                self._aged_zegna_result(age_days=7), category="knitwear"
+                self._aged_zegna_result(age_days=0.5), category="knitwear"
             )
+        )
+
+    def test_stale_slow_ai_only_great_deal_is_also_blocked(self):
+        result = self._aged_zegna_result(age_days=2)
+        result["deal_rating"] = "Great Deal"
+
+        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
+
+        self.assertIn("stale fixed-price listing", reason)
+        self.assertIn("Great Deal", reason)
+
+    def test_stale_backstop_is_category_agnostic(self):
+        categories = (
+            "golf-equipment",
+            "poker-chips",
+            "watches",
+            "knitwear",
+            "tailoring",
+            "footwear",
+            "neckwear",
+            "leather-goods",
+            "outerwear",
+            "school-gear",
+            "other",
+        )
+        for category in categories:
+            with self.subTest(category=category):
+                reason = m.is_blocked_by_steal_quality_gate(
+                    self._aged_zegna_result(age_days=2), category=category
+                )
+                self.assertIn("stale fixed-price listing", reason)
+
+    def test_fast_liquidity_remains_the_stale_backstop_exception(self):
+        result = self._aged_zegna_result(age_days=45)
+        result["liquidity"] = "fast"
+
+        self.assertIsNone(
+            m.is_blocked_by_steal_quality_gate(result, category="other")
         )
 
     def test_real_sold_comps_override_listing_age_contradiction(self):
@@ -2841,6 +3014,10 @@ class StealQualityGate(unittest.TestCase):
     def test_auction_and_unusable_age_fail_open(self):
         result = self._aged_zegna_result()
         result["listing"]["buyingOptions"] = ["AUCTION"]
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
+
+        # Cached telemetry must not bypass the helper's auction exemption.
+        result["listing_age_days"] = 45
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="knitwear"))
 
         result = self._aged_zegna_result()
@@ -6835,6 +7012,143 @@ class RunIntegration(unittest.TestCase):
         (record,) = self._alert_log_records()
         self.assertIn("no AI price", record["reason"])
 
+    def test_known_stale_listing_is_finalized_before_any_spare_ai_slot(self):
+        # Three shared slots are deliberately available for only two rows.
+        # A priority demotion alone would still let both reach the provider;
+        # the stale row must be removed before PASS 3 can spend the spare one.
+        self._patch("GEMINI_CALL_LIMIT", 3)
+        stale_id = "v1|stale-source-age|0"
+        fresh_id = "v1|fresh-source-age|0"
+        stale = self._ebay_item(
+            stale_id,
+            "Alden Shell Cordovan Longwing Shoes Mens 10 D",
+            300.0,
+        )
+        stale["itemCreationDate"] = (
+            datetime.now(timezone.utc) - timedelta(days=3)
+        ).isoformat()
+        fresh = self._ebay_item(
+            fresh_id,
+            "Alden Shell Cordovan Plain Toe Shoes Mens 10 D",
+            180.0,
+        )
+        fresh["itemCreationDate"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=30)
+        ).isoformat()
+        self._serve(
+            {
+                "query": "alden shell cordovan shoes",
+                "max_price": 400,
+                "category_id": "24087",
+                "category": "footwear",
+                "enabled": True,
+                "profile": "fast",
+            },
+            [stale, fresh],
+        )
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [fresh_id])
+        records = {record["item_id"]: record for record in self._alert_log_records()}
+        self.assertEqual(records[stale_id]["disposition_code"], "STALE_LISTING")
+        self.assertIn("suppressed before AI", records[stale_id]["reason"])
+        self.assertGreaterEqual(records[stale_id]["listing_age_days"], 3)
+        self.assertFalse(m.is_new(self._db(), stale_id))
+
+    def test_pending_age_filters_timestamp_less_adapter_before_ai(self):
+        self._patch("GEMINI_CALL_LIMIT", 3)
+        stale = p.make_listing(
+            "offerup",
+            "stale-observed-age",
+            "Alden Shell Cordovan Longwing Shoes Mens 10 D",
+            300.0,
+            "https://offerup.com/item/detail/stale-observed-age",
+        )
+        fresh_id = "v1|fresh-next-to-observed|0"
+        fresh = self._ebay_item(
+            fresh_id,
+            "Alden Shell Cordovan Plain Toe Shoes Mens 10 D",
+            180.0,
+        )
+        fresh["itemCreationDate"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=30)
+        ).isoformat()
+        self._serve(
+            {
+                "query": "alden shell cordovan shoes",
+                "max_price": 400,
+                "category_id": "24087",
+                "category": "footwear",
+                "enabled": True,
+                "profile": "fast",
+            },
+            [stale, fresh],
+        )
+        conn = m.init_db()
+        conn.execute(
+            "INSERT INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)",
+            (
+                stale["itemId"],
+                (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [fresh_id])
+        records = {record["item_id"]: record for record in self._alert_log_records()}
+        self.assertEqual(
+            records[stale["itemId"]]["disposition_code"],
+            "STALE_LISTING",
+        )
+        self.assertGreaterEqual(records[stale["itemId"]]["listing_age_days"], 2)
+
+    def test_all_stale_drought_keeps_only_one_fast_liquidity_probe(self):
+        # The post-AI gate intentionally allows fast-liquidity exceptions.
+        # In an all-stale drought, probe only the least-stale row so that
+        # exception remains reachable without burning every available slot.
+        self._patch("GEMINI_CALL_LIMIT", 3)
+        newer_id = "v1|stale-drought-newer|0"
+        older_id = "v1|stale-drought-older|0"
+        newer = self._ebay_item(
+            newer_id,
+            "Alden Shell Cordovan Longwing Shoes Mens 10 D",
+            180.0,
+        )
+        newer["itemCreationDate"] = (
+            datetime.now(timezone.utc) - timedelta(days=2)
+        ).isoformat()
+        older = self._ebay_item(
+            older_id,
+            "Alden Shell Cordovan Plain Toe Shoes Mens 10 D",
+            300.0,
+        )
+        older["itemCreationDate"] = (
+            datetime.now(timezone.utc) - timedelta(days=5)
+        ).isoformat()
+        self._serve(
+            {
+                "query": "alden shell cordovan shoes",
+                "max_price": 400,
+                "category_id": "24087",
+                "category": "footwear",
+                "enabled": True,
+                "profile": "fast",
+            },
+            [older, newer],
+        )
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [newer_id])
+        records = {record["item_id"]: record for record in self._alert_log_records()}
+        self.assertEqual(records[older_id]["disposition_code"], "STALE_LISTING")
+        self.assertIn("drought fallback", records[older_id]["reason"])
+        self.assertTrue(records[newer_id]["delivered"])
+
     def test_alert_requires_a_real_ai_check(self):
         # "every alert must be AI-vetted" - a failed/abstaining AI call
         # (None) is not a vetted check, so even a grab_on_sight-tier
@@ -7458,6 +7772,7 @@ class AlertLogPriceSemantics(unittest.TestCase):
             "deal_rating 'Marginal' below steal bar": "BELOW_MARGIN",
             "condition hard-fail keyword in title": "CONDITION_REJECT",
             "golf wrong-item title: set-oriented search matched a single club": "GOLF_WRONG_ITEM",
+            "stale fixed-price listing (2 days old) suppressed before AI": "STALE_LISTING",
         }
         for reason, expected in cases.items():
             with self.subTest(reason=reason):

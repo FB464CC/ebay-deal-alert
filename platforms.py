@@ -29,6 +29,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -376,6 +377,7 @@ def make_listing(
     condition=None,
     currency="USD",
     description=None,
+    item_creation_date=None,
 ):
     """Normalize one marketplace listing into eBay Browse API item shape.
 
@@ -424,6 +426,13 @@ def make_listing(
     # get_item call does - see fetch_ebay_item_description().
     if description:
         listing["description"] = description
+    # Canonical cross-marketplace creation field. eBay Browse already uses
+    # this exact key, so downstream age handling needs one parser rather than
+    # a platform-name switch and a collection of subtly different formats.
+    # Adapters only pass a value sourced directly from their real response;
+    # malformed/missing values remain fail-open in fixed_price_listing_age_days().
+    if item_creation_date:
+        listing["itemCreationDate"] = item_creation_date
     return listing
 
 
@@ -648,6 +657,10 @@ def _grailed_hit_to_listing(hit, sold_median, sold_count):
         size=hit.get("size"),
         seller=_dget(user, "username"),
         shipping=shipping_cost,
+        # Live Algolia hits expose both created_at and created_at_i. Keep the
+        # direct ISO listing-creation field; bumped_at/price_updated_at are
+        # activity timestamps and would make an old listing look fresh.
+        item_creation_date=hit.get("created_at"),
     )
     if listing:
         # Real sold-comp data and seller trust signals, both sitting in
@@ -927,6 +940,9 @@ def search_poshmark(saved_search):
                 seller=(post.get("creator_id") or post.get("creator_username")),
                 shipping=POSHMARK_ASSUMED_SHIPPING,
                 description=post.get("description"),
+                # Shares and edits move updated_at, while first_published_at
+                # remains the source's original public-listing timestamp.
+                item_creation_date=post.get("first_published_at"),
             )
         )
     return [x for x in listings if x], None
@@ -1471,6 +1487,36 @@ def _get_vinted_catalog_page(session, params):
     return None, session
 
 
+def _vinted_item_creation_date(item):
+    """Return the earliest trustworthy item-photo upload time as UTC ISO.
+
+    Vinted's catalog rows do not expose a top-level created_at value, but the
+    exact item's photo objects carry high_resolution.timestamp. Checked live
+    against the public page's own ``Uploaded`` label: fresh, six-week-old and
+    year-old items all agreed with these epochs, and all photos belonging to
+    each exact item shared the same value. Earliest is conservative if a
+    seller later adds a photo. Missing/malformed data fails open.
+    """
+    timestamps = []
+    photos = item.get("photos") if isinstance(item, dict) else None
+    if not isinstance(photos, list):
+        photos = []
+    main_photo = item.get("photo") if isinstance(item, dict) else None
+    if isinstance(main_photo, dict):
+        photos = [main_photo, *photos]
+    for photo in photos:
+        timestamp = _to_float(_dget(_dget(photo, "high_resolution"), "timestamp"))
+        if timestamp is not None:
+            timestamps.append(timestamp)
+    if not timestamps:
+        return None
+    try:
+        created = datetime.fromtimestamp(min(timestamps), timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+    return created.isoformat().replace("+00:00", "Z")
+
+
 def _vinted_item_to_listing(item):
     # The search response carries a full "photos" gallery array, not
     # just the single cover "photo" - confirmed live (4 real photos on
@@ -1498,6 +1544,7 @@ def _vinted_item_to_listing(item):
         size=item.get("size_title"),
         seller=_dget(_dget(item, "user"), "login"),
         shipping=service_fee + VINTED_ASSUMED_SHIPPING,
+        item_creation_date=_vinted_item_creation_date(item),
     )
 
 
