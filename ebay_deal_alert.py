@@ -119,6 +119,53 @@ CORPORATE_LOGO_KEYWORDS = _CONFIG["CORPORATE_LOGO_KEYWORDS"]
 CONDITION_HARD_FAIL_KEYWORDS = list(_CONFIG["CONDITION_HARD_FAIL_KEYWORDS"])
 if "not working" not in CONDITION_HARD_FAIL_KEYWORDS:
     CONDITION_HARD_FAIL_KEYWORDS.append("not working")
+# Browse API `conditions:{USED}` is a BROAD bucket, not a promise that an
+# item works. eBay's filter docs explicitly direct callers to conditionIds
+# for specific states, and its condition taxonomy assigns 7000 to "For parts
+# or not working". That is exactly how live item 398378480317 reached the bot
+# despite conditions:{USED|UNSPECIFIED}. Keep a positive server-side allowlist
+# of every documented non-new condition that is not explicitly nonfunctional;
+# the structured client-side gate below remains authoritative because server
+# filters are never a sufficient safety boundary on their own.
+#
+# Sources (verified 2026-09-09):
+# https://developer.ebay.com/api-docs/buy/static/ref-buy-browse-filters.html
+# https://developer.ebay.com/api-docs/sell/static/metadata/condition-id-values.html
+EBAY_ALLOWED_SECONDHAND_CONDITION_IDS = (
+    "2000",  # Certified Refurbished
+    "2010",  # Excellent - Refurbished
+    "2020",  # Very Good - Refurbished
+    "2030",  # Good - Refurbished
+    "2500",  # Seller Refurbished / Remanufactured
+    "2750",  # Like New
+    "2990",  # Pre-owned - Excellent
+    "3000",  # Used / Pre-owned - Good
+    "3010",  # Pre-owned - Fair
+    "4000",  # Very Good
+    "5000",  # Good
+    "6000",  # Acceptable (documented as still operational)
+)
+EBAY_SECONDHAND_CONDITION_FILTER = (
+    "conditionIds:{" + "|".join(EBAY_ALLOWED_SECONDHAND_CONDITION_IDS) + "}"
+)
+EBAY_NONFUNCTIONAL_CONDITION_IDS = frozenset({"7000"})
+# condition display names vary by category and eBay explicitly tells clients
+# to tolerate future changes. 7000 is the primary invariant; these labels
+# cover current category-specific renderings seen in eBay's own taxonomy/UI
+# (including "Parts Only" and "Damaged") plus the salvage terminology its
+# metadata docs use.
+EBAY_NONFUNCTIONAL_CONDITION_KEYWORDS = (
+    "for parts",
+    "parts only",
+    "not working",
+    "non-working",
+    "non working",
+    "nonfunctional",
+    "non-functional",
+    "damaged",
+    "salvage",
+    "restoration required",
+)
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
 FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
 GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
@@ -756,6 +803,65 @@ def _attach_seller_feedback(item):
     return item
 
 
+def _attach_ebay_structured_condition(item):
+    """Copy Browse item_summary condition fields to stable listing keys.
+
+    Search responses already contain these fields; no per-item getItem call
+    is needed. Keeping canonical keys makes the condition evidence explicit
+    instead of relying on the fact that today's listing dict happens to be
+    the untouched raw API object.
+    """
+    condition = item.get("condition")
+    condition_id = item.get("conditionId")
+    if condition is not None:
+        item["ebay_condition"] = str(condition).strip()
+    if condition_id is not None and not isinstance(condition_id, bool):
+        item["ebay_condition_id"] = str(condition_id).strip()
+    return item
+
+
+def _ebay_structured_condition_hard_fail_reason(listing):
+    """Return a hard-fail reason for an explicitly nonfunctional condition.
+
+    conditionId 7000 is eBay's stable taxonomy value. The display-name check
+    is a second backstop because eBay documents that labels vary by category
+    and can change, and public watch results currently render 7000-class
+    listings as both "For parts or not working" and "Parts Only".
+    """
+    listing = listing or {}
+    condition = listing.get("ebay_condition")
+    if condition is None:
+        condition = listing.get("condition")
+    if condition is None:
+        condition = listing.get("conditionDisplayName")
+
+    condition_id = listing.get("ebay_condition_id")
+    if condition_id is None:
+        condition_id = listing.get("conditionId")
+    if condition_id is None:
+        condition_id = listing.get("conditionID")
+    normalized_id = (
+        str(condition_id).strip()
+        if condition_id is not None and not isinstance(condition_id, bool)
+        else ""
+    )
+    normalized_condition = str(condition).strip() if condition is not None else ""
+    label_hit = matched_keyword(
+        normalized_condition.lower(), EBAY_NONFUNCTIONAL_CONDITION_KEYWORDS
+    )
+    if normalized_id not in EBAY_NONFUNCTIONAL_CONDITION_IDS and label_hit is None:
+        return None
+
+    evidence = []
+    if normalized_condition:
+        evidence.append(f"condition={normalized_condition!r}")
+    if normalized_id:
+        evidence.append(f"conditionId={normalized_id!r}")
+    if label_hit is not None and normalized_id not in EBAY_NONFUNCTIONAL_CONDITION_IDS:
+        evidence.append(f"matched={label_hit!r}")
+    return "eBay structured condition hard-fail: " + ", ".join(evidence)
+
+
 def _ebay_items_from_body(body, query, context):
     """Pull itemSummaries out of a Browse API body, failing loudly on a
     malformed one instead of returning an indistinguishable zero.
@@ -795,6 +901,12 @@ def _ebay_items_from_body(body, query, context):
         raise ValueError(
             f"eBay {context} returned itemSummaries as {type(items).__name__}, not a list, for {query!r}"
         )
+    # Both regular and ending-soon lanes call this parser. Thread the
+    # condition evidence once, directly from each item_summary, so neither
+    # lane can depend on a title phrase or a later per-item description call.
+    for item in items:
+        if isinstance(item, dict):
+            _attach_ebay_structured_condition(item)
     return items
 
 
@@ -862,7 +974,7 @@ def search_ebay(token, saved_search):
         # server-side filter is a strict superset and can't cause a false
         # negative. The client-side check stays as the real gate.
         "filter": (
-            "conditions:{USED|UNSPECIFIED},itemLocationCountry:US,"
+            f"{EBAY_SECONDHAND_CONDITION_FILTER},itemLocationCountry:US,"
             f"price:[..{saved_search['max_price']}],priceCurrency:USD"
         ),
         "sort": "newlyListed",
@@ -979,7 +1091,7 @@ def search_ebay_ending_soon_auctions(token, auction_search):
     params = {
         "category_ids": auction_search.get("category_id", WATCH_CATEGORY_ID),
         "filter": (
-            "conditions:{USED|UNSPECIFIED},itemLocationCountry:US,"
+            f"{EBAY_SECONDHAND_CONDITION_FILTER},itemLocationCountry:US,"
             f"price:[..{auction_search['max_price']}],priceCurrency:USD,"
             f"buyingOptions:{{AUCTION}},{end_date_filter}"
         ),
@@ -3145,6 +3257,20 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     if safety_hard_fail:
         return {"verdict": "PASS", "reason": safety_hard_fail, "listing": listing}
 
+    # The Browse search response already tells us the seller-selected item
+    # condition. Read that authoritative structured value before any brand,
+    # AI, or valuation logic. Live item 398378480317 had a neutral Hamilton
+    # title and seller-selected "For parts or not working" condition (the
+    # label eBay's taxonomy maps to 7000); treating it as an ordinary used
+    # watch produced a bogus 56%-under-resale alert.
+    structured_condition_fail = _ebay_structured_condition_hard_fail_reason(listing)
+    if structured_condition_fail:
+        return {
+            "verdict": "PASS",
+            "reason": structured_condition_fail,
+            "listing": listing,
+        }
+
     # 1. Brand/fabric/fit are apparel concerns. Golf equipment previously
     # ran through them too, which hard-rejected every normal "golf club"
     # title because "club" is an apparel corporate-logo keyword. Poker chips
@@ -4419,6 +4545,16 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     specifically (not Great Deal, and no no-AI-data blind-trust path even
     for a grab_on_sight brand) - grail-or-better, full stop.
     """
+    # Belt-and-suspenders backstop: score_listing() rejects this before AI,
+    # but no caller that constructs/merges a REVIEW result may be able to
+    # alert an explicitly nonfunctional Browse item if that earlier gate is
+    # ever bypassed or reordered.
+    structured_condition_fail = _ebay_structured_condition_hard_fail_reason(
+        result.get("listing")
+    )
+    if structured_condition_fail:
+        return structured_condition_fail
+
     deal_rating = result.get("deal_rating")
     discount_pct = result.get("discount_pct")
     # .lower(), not the raw AI value - every gate check below compares with
@@ -5297,6 +5433,13 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "delivered": bool(delivered),
         "ai_checked": ai_checked,
     }
+    # Persist the exact structured evidence behind an eBay condition reject.
+    # The production Hamilton miss could not be reconstructed from its alert
+    # record because these already-returned item_summary fields were omitted.
+    for key in ("ebay_condition", "ebay_condition_id"):
+        value = listing.get(key)
+        if value is not None:
+            record[key] = value
     if os.environ.get("GITHUB_SHA"):
         record["commit_hash"] = os.environ["GITHUB_SHA"]
     if delivery_error:

@@ -2487,6 +2487,83 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertIn("condition hard-fail keyword", result["reason"])
         self.assertIn("not working", result["reason"])
 
+    def test_real_hamilton_title_still_blocks_via_description_keyword_path(self):
+        # Preserve the existing text defense independently of the new
+        # structured-field defense. The real title itself says nothing about
+        # condition, so only this synthetic description supplies the phrase.
+        result = m.score_listing(
+            self._listing(
+                "Hamilton Masterpiece 1892 to 1992 Centennial watch",
+                price=25,
+                description="For parts or not working; repair will be required.",
+            ),
+            gap_report=None,
+            category="watches",
+        )
+
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("condition hard-fail keyword in title/description", result["reason"])
+
+    def test_real_hamilton_title_blocks_via_structured_condition_without_text(self):
+        # Exact production-miss shape: title/description contain no hard-fail
+        # words, while the lightweight Browse item_summary carries the truth.
+        listing = self._listing(
+            "Hamilton Masterpiece 1892 to 1992 Centennial watch", price=25
+        )
+        listing.update({
+            "condition": "For parts or not working",
+            "conditionId": "7000",
+        })
+
+        result = m.score_listing(
+            listing, gap_report=None, category="watches"
+        )
+
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("eBay structured condition hard-fail", result["reason"])
+        self.assertIn("conditionId='7000'", result["reason"])
+
+    def test_structured_nonfunctional_condition_display_variants_block(self):
+        # eBay says display names vary by category. These are the additional
+        # nonfunctional tiers found in its current public UI/help/metadata.
+        for condition in (
+            "Parts Only",
+            "Damaged",
+            "Salvage",
+            "Non-working",
+            "Restoration required",
+        ):
+            with self.subTest(condition=condition):
+                listing = self._listing("Neutral listing title", price=25)
+                listing["condition"] = condition
+                result = m.score_listing(listing, gap_report=None)
+                self.assertEqual(result["verdict"], "PASS")
+                self.assertIn("structured condition hard-fail", result["reason"])
+
+    def test_condition_id_7000_blocks_even_when_display_label_is_missing(self):
+        for condition_id in ("7000", 7000):
+            with self.subTest(condition_id=condition_id):
+                listing = self._listing(
+                    "Hamilton Masterpiece 1892 to 1992 Centennial watch", price=25
+                )
+                listing["conditionId"] = condition_id
+                result = m.score_listing(
+                    listing, gap_report=None, category="watches"
+                )
+                self.assertEqual(result["verdict"], "PASS")
+                self.assertIn("conditionId='7000'", result["reason"])
+
+    def test_structured_working_used_condition_is_not_blocked(self):
+        listing = self._listing(
+            "Hamilton Masterpiece 1892 to 1992 Centennial watch", price=25
+        )
+        listing.update({"condition": "Pre-owned - Good", "conditionId": "3000"})
+
+        result = m.score_listing(listing, gap_report=None, category="watches")
+
+        self.assertEqual(result["verdict"], "REVIEW")
+        self.assertNotIn("structured condition hard-fail", result.get("reason", ""))
+
     def test_fabric_recognized_from_description_not_just_title(self):
         # Same principle, the other direction: a description that states
         # the fabric should clear the "fabric not stated" flag even when
@@ -2960,6 +3037,28 @@ class StealQualityGate(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertIn("stale fixed-price listing", reason)
         self.assertIn("45 days", reason)
+
+    def test_structured_condition_is_a_final_pre_alert_backstop(self):
+        # Even a fully AI-vetted apparent steal cannot override eBay's own
+        # explicit statement that the item is nonfunctional.
+        result = {
+            "deal_rating": "Steal",
+            "discount_pct": 75,
+            "price_confidence": "high",
+            "liquidity": "fast",
+            "brand_tier": "grab_on_sight",
+            "search_query": "hamilton watch",
+            "listing": {
+                "title": "Hamilton Masterpiece 1892 to 1992 Centennial watch",
+                "condition": "For parts or not working",
+                "conditionId": "7000",
+            },
+        }
+
+        reason = m.is_blocked_by_steal_quality_gate(result, category="watches")
+
+        self.assertIn("eBay structured condition hard-fail", reason)
+        self.assertIn("conditionId='7000'", reason)
 
     def test_fresh_listing_does_not_get_the_stale_market_block(self):
         self.assertIsNone(
@@ -3990,6 +4089,72 @@ class SeenDbSizeCeiling(unittest.TestCase):
         self.assertGreater(oldest, "2026-08-01T00:00:00+00:00")
 
 
+class EbayBrowseConditionFilter(unittest.TestCase):
+    @staticmethod
+    def _response(body):
+        response = mock.Mock()
+        response.status_code = 200
+        response.raise_for_status = lambda: None
+        response.json = lambda: body
+        return response
+
+    def _assert_specific_functional_condition_filter(self, filter_value):
+        expected_ids = "|".join(m.EBAY_ALLOWED_SECONDHAND_CONDITION_IDS)
+        self.assertIn(f"conditionIds:{{{expected_ids}}}", filter_value)
+        self.assertNotIn("conditions:{USED", filter_value)
+        condition_clause = filter_value.split("conditionIds:{", 1)[1].split("}", 1)[0]
+        self.assertNotIn("7000", condition_clause.split("|"))
+
+    def test_regular_search_uses_specific_condition_ids_not_broad_used_bucket(self):
+        with mock.patch(
+            "requests.get", return_value=self._response({"itemSummaries": [], "total": 0})
+        ) as request:
+            m.search_ebay(
+                "fake-token",
+                {"query": "hamilton watch", "category_id": "31387", "max_price": 500},
+            )
+
+        self._assert_specific_functional_condition_filter(
+            request.call_args.kwargs["params"]["filter"]
+        )
+
+    def test_regular_search_threads_structured_condition_for_hard_rejection(self):
+        item = {
+            "itemId": "v1|398378480317|0",
+            "title": "Hamilton Masterpiece 1892 to 1992 Centennial watch",
+            "price": {"value": "25.00", "currency": "USD"},
+            "condition": "For parts or not working",
+            "conditionId": "7000",
+        }
+        with mock.patch(
+            "requests.get",
+            return_value=self._response({"itemSummaries": [item], "total": 1}),
+        ):
+            listings, total = m.search_ebay(
+                "fake-token",
+                {"query": "hamilton watch", "category_id": "31387", "max_price": 500},
+            )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(listings[0]["ebay_condition"], "For parts or not working")
+        result = m.score_listing(listings[0], gap_report=None, category="watches")
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("structured condition hard-fail", result["reason"])
+
+    def test_auction_search_uses_same_specific_condition_id_filter(self):
+        with mock.patch(
+            "requests.get", return_value=self._response({"itemSummaries": [], "total": 0})
+        ) as request:
+            m.search_ebay_ending_soon_auctions(
+                "fake-token",
+                {"query": "watch", "category_id": "31387", "max_price": 500},
+            )
+
+        self._assert_specific_functional_condition_filter(
+            request.call_args.kwargs["params"]["filter"]
+        )
+
+
 class EbayResponseShapeValidation(unittest.TestCase):
     """resp.raise_for_status() only guards the HTTP status, so eBay
     answering 200 with an error envelope (or drifting its JSON shape) used
@@ -4010,6 +4175,25 @@ class EbayResponseShapeValidation(unittest.TestCase):
     def test_normal_results_pass_through(self):
         body = {"itemSummaries": [{"itemId": "1"}], "total": 1}
         self.assertEqual(m._ebay_items_from_body(body, "q", "search"), [{"itemId": "1"}])
+
+    def test_item_summary_condition_fields_are_threaded_to_listing_keys(self):
+        # Shape copied from eBay Browse item_summary/search. This does not
+        # need (and must never trigger) an additional getItem API call.
+        raw_item = {
+            "itemId": "v1|398378480317|0",
+            "title": "Hamilton Masterpiece 1892 to 1992 Centennial watch",
+            "condition": "For parts or not working",
+            "conditionId": "7000",
+        }
+
+        items = m._ebay_items_from_body(
+            {"itemSummaries": [raw_item], "total": 1},
+            "hamilton watch",
+            "search",
+        )
+
+        self.assertEqual(items[0]["ebay_condition"], "For parts or not working")
+        self.assertEqual(items[0]["ebay_condition_id"], "7000")
 
     def test_error_envelope_raises_instead_of_looking_empty(self):
         body = {"errors": [{"errorId": 2001, "message": "Invalid filter"}]}
@@ -4173,6 +4357,22 @@ class EbayEndingSoonAuctions(unittest.TestCase):
     def test_auction_minutes_remaining_recorded(self):
         listings, _ = self._search([self._item(12)])
         self.assertAlmostEqual(listings[0]["auction_minutes_remaining"], 12, delta=1)
+
+    def test_structured_for_parts_condition_survives_auction_lane_and_hard_fails(self):
+        item = self._item(10)
+        item.update({
+            "title": "Hamilton Masterpiece 1892 to 1992 Centennial watch",
+            "condition": "For parts or not working",
+            "conditionId": "7000",
+        })
+
+        listings, _ = self._search([item])
+
+        self.assertEqual(len(listings), 1)
+        self.assertEqual(listings[0]["ebay_condition_id"], "7000")
+        result = m.score_listing(listings[0], gap_report=None, category="watches")
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("structured condition hard-fail", result["reason"])
 
 
 class StrayAuctionListing(unittest.TestCase):
@@ -5940,6 +6140,48 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(self.ai_calls), 2, "both REVIEW candidates get an AI check")
         self.assertFalse(m.is_new(self._db(), "v1|297183440152|0"),
                          "a hard-failed listing is a final disposition - mark it seen")
+
+    def test_real_hamilton_structured_for_parts_item_never_reaches_ai_or_alert(self):
+        item_id = "v1|398378480317|0"
+        listing = self._ebay_item(
+            item_id,
+            "Hamilton Masterpiece 1892 to 1992 Centennial watch",
+            25.0,
+            seller="laureyos7",
+            feedback_score=228,
+            feedback_pct="99.0",
+        )
+        listing.update({
+            "condition": "For parts or not working",
+            "conditionId": "7000",
+        })
+        m._attach_ebay_structured_condition(listing)
+        self._serve(
+            {
+                "query": "hamilton watch",
+                "max_price": 500,
+                "category_id": "31387",
+                "category": "watches",
+                "enabled": True,
+                "profile": "fast",
+            },
+            [listing],
+            total_listings=711,
+        )
+
+        m.run()
+
+        records = self._alert_log_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["item_id"], item_id)
+        self.assertEqual(records[0]["verdict"], "PASS")
+        self.assertEqual(records[0]["disposition_code"], "CONDITION_REJECT")
+        self.assertEqual(records[0]["ebay_condition"], "For parts or not working")
+        self.assertEqual(records[0]["ebay_condition_id"], "7000")
+        self.assertIn("structured condition hard-fail", records[0]["reason"])
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), item_id))
 
     def test_alert_log_prune_is_checked_during_candidate_processing(self):
         listings = [

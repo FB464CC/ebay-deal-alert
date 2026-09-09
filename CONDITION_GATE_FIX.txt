@@ -1,0 +1,135 @@
+eBay structured-condition gate investigation
+============================================
+
+Progress 1 - checkout baseline
+- Confirmed the repository is already at origin/main checkout commit:
+  5e058f64cbe404f408532ffcdbcb7c1a8ce52e8b Scout ingest: 1 listing(s) from extension
+- Initial `git status --short` was clean.
+- Per task instructions, no fetch, pull, or clone was performed.
+
+Progress 2 - production and API evidence
+- The production record is present locally at `alerts_log.jsonl:780`. It shows
+  `v1|398378480317|0`, seller laureyos7, title "Hamilton Masterpiece 1892 to
+  1992 Centennial watch", $25 item price / $26.50 tax-adjusted price, and a
+  delivered 56%-under-resale "Great Deal" alert at
+  2026-09-09T20:27:32.782833+00:00.
+- That same record preserves the exact search query, including title/query
+  exclusions for `-"for parts"` and `-"not working"`, and reports 711 matching
+  listings. The title contains neither phrase. Its recorded score reason has
+  no condition rejection, proving the text keyword gate did not fire.
+- Current code sends `conditions:{USED|UNSPECIFIED}` in BOTH regular Browse
+  search and ending-soon auction search requests.
+- eBay's official Buy API filter documentation says `conditions` accepts only
+  the broad, case-sensitive groups NEW, USED, and UNSPECIFIED; it explicitly
+  directs callers to `conditionIds` for specific condition states. Therefore
+  USED is not a safe synonym for "functional used". Official source:
+  https://developer.ebay.com/api-docs/buy/static/ref-buy-browse-filters.html
+- eBay's official condition taxonomy assigns conditionId `7000` to "For parts
+  or not working" and defines it as nonfunctional/defective/requiring repair
+  or missing essential components. Official source:
+  https://developer.ebay.com/api-docs/sell/static/metadata/condition-id-values.html
+- eBay's official Browse schema documents top-level `condition` and
+  `conditionId` fields on Browse item objects and warns that display names may
+  vary by category/change over time. A locally captured real Browse search
+  response (`turnbull.json`) independently confirms the actual item_summary
+  wire shape: `"condition":"Pre-owned - Good","conditionId":"3000"`.
+- The live eBay search surface currently returns known broken Hamilton watches
+  with the displayed structured condition "Parts Only" (for example legacy
+  item 188871478802). That is a real category-specific label worth covering in
+  addition to the canonical 7000 label.
+- eBay's current category-condition help also documents "Damaged" as a
+  non-operable tire condition and discusses salvage condition descriptors;
+  these category-varying nonfunctional labels should be defensive text
+  backstops, while ID 7000 remains the authoritative general hard fail.
+- No EBAY_CLIENT_ID/EBAY_CLIENT_SECRET environment variables or token-cache
+  file exist in this checkout. A real request to the production Browse search
+  endpoint without credentials returned HTTP 403, consistent with eBay's
+  documented requirement that every Browse call carry an application token.
+  Thus a fresh authenticated raw call cannot honestly be made from this
+  environment. The official docs, locally captured real Browse JSON, current
+  public eBay search results, and production alert record provide the closest
+  available evidence without inventing credentials.
+- The production pipeline cannot recover the exact description after the fact:
+  `item_summary/search` does not provide it; the code optionally spends a
+  separate `/item/{item_id}` request only after initial scoring, and the public
+  description endpoint now returns HTTP 410 for the ended/removed listing.
+  Since the delivered alert passed the later description re-check too, the
+  fetched description was either absent/unavailable or did not contain an
+  existing hard-fail phrase. In either case, a text-only gate was structurally
+  insufficient for the already-present structured condition.
+
+Progress 3 - implementation and focused regression validation
+- Replaced the broad `conditions:{USED|UNSPECIFIED}` filter in both
+  `search_ebay()` and `search_ebay_ending_soon_auctions()` with a shared
+  positive `conditionIds` allowlist of documented non-new conditions 2000,
+  2010, 2020, 2030, 2500, 2750, 2990, 3000, 3010, 4000, 5000, and 6000.
+  Explicitly nonfunctional ID 7000 is absent.
+- `_ebay_items_from_body()` now copies each item_summary's existing
+  `condition` / `conditionId` values to stable `ebay_condition` /
+  `ebay_condition_id` listing keys. Both regular and auction search lanes use
+  this common parser, so no extra API request is involved.
+- Added an authoritative client-side hard fail for conditionId 7000, plus
+  category/display-name backstops for For Parts, Parts Only, Not Working,
+  Non-working, Nonfunctional, Damaged, Salvage, and Restoration Required.
+- Applied that hard fail before brand/AI/valuation work in `score_listing()`
+  and again at the start of `is_blocked_by_steal_quality_gate()`, so an
+  upstream merge/reordering cannot turn an explicit nonfunctional condition
+  back into an alert.
+- Condition evidence is now persisted in alert-log records as
+  `ebay_condition` and `ebay_condition_id`, making future production
+  rejections auditable instead of losing the raw structured fields.
+- Added regression coverage for the exact neutral Hamilton title through:
+  (1) the existing description-keyword mechanism, (2) structured condition
+  text with no warning in title/description, (3) conditionId 7000, (4) both
+  regular and ending-soon Browse lanes, (5) the final quality-gate backstop,
+  and (6) a full `run()` integration assertion proving zero AI calls and zero
+  delivered alerts. Also covered working used ID 3000 as a non-rejection.
+- Focused validation result:
+  `66 passed, 406 deselected, 1 warning, 27 subtests passed in 0.99s`.
+  The warning is a pre-existing invalid escape sequence in an unrelated test
+  docstring at test_ebay_deal_alert.py:8232.
+- `git diff --check` found no whitespace errors (only Git's line-ending
+  conversion notices), and the required AST parse command succeeded.
+
+Progress 4 - exact production-run audit (GitHub API only; no git fetch)
+- The alert record's `commit_hash` resolves through the GitHub API to commit
+  9aaf6cf53ea1ec6f494871599c9eac541c4dc3be, a poll-state commit at
+  2026-09-09T20:21:59Z. Reading `ebay_deal_alert.py` at that exact ref via
+  the GitHub Contents API confirms the code that ran had
+  `conditions:{USED|UNSPECIFIED}` in BOTH Browse search functions,
+  `_ebay_items_from_body()` simply returned the raw item list, and
+  `score_listing()` applied CONDITION_HARD_FAIL_KEYWORDS only to the
+  lowercased title + optional description haystack.
+- Important nuance: the raw condition fields were not physically deleted from
+  the in-memory dict (the parser returned the raw dict). They were functionally
+  discarded: no gate read them, no result field normalized them, and the alert
+  logger omitted them. That is why the structured truth had no effect and why
+  the exact raw values cannot be reconstructed from the saved alert record.
+- GitHub Actions run 34400908117 (`Poll eBay Deals`, run 10092) used that exact
+  head SHA. Its real log shows the Hamilton item scored REVIEW at
+  20:26:39.043Z and `Sent alert for v1|398378480317|0` at 20:27:32.780Z.
+  There was no item-specific description-fetch failure log. This proves the
+  complete production path executed; it does not prove whether getItem returned
+  an empty description or text without a hard-fail phrase. Either outcome is
+  immaterial to the root cause: the later description re-check did not reject,
+  while the structured condition was available and ignored.
+- The production run had no downloadable artifacts containing raw Browse JSON,
+  so claiming the exact raw conditionId from that response would be dishonest.
+  The listing's verified eBay condition label maps to stable ID 7000 in eBay's
+  official taxonomy, and the regression covers both label-only and ID-only
+  response shapes independently.
+
+Progress 5 - final validation
+- Exact required syntax command:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  Exit code: 0. Output: none.
+- Exact required full-suite command:
+  `python3 -m pytest -q`
+  Exit code: 0.
+  Result: `641 passed, 2 warnings, 496 subtests passed in 17.24s`.
+- The two warnings are unrelated/pre-existing: one invalid `\\d` escape in a
+  test docstring (now reported at test_ebay_deal_alert.py:8245 after added test
+  lines), and lxml's deprecation warning for its no-op `strip_cdata` option.
+- Final `git diff --check` exit code: 0; only Windows LF-to-CRLF notices.
+- No commit or push was performed.
+
