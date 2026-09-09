@@ -3757,7 +3757,12 @@ def check_photos_with_gemini(
             "\"edge_spots_consistent\": bool, "
             "\"recolor_suspected\": bool, \"recolor_reason\": string, "
             "\"identified_casino_or_maker\": string, "
-            "\"estimated_chip_count\": number|null, \"summary\": string}. "
+            "\"estimated_chip_count\": number|null, "
+            "\"chip_count_visually_supported\": bool, "
+            "\"is_complete_usable_set\": bool, "
+            "\"set_completeness_reason\": string, \"summary\": string}. "
+            "Every bool field must be an unquoted JSON true or false, never a string, "
+            "number, or null. "
             "chip_type must be one concise identification such as \"compression-molded "
             "clay\", \"ceramic\", \"ABS plastic/novelty\", or \"unknown\". Use "
             "\"compression-molded clay\" only when photos jointly support its impressed "
@@ -3770,9 +3775,20 @@ def check_photos_with_gemini(
             "single-composition ceramic/polymer blank with permanent dye-sublimated "
             "artwork across the face and normally the edge, without a clay mold, separate "
             "inlay, injection seam/nub, or metal core; seller text alone is insufficient. "
+            "An injection-molded ABS/composite chip can weigh 11.5g, have mass-produced "
+            "pseudo-edge spots, and carry direct-to-chip artwork under a semi-gloss UV "
+            "coating with no sticker. Therefore weight, a full-color face, or merely not "
+            "seeing a peelable label does NOT prove clay or ceramic. A glossy hard-plastic "
+            "shell, circumferential injection seam, sprue/ejector nub, exposed metal core, "
+            "or painted/printed edge marks rather than through-body inserts are negative "
+            "construction evidence. No one cue such as gloss is conclusive by itself, but "
+            "without clear positive construction evidence keep the type unknown and both "
+            "genuine-material booleans false. Wide or low-resolution case photos alone are "
+            "not enough to visually confirm either material. "
             "Set is_genuine_clay false for ceramic and is_genuine_ceramic false for clay. "
             "has_inlay_not_sticker is true only for an actual inlay disc molded into a "
-            "clay chip face. has_hot_stamp_not_sticker is true only for a legitimate "
+            "clay chip face, not a raised disc, peel edge, bubble, or direct surface print. "
+            "has_hot_stamp_not_sticker is true only for a legitimate "
             "foil hot stamp applied directly to a compression-clay chip, such as a "
             "denomination, monogram, or Paulson starburst—not an adhesive label. "
             "ceramic_design_embedded_not_sticker is true only when the ceramic artwork "
@@ -3793,12 +3809,32 @@ def check_photos_with_gemini(
             "maker visibly supported by the photos (including Paulson, BCC/Blue Chip, "
             "Burt/ASM/CPC, TR King/TRK, CHIPCO, BR Pro, SUN-FLY, Nevada Jacks, or "
             "SLOWPLAY ceramic), "
-            "otherwise use \"unknown\". estimated_chip_count is the "
-            "approximate number visible, or null when it cannot be counted reliably. "
+            "otherwise use \"unknown\". estimated_chip_count is the conservatively "
+            "supported number in the photos, or null when it cannot be counted reliably. "
+            "Set chip_count_visually_supported true only when the gallery exposes enough "
+            "chips to count directly or conservatively extrapolate from fully visible "
+            "racks, rows, or stacks whose geometry and occupied positions are shown. Never "
+            "derive the count from the title, description, box label, advertised case/rack "
+            "capacity, a seller-stated count, or hidden/closed/obscured compartments. If "
+            "the photos cannot independently support the count, use null and false even "
+            "when seller text claims 100, 300, or 500 pieces. is_complete_usable_set is "
+            "true only when the visibly supported chips form a coherent collection that "
+            "could be used together for an actual poker game: multiple distinguishable "
+            "colors or denominations in meaningful quantities, a consistent casino/maker/"
+            "design family, and no obvious large missing groups or patterned gaps that "
+            "indicate removals. Empty space in an oversized case alone is not proof of an "
+            "incomplete set when the chips themselves show a coherent playable breakdown. "
+            "Use false for a sampler, one-denomination rack, miscellaneous hodgepodge, "
+            "severely lopsided breakdown, or any gallery too obscured to establish those "
+            "facts. Matching wear and edge treatment address authenticity; they do not by "
+            "themselves prove set completeness. set_completeness_reason should briefly "
+            "state the visible count/breakdown evidence or the uncertainty that forced "
+            "false. "
             "A seller claim that chips are 'real casino chips' or 'redeemable for cash' "
             "is not photo-verifiable and must neither raise nor lower the authenticity "
             "assessment by itself. summary should briefly state the visual evidence and "
-            "any uncertainty, without making a price or resale-value judgment."
+            "any uncertainty, including the basis for the count, without making a price "
+            "or resale-value judgment."
         )
         return _call_photo_check(poker_chips_prompt, images, hard_stop=hard_stop)
 
@@ -4415,6 +4451,17 @@ def is_blocked_by_steal_quality_gate(result, category=None):
                 f"poker-chips bar: estimated chip count {chip_count:g} below "
                 f"{POKER_CHIPS_MIN_SET_SIZE}-chip usable-set minimum"
             )
+        if result.get("poker_chips_chip_count_visually_supported") is not True:
+            return (
+                "poker-chips bar: chip count not independently supported by the photos - "
+                f"at least {POKER_CHIPS_MIN_SET_SIZE} visible/countable chips required"
+            )
+        if result.get("poker_chips_is_complete_usable_set") is not True:
+            reason = (
+                result.get("poker_chips_set_completeness_reason")
+                or "complete/coherent set not visually established"
+            )
+            return f"poker-chips bar: not a confirmed complete usable set: {reason}"
         landed = result.get("price")
         if landed is not None and landed > POKER_CHIPS_MAX_PRICE:
             return (
@@ -4423,26 +4470,29 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             )
         chip_type = result.get("poker_chips_chip_type")
         if chip_type == "compression-molded clay":
-            if not result.get("poker_chips_is_genuine_clay"):
+            if result.get("poker_chips_is_genuine_clay") is not True:
                 return "poker-chips bar: clay construction not visually confirmed"
             if not (
-                result.get("poker_chips_has_inlay_not_sticker")
-                or result.get("poker_chips_has_hot_stamp_not_sticker")
+                result.get("poker_chips_has_inlay_not_sticker") is True
+                or result.get("poker_chips_has_hot_stamp_not_sticker") is True
             ):
                 return (
                     "poker-chips bar: no confirmed molded inlay or authentic hot stamp "
                     "(sticker/label risk)"
                 )
         elif chip_type == "ceramic":
-            if not result.get("poker_chips_is_genuine_ceramic"):
+            if result.get("poker_chips_is_genuine_ceramic") is not True:
                 return "poker-chips bar: ceramic construction not visually confirmed"
-            if not result.get("poker_chips_ceramic_design_embedded_not_sticker"):
+            if result.get("poker_chips_ceramic_design_embedded_not_sticker") is not True:
                 return "poker-chips bar: ceramic design not confirmed embedded (sticker/label risk)"
         else:
             return "poker-chips bar: not confirmed compression clay or ceramic"
-        if not result.get("poker_chips_edge_spots_consistent"):
+        if result.get("poker_chips_edge_spots_consistent") is not True:
             return "poker-chips bar: inconsistent edge treatment across the set"
-        if result.get("poker_chips_recolor_suspected"):
+        recolor_suspected = result.get("poker_chips_recolor_suspected")
+        if recolor_suspected is not False:
+            if recolor_suspected is not True:
+                return "poker-chips bar: recolor assessment missing/invalid"
             reason = result.get("poker_chips_recolor_reason") or "unspecified visual anomaly"
             return f"poker-chips bar: recolor suspected: {reason}"
         return None
@@ -5072,7 +5122,9 @@ def _format_estimated_usd(value):
         return None
 
 
-ALERT_LOG_SCHEMA_VERSION = 2
+# v3 adds the complete poker-vision decision evidence to category rows and
+# makes their ai_checked bit depend on the explicit completed-call marker.
+ALERT_LOG_SCHEMA_VERSION = 3
 
 
 def disposition_code_for(result, delivered=False, delivery_error=None):
@@ -5143,6 +5195,22 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         raw_price_value = (listing.get("price") or {}).get("value", 0)
         item_price = float(0 if raw_price_value is None else raw_price_value)
     search_id, category = _alert_search_metadata(result)
+    if category == "poker-chips":
+        # The old generic reason-text heuristic considered "needs a real AI
+        # photo check" proof that a check happened. Production NO_AI_BUDGET
+        # poker rows were consequently stamped ai_checked=true. The merge
+        # path sets this explicit marker only after a non-None vision result.
+        ai_checked = bool(result.get("poker_chips_ai_checked"))
+    else:
+        ai_checked = bool(
+            result.get("golf_ai_checked")
+            or result.get("price_confidence")
+            or "ai photo check" in str(result.get("reason") or "").lower()
+            or any(
+                "ai photo check" in str(flag).lower()
+                for flag in result.get("flags", [])
+            )
+        )
     record = {
         "schema_version": ALERT_LOG_SCHEMA_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -5164,13 +5232,7 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         # before send_alert() and delivery then failed. Keep the state
         # explicit so every reader can distinguish evaluated from delivered.
         "delivered": bool(delivered),
-        "ai_checked": bool(
-            result.get("golf_ai_checked")
-            or result.get("poker_chips_ai_checked")
-            or result.get("price_confidence")
-            or "ai photo check" in str(result.get("reason") or "").lower()
-            or any("ai photo check" in str(flag).lower() for flag in result.get("flags", []))
-        ),
+        "ai_checked": ai_checked,
     }
     if os.environ.get("GITHUB_SHA"):
         record["commit_hash"] = os.environ["GITHUB_SHA"]
@@ -5212,6 +5274,30 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         value = result.get(key)
         if value is not None:
             record[key] = value
+
+    if category == "poker-chips" and ai_checked:
+        # Keep every field, including False/empty/null values: absence would
+        # otherwise make an AI abstention indistinguishable from old-schema
+        # data and recreate the audit gap this telemetry closes. Result keys
+        # retain the established category prefix used by golf/watch fields.
+        for key in (
+            "poker_chips_chip_type",
+            "poker_chips_is_genuine_clay",
+            "poker_chips_is_genuine_ceramic",
+            "poker_chips_has_inlay_not_sticker",
+            "poker_chips_has_hot_stamp_not_sticker",
+            "poker_chips_ceramic_design_embedded_not_sticker",
+            "poker_chips_edge_spots_consistent",
+            "poker_chips_recolor_suspected",
+            "poker_chips_recolor_reason",
+            "poker_chips_identified_casino_or_maker",
+            "poker_chips_estimated_chip_count",
+            "poker_chips_chip_count_visually_supported",
+            "poker_chips_is_complete_usable_set",
+            "poker_chips_set_completeness_reason",
+            "poker_chips_summary",
+        ):
+            record[key] = result.get(key)
 
     try:
         # newline="" so Windows doesn't translate \n -> \r\n on write - the
@@ -7877,6 +7963,42 @@ def run():
             )
             gemini_budget_logged = True
 
+        if ai_result is not None and category == "poker-chips":
+            # Merge immediately after the call, before any generic post-AI
+            # suppression can append and continue. That guarantees every
+            # poker log row produced after a real check--not only rows that
+            # reach the category gate--carries the complete vision evidence.
+            # This is unconditional on a resale estimate: the specialized
+            # prompt intentionally never asks the model to price chips.
+            result["poker_chips_ai_checked"] = True
+            result["poker_chips_chip_type"] = ai_result.get("chip_type")
+            # Preserve the actual JSON values rather than truthiness-coercing
+            # them. The gate's identity checks reject malformed/missing bools,
+            # while the log retains the exact false/null/string evidence that
+            # explains the decision instead of silently rewriting it.
+            result["poker_chips_is_genuine_clay"] = ai_result.get("is_genuine_clay")
+            result["poker_chips_is_genuine_ceramic"] = ai_result.get("is_genuine_ceramic")
+            result["poker_chips_has_inlay_not_sticker"] = ai_result.get("has_inlay_not_sticker")
+            result["poker_chips_has_hot_stamp_not_sticker"] = ai_result.get("has_hot_stamp_not_sticker")
+            result["poker_chips_ceramic_design_embedded_not_sticker"] = ai_result.get(
+                "ceramic_design_embedded_not_sticker"
+            )
+            result["poker_chips_edge_spots_consistent"] = ai_result.get("edge_spots_consistent")
+            result["poker_chips_recolor_suspected"] = ai_result.get("recolor_suspected")
+            result["poker_chips_recolor_reason"] = ai_result.get("recolor_reason")
+            result["poker_chips_identified_casino_or_maker"] = ai_result.get("identified_casino_or_maker")
+            result["poker_chips_estimated_chip_count"] = ai_result.get("estimated_chip_count")
+            result["poker_chips_chip_count_visually_supported"] = ai_result.get(
+                "chip_count_visually_supported"
+            )
+            result["poker_chips_is_complete_usable_set"] = ai_result.get(
+                "is_complete_usable_set"
+            )
+            result["poker_chips_set_completeness_reason"] = ai_result.get(
+                "set_completeness_reason"
+            )
+            result["poker_chips_summary"] = ai_result.get("summary")
+
         if ai_result is not None and brand_in(
             (ai_result.get("summary") or "").lower(), GENDER_EXCLUDE_KEYWORDS
         ):
@@ -7978,26 +8100,6 @@ def run():
             result["golf_counterfeit_suspected"] = bool(ai_result.get("counterfeit_suspected"))
             result["golf_identified_brand"] = ai_result.get("identified_brand")
             result["damage_found"] = bool(ai_result.get("damage_found"))
-        if ai_result is not None and category == "poker-chips":
-            # As with golf, this is unconditional on a resale estimate: the
-            # specialized prompt intentionally never asks the model to price
-            # chips. These fields are the complete input to the clay-quality
-            # research gate above.
-            result["poker_chips_ai_checked"] = True
-            result["poker_chips_chip_type"] = ai_result.get("chip_type")
-            result["poker_chips_is_genuine_clay"] = bool(ai_result.get("is_genuine_clay"))
-            result["poker_chips_is_genuine_ceramic"] = bool(ai_result.get("is_genuine_ceramic"))
-            result["poker_chips_has_inlay_not_sticker"] = bool(ai_result.get("has_inlay_not_sticker"))
-            result["poker_chips_has_hot_stamp_not_sticker"] = bool(ai_result.get("has_hot_stamp_not_sticker"))
-            result["poker_chips_ceramic_design_embedded_not_sticker"] = bool(
-                ai_result.get("ceramic_design_embedded_not_sticker")
-            )
-            result["poker_chips_edge_spots_consistent"] = bool(ai_result.get("edge_spots_consistent"))
-            result["poker_chips_recolor_suspected"] = bool(ai_result.get("recolor_suspected"))
-            result["poker_chips_recolor_reason"] = ai_result.get("recolor_reason") or ""
-            result["poker_chips_identified_casino_or_maker"] = ai_result.get("identified_casino_or_maker")
-            result["poker_chips_estimated_chip_count"] = ai_result.get("estimated_chip_count")
-            result["poker_chips_summary"] = ai_result.get("summary") or ""
         if ai_result is not None and category == "watches":
             # Real live miss: a genuine Oris watch listed with its own
             # eBay item-specifics metadata mislabeled as "Seiko" - the

@@ -370,6 +370,11 @@ class PokerChipsGate(unittest.TestCase):
             "poker_chips_recolor_suspected": False,
             "poker_chips_recolor_reason": "",
             "poker_chips_estimated_chip_count": 300,
+            "poker_chips_chip_count_visually_supported": True,
+            "poker_chips_is_complete_usable_set": True,
+            "poker_chips_set_completeness_reason": (
+                "300 visible matching chips in five populated denominations"
+            ),
         }
         result.update(poker_fields)
         return result
@@ -466,6 +471,17 @@ class PokerChipsGate(unittest.TestCase):
             "poker-chips bar: recolor suspected: uneven saturated red patch on one face",
         )
 
+    def test_missing_or_non_boolean_recolor_assessment_blocks(self):
+        for value in (None, "false", 0):
+            with self.subTest(value=value):
+                reason = m.is_blocked_by_steal_quality_gate(
+                    self._result(poker_chips_recolor_suspected=value),
+                    category="poker-chips",
+                )
+                self.assertEqual(
+                    reason, "poker-chips bar: recolor assessment missing/invalid"
+                )
+
     def test_price_over_150_blocks(self):
         reason = m.is_blocked_by_steal_quality_gate(
             self._result(price=150.01), category="poker-chips"
@@ -512,6 +528,75 @@ class PokerChipsGate(unittest.TestCase):
             self._result(poker_chips_estimated_chip_count=100),
             category="poker-chips",
         ))
+
+    def test_seller_claimed_count_without_photo_support_blocks(self):
+        reason = m.is_blocked_by_steal_quality_gate(
+            self._result(
+                poker_chips_estimated_chip_count=500,
+                poker_chips_chip_count_visually_supported=False,
+            ),
+            category="poker-chips",
+        )
+        self.assertEqual(
+            reason,
+            "poker-chips bar: chip count not independently supported by the photos - "
+            "at least 100 visible/countable chips required",
+        )
+
+    def test_incomplete_or_hodgepodge_group_blocks_despite_count_and_material(self):
+        for completeness_reason in (
+            "only one denomination is shown",
+            "mixed unrelated casino chips with large empty case spaces",
+        ):
+            with self.subTest(completeness_reason=completeness_reason):
+                reason = m.is_blocked_by_steal_quality_gate(
+                    self._result(
+                        poker_chips_is_complete_usable_set=False,
+                        poker_chips_set_completeness_reason=completeness_reason,
+                    ),
+                    category="poker-chips",
+                )
+                self.assertEqual(
+                    reason,
+                    "poker-chips bar: not a confirmed complete usable set: "
+                    + completeness_reason,
+                )
+
+    def test_truthy_non_boolean_values_cannot_satisfy_positive_proof_fields(self):
+        clay_fields = (
+            "poker_chips_chip_count_visually_supported",
+            "poker_chips_is_complete_usable_set",
+            "poker_chips_is_genuine_clay",
+            "poker_chips_has_inlay_not_sticker",
+            "poker_chips_edge_spots_consistent",
+        )
+        for field in clay_fields:
+            with self.subTest(field=field):
+                result = self._result(**{field: "true"})
+                if field == "poker_chips_has_inlay_not_sticker":
+                    result["poker_chips_has_hot_stamp_not_sticker"] = False
+                self.assertIsNotNone(
+                    m.is_blocked_by_steal_quality_gate(result, category="poker-chips")
+                )
+
+        ceramic = self._result(
+            poker_chips_chip_type="ceramic",
+            poker_chips_is_genuine_clay=False,
+            poker_chips_is_genuine_ceramic=True,
+            poker_chips_has_inlay_not_sticker=False,
+            poker_chips_ceramic_design_embedded_not_sticker=True,
+        )
+        for field in (
+            "poker_chips_is_genuine_ceramic",
+            "poker_chips_ceramic_design_embedded_not_sticker",
+        ):
+            with self.subTest(field=field):
+                malformed = dict(ceramic, **{field: "true"})
+                self.assertIsNotNone(
+                    m.is_blocked_by_steal_quality_gate(
+                        malformed, category="poker-chips"
+                    )
+                )
 
     def test_poker_scoring_bypasses_apparel_logo_and_fabric_rules(self):
         # Live dispatch leak: poker rows were evaluated as menswear before
@@ -574,6 +659,10 @@ class PokerChipsGate(unittest.TestCase):
             '"ceramic_design_embedded_not_sticker": bool',
             '"edge_spots_consistent": bool',
             '"recolor_suspected": bool',
+            '"chip_count_visually_supported": bool',
+            '"is_complete_usable_set": bool',
+            '"set_completeness_reason": string',
+            "Every bool field must be an unquoted JSON true or false",
             "Paulson",
             "CHIPCO",
             "dye-sublimated CERAMIC",
@@ -582,6 +671,12 @@ class PokerChipsGate(unittest.TestCase):
             "Do not estimate resale value",
             "use false for boolean fields",
             "unknown for applicable string fields rather than guessing",
+            "injection-molded ABS/composite chip can weigh 11.5g",
+            "semi-gloss UV coating with no sticker",
+            "fully visible racks, rows, or stacks",
+            "advertised case/rack capacity",
+            "one-denomination rack",
+            "Matching wear and edge treatment address authenticity",
         ):
             with self.subTest(required_text=required_text):
                 self.assertIn(required_text, prompt)
@@ -7294,12 +7389,12 @@ class AlertLogPriceSemantics(unittest.TestCase):
     no landed cost. Downstream readers (mobile app, weekly digest) couldn't
     tell which they were looking at."""
 
-    def _write_and_read(self, result):
+    def _write_and_read(self, result, delivered=False):
         tmpdir = pathlib.Path(tempfile.mkdtemp())
         orig = m.ALERTS_LOG_PATH
         m.ALERTS_LOG_PATH = tmpdir / "alerts_log.jsonl"
         try:
-            m.append_alert_log(result)
+            m.append_alert_log(result, delivered=delivered)
             with m.ALERTS_LOG_PATH.open("r", encoding="utf-8") as f:
                 return json.loads(f.read().strip())
         finally:
@@ -7346,7 +7441,7 @@ class AlertLogPriceSemantics(unittest.TestCase):
             "reason": "excluded gender keyword in title/description",
         }
         record = self._write_and_read(result)
-        self.assertEqual(record["schema_version"], 2)
+        self.assertEqual(record["schema_version"], 3)
         self.assertEqual(record["disposition_code"], "GENDER_EXCLUDE")
         self.assertEqual(record["search_id"], search["id"])
         self.assertEqual(record["category"], "golf-equipment")
@@ -7410,6 +7505,106 @@ class AlertLogPriceSemantics(unittest.TestCase):
         self.assertFalse(record["golf_brand_claims_confirmed"])
         self.assertTrue(record["golf_handedness_confirmed"])
         self.assertIn("damage_found", record)
+
+    def test_poker_ai_gate_inputs_are_logged_for_delivered_and_blocked_rows(self):
+        delivered_details = {
+            "poker_chips_chip_type": "compression-molded clay",
+            "poker_chips_is_genuine_clay": True,
+            "poker_chips_is_genuine_ceramic": False,
+            "poker_chips_has_inlay_not_sticker": True,
+            "poker_chips_has_hot_stamp_not_sticker": False,
+            "poker_chips_ceramic_design_embedded_not_sticker": False,
+            "poker_chips_edge_spots_consistent": True,
+            "poker_chips_recolor_suspected": False,
+            "poker_chips_recolor_reason": "",
+            "poker_chips_identified_casino_or_maker": "Paulson",
+            "poker_chips_estimated_chip_count": 300,
+            "poker_chips_chip_count_visually_supported": True,
+            "poker_chips_is_complete_usable_set": True,
+            "poker_chips_set_completeness_reason": (
+                "six full visible racks in a coherent denomination breakdown"
+            ),
+            "poker_chips_summary": "Mold, inlay, edge inserts, and count visible.",
+        }
+        blocked_details = {
+            "poker_chips_chip_type": "ABS plastic/novelty",
+            "poker_chips_is_genuine_clay": False,
+            "poker_chips_is_genuine_ceramic": False,
+            "poker_chips_has_inlay_not_sticker": False,
+            "poker_chips_has_hot_stamp_not_sticker": False,
+            "poker_chips_ceramic_design_embedded_not_sticker": False,
+            "poker_chips_edge_spots_consistent": True,
+            "poker_chips_recolor_suspected": False,
+            "poker_chips_recolor_reason": "",
+            "poker_chips_identified_casino_or_maker": "unknown",
+            "poker_chips_estimated_chip_count": None,
+            "poker_chips_chip_count_visually_supported": False,
+            "poker_chips_is_complete_usable_set": False,
+            "poker_chips_set_completeness_reason": "closed case hides the chip count",
+            "poker_chips_summary": "Glossy injection-molded chips; count obscured.",
+        }
+        cases = (
+            (True, "REVIEW", "manual research target", delivered_details),
+            (
+                False,
+                "PASS",
+                "blocked by steal-quality gate: poker-chips bar: not confirmed "
+                "compression clay or ceramic",
+                blocked_details,
+            ),
+        )
+
+        for delivered, verdict, reason, details in cases:
+            with self.subTest(delivered=delivered):
+                result = {
+                    "listing": {
+                        "itemId": f"vinted:poker-{delivered}",
+                        "title": "Poker chips",
+                        "platform": "vinted",
+                        "price": {"value": 25.0, "currency": "USD"},
+                    },
+                    "search_query": "clay poker chips lot",
+                    "category": "poker-chips",
+                    "verdict": verdict,
+                    "reason": reason,
+                    "poker_chips_ai_checked": True,
+                    **details,
+                }
+                record = self._write_and_read(result, delivered=delivered)
+
+                self.assertEqual(record["schema_version"], 3)
+                self.assertTrue(record["ai_checked"])
+                self.assertEqual(record["delivered"], delivered)
+                self.assertEqual(
+                    record["disposition_code"],
+                    "DELIVERED" if delivered else "GATE_REJECTED",
+                )
+                for key, expected in details.items():
+                    with self.subTest(field=key):
+                        self.assertIn(key, record)
+                        self.assertEqual(record[key], expected)
+
+    def test_poker_no_ai_budget_reason_does_not_claim_ai_was_checked(self):
+        result = {
+            "listing": {
+                "itemId": "vinted:no-ai-poker",
+                "title": "Plastic poker play chips",
+                "platform": "vinted",
+                "price": {"value": 6.0, "currency": "USD"},
+            },
+            "search_query": "clay poker chips lot",
+            "category": "poker-chips",
+            "verdict": "PASS",
+            "reason": (
+                "blocked by steal-quality gate: poker-chips bar: no AI price "
+                "estimate yet - needs a real AI photo check"
+            ),
+        }
+        record = self._write_and_read(result)
+
+        self.assertEqual(record["disposition_code"], "NO_AI_BUDGET")
+        self.assertFalse(record["ai_checked"])
+        self.assertNotIn("poker_chips_chip_type", record)
 
     def test_append_preserves_existing_history_bytes(self):
         tmpdir = pathlib.Path(tempfile.mkdtemp())
