@@ -417,6 +417,8 @@ class VintedAdaptiveBackoff(unittest.TestCase):
         # Module-level dicts persist across tests in the same process -
         # isolate every test from whatever an earlier one left behind.
         p._backoff_multiplier.clear()
+        p._backoff_success_streak.clear()
+        p._backoff_updated_ts.clear()
         p._last_call.clear()
 
     def test_register_rate_limit_doubles_and_caps(self):
@@ -431,6 +433,24 @@ class VintedAdaptiveBackoff(unittest.TestCase):
         p._register_rate_limit("vinted")
         p._register_rate_limit("vinted")
         self.assertEqual(p._backoff_multiplier.get("poshmark", 1), 1)
+
+    def test_successes_halve_each_backoff_rung_and_persist_recovery(self):
+        p._backoff_multiplier["vinted"] = 32
+        for expected in (16, 8, 4, 2, 1):
+            for _ in range(p._BACKOFF_SUCCESS_DECAY_REQUESTS - 1):
+                self.assertNotEqual(p._register_backoff_success("vinted"), expected)
+            self.assertEqual(p._register_backoff_success("vinted"), expected)
+        self.assertNotIn("vinted", p._backoff_multiplier)
+        self.assertNotIn("vinted", json.loads(p._BACKOFF_STATE_PATH.read_text()))
+
+    def test_rate_limit_resets_partial_success_streak(self):
+        p._backoff_multiplier["vinted"] = 8
+        for _ in range(p._BACKOFF_SUCCESS_DECAY_REQUESTS - 1):
+            p._register_backoff_success("vinted")
+
+        self.assertEqual(p._register_rate_limit("vinted"), 16)
+        self.assertNotIn("vinted", p._backoff_success_streak)
+        self.assertEqual(p._register_backoff_success("vinted"), 16)
 
     def test_pace_actually_scales_with_backoff_multiplier(self):
         # Mutation-catchable: proves _pace() reads the multiplier, not just
@@ -457,6 +477,13 @@ class VintedAdaptiveBackoff(unittest.TestCase):
         self.assertEqual(p._backoff_multiplier.get("vinted"), 2)
         self.assertIn("backing off", " ".join(cm.output))
 
+    def test_get_json_success_contributes_to_backoff_recovery(self):
+        with mock.patch("platforms.requests.get", return_value=_FakeResp(200, {"ok": True})), \
+             mock.patch.object(p, "_pace"), \
+             mock.patch.object(p, "_register_backoff_success") as success:
+            self.assertEqual(p.get_json("vinted", "https://vinted.example/api"), {"ok": True})
+        success.assert_called_once_with("vinted")
+
     def test_fetch_page_429_registers_backoff(self):
         fake_fetcher = mock.MagicMock()
         fake_fetcher.get.return_value = mock.MagicMock(status=429)
@@ -467,6 +494,54 @@ class VintedAdaptiveBackoff(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(p._backoff_multiplier.get("offerup"), 2)
         self.assertIn("backing off", " ".join(cm.output))
+
+
+class BackoffSuccessCallSites(unittest.TestCase):
+    """Every transport that can increase generic 429 backoff must also
+    report clean responses; otherwise its persisted 32x multiplier can only
+    recover at the abrupt 30-minute expiry."""
+
+    def test_valid_grailed_batch_json_contributes_to_recovery(self):
+        response = _FakeResp(200, {"results": [{"hits": []}]})
+        with mock.patch("platforms.requests.post", return_value=response), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "_register_backoff_success") as success:
+            results = p._algolia_multi_query([{"indexName": "I", "params": "query=foo"}])
+
+        self.assertEqual(results, [{"hits": []}])
+        success.assert_called_once_with("grailed")
+
+    def test_parsed_shopgoodwill_200_contributes_to_recovery(self):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.return_value = _FakeScraplingResp(
+            200,
+            {"searchResults": {"items": [], "itemCount": 0}},
+        )
+        with mock.patch.dict(
+            "sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}
+        ), mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True), \
+                mock.patch.object(p, "_register_backoff_success") as success:
+            result = p.search_shopgoodwill({"query": "test"})
+
+        self.assertEqual(result, ([], 0))
+        success.assert_called_once_with("shopgoodwill")
+
+    def test_successful_html_fetch_contributes_to_recovery(self):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.get.return_value = mock.MagicMock(
+            status=200,
+            body=b"<html>ok</html>",
+            encoding="utf-8",
+        )
+        with mock.patch.dict(
+            "sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}
+        ), mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "_register_backoff_success") as success:
+            body = p._fetch_page("offerup", "https://offerup.example/search")
+
+        self.assertEqual(body, "<html>ok</html>")
+        success.assert_called_once_with("offerup")
 
 
 class PersistedBackoffState(unittest.TestCase):
@@ -487,6 +562,8 @@ class PersistedBackoffState(unittest.TestCase):
         p._BACKOFF_STATE_PATH = self.path
         p._backoff_state_loaded = False
         p._backoff_multiplier.clear()
+        p._backoff_success_streak.clear()
+        p._backoff_updated_ts.clear()
         p._last_call.clear()
 
     def tearDown(self):
@@ -500,6 +577,46 @@ class PersistedBackoffState(unittest.TestCase):
         state = json.loads(self.path.read_text())
         self.assertEqual(state["offerup"]["multiplier"], 4)
         self.assertIn("updated_ts", state["offerup"])
+
+    def test_updating_offerup_does_not_refresh_vinted_timestamp(self):
+        # The prior serializer stamped every in-memory platform with one
+        # blanket ``now``.  Thus an unrelated OfferUp 429 could indefinitely
+        # renew Vinted's old 32x slowdown on five-minute workflow runs.
+        self.path.write_text(json.dumps({
+            "vinted": {"multiplier": 32, "updated_ts": 1000},
+        }))
+        with mock.patch("platforms.time.time", return_value=1100):
+            p._register_rate_limit("offerup")
+
+        state = json.loads(self.path.read_text())
+        self.assertEqual(state["vinted"], {"multiplier": 32, "updated_ts": 1000})
+        self.assertEqual(state["offerup"], {"multiplier": 2, "updated_ts": 1100})
+
+    def test_partial_success_streak_survives_the_next_process(self):
+        # At 32x, OfferUp/ShopGoodwill are paced 16 seconds apart and cannot
+        # necessarily produce eight successes inside one 90-second job.  A
+        # process-local streak would leave them pinned until the TTL cliff.
+        p._backoff_multiplier["offerup"] = 32
+        original_updated_ts = time.time()
+        p._backoff_updated_ts["offerup"] = original_updated_ts
+        first_run_successes = p._BACKOFF_SUCCESS_DECAY_REQUESTS - 3
+        for _ in range(first_run_successes):
+            self.assertEqual(p._register_backoff_success("offerup"), 32)
+        persisted = json.loads(self.path.read_text())["offerup"]
+        self.assertEqual(persisted["success_streak"], first_run_successes)
+        self.assertEqual(persisted["updated_ts"], original_updated_ts)
+
+        # Simulate the next five-minute workflow process loading that state.
+        p._backoff_multiplier.clear()
+        p._backoff_success_streak.clear()
+        p._backoff_updated_ts.clear()
+        p._backoff_state_loaded = False
+        for _ in range(2):
+            self.assertEqual(p._register_backoff_success("offerup"), 32)
+        self.assertEqual(p._register_backoff_success("offerup"), 16)
+        state = json.loads(self.path.read_text())["offerup"]
+        self.assertEqual(state["multiplier"], 16)
+        self.assertNotIn("success_streak", state)
 
     def test_fresh_process_loads_recent_multiplier_from_disk(self):
         # Simulates the next GH Actions run: a fresh process (empty
@@ -543,6 +660,25 @@ class PersistedBackoffState(unittest.TestCase):
             p._pace("offerup")
         sleep_mock.assert_called_once()
         self.assertAlmostEqual(sleep_mock.call_args[0][0], 0.5, places=3)
+
+    def test_invalid_numeric_state_entries_are_ignored(self):
+        # Python's JSON decoder accepts NaN/Infinity even though they are not
+        # standard JSON.  Previously int(NaN/Infinity) raised during pacing;
+        # negative multipliers disabled pacing, and a future timestamp could
+        # preserve a stale penalty forever.
+        now = time.time()
+        self.path.write_text(json.dumps({
+            "nan": {"multiplier": float("nan"), "updated_ts": now},
+            "infinity": {"multiplier": float("inf"), "updated_ts": now},
+            "negative": {"multiplier": -4, "updated_ts": now},
+            "future": {"multiplier": 32, "updated_ts": now + 86400},
+            "valid": {"multiplier": 8, "updated_ts": now - 1},
+        }))
+
+        p._load_backoff_state_if_needed()
+
+        self.assertEqual(p._backoff_multiplier, {"valid": 8})
+        self.assertEqual(set(p._backoff_updated_ts), {"valid"})
 
 
 class GetJsonTransientRetry(unittest.TestCase):
@@ -632,6 +768,28 @@ class ShopGoodwillTimeoutRetry(unittest.TestCase):
         self.assertEqual(fake_fetcher.post.call_count, 2)
         self.assertIn("request failed", " ".join(cm.output))
 
+    def test_timeout_diagnostics_include_attempt_elapsed_and_safe_proxy_flag(self):
+        fake_fetcher = mock.MagicMock()
+        fake_fetcher.post.side_effect = TimeoutError("Operation timed out")
+        secret_proxy = "https://user:super-secret@example.invalid:8443"
+        with mock.patch.dict(
+                "sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}), \
+                mock.patch.dict(p.os.environ, {"SHOPGOODWILL_PROXY_URL": secret_proxy}), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True), \
+                mock.patch.object(p.time, "sleep"), \
+                mock.patch.object(p.time, "monotonic", side_effect=[10.0, 11.25, 20.0, 22.5]):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_shopgoodwill({"query": "test"})
+
+        message = " ".join(cm.output)
+        self.assertEqual(result, ([], None))
+        self.assertIn("attempt 1/2 after 1.25s", message)
+        self.assertIn("attempt 2/2 after 2.50s", message)
+        self.assertIn("proxy configured: yes", message)
+        self.assertNotIn(secret_proxy, message)
+        self.assertNotIn("super-secret", message)
+
 
 class DefensiveParsing(unittest.TestCase):
     def test_dget_scalar_receiver_returns_default(self):
@@ -690,7 +848,93 @@ class DefensiveParsing(unittest.TestCase):
 
     def test_poshmark_search_survives_a_null_data_collection(self):
         with mock.patch.object(p, "get_json", return_value={"data": None}):
-            self.assertEqual(p.search_poshmark({"query": "brooks brothers blazer"}), ([], None))
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_poshmark({"query": "brooks brothers blazer"})
+        self.assertEqual(result, ([], None))
+        self.assertIn("parse failed", " ".join(cm.output))
+        self.assertIn("data collection was NoneType", " ".join(cm.output))
+
+    def test_poshmark_missing_data_logs_safe_shape_metadata(self):
+        body = {
+            "more": {"total": 17},
+            "trace_id": "trace-123",
+            "meta": {"facets": []},
+        }
+        with mock.patch.object(p, "get_json", return_value=body):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_poshmark({"query": "canali blazer"})
+
+        message = " ".join(cm.output)
+        self.assertEqual(result, ([], None))
+        self.assertIn("parse failed", message)
+        self.assertIn("data collection was missing", message)
+        self.assertIn("reported_total=17", message)
+        self.assertIn("reported_total_type=int", message)
+        self.assertIn("trace_id_type=str", message)
+        self.assertNotIn("trace-123", message)
+        self.assertIn("top_level_keys=['meta', 'more', 'trace_id']", message)
+
+    def test_poshmark_non_object_body_logs_parse_failure(self):
+        with mock.patch.object(p, "get_json", return_value=[{"id": "wrong-level"}]):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_poshmark({"query": "canali blazer"})
+
+        self.assertEqual(result, ([], None))
+        self.assertIn(
+            "successful JSON response top level was list, expected object",
+            " ".join(cm.output),
+        )
+
+    def test_poshmark_valid_empty_data_logs_success_metadata_at_info(self):
+        body = {
+            "data": [],
+            "more": {"total": 0},
+            "trace_id": "trace-empty",
+            "meta": {},
+        }
+        with mock.patch.object(p, "get_json", return_value=body):
+            with self.assertLogs("platforms", level="INFO") as cm:
+                result = p.search_poshmark({"query": "impossibly rare item"})
+
+        message = " ".join(cm.output)
+        self.assertEqual(result, ([], None))
+        self.assertIn("successful JSON response contained an empty data list", message)
+        self.assertIn("reported_total=0", message)
+        self.assertIn("trace_id_type=str", message)
+        self.assertNotIn("trace-empty", message)
+
+    def test_poshmark_nonempty_renamed_row_fields_log_safe_shape_metadata(self):
+        body = {
+            "data": [
+                {
+                    "post_id": "renamed-id-must-not-be-logged",
+                    "name": "Renamed title must not be logged",
+                    "amount": {"val": "50"},
+                },
+                "non-object-row-must-not-be-logged",
+            ],
+            "more": {"total": 2},
+            "trace_id": "trace-row-shape",
+        }
+        with mock.patch.object(p, "get_json", return_value=body):
+            with self.assertLogs("platforms", level="WARNING") as cm:
+                result = p.search_poshmark({"query": "canali blazer"})
+
+        message = " ".join(cm.output)
+        self.assertEqual(result, ([], None))
+        self.assertIn("parse failed", message)
+        self.assertIn("contained 2 data row(s) but zero normalized listings", message)
+        self.assertIn("object_rows=1", message)
+        self.assertIn("rows_with_id=0", message)
+        self.assertIn("rows_with_title=0", message)
+        self.assertIn("rows_with_price=0", message)
+        self.assertIn("sample_row_keys=['amount', 'name', 'post_id']", message)
+        self.assertIn("reported_total=2", message)
+        self.assertIn("trace_id_type=str", message)
+        self.assertNotIn("trace-row-shape", message)
+        self.assertNotIn("renamed-id-must-not-be-logged", message)
+        self.assertNotIn("Renamed title must not be logged", message)
+        self.assertNotIn("non-object-row-must-not-be-logged", message)
 
     def test_poshmark_search_skips_non_dict_rows_without_dropping_good_ones(self):
         body = {"data": [
@@ -842,6 +1086,8 @@ class VintedCircuitBreaker(unittest.TestCase):
         p.VINTED_RATE_LIMIT_STATE_PATH = self.path
         p._vinted_thread_state = threading.local()
         p._backoff_multiplier.clear()
+        p._backoff_success_streak.clear()
+        p._backoff_updated_ts.clear()
         p._last_call.clear()
         p._vinted_consecutive_query_failures = 0
 
@@ -922,10 +1168,12 @@ class VintedCircuitBreaker(unittest.TestCase):
         session = mock.MagicMock()
         session.get.return_value = _FakeScraplingResp(200, {"items": []})
         params = {"page": 1}
-        with mock.patch.object(p, "_pace"):
+        with mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "_register_backoff_success") as success:
             body, returned_session = p._get_vinted_catalog_page(session, params)
         self.assertEqual(body, {"items": []})
         self.assertIs(returned_session, session)
+        success.assert_called_once_with("vinted")
         session.get.assert_called_once_with(
             p.VINTED_CATALOG_URL,
             params=params,
@@ -1219,6 +1467,9 @@ class OfferUpAdapter(unittest.TestCase):
         late_request_started = threading.Event()
 
         def fetch_page(*_args, **_kwargs):
+            on_request_started = _kwargs.get("on_request_started")
+            if on_request_started is not None:
+                on_request_started()
             if not late_request_started.is_set() and fetch_page.calls == 0:
                 fetch_page.calls += 1
                 return _OFFERUP_HTML
@@ -1233,9 +1484,34 @@ class OfferUpAdapter(unittest.TestCase):
         self.assertTrue(late_request_started.is_set())
         self.assertEqual(fetch.call_count, 2)
         self.assertEqual(set(result), {"rolex watch"})
+        self.assertEqual(result.started_requests, 2)
+        self.assertEqual(result.completed_requests, 1)
+        self.assertEqual(result.scheduled_requests, 2)
+        self.assertTrue(result.deadline_truncated)
         release_late_request.set()
         time.sleep(0.02)
         self.assertEqual(set(result), {"rolex watch"})
+
+    def test_pacing_past_deadline_does_not_dispatch_or_count_a_request(self):
+        fake_fetcher = mock.MagicMock()
+
+        def slow_pace(_platform):
+            time.sleep(0.06)
+
+        with mock.patch.dict(
+                "sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake_fetcher)}), \
+                mock.patch.object(p, "MARKETPLACE_BATCH_DEADLINE_SECONDS", 0.02), \
+                mock.patch.object(p, "_pace", side_effect=slow_pace):
+            result = p.search_offerup([{"query": "rolex watch"}])
+
+        # The outer snapshot returns at its deadline while the daemon is still
+        # pacing.  Give it time to wake and prove it refuses the late dispatch.
+        time.sleep(0.08)
+        fake_fetcher.get.assert_not_called()
+        self.assertEqual(result.started_requests, 0)
+        self.assertEqual(result.completed_requests, 0)
+        self.assertEqual(result.scheduled_requests, 1)
+        self.assertTrue(result.deadline_truncated)
 
 
 class HtmlBatchHealthContext(unittest.TestCase):
@@ -1334,6 +1610,9 @@ class DepopAdapter(unittest.TestCase):
         late_request_started = threading.Event()
 
         def fetch_page(*_args, **_kwargs):
+            on_request_started = _kwargs.get("on_request_started")
+            if on_request_started is not None:
+                on_request_started()
             if not late_request_started.is_set() and fetch_page.calls == 0:
                 fetch_page.calls += 1
                 return _depop_html(_DEPOP_PAYLOAD)
@@ -1348,6 +1627,10 @@ class DepopAdapter(unittest.TestCase):
         self.assertTrue(late_request_started.is_set())
         self.assertEqual(fetch.call_count, 2)
         self.assertEqual(set(result), {"rolex watch"})
+        self.assertEqual(result.started_requests, 2)
+        self.assertEqual(result.completed_requests, 1)
+        self.assertEqual(result.scheduled_requests, 2)
+        self.assertTrue(result.deadline_truncated)
         release_late_request.set()
         time.sleep(0.02)
         self.assertEqual(set(result), {"rolex watch"})

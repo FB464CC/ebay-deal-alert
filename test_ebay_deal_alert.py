@@ -5516,6 +5516,146 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         self.assertIn("1.0/request", mock_notify.call_args[0][0])
         self.assertIn("baseline ~10.0/request", mock_notify.call_args[0][0])
 
+    def test_deadline_incomplete_zero_is_not_reported_as_parser_collapse(self):
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        now = datetime.now(timezone.utc)
+
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn,
+                now,
+                ["poshmark"],
+                {"poshmark": 0},
+                health={
+                    "poshmark": {
+                        "requests": 0,
+                        "completed_requests": 0,
+                        "scheduled_requests": 33,
+                    }
+                },
+            )
+
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args[0][0]
+        self.assertIn("deadline coverage only 0/33", message)
+        self.assertIn("count-collapse comparison suppressed", message)
+        self.assertNotIn("fixed 7-day median", message)
+        recorded = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count "
+            "FROM marketplace_counts WHERE platform = 'poshmark' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (0, 0, 33))
+
+    def test_completed_zero_responses_still_detect_parser_shape_collapse(self):
+        self._seed_history("poshmark", [40, 45, 50, 45, 48, 42, 46, 44, 47, 43])
+        now = datetime.now(timezone.utc)
+
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn,
+                now,
+                ["poshmark"],
+                {"poshmark": 0},
+                health={
+                    "poshmark": {
+                        "requests": 33,
+                        "completed_requests": 33,
+                        "scheduled_requests": 33,
+                    }
+                },
+            )
+
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args[0][0]
+        self.assertIn("0 listings across 33 request(s)", message)
+        self.assertIn("fixed 7-day median", message)
+        self.assertNotIn("deadline coverage", message)
+
+    def test_circuit_open_history_is_excluded_from_future_baselines(self):
+        now = datetime.now(timezone.utc)
+        m._ensure_marketplace_health_columns(self.conn)
+        for index in range(5):
+            self.conn.execute(
+                "INSERT INTO marketplace_counts "
+                "(platform, run_ts, count, request_count, completed_request_count, "
+                "scheduled_request_count, circuit_breaker_open) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "vinted",
+                    (now - timedelta(hours=index + 1)).isoformat(),
+                    100,
+                    10,
+                    10,
+                    10,
+                    0,
+                ),
+            )
+        for index in range(7):
+            self.conn.execute(
+                "INSERT INTO marketplace_counts "
+                "(platform, run_ts, count, request_count, completed_request_count, "
+                "scheduled_request_count, circuit_breaker_open) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "vinted",
+                    (now - timedelta(hours=index + 10)).isoformat(),
+                    0,
+                    10,
+                    10,
+                    10,
+                    1,
+                ),
+            )
+        self.conn.commit()
+
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn,
+                now,
+                ["vinted"],
+                {"vinted": 0},
+                health={
+                    "vinted": {
+                        "requests": 10,
+                        "completed_requests": 10,
+                        "scheduled_requests": 10,
+                    }
+                },
+            )
+
+        mock_notify.assert_called_once()
+        self.assertIn("baseline ~10.0/request", mock_notify.call_args[0][0])
+
+    def test_circuit_open_suppresses_collapse_even_if_all_tasks_were_completed(self):
+        self._seed_history("vinted", [300] * 10)
+        self.conn.execute(
+            "UPDATE marketplace_counts SET request_count = 3 WHERE platform = 'vinted'"
+        )
+        self.conn.commit()
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+
+        with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(
+                self.conn,
+                now,
+                ["vinted"],
+                {"vinted": 0},
+                health={
+                    "vinted": {
+                        "requests": 3,
+                        "completed_requests": 3,
+                        "scheduled_requests": 3,
+                        "circuit_breaker_open": 1,
+                    }
+                },
+            )
+
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args[0][0]
+        self.assertIn("circuit-breaker cooldown active", message)
+        self.assertIn("count-collapse comparison suppressed", message)
+        self.assertNotIn("fixed 7-day median", message)
+
     def test_timeout_error_rate_and_garbage_signals_are_persisted(self):
         now = datetime.now(timezone.utc)
         health = {
@@ -5584,6 +5724,228 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         ).fetchone()
         self.assertEqual(recorded, (1, 0, 1))
 
+    def test_deadline_noops_are_not_counted_as_real_requests(self):
+        """Workers used to dequeue until deadline + HTTP_TIMEOUT_MARGIN.
+
+        _fetch_marketplace() immediately no-op'd after the real deadline, so
+        every queued task drained during the margin became a fake successful
+        zero.  That is the exact mechanism capable of producing production's
+        Poshmark ``0 listings across 33 requests`` without 33 HTTP calls.
+        """
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)  # rotation offset 0
+        clock = {"now": 0.0}
+        adapter_calls = []
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def crosses_fetch_deadline(saved_search):
+            adapter_calls.append(saved_search["query"])
+            clock["now"] = 1.1
+            return ([{
+                "itemId": f"poshmark:{saved_search['query']}",
+                "title": "test item",
+                "seller": {},
+            }], 1)
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS["poshmark"] = crosses_fetch_deadline
+            m.MARKETPLACES_ENABLED = ["poshmark"]
+            m.SAVED_SEARCHES = [
+                {"query": f"test item {index}", "enabled": True,
+                 "platforms": ["poshmark"]}
+                for index in range(3)
+            ]
+            with mock.patch.object(m, "MARKETPLACE_FETCH_BUDGET_SECONDS", 1), \
+                 mock.patch.object(m, "HTTP_TIMEOUT_MARGIN", 10), \
+                 mock.patch.object(m, "MARKETPLACE_WORKERS_PER_PLATFORM", 1), \
+                 mock.patch.object(m.time, "monotonic", side_effect=lambda: clock["now"]), \
+                 mock.patch.object(m, "notify_bot_down") as mock_notify:
+                found = m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertEqual(adapter_calls, ["test item 0"])
+        self.assertEqual(len(found["test item 0"]), 1)
+        recorded = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count, count "
+            "FROM marketplace_counts WHERE platform = 'poshmark' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (1, 1, 3, 1))
+        message = mock_notify.call_args[0][0]
+        self.assertIn("deadline coverage only 1/3", message)
+        self.assertIn("count-collapse comparison suppressed", message)
+
+    def test_slow_platform_cannot_starve_another_platforms_private_lane(self):
+        """Eight backed-off Vinted jobs previously occupied all eight shared
+        workers, leaving a healthy Poshmark queue untouched until deadline."""
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)  # rotation offset 0
+        release = threading.Event()
+        slow_returned = threading.Event()
+        slow_return_count = 0
+        slow_return_lock = threading.Lock()
+        poshmark_calls = []
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def blocked_vinted(_saved_search):
+            nonlocal slow_return_count
+            release.wait(timeout=1)
+            with slow_return_lock:
+                slow_return_count += 1
+                if slow_return_count == 2:
+                    slow_returned.set()
+            return [], None
+
+        def healthy_poshmark(saved_search):
+            poshmark_calls.append(saved_search["query"])
+            return ([{
+                "itemId": f"poshmark:{saved_search['query']}",
+                "title": "test item",
+                "seller": {},
+            }], 1)
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS.update({
+                "vinted": blocked_vinted,
+                "poshmark": healthy_poshmark,
+            })
+            m.MARKETPLACES_ENABLED = ["vinted", "poshmark"]
+            m.SAVED_SEARCHES = [
+                {"query": f"slow {index}", "enabled": True,
+                 "platforms": ["vinted"]}
+                for index in range(8)
+            ] + [
+                {"query": f"fast {index}", "enabled": True,
+                 "platforms": ["poshmark"]}
+                for index in range(2)
+            ]
+            with mock.patch.object(m, "MARKETPLACE_FETCH_BUDGET_SECONDS", 0.04), \
+                 mock.patch.object(m, "HTTP_TIMEOUT_MARGIN", 0.01), \
+                 mock.patch.object(m, "MARKETPLACE_WORKERS_PER_PLATFORM", 2), \
+                 mock.patch.object(p, "adapter_circuit_breaker_allows_calls", return_value=True), \
+                 mock.patch.object(m, "notify_bot_down"):
+                found = m.prefetch_marketplaces(now, self.conn)
+        finally:
+            release.set()
+            slow_returned.wait(timeout=1)
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertEqual(poshmark_calls, ["fast 0", "fast 1"])
+        self.assertEqual(
+            sum(len(found.get(query, [])) for query in poshmark_calls),
+            2,
+        )
+        poshmark_health = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count "
+            "FROM marketplace_counts WHERE platform = 'poshmark' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        vinted_health = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count "
+            "FROM marketplace_counts WHERE platform = 'vinted' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(poshmark_health, (2, 2, 2))
+        self.assertEqual(vinted_health, (2, 0, 8))
+
+    def test_open_circuit_does_not_become_completed_zero_result_requests(self):
+        self._seed_history("vinted", [100] * 10)
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        adapter = mock.Mock(return_value=([], None))
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS["vinted"] = adapter
+            m.MARKETPLACES_ENABLED = ["vinted"]
+            m.SAVED_SEARCHES = [
+                {"query": f"test item {index}", "enabled": True,
+                 "platforms": ["vinted"]}
+                for index in range(3)
+            ]
+            with mock.patch.object(
+                    p, "adapter_circuit_breaker_allows_calls", return_value=False), \
+                    mock.patch.object(m, "notify_bot_down") as mock_notify:
+                found = m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertEqual(found, {})
+        adapter.assert_not_called()
+        recorded = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count, "
+            "circuit_breaker_open, count FROM marketplace_counts "
+            "WHERE platform = 'vinted' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (0, 0, 3, 1, 0))
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args[0][0]
+        self.assertIn("circuit-breaker cooldown active", message)
+        self.assertIn("0/3 scheduled request(s) completed", message)
+        self.assertNotIn("fixed 7-day median", message)
+
+    def test_final_request_that_trips_circuit_is_marked_in_health(self):
+        self._seed_history("vinted", [100] * 10)
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def trips_circuit(_search):
+            p.logger.warning(
+                "Vinted circuit breaker: persistent HTTP 429 after retry; backing off"
+            )
+            return [], None
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.ADAPTERS["vinted"] = trips_circuit
+            m.MARKETPLACES_ENABLED = ["vinted"]
+            m.SAVED_SEARCHES = [
+                {"query": "test item", "enabled": True, "platforms": ["vinted"]}
+            ]
+            with mock.patch.object(
+                    p, "adapter_circuit_breaker_allows_calls", return_value=True), \
+                    mock.patch.object(m, "notify_bot_down") as mock_notify:
+                m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        recorded = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count, "
+            "circuit_breaker_open FROM marketplace_counts "
+            "WHERE platform = 'vinted' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (1, 1, 1, 1))
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args[0][0]
+        self.assertIn("circuit-breaker cooldown active", message)
+        self.assertNotIn("fixed 7-day median", message)
+
     def test_prefetch_captures_adapter_429_warning_count(self):
         self._seed_history("vinted", [45] * 10)
         now = datetime.now(timezone.utc)
@@ -5603,7 +5965,9 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
             m.SAVED_SEARCHES = [
                 {"query": "test watch", "enabled": True, "platforms": ["vinted"]}
             ]
-            with mock.patch.object(m, "notify_bot_down") as mock_notify:
+            with mock.patch.object(
+                    p, "adapter_circuit_breaker_allows_calls", return_value=True), \
+                    mock.patch.object(m, "notify_bot_down") as mock_notify:
                 m.prefetch_marketplaces(now, self.conn)
         finally:
             p.ADAPTERS.clear()
@@ -5660,6 +6024,96 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         ).fetchone()
         self.assertEqual((request_count, error_count), (5, 1))
         mock_notify.assert_not_called()
+
+    def test_html_batch_partial_snapshot_persists_truthful_coverage(self):
+        """A real OfferUp/Depop batch can return at its deadline after only
+        some sequential query requests.  Its plain result size cannot prove
+        whether missing keys were empty responses or searches never run."""
+        now = datetime.now(timezone.utc)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def partial_batch(_searches, deadline=None):
+            return p._HtmlBatchResult(
+                {
+                    "test item 0": [
+                        {"itemId": "depop:0", "title": "test item", "seller": {}}
+                    ]
+                },
+                started_requests=2,
+                completed_requests=1,
+                scheduled_requests=4,
+                deadline_truncated=True,
+            )
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS["depop"] = partial_batch
+            m.MARKETPLACES_ENABLED = ["depop"]
+            m.SAVED_SEARCHES = [
+                {"query": f"test item {index}", "enabled": True, "platforms": ["depop"]}
+                for index in range(4)
+            ]
+            with mock.patch.object(m, "notify_bot_down") as mock_notify:
+                found = m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        self.assertEqual(len(found["test item 0"]), 1)
+        recorded = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count, count "
+            "FROM marketplace_counts WHERE platform = 'depop' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (2, 1, 4, 1))
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args[0][0]
+        self.assertIn("deadline coverage only 1/4", message)
+        self.assertIn("count-collapse comparison suppressed", message)
+
+    def test_html_batch_exception_does_not_invent_per_query_requests(self):
+        now = datetime.now(timezone.utc)
+        orig_adapters, orig_batch = dict(p.ADAPTERS), dict(p.BATCH_ADAPTERS)
+        orig_searches, orig_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+
+        def failed_batch(_searches, deadline=None):
+            raise RuntimeError("failed before per-query progress was reported")
+
+        try:
+            p.ADAPTERS.clear()
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS["offerup"] = failed_batch
+            m.MARKETPLACES_ENABLED = ["offerup"]
+            m.SAVED_SEARCHES = [
+                {"query": f"test item {index}", "enabled": True, "platforms": ["offerup"]}
+                for index in range(4)
+            ]
+            with mock.patch.object(
+                    p, "adapter_circuit_breaker_allows_calls", return_value=True), \
+                    mock.patch.object(m, "notify_bot_down") as mock_notify:
+                m.prefetch_marketplaces(now, self.conn)
+        finally:
+            p.ADAPTERS.clear()
+            p.ADAPTERS.update(orig_adapters)
+            p.BATCH_ADAPTERS.clear()
+            p.BATCH_ADAPTERS.update(orig_batch)
+            m.SAVED_SEARCHES = orig_searches
+            m.MARKETPLACES_ENABLED = orig_enabled
+
+        recorded = self.conn.execute(
+            "SELECT request_count, completed_request_count, scheduled_request_count, error_count "
+            "FROM marketplace_counts WHERE platform = 'offerup' ORDER BY run_ts DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(recorded, (0, 0, 4, 1))
+        mock_notify.assert_called_once()
+        message = mock_notify.call_args[0][0]
+        self.assertIn("deadline coverage only 0/4", message)
+        self.assertIn("1/? request errors", message)
 
     def test_late_outer_worker_cannot_mutate_returned_results_or_counts(self):
         started = threading.Event()

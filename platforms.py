@@ -132,6 +132,18 @@ _last_call = {}
 # every remaining call to that platform.
 _backoff_multiplier = {}
 _MAX_BACKOFF_MULTIPLIER = 32
+# An adaptive multiplier must be able to recover while requests are succeeding.
+# Live Actions runs on 2026-09-09 exposed the old failure mode: Vinted loaded a
+# persisted 32x multiplier, returned only HTTP 200 responses, but stayed at a
+# 4.8-second inter-request interval until the fixed 30-minute expiry.  Its
+# workers then occupied the shared marketplace pool until the 90-second
+# deadline, cutting Vinted coverage and starving later platforms.  Eight
+# consecutive successes are enough evidence to halve one rung: at 32x that is
+# still ~38 seconds of clean traffic before trying 16x, while a healthy run can
+# descend the full 32 -> 1 ladder inside its fetch budget.
+_BACKOFF_SUCCESS_DECAY_REQUESTS = 8
+_backoff_success_streak = {}
+_backoff_updated_ts = {}
 
 # Comment above this dict used to read "resets naturally every run... so
 # there's no cross-run decay logic needed." Real live GitHub Actions logs
@@ -175,20 +187,48 @@ def _load_backoff_state_if_needed():
             continue
         multiplier = entry.get("multiplier")
         updated_ts = entry.get("updated_ts")
-        if not isinstance(multiplier, (int, float)) or not isinstance(updated_ts, (int, float)):
+        # json.loads accepts non-standard NaN/Infinity values by default.
+        # Do not let a corrupt state entry crash int() below, disable pacing
+        # with a non-positive multiplier, or survive forever via a timestamp
+        # arbitrarily far in the future.
+        if type(multiplier) not in (int, float) or type(updated_ts) not in (int, float):
+            continue
+        if not math.isfinite(multiplier) or not math.isfinite(updated_ts):
+            continue
+        if multiplier < 1 or updated_ts > now:
             continue
         if now - updated_ts > _BACKOFF_DECAY_SECONDS:
             continue
         _backoff_multiplier[platform] = min(int(multiplier), _MAX_BACKOFF_MULTIPLIER)
+        _backoff_updated_ts[platform] = updated_ts
+        success_streak = entry.get("success_streak", 0)
+        if type(success_streak) is int and 0 < success_streak < _BACKOFF_SUCCESS_DECAY_REQUESTS:
+            _backoff_success_streak[platform] = success_streak
 
 
 def _save_backoff_state():
     """Must be called with _rate_lock already held."""
     now = time.time()
-    state = {
-        platform: {"multiplier": multiplier, "updated_ts": now}
-        for platform, multiplier in _backoff_multiplier.items()
-    }
+    for platform in _backoff_multiplier:
+        _backoff_updated_ts.setdefault(platform, now)
+    state = {}
+    for platform, multiplier in _backoff_multiplier.items():
+        entry = {
+            "multiplier": multiplier,
+            # Keep each platform's own last-change time.  The old blanket
+            # ``now`` refreshed Vinted's stale 32x penalty whenever an
+            # unrelated platform (for example OfferUp) hit a 429.
+            "updated_ts": _backoff_updated_ts[platform],
+        }
+        success_streak = _backoff_success_streak.get(platform, 0)
+        if success_streak:
+            # A max-backoff OfferUp/ShopGoodwill call is 16 seconds apart and
+            # may complete fewer than eight requests in one 90-second job.
+            # Carry clean-response evidence across five-minute processes so
+            # low-volume adapters can recover too, without refreshing the
+            # multiplier's own expiry timestamp.
+            entry["success_streak"] = success_streak
+        state[platform] = entry
     try:
         with _BACKOFF_STATE_PATH.open("w", encoding="utf-8") as f:
             json.dump(state, f)
@@ -200,10 +240,49 @@ def _save_backoff_state():
 def _register_rate_limit(platform):
     with _rate_lock:
         _load_backoff_state_if_needed()
+        _backoff_success_streak.pop(platform, None)
         current = _backoff_multiplier.get(platform, 1)
         _backoff_multiplier[platform] = min(current * 2, _MAX_BACKOFF_MULTIPLIER)
+        _backoff_updated_ts[platform] = time.time()
         _save_backoff_state()
         return _backoff_multiplier[platform]
+
+
+def _register_backoff_success(platform):
+    """Halve an adaptive 429 backoff after sustained successful responses.
+
+    A 429 doubles the inter-request delay immediately, while a run of clean
+    responses cautiously halves it.  Persist each changed rung so five-minute
+    Actions runs do not reload an obsolete 32x value.
+    """
+    changed_to = None
+    with _rate_lock:
+        _load_backoff_state_if_needed()
+        current = _backoff_multiplier.get(platform, 1)
+        if current <= 1:
+            _backoff_success_streak.pop(platform, None)
+            return 1
+        successes = _backoff_success_streak.get(platform, 0) + 1
+        if successes < _BACKOFF_SUCCESS_DECAY_REQUESTS:
+            _backoff_success_streak[platform] = successes
+            _save_backoff_state()
+            return current
+        _backoff_success_streak.pop(platform, None)
+        changed_to = max(1, current // 2)
+        if changed_to == 1:
+            _backoff_multiplier.pop(platform, None)
+            _backoff_updated_ts.pop(platform, None)
+        else:
+            _backoff_multiplier[platform] = changed_to
+            _backoff_updated_ts[platform] = time.time()
+        _save_backoff_state()
+    logger.info(
+        "%s adaptive 429 backoff recovered after %s successful responses; pacing %sx slower",
+        platform,
+        _BACKOFF_SUCCESS_DECAY_REQUESTS,
+        changed_to,
+    )
+    return changed_to
 
 
 def _pace(platform):
@@ -272,10 +351,12 @@ def get_json(platform, url, params=None, headers=None, session=None, timeout=HTT
             logger.warning("%s returned HTTP %s", platform, resp.status_code)
             return None
         try:
-            return resp.json()
+            body = resp.json()
         except ValueError:
             logger.warning("%s returned non-JSON body", platform)
             return None
+        _register_backoff_success(platform)
+        return body
     return None
 
 
@@ -778,6 +859,7 @@ def _algolia_multi_query(sub_requests):
             logger.warning("grailed batch returned JSON without a valid results array")
             results.extend([None] * len(chunk))
             continue
+        _register_backoff_success("grailed")
         chunk_results = list(body["results"])
         # Defensive: if Algolia ever returns a different count than
         # requested, pad/truncate rather than let a later zip() misalign
@@ -893,10 +975,86 @@ def search_poshmark(saved_search):
             "suggested_filters_count": "0",
         },
     )
-    if not body:
+    # A transport/non-JSON failure was already logged by get_json().  Keep it
+    # distinct from a parsed-but-malformed body: production's 0-across-33
+    # incident emitted no Poshmark warning at all, so the old ``if not body``
+    # made an empty object, a wrong top-level JSON type, and a request that
+    # never ran indistinguishable in Actions logs.
+    if body is None:
         return [], None
+    if not isinstance(body, dict):
+        logger.warning(
+            "poshmark parse failed: successful JSON response top level was %s, "
+            "expected object",
+            type(body).__name__,
+        )
+        return [], None
+
+    top_level_keys = sorted(str(key) for key in body)[:20]
+    more = _dget(body, "more")
+    missing_metadata = object()
+    raw_reported_total = _dget(more, "total", missing_metadata)
+    if (
+        type(raw_reported_total) in (int, float)
+        and math.isfinite(raw_reported_total)
+        and raw_reported_total >= 0
+    ):
+        reported_total = raw_reported_total
+    else:
+        reported_total = None
+    reported_total_type = (
+        "missing"
+        if raw_reported_total is missing_metadata
+        else type(raw_reported_total).__name__
+    )
+    raw_trace_id = body.get("trace_id", missing_metadata)
+    trace_id_type = (
+        "missing" if raw_trace_id is missing_metadata else type(raw_trace_id).__name__
+    )
+    missing_data = object()
+    data = body.get("data", missing_data)
+    if not isinstance(data, list):
+        data_shape = "missing" if data is missing_data else type(data).__name__
+        logger.warning(
+            "poshmark parse failed: successful JSON response data collection was %s "
+            "(top_level_keys=%s, reported_total=%r, reported_total_type=%s, "
+            "trace_id_type=%s)",
+            data_shape,
+            top_level_keys,
+            reported_total,
+            reported_total_type,
+            trace_id_type,
+        )
+        return [], None
+    if not data:
+        # INFO, not WARNING: an exact query can genuinely have zero current
+        # listings.  This is still essential incident evidence.  If Poshmark
+        # disappears from the aggregate summary and these lines exist, the
+        # endpoint returned parsed 2xx JSON with an empty collection; if the
+        # lines are absent, the shared worker queue never reached Poshmark.
+        logger.info(
+            "poshmark successful JSON response contained an empty data list "
+            "(reported_total=%r, reported_total_type=%s, trace_id_type=%s, "
+            "top_level_keys=%s)",
+            reported_total,
+            reported_total_type,
+            trace_id_type,
+            top_level_keys,
+        )
+    posts = _dict_rows(body, "data")
+    rows_with_id = sum(bool(post.get("id")) for post in posts)
+    rows_with_title = sum(bool(post.get("title")) for post in posts)
+    rows_with_price = sum(
+        _dget(_dget(post, "price_amount"), "val", _dget(post, "price")) is not None
+        for post in posts
+    )
+    sample_row_keys = sorted({
+        str(key)
+        for post in posts[:3]
+        for key in post
+    })[:20]
     listings = []
-    for post in _dict_rows(body, "data"):
+    for post in posts:
         post_id = post.get("id")
         title = post.get("title") or ""
         if not post_id or not title:
@@ -926,26 +1084,46 @@ def search_poshmark(saved_search):
         ]
         extra_images = [u for u in extra_images if u and u != picture]
         size = _dget(_dget(_dget(post, "inventory"), "size_obj"), "display")
-        listings.append(
-            make_listing(
-                "poshmark",
-                post_id,
-                title,
-                price,
-                # No url field exists; Poshmark's own anchors are slug-id.
-                f"https://poshmark.com/listing/{_slugify(title)}-{post_id}",
-                image_url=picture,
-                extra_images=extra_images,
-                size=size or post.get("size"),
-                seller=(post.get("creator_id") or post.get("creator_username")),
-                shipping=POSHMARK_ASSUMED_SHIPPING,
-                description=post.get("description"),
-                # Shares and edits move updated_at, while first_published_at
-                # remains the source's original public-listing timestamp.
-                item_creation_date=post.get("first_published_at"),
-            )
+        listing = make_listing(
+            "poshmark",
+            post_id,
+            title,
+            price,
+            # No url field exists; Poshmark's own anchors are slug-id.
+            f"https://poshmark.com/listing/{_slugify(title)}-{post_id}",
+            image_url=picture,
+            extra_images=extra_images,
+            size=size or post.get("size"),
+            seller=(post.get("creator_id") or post.get("creator_username")),
+            shipping=POSHMARK_ASSUMED_SHIPPING,
+            description=post.get("description"),
+            # Shares and edits move updated_at, while first_published_at
+            # remains the source's original public-listing timestamp.
+            item_creation_date=post.get("first_published_at"),
         )
-    return [x for x in listings if x], None
+        if listing:
+            listings.append(listing)
+    if data and not listings:
+        # A nonempty collection that cannot produce even one listing is not a
+        # genuine zero-result search.  Record field names and aggregate counts
+        # only (never titles, IDs, or other response values) so a per-row API
+        # rename is diagnosable without leaking listing content into logs.
+        logger.warning(
+            "poshmark parse failed: successful JSON response contained %s data "
+            "row(s) but zero normalized listings (object_rows=%s, rows_with_id=%s, "
+            "rows_with_title=%s, rows_with_price=%s, sample_row_keys=%s, "
+            "reported_total=%r, reported_total_type=%s, trace_id_type=%s)",
+            len(data),
+            len(posts),
+            rows_with_id,
+            rows_with_title,
+            rows_with_price,
+            sample_row_keys,
+            reported_total,
+            reported_total_type,
+            trace_id_type,
+        )
+    return listings, None
 
 
 # ---------------------------------------------------------------------------
@@ -1133,6 +1311,7 @@ def search_shopgoodwill(saved_search):
         # one waited for pacing. Recheck immediately before touching the site.
         if not shopgoodwill_circuit_breaker_allows_calls():
             return [], None
+        attempt_started = time.monotonic()
         try:
             resp = Fetcher.post(
                 SHOPGOODWILL_URL,
@@ -1142,6 +1321,7 @@ def search_shopgoodwill(saved_search):
                 proxy=proxy_url,
             )
         except Exception as exc:
+            elapsed = time.monotonic() - attempt_started
             # Real live evidence (GH Actions run 34167727565): "curl: (28)
             # Operation timed out after 8002 milliseconds" - a plain
             # connection-level timeout, not a 403/429 block. Every other
@@ -1150,10 +1330,24 @@ def search_shopgoodwill(saved_search):
             # loop's own retry and losing the whole query to one transient
             # timeout. One retry, same as the 403/429 path, before giving up.
             if attempt == 0:
-                logger.warning("shopgoodwill request failed: %s; retrying once after 2s", exc)
+                logger.warning(
+                    "shopgoodwill request failed on attempt %s/2 after %.2fs "
+                    "(proxy configured: %s): %s; retrying once after 2s",
+                    attempt + 1,
+                    elapsed,
+                    "yes" if proxy_url else "no",
+                    exc,
+                )
                 time.sleep(2)
                 continue
-            logger.warning("shopgoodwill request failed: %s", exc)
+            logger.warning(
+                "shopgoodwill request failed on attempt %s/2 after %.2fs "
+                "(proxy configured: %s): %s",
+                attempt + 1,
+                elapsed,
+                "yes" if proxy_url else "no",
+                exc,
+            )
             return [], None
         status = resp.status
         if status not in (403, 429):
@@ -1163,8 +1357,14 @@ def search_shopgoodwill(saved_search):
             delay = _retry_after_seconds(getattr(resp, "headers", None))
             delay = 2 if delay is None else min(delay, SHOPGOODWILL_BACKOFF_MAX_MINUTES * 60)
             logger.warning(
-                "shopgoodwill transient HTTP %s block; retrying once after %ss%s",
-                status, delay, f" and pacing {multiplier}x slower" if multiplier else "",
+                "shopgoodwill transient HTTP %s block on attempt %s/2 after %.2fs "
+                "(proxy configured: %s); retrying once after %ss%s",
+                status,
+                attempt + 1,
+                time.monotonic() - attempt_started,
+                "yes" if proxy_url else "no",
+                delay,
+                f" and pacing {multiplier}x slower" if multiplier else "",
             )
             time.sleep(delay)
             continue
@@ -1179,6 +1379,7 @@ def search_shopgoodwill(saved_search):
     except Exception:
         logger.warning("shopgoodwill returned HTTP 200 with a non-JSON body; failed, not zero results")
         return [], None
+    _register_backoff_success("shopgoodwill")
     results = _dget(_dget(body, "searchResults"), "items") or []
     listings = []
     skipped_too_early = 0
@@ -1464,6 +1665,7 @@ def _get_vinted_catalog_page(session, params):
                 logger.warning("vinted returned non-JSON body")
                 return None, session
             _note_vinted_query_success()
+            _register_backoff_success("vinted")
             return body, session
 
         multiplier = _register_rate_limit("vinted") if status == 429 else None
@@ -1589,6 +1791,21 @@ def search_vinted(saved_search):
     return [x for x in listings if x], None
 
 
+def adapter_circuit_breaker_allows_calls(platform):
+    """Whether a scheduler should start another logical adapter call.
+
+    Vinted and ShopGoodwill already enforce their persistent breakers inside
+    their adapters.  Exposing the same guard to the scheduler prevents a live
+    cooldown from being miscounted as dozens of completed zero-result HTTP
+    searches when workers rapidly drain that platform's private queue.
+    """
+    if platform == "vinted":
+        return vinted_circuit_breaker_allows_calls()
+    if platform == "shopgoodwill":
+        return shopgoodwill_circuit_breaker_allows_calls()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # OfferUp / Depop - HTML-page adapters via scrapling's Fetcher.
 #
@@ -1689,15 +1906,41 @@ def fetch_offerup_listing_description(item_url):
     return description or None
 
 
-def _fetch_page(platform, url, timeout=15):
-    """Fetch an HTML page via scrapling's TLS-spoofing Fetcher, or None."""
+_FETCH_PAGE_NOT_STARTED = object()
+
+
+def _fetch_page(
+    platform,
+    url,
+    timeout=15,
+    *,
+    deadline=None,
+    on_request_started=None,
+):
+    """Fetch an HTML page via Scrapling's TLS-spoofing Fetcher, or None.
+
+    ``deadline`` is used by sequential batch adapters.  Pacing can itself
+    sleep for several seconds under adaptive backoff, so calculate the real
+    request timeout only after pacing and decline to dispatch if the budget
+    expired meanwhile.  ``on_request_started`` lets batch health telemetry
+    count a request at that exact boundary rather than before the sleep.  It
+    may return ``False`` to veto dispatch if the shared deadline expired
+    while acquiring its progress lock.
+    """
     try:
         from scrapling.fetchers import Fetcher
     except ImportError:
         logger.warning("%s skipped: scrapling is not installed", platform)
-        return None
+        return _FETCH_PAGE_NOT_STARTED if deadline is not None else None
     _pace(platform)
+    if deadline is not None:
+        bounded_timeout = _batch_request_timeout(deadline)
+        if bounded_timeout is None:
+            return _FETCH_PAGE_NOT_STARTED
+        timeout = min(timeout, bounded_timeout)
     try:
+        if on_request_started is not None and on_request_started() is False:
+            return _FETCH_PAGE_NOT_STARTED
         resp = Fetcher.get(url, timeout=timeout)
     except Exception as exc:
         logger.warning("%s request failed: %s", platform, exc)
@@ -1715,7 +1958,8 @@ def _fetch_page(platform, url, timeout=15):
         return None
     body = resp.body
     if isinstance(body, bytes):
-        return body.decode(resp.encoding or "utf-8", errors="replace")
+        body = body.decode(resp.encoding or "utf-8", errors="replace")
+    _register_backoff_success(platform)
     return body
 
 
@@ -1788,6 +2032,33 @@ def _batch_request_timeout(deadline):
     return min(15, max(0.001, remaining))
 
 
+class _HtmlBatchResult(dict):
+    """A normal result mapping with truthful per-query coverage metadata.
+
+    OfferUp and Depop expose a batch-shaped adapter contract, but internally
+    make one HTTP request per saved search.  A plain partial dict cannot tell
+    the scheduler whether omitted queries were genuine empty responses or
+    work that never ran before the deadline.  Keeping this as a ``dict``
+    subclass preserves every existing caller while giving health accounting
+    the information it needs to suppress misleading count-collapse alerts.
+    """
+
+    def __init__(
+        self,
+        values,
+        *,
+        started_requests,
+        completed_requests,
+        scheduled_requests,
+        deadline_truncated,
+    ):
+        super().__init__(values)
+        self.started_requests = started_requests
+        self.completed_requests = completed_requests
+        self.scheduled_requests = scheduled_requests
+        self.deadline_truncated = deadline_truncated
+
+
 def _run_html_batch(platform, saved_searches, build_url, extract_objects, normalize_object, deadline=None):
     """Run a sequential HTML batch behind a hard, snapshotting deadline.
 
@@ -1806,30 +2077,105 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
     if deadline is None:
         deadline = time.monotonic() + MARKETPLACE_BATCH_DEADLINE_SECONDS
     working = {}
+    progress = {
+        "started_requests": 0,
+        "completed_requests": 0,
+        "deadline_truncated": False,
+    }
     working_lock = threading.Lock()
 
     def run():
         _marketplace_log_context.platform = platform
         try:
             for saved_search in saved_searches:
-                timeout = _batch_request_timeout(deadline)
-                if timeout is None:
+                if _batch_request_timeout(deadline) is None:
+                    with working_lock:
+                        progress["deadline_truncated"] = True
                     return
                 query = split_query_exclusions(saved_search["query"])[0]
-                html = _fetch_page(platform, build_url(query), timeout=timeout)
+                request_started = False
+
+                def note_request_started():
+                    nonlocal request_started
+                    with working_lock:
+                        if time.monotonic() >= deadline:
+                            return False
+                        request_started = True
+                        progress["started_requests"] += 1
+                    return True
+
+                try:
+                    html = _fetch_page(
+                        platform,
+                        build_url(query),
+                        deadline=deadline,
+                        on_request_started=note_request_started,
+                    )
+                except Exception:
+                    # A request that fails promptly is still completed work;
+                    # do not mislabel it as deadline truncation.  Continue so
+                    # one malformed page/transport exception cannot prevent
+                    # coverage of every remaining query.
+                    with working_lock:
+                        if time.monotonic() <= deadline:
+                            progress["completed_requests"] += 1
+                        else:
+                            progress["deadline_truncated"] = True
+                    logger.exception("%s batch fetch failed", platform)
+                    if time.monotonic() > deadline:
+                        return
+                    continue
+                if html is _FETCH_PAGE_NOT_STARTED:
+                    # Most importantly, adaptive pacing may have consumed the
+                    # remaining budget.  No HTTP request was dispatched, so
+                    # leave both started and completed unchanged.
+                    with working_lock:
+                        progress["deadline_truncated"] = True
+                    return
+                if not request_started:
+                    # Keep the long-standing test/extension seam where
+                    # _fetch_page can be replaced by a simple callable.  The
+                    # production implementation always invokes the callback
+                    # immediately before network dispatch.
+                    note_request_started()
                 if html is None or time.monotonic() > deadline:
                     if time.monotonic() > deadline:
+                        with working_lock:
+                            progress["deadline_truncated"] = True
                         logger.warning(
                             "%s batch request exceeded the marketplace deadline; discarding its late result",
                             platform,
                         )
                         return
+                    with working_lock:
+                        progress["completed_requests"] += 1
                     continue
-                listings = [x for x in (normalize_object(obj) for obj in extract_objects(html)) if x]
-                if listings:
+                try:
+                    listings = [x for x in (normalize_object(obj) for obj in extract_objects(html)) if x]
+                except Exception:
+                    # The HTTP call completed and the parser failed before
+                    # the deadline.  Count it as a completed error sample and
+                    # continue; parser failure is not missing deadline work.
                     with working_lock:
                         if time.monotonic() <= deadline:
-                            working[saved_search["query"]] = listings
+                            progress["completed_requests"] += 1
+                        else:
+                            progress["deadline_truncated"] = True
+                    logger.exception("%s batch fetch failed", platform)
+                    if time.monotonic() > deadline:
+                        return
+                    continue
+                with working_lock:
+                    if time.monotonic() > deadline:
+                        progress["deadline_truncated"] = True
+                        logger.warning(
+                            "%s batch parsing exceeded the marketplace deadline; discarding its late result",
+                            platform,
+                        )
+                        return
+                    progress["completed_requests"] += 1
+                    if listings:
+                        working[saved_search["query"]] = listings
         except Exception:
             logger.exception("%s batch fetch failed", platform)
         finally:
@@ -1840,8 +2186,20 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
     worker.join(timeout=max(0.0, deadline - time.monotonic()))
     if worker.is_alive():
         logger.warning("%s batch hit the marketplace deadline; returning completed searches only", platform)
+        with working_lock:
+            progress["deadline_truncated"] = True
     with working_lock:
-        return {query: list(listings) for query, listings in working.items()}
+        snapshot = {query: list(listings) for query, listings in working.items()}
+        return _HtmlBatchResult(
+            snapshot,
+            started_requests=progress["started_requests"],
+            completed_requests=progress["completed_requests"],
+            scheduled_requests=len(saved_searches),
+            deadline_truncated=(
+                progress["deadline_truncated"]
+                or progress["completed_requests"] < len(saved_searches)
+            ),
+        )
 
 
 @batch_adapter("offerup")

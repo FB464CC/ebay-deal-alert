@@ -396,6 +396,12 @@ SCOUT_FRESH_PRIORITY_MINUTES = 15
 # budget. Anything still not fetched inside the budget is skipped this run
 # and picked up next time (the search list rotates so no tail starves twice).
 MARKETPLACE_FETCH_BUDGET_SECONDS = float(_CONFIG.get("MARKETPLACE_FETCH_BUDGET_SECONDS", 90))
+# Per-platform lanes prevent a slow or backed-off marketplace from consuming
+# every generic worker.  Two keeps enough overlap to hide ordinary HTTP
+# latency while capping any one platform's share of in-flight work.
+MARKETPLACE_WORKERS_PER_PLATFORM = max(
+    1, min(4, int(_CONFIG.get("MARKETPLACE_WORKERS_PER_PLATFORM", 2)))
+)
 # The workflow hard-kills the job at eight minutes. Stop starting network/AI
 # work at 6.5 minutes so in-flight bounded requests and final state writes have
 # ninety seconds of shutdown headroom instead of being SIGKILLed mid-write.
@@ -1498,6 +1504,8 @@ def init_db():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS marketplace_counts "
         "(platform TEXT, run_ts TEXT, count INTEGER, request_count INTEGER DEFAULT 0, "
+        "completed_request_count INTEGER DEFAULT 0, scheduled_request_count INTEGER DEFAULT 0, "
+        "circuit_breaker_open INTEGER DEFAULT 0, "
         "error_count INTEGER DEFAULT 0, timeout_count INTEGER DEFAULT 0, "
         "rate_limit_count INTEGER DEFAULT 0, raw_count INTEGER DEFAULT 0, "
         "garbage_count INTEGER DEFAULT 0)"
@@ -1520,6 +1528,9 @@ def _ensure_marketplace_health_columns(conn):
     }
     for name in (
         "request_count",
+        "completed_request_count",
+        "scheduled_request_count",
+        "circuit_breaker_open",
         "error_count",
         "timeout_count",
         "rate_limit_count",
@@ -6288,9 +6299,14 @@ def send_weekly_digest():
 
 def _fetch_marketplace(saved_search, platform_name, deadline):
     """One (search, marketplace) fetch. Never raises - a dead marketplace must
-    not be able to abort the run for the others."""
-    if time.monotonic() >= deadline:
-        return platform_name, saved_search["query"], [], 0, 0, 0
+    not be able to abort the run for the others.
+
+    The caller owns the start-deadline check.  Once it dispatches a real
+    adapter call just before that boundary, let the bounded HTTP request finish
+    inside the separate collection margin.  Keeping another deadline no-op in
+    here used to let workers dequeue the entire remaining queue during that
+    margin and count each no-op as a real zero-result request.
+    """
     try:
         listings, _total = marketplaces.ADAPTERS[platform_name](saved_search)
         raw_count = len(listings)
@@ -6357,7 +6373,26 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
     for platform in active:
         today = counts.get(platform, 0)
         signals = health.get(platform) or {}
-        request_count = int(signals.get("requests") or 0)
+        # ``requests`` is the number of adapter calls actually started.  A
+        # completed count is separate because a bounded daemon worker can
+        # still be in flight when the collection margin closes.  Callers that
+        # predate this telemetry omit the key and retain the historical
+        # request_count behaviour; an explicit zero must not fall back.
+        request_count = max(0, int(signals.get("requests") or 0))
+        completed_signal = signals.get("completed_requests")
+        completed_request_count = (
+            request_count
+            if completed_signal is None
+            else max(0, int(completed_signal or 0))
+        )
+        scheduled_signal = signals.get("scheduled_requests")
+        scheduled_request_count = (
+            completed_request_count
+            if scheduled_signal is None
+            else max(0, int(scheduled_signal or 0))
+        )
+        sample_complete = scheduled_request_count <= completed_request_count
+        circuit_breaker_open = int(bool(signals.get("circuit_breaker_open")))
         error_count = int(signals.get("errors") or 0)
         timeout_count = int(signals.get("timeouts") or 0)
         rate_limit_count = int(signals.get("rate_limits") or 0)
@@ -6365,14 +6400,18 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
         garbage_count = int(signals.get("known_garbage") or 0)
         conn.execute(
             "INSERT INTO marketplace_counts "
-            "(platform, run_ts, count, request_count, error_count, timeout_count, "
-            "rate_limit_count, raw_count, garbage_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(platform, run_ts, count, request_count, completed_request_count, "
+            "scheduled_request_count, circuit_breaker_open, error_count, timeout_count, rate_limit_count, "
+            "raw_count, garbage_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 platform,
                 now.isoformat(),
                 today,
                 request_count,
+                completed_request_count,
+                scheduled_request_count,
+                circuit_breaker_open,
                 error_count,
                 timeout_count,
                 rate_limit_count,
@@ -6384,7 +6423,8 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
         prior_rows = [
             row
             for row in conn.execute(
-                "SELECT count, request_count FROM marketplace_counts "
+                "SELECT count, request_count, completed_request_count, "
+                "scheduled_request_count, circuit_breaker_open FROM marketplace_counts "
                 "WHERE platform = ? AND run_ts >= ? AND run_ts < ?",
                 (
                     platform,
@@ -6394,25 +6434,35 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
             ).fetchall()
         ]
         # Aggregate counts are only comparable when the number of searches is
-        # comparable. Real healthy Poshmark runs ranged from 670 to 1,431
-        # listings solely because a different number/mix of searches finished
-        # inside the shared deadline. Compare listings per logical request
-        # whenever request telemetry exists. Count-only callers/legacy rows
-        # retain the old metric until they accumulate five instrumented runs.
-        if request_count:
-            prior = [count / requests for count, requests in prior_rows if requests]
-            today_metric = today / request_count
+        # comparable.  Use only requests whose result was collected, and keep
+        # deadline-incomplete historical rows out of the baseline entirely.
+        # Migrated rows have both new columns at zero, so they deliberately
+        # fall back to their old request_count and remain usable history.
+        complete_prior_rows = [
+            (count, completed or requests)
+            for count, requests, completed, scheduled, circuit_open in prior_rows
+            if not circuit_open and not (scheduled and completed < scheduled)
+        ]
+        if completed_request_count:
+            prior = [
+                count / completed
+                for count, completed in complete_prior_rows
+                if completed
+            ]
+            today_metric = today / completed_request_count
         else:
-            prior = [count for count, _requests in prior_rows]
+            prior = [count for count, _completed in complete_prior_rows]
             today_metric = today
         baseline = median(prior) if len(prior) >= 5 else None
         prior_count_baseline = (
-            median(count for count, _requests in prior_rows)
-            if len(prior_rows) >= 5
+            median(count for count, _completed in complete_prior_rows)
+            if len(complete_prior_rows) >= 5
             else None
         )
         count_collapse = bool(
-            baseline is not None
+            sample_complete
+            and not circuit_breaker_open
+            and baseline is not None
             and prior_count_baseline is not None
             and prior_count_baseline >= 5
             and today_metric < baseline * 0.5
@@ -6420,9 +6470,9 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
         error_rate = error_count / request_count if request_count else 0.0
         sick_reasons = []
         if count_collapse:
-            if request_count:
+            if completed_request_count:
                 sick_reasons.append(
-                    f"{today} listings across {request_count} request(s) "
+                    f"{today} listings across {completed_request_count} request(s) "
                     f"({today_metric:.1f}/request) vs fixed 7-day median "
                     f"baseline ~{baseline:.1f}/request"
                 )
@@ -6430,6 +6480,28 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
                 sick_reasons.append(
                     f"{today} listings vs fixed 7-day median baseline ~{round(baseline)}/run"
                 )
+        # A deadline-truncated sample is not evidence of a parser/API-shape
+        # collapse.  Report severe coverage loss in its own terms, while the
+        # per-run log below records even small truncations for diagnosis.
+        if circuit_breaker_open:
+            sick_reasons.append(
+                "marketplace circuit-breaker cooldown active; "
+                f"{completed_request_count}/{scheduled_request_count} scheduled request(s) "
+                f"completed ({request_count} started); count-collapse comparison suppressed"
+            )
+        elif (
+            scheduled_request_count
+            and completed_request_count < scheduled_request_count
+            and (
+                completed_request_count == 0
+                or completed_request_count / scheduled_request_count < 0.5
+            )
+        ):
+            sick_reasons.append(
+                "marketplace deadline coverage only "
+                f"{completed_request_count}/{scheduled_request_count} request(s) completed "
+                f"({request_count} started); count-collapse comparison suppressed"
+            )
         if rate_limit_count >= 5:
             sick_reasons.append(f"{rate_limit_count} HTTP 429/rate-limit events")
         if timeout_count:
@@ -6505,7 +6577,9 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         (s, p)
         for s in searches
         for p in s.get("platforms", active)
-        if p in marketplaces.ADAPTERS and p not in marketplaces.BATCH_ADAPTERS
+        if p in active
+        and p in marketplaces.ADAPTERS
+        and p not in marketplaces.BATCH_ADAPTERS
     ]
     deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
     if run_hard_stop is not None:
@@ -6519,6 +6593,9 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     health = {
         platform: {
             "requests": 0,
+            "completed_requests": 0,
+            "scheduled_requests": 0,
+            "circuit_breaker_open": 0,
             "errors": 0,
             "timeouts": 0,
             "rate_limits": 0,
@@ -6527,6 +6604,23 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         }
         for platform in MARKETPLACES_ENABLED
     }
+    task_queues = {}
+    for saved_search, platform_name in tasks:
+        platform_queue = task_queues.setdefault(platform_name, queue.Queue())
+        platform_queue.put(saved_search)
+        health[platform_name]["scheduled_requests"] += 1
+    batch_relevant = {
+        platform_name: [
+            saved_search
+            for saved_search in searches
+            if platform_name in saved_search.get("platforms", active)
+        ]
+        for platform_name in batched_platforms
+    }
+    for platform_name, relevant in batch_relevant.items():
+        health[platform_name]["scheduled_requests"] += (
+            len(relevant) if platform_name in {"offerup", "depop"} else bool(relevant)
+        )
     results_lock = threading.Lock()
     health_context = threading.local()
 
@@ -6554,6 +6648,9 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                 return
             message = record.getMessage().lower()
             updates = []
+            circuit_opened = (
+                "circuit breaker" in message and "backing off" in message
+            )
             if "429" in message or "rate limited" in message:
                 updates.append("rate_limits")
             if "timeout" in message or "timed out" in message:
@@ -6573,8 +6670,10 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                 )
             ) and "429" not in message and "rate limited" not in message:
                 updates.append("errors")
-            if updates:
+            if updates or circuit_opened:
                 with results_lock:
+                    if circuit_opened:
+                        health[platform_name]["circuit_breaker_open"] = 1
                     for name in updates:
                         health[platform_name][name] += 1
 
@@ -6653,22 +6752,26 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         """Runs the platform's ONE batch call (covering every enabled
         search for it) as its own daemon thread, in parallel with the
         per-task queue workers below - same deadline, same merge lock."""
-        relevant = [s for s in searches if platform_name in s.get("platforms", active)]
+        relevant = batch_relevant[platform_name]
         if not relevant:
             return
-        if time.monotonic() >= hard_stop:
+        # ``deadline`` is the last instant to START work; ``hard_stop`` is
+        # only a collection margin for a call already in flight.
+        if time.monotonic() >= deadline:
             return
-        with results_lock:
-            if time.monotonic() >= hard_stop:
-                return
-            # OfferUp and Depop's "batch" adapters make one HTTP request per
-            # relevant search. Counting the wrapper call as one made a handful
-            # of ordinary query failures look like a 300%-plus error rate.
-            # Grailed really does combine its searches into a few Algolia
-            # multi-query calls, so its established wrapper-level count stays.
-            health[platform_name]["requests"] += (
-                len(relevant) if platform_name in {"offerup", "depop"} else 1
-            )
+        logical_request_count = (
+            len(relevant) if platform_name in {"offerup", "depop"} else 1
+        )
+        # Grailed really does combine its searches into a few Algolia
+        # multi-query calls, so its established wrapper-level count is known
+        # at call start. OfferUp/Depop run one request per query inside their
+        # wrapper; their exact started/completed counts arrive as metadata on
+        # the result instead of assuming every scheduled query actually ran.
+        if platform_name not in {"offerup", "depop"}:
+            with results_lock:
+                if time.monotonic() >= deadline:
+                    return
+                health[platform_name]["requests"] += logical_request_count
         health_context.platform = platform_name
         try:
             results = marketplaces.BATCH_ADAPTERS[platform_name](relevant, deadline=deadline)
@@ -6678,6 +6781,15 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                 with results_lock:
                     if time.monotonic() < hard_stop:
                         health[platform_name]["errors"] += 1
+                        if platform_name not in {"offerup", "depop"}:
+                            # Grailed's wrapper itself is its one logical
+                            # request, so a prompt exception completes it.
+                            health[platform_name]["completed_requests"] += logical_request_count
+                        # OfferUp/Depop perform N sequential HTTP calls inside
+                        # the wrapper.  If it raises without result metadata,
+                        # none of those calls can honestly be inferred as
+                        # started or completed; retain scheduled=N and let the
+                        # incomplete-coverage signal explain the sample.
             return
         finally:
             health_context.platform = None
@@ -6690,6 +6802,21 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         with results_lock:
             if time.monotonic() >= hard_stop:
                 return
+            started_request_count = getattr(
+                results, "started_requests", logical_request_count
+            )
+            completed_request_count = getattr(
+                results, "completed_requests", logical_request_count
+            )
+            if platform_name in {"offerup", "depop"}:
+                health[platform_name]["requests"] += min(
+                    logical_request_count,
+                    max(0, int(started_request_count)),
+                )
+            health[platform_name]["completed_requests"] += min(
+                logical_request_count,
+                max(0, int(completed_request_count)),
+            )
             for query, listings in (results or {}).items():
                 # Same "-term" exclusion enforcement _fetch_marketplace()
                 # applies to the per-task path - a batch call skips that
@@ -6724,20 +6851,40 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     # PROCESS take 20.3s to exit even though this function returned at 12s.
     # Daemon threads have no such hook - the process exits without waiting
     # for them, so a genuinely stuck request is simply abandoned.
-    work_queue = queue.Queue()
-    for task in tasks:
-        work_queue.put(task)
+    def worker(platform_name, work_queue):
+        """Drain one platform's private queue.
 
-    def worker():
+        A Vinted backoff sleep or a ShopGoodwill proxy timeout can occupy at
+        most this platform's bounded lanes; Poshmark and every other adapter
+        retain their own workers and deadline coverage.
+        """
         while True:
-            if time.monotonic() >= hard_stop:
+            # Never dequeue after the actual fetch deadline.  The following
+            # HTTP_TIMEOUT_MARGIN exists only so a request already started can
+            # publish its result; using hard_stop here created fake requests
+            # because _fetch_marketplace() immediately no-op'd after deadline.
+            if time.monotonic() >= deadline:
                 return
             try:
-                saved_search, platform_name = work_queue.get_nowait()
+                saved_search = work_queue.get_nowait()
             except queue.Empty:
                 return
+            if not marketplaces.adapter_circuit_breaker_allows_calls(platform_name):
+                work_queue.task_done()
+                with results_lock:
+                    first_open_observation = not health[platform_name][
+                        "circuit_breaker_open"
+                    ]
+                    health[platform_name]["circuit_breaker_open"] = 1
+                if first_open_observation:
+                    logger.warning(
+                        "%s marketplace circuit breaker stopped its private lane; "
+                        "queued scheduled searches were not started",
+                        platform_name,
+                    )
+                return
             with results_lock:
-                if time.monotonic() >= hard_stop:
+                if time.monotonic() >= deadline:
                     work_queue.task_done()
                     return
                 health[platform_name]["requests"] += 1
@@ -6759,6 +6906,7 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                 if time.monotonic() >= hard_stop:
                     work_queue.task_done()
                     return
+                health[_platform]["completed_requests"] += 1
                 health[_platform]["raw_listings"] += raw_count
                 health[_platform]["known_garbage"] += garbage_count
                 health[_platform]["errors"] += errors
@@ -6767,7 +6915,17 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                     counts[_platform] = counts.get(_platform, 0) + len(listings)
             work_queue.task_done()
 
-    workers = [threading.Thread(target=worker, daemon=True) for _ in range(8)]
+    workers = [
+        threading.Thread(
+            target=worker,
+            args=(platform_name, work_queue),
+            daemon=True,
+        )
+        for platform_name, work_queue in task_queues.items()
+        for _ in range(
+            min(MARKETPLACE_WORKERS_PER_PLATFORM, work_queue.qsize())
+        )
+    ]
     workers += [
         threading.Thread(target=batch_worker, args=(pl,), daemon=True)
         for pl in batched_platforms
@@ -6795,6 +6953,25 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         health_snapshot = {
             platform: dict(signals) for platform, signals in health.items()
         }
+    for platform_name, signals in health_snapshot.items():
+        scheduled = signals["scheduled_requests"]
+        completed = signals["completed_requests"]
+        if scheduled and completed < scheduled:
+            incomplete_cause = (
+                "circuit-breaker cooldown"
+                if signals["circuit_breaker_open"]
+                else "fetch deadline"
+            )
+            logger.warning(
+                "%s marketplace coverage incomplete due to %s: "
+                "%s/%s scheduled request(s) completed (%s actually started); "
+                "count-collapse comparison will be suppressed",
+                platform_name,
+                incomplete_cause,
+                completed,
+                scheduled,
+                signals["requests"],
+            )
     # Gated on the same global run deadline this function's own deadline was
     # clamped against - without this, a run that hit its ~390s hard stop
     # while a batch was still in flight could still write fresh anomaly/

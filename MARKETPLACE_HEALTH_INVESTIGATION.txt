@@ -1,0 +1,225 @@
+Marketplace health investigation
+================================
+
+Scope and checkout
+------------------
+- Fresh clone: C:\ebay-deal-alert-health-investigation-2
+- Initial HEAD: 9ca9f3be9db5b798e22cebf3779a277df7e978ba
+  (chore: update poll state [skip ci], 2026-09-09 21:13:10 UTC)
+- Protected areas: ebay_scrape.py and the eBay Browse API condition-filtering
+  logic in ebay_deal_alert.py will not be edited.
+
+Checkpoint 1 - 2026-09-09 21:17 UTC
+----------------------------------------
+- Pulled the 40 newest poll.yml runs with gh. Runs are being dispatched about
+  every five minutes and most use a different state-update commit; the newest
+  run at initial inspection was 34405862308 (in progress, created 21:15 UTC).
+- Investigation tracks opened: live/recent health re-derivation, shared runner
+  and HTTP infrastructure, Poshmark response parsing/data shape, Vinted and
+  ShopGoodwill platform behavior, and recent git regressions.
+- No root-cause conclusion yet.
+
+Checkpoint 2 - live-log transition map
+--------------------------------------
+- Re-derived the reported Vinted number from run 34392932307 (created
+  19:05 UTC): final prefetch count was exactly 2,711. All observed Vinted
+  catalog calls in that run were HTTP 200; the run hit the 90-second
+  marketplace deadline and late Vinted workers were discarded. This is a
+  throughput collapse, not a JSON-shape failure or a Vinted HTTP outage.
+- Vinted is cyclic rather than continuously degraded. Examples from the live
+  logs: 7,114 listings at 18:25, 2,711 at 19:05, 5,103 at 19:35, roughly
+  1,100-1,460 from 19:55 through 20:15, 7,097 at 20:20, and 5,727 at
+  21:10. The persisted state shows why: Vinted repeatedly reaches the generic
+  32x pacing multiplier (0.15s becomes 4.8s between starts), that multiplier
+  has no success-driven decay, and it falls off only at a fixed 30-minute
+  expiry cliff. Healthy bursts produce 429s, then several subsequent runs are
+  deliberately throttled until the cliff expires.
+- This Vinted pacing also exposes a shared scheduling bug: one flat queue is
+  serviced by eight generic workers. A worker sleeping inside Vinted's global
+  pacer still occupies a generic worker, so enough slow Vinted tasks can
+  consume the pool and starve Poshmark/ShopGoodwill tasks behind them. Many
+  affected runs log `Marketplace prefetch hit its hard deadline` and discard
+  late workers.
+- Re-derived ShopGoodwill's alert window in run 34392932307: four cURL error
+  28 failures, each timing out after ~8,002 ms with zero response bytes.
+  Other platforms returned data in the same run, so this is not evidence of
+  runner-wide DNS/network failure. ShopGoodwill later returned HTTP 200s, but
+  timeout bursts recur intermittently and worsen shared-pool starvation.
+- Poshmark is intermittent, not a permanent parser break. Healthy examples in
+  the inspected window include 743 listings at 19:00 and 714 at 21:10; zero
+  runs have no logged 4xx/5xx, request exception, timeout, non-JSON warning,
+  or traceback. The newest 21:15 run again returned zero, so it cannot yet be
+  called recovered. More response metadata is needed to distinguish an HTTP
+  200 empty-body/shadow-throttle from deadline truncation in each zero run.
+- Grailed and Depop stayed essentially flat at 105 and ~372-373 listings
+  while the three target platforms fluctuated. That is evidence against a
+  broad GitHub Actions runner/DNS outage and against a shared parser-library
+  regression affecting every outbound marketplace.
+
+Checkpoint 3 - dependency, runner-image, and regression checks
+---------------------------------------------------------------
+- Compared install logs from 18:05, 19:05, 20:00, 21:10, and 21:15 UTC.
+  Every sample installed the same relevant stack: requests 2.32.4,
+  scrapling 0.4.15, curl_cffi 0.16.3, urllib3 2.7.0, and the same associated
+  fingerprint packages. requirements.txt also has the same blob across the
+  incident runs. A shared dependency upgrade inside the two-hour window is
+  ruled out.
+- GitHub served a mix of ubuntu-24.04 image builds 20260831.293 and
+  20260907.300. Both builds produced healthy and degraded Poshmark/Vinted
+  runs; e.g. 20260907 produced both the 20:15 degraded run and the 20:20
+  fully recovered run. Runner image generation is not the cause.
+- The relevant repo regression predates today's alert: commit f97690fa
+  (2026-09-07) persisted the generic adaptive multiplier for OfferUp, but
+  Vinted also calls that generic rate-limit function. The implementation
+  reloads a fresh 429-driven multiplier for up to 30 minutes with no
+  success-driven decrease, producing the measured sawtooth once Vinted gets
+  a burst of 429s. It also rewrites every platform's persisted timestamp
+  whenever any one platform changes, so one platform can accidentally keep
+  another platform's stale slowdown fresh.
+- The Poshmark zero is therefore not evidence of 33 successful HTTP-empty
+  responses. Request telemetry increments when a task is dequeued, before
+  the adapter call. During the 10-second deadline margin, workers can drain
+  queued tasks through _fetch_marketplace's immediate deadline return and
+  count them as requests that never touched Poshmark. Matching task rotations
+  return hundreds of Poshmark rows after Vinted's backoff expires and zero
+  while a fresh 32x Vinted multiplier monopolizes the shared workers. A
+  permanent JSON field rename is ruled out; successful-response shape logging
+  is still being added so a future server-side empty/malformed response can be
+  proven directly rather than inferred.
+- Latest inspected production run 34405862308 (21:15 UTC) is degraded again:
+  Vinted 1,473; Poshmark absent; the shared marketplace deadline fired. It
+  also shows 29 logical ShopGoodwill HTTP-200 responses and no ShopGoodwill
+  timeout warning, so ShopGoodwill's transport had recovered in that run.
+  The fenced eBay scrape lane still emitted 11 Akamai HTTP-403 warnings, so
+  it had not recovered at that checkpoint; no eBay code was changed here.
+- Parsed the live configuration independently: 94 searches are enabled; 51
+  are eligible for Vinted and exactly 33 for Poshmark. Those are exactly the
+  alert's reported `request(s)` counts even though the affected logs contain
+  only 43 actual Vinted catalog calls (and no proof of 33 Poshmark calls).
+  This confirms that the counter reflected the queue being drained through
+  deadline no-ops, not completed HTTP requests. By 21:15 the number of actual
+  Vinted HTTP-200 catalog calls had fallen to 30, while health still treated
+  all 51 logical tasks as requests.
+- Direct cross-platform timestamp proof: run 34405862308 had no Vinted 429,
+  while OfferUp emitted 429s through 21:16:37.952 UTC. The subsequently
+  persisted state gave both OfferUp and Vinted that exact updated timestamp,
+  proving the shared serializer refreshed Vinted's unrelated 32x penalty.
+
+Checkpoint 4 - fixes and validation
+-----------------------------------
+- Root-cause synthesis: there is no credible single external outage across
+  all four marketplaces. Vinted and Poshmark share an internal orchestration
+  failure: Vinted's persisted generic backoff stayed at 32x despite successful
+  responses, and its sleeping work occupied the flat shared pool before the
+  rotated queue reached Poshmark. ShopGoodwill's four cURL(28) events were an
+  independent transient proxy/TLS-path timeout burst, although the old shared
+  pool let those stalls amplify deadline starvation. The fenced eBay scrape
+  lane's Akamai 403 is independent again.
+- Backoff state now preserves a separate update timestamp per platform, so an
+  OfferUp 429 cannot refresh Vinted's expiry. Eight consecutive successfully
+  parsed responses halve the affected platform's multiplier one rung at a
+  time (32 -> 16 -> 8 -> 4 -> 2 -> 1); partial success streaks persist across
+  five-minute workflow processes without extending the multiplier timestamp.
+  Every generic-backoff response path registers clean responses, and corrupt,
+  non-finite, non-positive, or future-dated state entries are ignored.
+- Marketplace dispatch now has a small private worker lane per platform.
+  Workers stop dequeuing at the real fetch deadline; the following margin is
+  only for collecting already-started bounded calls. A sleeping Vinted pacer
+  or stalled ShopGoodwill request can therefore no longer consume Poshmark's
+  execution slots.
+- Health telemetry now records scheduled, actually started, and completed
+  requests separately. Deadline-incomplete samples are excluded from the
+  per-request baseline and report coverage loss rather than a false parser or
+  count-collapse diagnosis. OfferUp/Depop batch results carry equivalent
+  per-query progress metadata, including partial deadline returns. Their
+  request timeout is recomputed after adaptive pacing, so pacing that consumes
+  the budget cannot launch or count a network call after the deadline.
+- Vinted/ShopGoodwill circuit-breaker cooldowns are checked before dequeueing
+  more work and recorded explicitly, including a breaker tripped by the final
+  request. Cooldown rows and all other incomplete-coverage rows are excluded
+  from future baselines; their alert says cooldown/coverage rather than
+  claiming completed HTTP-empty responses or a parser collapse.
+- Poshmark successful JSON now logs distinct safe diagnostics for a wrong
+  top-level type, missing/wrong `data` shape, a valid empty list, and a
+  nonempty list from which zero rows normalize. The row-level signal reports
+  structural field counts, bounded key names, numeric-safe totals, and metadata
+  types only, not listing or trace values. This does not claim today's zero was
+  a shape change; it closes the exact observability gap that prevented the old
+  production logs from proving or excluding one.
+- ShopGoodwill retains its existing single retry and timeout. Evidence did
+  not support retrying harder or widening timeouts. Failure logs now include
+  attempt number, elapsed time, and only a yes/no proxy-configured marker so a
+  future recurrence can distinguish connection stalls without exposing proxy
+  credentials.
+- Production run 34408622902 (created 21:45 UTC) was still on the old
+  undeployed code and still degraded: Vinted returned 1,322 listings from 30
+  observed successful catalog calls, Poshmark produced no collected result or
+  success diagnostic under the old observability, and the marketplace
+  deadline fired. ShopGoodwill made 26 logical HTTP-200 calls with no timeout
+  warning, confirming transport recovery. The fenced eBay scrape lane emitted
+  15 Akamai HTTP-403 warnings.
+- Exact local validation from this checkout:
+    python3 -m pytest -q
+    671 passed, 1 warning, 496 subtests passed in 14.64s
+  The one warning is an existing lxml `strip_cdata` deprecation warning from
+  test_ebay_deal_alert.py::RunIntegration::
+  test_mid_run_429_also_stops_the_auction_lane.
+- No commit or push was made. ebay_scrape.py and the protected eBay condition
+  filtering code remain untouched.
+
+Checkpoint 5 - TTL control run and current status
+-------------------------------------------------
+- Run 34409064285 (created 21:50 UTC) supplied the decisive natural control.
+  Production was still unchanged, but Vinted's persisted 21:16:37.952
+  timestamp had just aged past its 30-minute TTL. Results immediately changed
+  from Vinted 1,322 / Poshmark absent at 21:45 to Vinted 7,102 / Poshmark 748.
+  Vinted completed 99 observed catalog calls, all HTTP 200, versus 30 in the
+  prior run. ShopGoodwill completed all 94 eligible calls with HTTP 200 and no
+  timeout warning. The marketplace deadline did not fire.
+- This expiry-aligned recovery on identical application/dependency code makes
+  the Vinted-backoff/shared-pool explanation substantially stronger than an
+  intermittent Poshmark response-shape theory. It establishes that all three
+  in-scope marketplaces were healthy in that control run before these local
+  fixes were deployed; without the fixes, the same sawtooth can recur.
+- A direct adapter check from this checkout returned 40 normalized Poshmark
+  rows with the expected current schema. That check came from the local
+  network rather than a GitHub Actions runner, so it is supporting evidence,
+  not a substitute for the new production-safe shape diagnostics.
+- eBay did not join that recovery: the 21:50 run still emitted 13 Akamai 403
+  warnings in its fenced scrape lane. No eBay scrape or condition-gate code
+  was investigated or edited here.
+
+Checkpoint 6 - latest production state
+--------------------------------------
+- The undeployed sawtooth did recur. Runs at 21:55 and 22:00 remained healthy
+  (Vinted 7,107/7,098 and Poshmark 747/746; all 94 ShopGoodwill calls returned
+  HTTP 200), but run 34410377009 at 22:05 logged nine ShopGoodwill cURL(28)
+  zero-byte timeout events. It still collected 69 ShopGoodwill HTTP-200 calls,
+  so this is intermittent proxy-path loss rather than a total API/parser
+  failure.
+- Run 34410818278 (22:10 UTC) still had Poshmark at 745 and Vinted at 6,425,
+  but four near-simultaneous
+  HTTP 429s invoked 60-second Retry-After sleeps, raised its persisted generic
+  multiplier to 16x, and the marketplace hard deadline fired; it is therefore
+  entering the same degraded cycle again, not stably recovered. ShopGoodwill
+  had zero timeout in this latest run and 73 observed HTTP-200 calls, but the
+  shared run ended before full 94-search coverage, so its transport is healthy
+  at the instant while its recent stability/coverage is not. eBay alone
+  remained externally blocked, with 16 Akamai 403 warnings in this run.
+- Latest completed run 34411260195 (22:15 UTC) then closed the loop. With the
+  old 16x Vinted state loaded, Vinted fell to 2,714 and Poshmark to 195;
+  ShopGoodwill reached only 36/94 searches, although all 36 calls were HTTP
+  200 with no timeout. The marketplace deadline fired. eBay again emitted 16
+  Akamai 403 warnings. One run after the Vinted 429 burst, the same internal
+  shared-pool starvation had therefore returned without any concurrent
+  Vinted or ShopGoodwill transport block.
+- The state commit after that run independently repeated the serializer bug:
+  Vinted had no 429, but OfferUp climbed to 32x through 22:16:05.895 UTC and
+  the file gave both OfferUp and Vinted that exact timestamp (Vinted remained
+  16x). Thus unrelated OfferUp traffic refreshed Vinted's penalty again while
+  this investigation was running.
+- Current classification: Vinted and Poshmark are degraded again under the
+  confirmed undeployed backoff/shared-pool bug. ShopGoodwill's latest
+  transport is responding, but its coverage is degraded by that same pool and
+  its independent proxy/TLS timeout bursts remain intermittent. eBay's scrape
+  lane remains degraded and intentionally out of scope.
