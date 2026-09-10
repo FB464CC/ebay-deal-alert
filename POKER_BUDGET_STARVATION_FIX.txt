@@ -1,0 +1,102 @@
+# Poker budget starvation investigation and fix
+
+Started 2026-09-10 (America/New_York).
+
+## Baseline
+
+- Confirmed checkout head with `git log -1 --format="%H %s"`:
+  `68778a87d9812888da47705a73212dc00de3d382 Marketplace scheduler: fix Vinted/Poshmark shared-pool starvation + backoff bug`
+- Worktree was clean before this investigation.
+- Scope observed: implementation changes will be limited to `ebay_deal_alert.py`, numeric budget/staleness defaults in `config.json`, and matching tests. This evidence report is written because it was explicitly requested.
+
+## Evidence collection in progress
+
+- Fresh GitHub API retrieval of `alerts_log.jsonl`, current-code inspection, git-history review, and independent analyses of budget allocation and staleness behavior are underway.
+
+## Checkpoint 1 — live-log and implementation facts
+
+- I retrieved the remote log through the requested GitHub API/base64 path and decoded it in-memory (the GNU `base64 -d` utility rejected the API's wrapped stream, while strict Python base64 decoding of the same bytes succeeded). The first fresh read contained 698 rows spanning `2026-09-10T01:17:56Z` through `2026-09-10T16:49:30Z`; the log is live and can change during this investigation, so it will be pulled again immediately before validation.
+- In that pull, poker had 149 rows: 19 real AI checks (all `GATE_REJECTED`), 60 `NO_AI_BUDGET`, 68 `STALE_LISTING`, one `COUNTERFEIT`, and one `OVER_MAX_PRICE`. No poker delivery occurred. This independently corroborates that the quality prompt is not the rejection problem.
+- Golf had 393 rows: 154 real AI checks and 193 `NO_AI_BUDGET`; zero deliveries. The exact live counts will be refreshed at handoff.
+- Poker source/platform mix in that read was 98 `ebay_scraped`, 27 Vinted, 19 OfferUp, and 5 official eBay. Its 60 budget misses split 35 scrape-lane, 11 OfferUp, 11 Vinted, and 3 official eBay. Therefore a shared-pool reservation can protect the 25 non-scrape misses, but cannot falsely claim to expand the deliberately isolated scrape lane.
+- Current code confirms the distinction: normal rows spend `GEMINI_CALL_LIMIT`; non-golf scrape rows spend only `EBAY_SCRAPE_AI_CHECK_LIMIT`; Scout rows spend only `SCOUT_AI_CHECK_LIMIT`; golf scrape rows are the one intentional exception that use the shared pool. The existing fairness function is only golf-versus-non-golf, so poker has no guaranteed slot within the latter group.
+- Config has 43 enabled golf-equipment searches and 18 enabled poker-chip searches. No saved-search object will be edited.
+
+## Checkpoint 2 — cap provenance and cost evidence
+
+- `GEMINI_CALL_LIMIT=12` is a local scheduling cap, not a documented DeepSeek hard limit. Repository history says it was raised 6→12 "for faster watch coverage"; an earlier Gemini-only era instead reduced an 8-per-run pacing cap to 3 after its approximately 1,000-RPD free quota exhausted early. The current primary is DeepSeek, with Gemini as fallback.
+- Official DeepSeek documentation currently lists a 2,500-concurrent-request limit for Flash and token billing (rather than a 12-per-run limit); images are billed as tokens. Official Gemini documentation says quotas are project/tier/model specific (RPM, TPM, and RPD), so this checkout cannot establish a safe Gemini-fallback increase without the account's AI Studio quota view.
+- The checked-in paid ledger is already full: UTC September has `reserved_usd=10.000000000000188` across 2,232 calls, exactly matching the configured `$10` monthly safety cap and `$0.005` vision reservation. The current log observed 219 completed AI checks in roughly 15.5 hours (about 339/day if sustained). At the existing conservative reservation, that rate alone implies about `$1.70/day` or `$51/month`; there is no paid-cost headroom to raise the global cap without an explicit larger budget. A pool increase would primarily press the unknown Gemini fallback quota after the DeepSeek ledger rejects new paid calls.
+- Preliminary conclusion: preserve the total shared cap of 12; solve the demonstrated shared-pool inequity with a small poker reservation, not an unjustified total-cost increase.
+
+## Checkpoint 3 — poker staleness evidence
+
+- The current poker research deliberately includes both generic/estate discovery wording and direct maker/material wording. I will not weaken its authenticity gate.
+- Fresh stale-row analysis is in progress. The initial detailed replay found 68 poker `STALE_LISTING` rows: 45 exactly one day old, 15 two days old, and the rest older. Most were eBay-scraped or direct maker/material-query false positives; the current evidence has not yet identified a single verified good poker set suppressed by the universal cutoff. A final fresh replay and a history check will decide whether an override is justified; no poker staleness change will be invented merely because the theoretical tension exists.
+
+## Checkpoint 4 — staleness decision (fresh replay at remote content SHA 6b3978a4f5d1)
+
+- A later fresh pull contained 704 rows through `2026-09-10T17:00:15Z`, including 149 poker rows and 68 `STALE_LISTING` rows. Source/age breakdown: 59 eBay-scraped (43 at observed age 1 day, 15 at 2 days, 1 at 3 days), 2 OfferUp (observed age 1 day), 6 Vinted (source ages 4, 38, 39, 40, 83, 251 days), and one official eBay row (6 days). The scrape/OfferUp values are honest `ai_pending` lower bounds where no source post timestamp exists; Vinted/eBay have source-age signals.
+- Query classification is decisively against a poker exception: 46/68 (67.6%) came from direct maker/provenance queries, 15/68 (22.1%) from direct material/self-description queries, and only 7/68 (10.3%) from broad generic/estate discovery queries. The two stale `casino chips lot` rows were Christmas ornaments and a 50-chip Bakelite lot, not a qualifying >=100-chip clay/ceramic set. The generic stale rows include plastic, Bicycle, toy, and Cardinal sets; the direct cohorts are predominantly Cardinal, explicit composite/metal-core, sample, or 25/50-chip noise. No stale row has sold-comps evidence, and each was suppressed because fresh/unknown-age candidates were available.
+- The historical poker research supports broad discovery in principle, but supplies no good-find age distribution: the few historical poker deliveries were generic/single-chip examples with null age, not confirmed qualifying sets. The requested old `POKER_PREMIUM.txt` and `POKER_QUALITY.txt` are absent; the relevant retained history is `POKER_CHIPS_RESEARCH.txt` and remote commits.
+- A 3-day poker override would re-admit 60/68 current rows (88.2%); a 7-day override would re-admit 63/68. That is a large, evidenced reintroduction of noise into the exact budget this task must protect, without a verified-good counterexample. Decision: leave the universal one-day staleness behavior unchanged for poker and every other category. Consequently there is no category override or override-only regression to add.
+
+## Checkpoint 5 — targeted allocation implementation
+
+Implemented `POKER_CHIPS_SHARED_AI_SOFT_CAP: 2` in `config.json` and passed it into
+`_apply_shared_ai_category_fairness()` from `run()`. The shared-pool allocator now
+keeps bounded golf and poker shares in the executable prefix, then fills remaining
+slots by the original priority ordering. Fresh shared-lane evidence supported a
+2-slot poker share: 51 poker rows (35 unique), versus 166 golf rows (124 unique) and
+118 watches rows, with enabled-search counts of 18, 43, and 29 respectively. This
+preserves golf's existing 6-slot share and leaves four of the 12 shared slots available
+to the non-reserved priority pool.
+
+The total `GEMINI_CALL_LIMIT` remains 12. It is a scheduler/cost-control cap rather
+than a published fixed provider quota, but the local paid-AI ledger was already at
+$10.00 for 2,232 reservations this month. Raising it is not safe headroom. The
+isolated eBay-scrape lane remains 1 because it protects the shared pool from scraper
+floods, and Scout remains 1 because 132 current golf Scout budget misses were retry
+churn across only three listings rather than 132 distinct opportunities.
+
+Added focused unit and integration regressions proving that a poker candidate reaches
+an actual AI call while golf consumes its own reserved share. No staleness override
+was added: the fresh stale-row evidence did not support one.
+
+## Checkpoint 6 — final live refresh, review, and validation
+
+- Final fresh GitHub API content SHA: `e27653b2120a4c60a594c3a4c30422d4b1150cd0`.
+  It contained 706 rows from `2026-09-10T01:17:56Z` through
+  `2026-09-10T17:11:00Z`. Poker remained 149 rows / 19 AI-checked / 0 delivered:
+  `GATE_REJECTED=19`, `STALE_LISTING=68`, `NO_AI_BUDGET=60`, `COUNTERFEIT=1`,
+  `OVER_MAX_PRICE=1`. Golf was 394 rows / 155 AI-checked / 0 delivered, including
+  `NO_AI_BUDGET=193`. Poker's budget misses were 11 Vinted, 11 OfferUp, 3 official
+  eBay, and 35 eBay-scrape; the new shared reservation addresses the 25 regular-lane
+  misses only, as intended.
+- The regression was hardened after final review: its normal priority fixture uses
+  two non-mass-market Omega watches ahead of poker. A zero-reservation control proves
+  that poker is absent from the same six-slot fairness window; the positive
+  end-to-end test proves `run()` then spends a real photo-check call on poker while
+  golf spends two of four shared calls. A randomized compatibility review found the
+  zero-poker-cap path exactly retained the prior two-category ordering.
+- Ending-soon auctions retain their existing absolute priority. In an unusually
+  auction-heavy cycle that leaves fewer ordinary shared slots than the combined 6+2
+  soft caps, golf's pre-existing share can consume the reduced ordinary capacity
+  before poker. This is deliberate preservation of the hard auction policy, not a
+  claim of an unconditional poker entitlement in that exceptional lane.
+
+Validation actually run after the final test correction:
+
+```text
+python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"
+exit 0
+
+python3 -c "import json; json.load(open('config.json'))"
+exit 0
+
+python3 -m pytest -q
+673 passed, 1 warning, 496 subtests passed in 16.15s
+```
+
+The one warning is an existing third-party lxml `strip_cdata` deprecation from an
+unrelated integration test. No commit or push was made.

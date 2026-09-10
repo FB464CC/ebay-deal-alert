@@ -497,6 +497,16 @@ GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
 GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP = int(
     _CONFIG.get("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 6)
 )
+# Poker's regular, non-scrape candidates are a meaningful but much smaller
+# part of the shared pool than golf's: a fresh live-log replay found 51 poker
+# shared-lane rows versus 166 golf rows (and 118 watches).  Two of twelve
+# slots gives poker its needed floor without copying golf's six-slot share or
+# crowding out the other categories.  Its 98 eBay-scrape rows deliberately
+# remain under EBAY_SCRAPE_AI_CHECK_LIMIT; this reservation must not turn a
+# bounded flood-control lane back into a shared-pool flood.
+POKER_CHIPS_SHARED_AI_SOFT_CAP = int(
+    _CONFIG.get("POKER_CHIPS_SHARED_AI_SOFT_CAP", 2)
+)
 # 3 calls in a few seconds is trivially under any plausible RPM ceiling, so
 # the old 5s inter-call sleep wasn't buying RPM safety, just wall-clock -
 # which matters given GitHub bills Actions minutes rounded up per job.
@@ -7068,8 +7078,10 @@ def _is_golf_shared_scrape_candidate(candidate):
     )
 
 
-def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
-    """Give golf a bounded, early share of the normal AI window.
+def _apply_shared_ai_category_fairness(
+    candidates, shared_limit, golf_soft_cap, poker_soft_cap=0
+):
+    """Give golf and poker bounded, early shares of the normal AI window.
 
     `candidates` has already been priority-sorted. Ending-soon auctions and
     isolated-budget rows stay in their exact positions. Golf eBay-scrape rows
@@ -7077,16 +7089,19 @@ def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
     misses came from that source, where a separate one-call lane made the
     configured golf share unreachable.
 
-    Select up to `golf_soft_cap` golf rows and fill the rest with non-golf,
-    allowing either side to reclaim genuinely idle capacity. The selected
-    groups are interleaved, preserving priority within each group, because a
-    slow vision provider often exhausts the run deadline before all nominal
-    calls happen. A fair *window* that leaves one category at its tail is not
-    fair in the wall-clock prefix production actually executes.
+    Select up to each category's configured soft cap, fill the remainder with
+    other categories, and let every group reclaim genuinely idle capacity.
+    `poker_soft_cap=0` retains the original golf-versus-non-golf behavior for
+    callers that do not opt into the poker reservation. The selected groups
+    are interleaved, preserving priority within each group, because a slow
+    vision provider often exhausts the run deadline before all nominal calls
+    happen. A fair *window* that leaves one category at its tail is not fair in
+    the wall-clock prefix production actually executes.
     """
     ordered = list(candidates)
     shared_limit = max(0, int(shared_limit))
     golf_soft_cap = max(0, int(golf_soft_cap))
+    poker_soft_cap = max(0, int(poker_soft_cap))
     if shared_limit == 0 or not ordered:
         return ordered
 
@@ -7109,61 +7124,88 @@ def _apply_shared_ai_category_fairness(candidates, shared_limit, golf_soft_cap):
     if ordinary_capacity == 0:
         return ordered
 
+    def bucket_for(candidate):
+        category = candidate.get("category")
+        if category == "golf-equipment":
+            return "golf"
+        # A zero poker cap means "no dedicated reservation," not "exclude
+        # poker from the ordinary non-golf share." That preserves the old
+        # helper contract for direct callers/tests and lets config disable the
+        # reservation without causing new starvation.
+        if category == "poker-chips" and poker_soft_cap:
+            return "poker"
+        return "other"
+
     movable = [
         (position, candidate)
         for position, candidate in enumerate(ordered)
         if not is_isolated(candidate)
         and not bool((candidate.get("result") or {}).get("is_ending_soon_auction"))
     ]
-    golf_entries = [
-        entry for entry in movable if entry[1].get("category") == "golf-equipment"
-    ]
-    non_golf_entries = [
-        entry for entry in movable if entry[1].get("category") != "golf-equipment"
-    ]
+    entries_by_bucket = {"golf": [], "poker": [], "other": []}
+    for entry in movable:
+        entries_by_bucket[bucket_for(entry[1])].append(entry)
 
-    golf_count = min(len(golf_entries), golf_soft_cap, ordinary_capacity)
-    non_golf_count = min(len(non_golf_entries), ordinary_capacity - golf_count)
-    remaining = ordinary_capacity - golf_count - non_golf_count
+    # Reserve a bounded share for the two evidenced categories, then make the
+    # balance available to everything else. Any unused share is filled in
+    # original priority order below, so a soft cap never wastes a call.
+    caps_by_bucket = {
+        "golf": golf_soft_cap,
+        "poker": poker_soft_cap,
+        "other": ordinary_capacity,
+    }
+    selected_by_bucket = {"golf": [], "poker": [], "other": []}
+    remaining = ordinary_capacity
+    for bucket in ("golf", "poker", "other"):
+        count = min(len(entries_by_bucket[bucket]), caps_by_bucket[bucket], remaining)
+        selected_by_bucket[bucket] = entries_by_bucket[bucket][:count]
+        remaining -= count
 
-    # Preserve the old soft-cap property: once one side has no candidate to
-    # offer, the other side immediately backfills rather than wasting calls.
+    # Once the reserved slices and ordinary share have had their chance, the
+    # highest-priority still-unselected rows reclaim every idle slot. This is
+    # the multi-category form of the original golf/non-golf backfill rule.
+    selected_positions = {
+        position
+        for entries in selected_by_bucket.values()
+        for position, _candidate in entries
+    }
     if remaining:
-        extra_non_golf = min(remaining, len(non_golf_entries) - non_golf_count)
-        non_golf_count += extra_non_golf
-        remaining -= extra_non_golf
-    if remaining:
-        golf_count += min(remaining, len(golf_entries) - golf_count)
+        for entry in movable:
+            if entry[0] in selected_positions:
+                continue
+            bucket = bucket_for(entry[1])
+            selected_by_bucket[bucket].append(entry)
+            selected_positions.add(entry[0])
+            remaining -= 1
+            if remaining == 0:
+                break
 
-    selected_golf = golf_entries[:golf_count]
-    selected_non_golf = non_golf_entries[:non_golf_count]
-    selected = []
-    golf_index = 0
-    non_golf_index = 0
-    prefer_golf = bool(
-        selected_golf
-        and (
-            not selected_non_golf
-            or selected_golf[0][0] < selected_non_golf[0][0]
-        )
+    # Cycle through whichever selected groups appeared first in the original
+    # priority order. This keeps even a one- or two-slot reservation in the
+    # executable prefix instead of merely somewhere inside a nominal window.
+    active_buckets = sorted(
+        (
+            bucket
+            for bucket, entries in selected_by_bucket.items()
+            if entries
+        ),
+        key=lambda bucket: selected_by_bucket[bucket][0][0],
     )
-    while golf_index < len(selected_golf) or non_golf_index < len(selected_non_golf):
-        if prefer_golf and golf_index < len(selected_golf):
-            selected.append(selected_golf[golf_index])
-            golf_index += 1
-        elif not prefer_golf and non_golf_index < len(selected_non_golf):
-            selected.append(selected_non_golf[non_golf_index])
-            non_golf_index += 1
-        elif golf_index < len(selected_golf):
-            selected.append(selected_golf[golf_index])
-            golf_index += 1
-        else:
-            selected.append(selected_non_golf[non_golf_index])
-            non_golf_index += 1
-        if golf_index < len(selected_golf) and non_golf_index < len(selected_non_golf):
-            prefer_golf = not prefer_golf
+    selected = []
+    selected_indices = {bucket: 0 for bucket in active_buckets}
+    while True:
+        progressed = False
+        for bucket in active_buckets:
+            index = selected_indices[bucket]
+            entries = selected_by_bucket[bucket]
+            if index >= len(entries):
+                continue
+            selected.append(entries[index])
+            selected_indices[bucket] += 1
+            progressed = True
+        if not progressed:
+            break
 
-    selected_positions = {position for position, _candidate in selected}
     fair_movable = [candidate for _position, candidate in selected]
     fair_movable.extend(
         candidate for position, candidate in movable if position not in selected_positions
@@ -8292,6 +8334,7 @@ def run():
         review_candidates,
         shared_limit=GEMINI_CALL_LIMIT,
         golf_soft_cap=GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP,
+        poker_soft_cap=POKER_CHIPS_SHARED_AI_SOFT_CAP,
     )
     # Category fairness may deliberately pull golf rows forward from later in
     # the sorted list. Reassert only the two hard global partitions afterward:

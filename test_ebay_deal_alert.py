@@ -7217,6 +7217,86 @@ class RunIntegration(unittest.TestCase):
             ["v1|golf-shared-scrape-1|0", "v1|golf-shared-scrape-2|0"],
         )
 
+    def test_poker_shared_reservation_spends_a_real_slot_during_golf_contention(self):
+        # Exercise the actual PASS 2 -> PASS 3 handoff, not only the ordering
+        # helper. Watches are deliberately higher-priced than poker, so the
+        # old golf-vs-non-golf split would spend both non-golf slots on watches
+        # after reserving golf's two. The poker reservation must reach a real
+        # photo-check call while golf still spends its configured share.
+        self._patch("GEMINI_CALL_LIMIT", 4)
+        self._patch("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 2)
+        self._patch("POKER_CHIPS_SHARED_AI_SOFT_CAP", 1)
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        searches = [
+            {
+                "query": "golf club set -junior -youth -kids -ladies -womens -lefty",
+                "category": "golf-equipment",
+                "category_id": "115280",
+                "max_price": 300,
+                "enabled": True,
+                "profile": "fast",
+            },
+            {
+                "query": "omega watch",
+                "category": "watches",
+                "category_id": "31387",
+                "max_price": 300,
+                "enabled": True,
+                "profile": "fast",
+            },
+            {
+                "query": "casino chips lot",
+                "category": "poker-chips",
+                "category_id": "166570",
+                "max_price": 150,
+                "enabled": True,
+                "profile": "fast",
+            },
+        ]
+        listings_by_query = {
+            searches[0]["query"]: [
+                self._ebay_item(
+                    f"v1|golf-shared-{index}|0",
+                    f"TaylorMade Right Hand Complete Golf Club Set {index} Bag Irons Putter",
+                    120 + index,
+                )
+                for index in range(3)
+            ],
+            searches[1]["query"]: [
+                self._ebay_item(
+                    f"v1|watch-shared-{index}|0",
+                    f"Omega Seamaster Mens Watch {index}",
+                    240 - index,
+                )
+                for index in range(2)
+            ],
+            searches[2]["query"]: [
+                self._ebay_item(
+                    "v1|poker-shared-1|0",
+                    "Vintage Unmarked Casino Poker Chip Set 300 Chips With Case",
+                    50,
+                )
+            ],
+        }
+        self._patch("SAVED_SEARCHES", searches)
+        self._patch(
+            "search_ebay",
+            lambda token, search: (list(listings_by_query[search["query"]]), 42),
+        )
+
+        m.run()
+
+        self.assertEqual(len(self.ai_calls), 4)
+        self.assertIn("v1|poker-shared-1|0", self.ai_calls)
+        self.assertEqual(
+            sum(item_id.startswith("v1|golf-shared-") for item_id in self.ai_calls),
+            2,
+        )
+        self.assertEqual(
+            sum(item_id.startswith("v1|watch-shared-") for item_id in self.ai_calls),
+            1,
+        )
+
     def test_facebook_golf_queue_row_reaches_golf_gate_and_alerts(self):
         # Exercise the real queue loader, Scout router, run loop, golf merge,
         # golf gate, and alert path together. Only network/provider edges are
@@ -9032,6 +9112,47 @@ class SharedAiCategoryFairness(unittest.TestCase):
             "the executable prefix must alternate categories while preserving "
             "priority within each category",
         )
+
+    def test_poker_share_reaches_executable_prefix_while_golf_uses_its_share(self):
+        # Poker is deliberately last in the incoming priority order here.
+        # Without its own share, the old golf-vs-non-golf helper selects the
+        # two earlier watches as all available non-golf capacity and poker
+        # gets no shared AI check at all.
+        candidates = [
+            self._candidate(f"watch-{index}", "watches")
+            for index in range(8)
+        ] + [
+            self._candidate(f"golf-{index}", "golf-equipment")
+            for index in range(8)
+        ] + [
+            self._candidate(f"poker-{index}", "poker-chips")
+            for index in range(4)
+        ]
+
+        without_reservation = m._apply_shared_ai_category_fairness(
+            candidates, 6, 3
+        )
+        self.assertFalse(
+            any(
+                row["category"] == "poker-chips"
+                for row in without_reservation[:6]
+            ),
+            "the control demonstrates why poker needs a distinct shared share",
+        )
+
+        ordered = m._apply_shared_ai_category_fairness(
+            candidates, 6, 3, poker_soft_cap=1
+        )
+        first_window = ordered[:6]
+
+        self.assertEqual(
+            sum(row["category"] == "golf-equipment" for row in first_window), 3
+        )
+        self.assertEqual(
+            sum(row["category"] == "poker-chips" for row in first_window), 1
+        )
+        self.assertEqual(sum(row["category"] == "watches" for row in first_window), 2)
+        self.assertEqual(first_window[2]["name"], "poker-0")
 
     def test_golf_share_is_reachable_when_non_golf_was_sorted_first(self):
         candidates = [
