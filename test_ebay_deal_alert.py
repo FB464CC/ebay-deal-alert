@@ -4801,6 +4801,56 @@ class EvidenceBackedCategoryPromptCalibration(unittest.TestCase):
                 )
 
 
+class WatchCounterfeitPricePrompt(unittest.TestCase):
+    def test_extreme_price_is_explicit_counterfeit_evidence_not_a_photo_only_rule(self):
+        listing = {
+            "title": "Longines Master Collection Full Set",
+            "price": {"value": 88, "currency": "USD"},
+            "image": {"imageUrl": "https://example.test/watch.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(m, "_call_photo_check", return_value={}) as photo_check:
+            m.check_photos_with_gemini(
+                listing, category="watches", current_month_name="September"
+            )
+
+        prompt = photo_check.call_args.args[0]
+        self.assertIn(
+            f"{m.WATCH_EXTREME_DISCOUNT_WARNING_PCT}% or more below that estimate",
+            prompt,
+        )
+        self.assertIn("itself real counterfeit/misrepresentation risk evidence", prompt)
+        self.assertIn("not something that needs a second visual tell", prompt)
+        self.assertIn("placeholder or auction starting bid unless", prompt)
+        self.assertIn("evidence on its own even when compressed photos look plausible", prompt)
+        self.assertIn("Set counterfeit_suspected false only", prompt)
+
+
+class CounterfeitAssessmentParsing(unittest.TestCase):
+    def test_null_or_omitted_verdict_stays_unknown_while_explicit_false_stays_false(self):
+        # The raw historic Vinted records omitted the fields, while the
+        # user's query path observes that absence as null. Neither may become
+        # an implicit clean verdict during the AI-result merge.
+        for ai_result in (
+            {"counterfeit_suspected": None, "counterfeit_reason": None},
+            {},
+        ):
+            with self.subTest(ai_result=ai_result):
+                result = {}
+                m._merge_ai_counterfeit_assessment(result, ai_result)
+                self.assertIsNone(result["counterfeit_suspected"])
+                self.assertIsNone(result["counterfeit_reason"])
+
+        result = {}
+        m._merge_ai_counterfeit_assessment(result, {
+            "counterfeit_suspected": False,
+            "counterfeit_reason": "",
+        })
+        self.assertIs(result["counterfeit_suspected"], False)
+        self.assertIsNone(result["counterfeit_reason"])
+
+
 class AsciiSafeHeader(unittest.TestCase):
     """Live miss: a genuine 72%-under-resale "Steal" (Allen Edmonds
     LaSalle, size 13) sat completely unsent for 6+ hours because its
@@ -4975,6 +5025,53 @@ class SendAlertRetailResaleLine(unittest.TestCase):
         message = self._send_and_capture(result)
         self.assertNotIn("EXTREME WATCH DISCOUNT", message)
         self.assertIn("bot cannot detect counterfeits", message)
+
+    def test_unverified_vinted_extreme_watch_is_a_low_priority_review_but_vetted_one_is_urgent(self):
+        # Exact production-shaped contrast: the noisy Vinted rows had a
+        # completed AI check but no persisted/usable counterfeit verdict and
+        # medium price confidence. A similarly discounted watch that the AI
+        # explicitly did NOT suspect and priced at high confidence remains
+        # reachable at normal Priority 5.
+        common = {
+            "listing": {
+                "title": "Longines Master Collection Full Set",
+                "itemWebUrl": "https://www.vinted.com/items/example",
+                "platform": "vinted",
+            },
+            "category": "watches",
+            "category_id": m.WATCH_CATEGORY_ID,
+            "price": 99.74,
+            "estimated_resale_value": 1400,
+            "deal_rating": "Steal",
+            "discount_pct": 93,
+            "watch_ai_checked": True,
+        }
+        unverified = {
+            **common,
+            "counterfeit_suspected": None,
+            "price_confidence": "medium",
+        }
+        vetted = {
+            **common,
+            "counterfeit_suspected": False,
+            "price_confidence": "high",
+        }
+
+        unverified_message = self._send_and_capture(unverified)
+        unverified_headers = dict(self.last_headers)
+        vetted_message = self._send_and_capture(vetted)
+        vetted_headers = dict(self.last_headers)
+
+        self.assertEqual(m.alert_urgency(unverified)[0], 2)
+        self.assertEqual(unverified_headers["Priority"], "2")
+        self.assertIn("WATCH REVIEW", unverified_headers["Title"])
+        self.assertIn("AI counterfeit verdict is missing/unknown", unverified_message)
+        self.assertIn("low-priority review, not a vetted Steal", unverified_message)
+
+        self.assertEqual(m.alert_urgency(vetted)[0], 5)
+        self.assertEqual(vetted_headers["Priority"], "5")
+        self.assertNotIn("WATCH REVIEW", vetted_headers["Title"])
+        self.assertNotIn("low-priority review", vetted_message)
 
     def test_higher_description_disclosed_value_is_visible_as_unverified_claim(self):
         result = {
@@ -6985,6 +7082,59 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.alerts, [])
         self.assertFalse(m.is_new(self._db(), listing["itemId"]))
 
+    def test_vinted_extreme_unknown_and_explicitly_clean_watch_diverge_end_to_end(self):
+        # Regression for the exact production shape: Vinted watch, real AI
+        # check, extreme discount, model counterfeit verdict absent/null.
+        # It must stay visible as a P2 review, while a comparable watch with
+        # an explicit false verdict and high-confidence valuation keeps P5.
+        saved_search = {
+            "query": "longines watch", "max_price": 500,
+            "category_id": m.WATCH_CATEGORY_ID, "category": "watches",
+            "enabled": True, "profile": "slow",
+        }
+        unknown_listing = p.make_listing(
+            "vinted", "extreme-unknown", "Longines Master Collection", 88,
+            "https://www.vinted.com/items/extreme-unknown",
+        )
+        vetted_listing = p.make_listing(
+            "vinted", "extreme-vetted", "Longines Master Collection", 96,
+            "https://www.vinted.com/items/extreme-vetted",
+        )
+        self._serve(saved_search, [])
+        self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {
+            saved_search["query"]: [unknown_listing, vetted_listing]
+        })
+
+        def watch_ai(listing, category="other", current_month_name=None, hard_stop=None):
+            self.ai_calls.append(listing["itemId"])
+            is_unknown = listing["itemId"] == unknown_listing["itemId"]
+            return {
+                **self.AI_STEAL,
+                "summary": "Longines wristwatch; no visible damage.",
+                "brand_mismatch": False,
+                "estimated_resale_value": 1400,
+                "price_confidence": "medium" if is_unknown else "high",
+                "counterfeit_suspected": None if is_unknown else False,
+                "counterfeit_reason": None if is_unknown else "",
+            }
+
+        self._patch("check_photos_with_gemini", watch_ai)
+
+        m.run()
+
+        sent = {entry["listing"]["itemId"]: entry for entry in self.alerts}
+        logged = {entry["item_id"]: entry for entry in self._alert_log_records()}
+        unknown_result = sent[unknown_listing["itemId"]]
+        vetted_result = sent[vetted_listing["itemId"]]
+
+        self.assertEqual(set(sent), {unknown_listing["itemId"], vetted_listing["itemId"]})
+        self.assertTrue(logged[unknown_listing["itemId"]]["ai_checked"])
+        self.assertIn("counterfeit_suspected", logged[unknown_listing["itemId"]])
+        self.assertIsNone(logged[unknown_listing["itemId"]]["counterfeit_suspected"])
+        self.assertIs(logged[vetted_listing["itemId"]]["counterfeit_suspected"], False)
+        self.assertEqual(m.alert_urgency(unknown_result)[0], 2)
+        self.assertEqual(m.alert_urgency(vetted_result)[0], 5)
+
     def test_wrong_suit_body_size_blocked_before_ai_end_to_end(self):
         # Exact reported live alert: a "loro piana suit" search sent this
         # 46L listing as a 76%-under-resale steal despite the user's real
@@ -8802,6 +8952,44 @@ class AlertLogPriceSemantics(unittest.TestCase):
         record = self._write_and_read(result)
         self.assertEqual(record["price"], 100.0)
         self.assertEqual(record["item_price"], 80.0)
+
+    def test_ai_checked_watch_log_preserves_unknown_and_explicit_false_counterfeit_verdicts(self):
+        # Old production rows omitted these keys entirely, making a real AI
+        # null indistinguishable from an explicit clean verdict. Both must be
+        # serialized for the next audit, including JSON null.
+        base = {
+            "listing": {
+                "itemId": "vinted:watch-counterfeit-telemetry",
+                "title": "Longines Master Collection",
+                "platform": "vinted",
+                "price": {"value": 88.0, "currency": "USD"},
+            },
+            "category": "watches",
+            "verdict": "REVIEW",
+            "price": 99.74,
+            "item_price": 88.0,
+            "price_confidence": "medium",
+            "watch_ai_checked": True,
+        }
+        unknown = self._write_and_read({
+            **base,
+            "counterfeit_suspected": None,
+            "counterfeit_reason": None,
+        }, delivered=True)
+        explicitly_not_suspected = self._write_and_read({
+            **base,
+            "listing": {**base["listing"], "itemId": "vinted:watch-counterfeit-clean"},
+            "counterfeit_suspected": False,
+            "counterfeit_reason": None,
+        }, delivered=True)
+
+        self.assertTrue(unknown["ai_checked"])
+        self.assertIn("counterfeit_suspected", unknown)
+        self.assertIn("counterfeit_reason", unknown)
+        self.assertIsNone(unknown["counterfeit_suspected"])
+        self.assertIsNone(unknown["counterfeit_reason"])
+        self.assertIs(explicitly_not_suspected["counterfeit_suspected"], False)
+        self.assertIsNone(explicitly_not_suspected["counterfeit_reason"])
 
     def test_versioned_disposition_and_search_metadata_are_always_written(self):
         search = next(search for search in m.SAVED_SEARCHES if search["id"] == "golf-taylormade-m2-irons")

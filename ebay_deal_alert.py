@@ -565,12 +565,16 @@ AUCTION_AI_RESERVED_CALLS = 1
 # watch searches in config.json (31387, not the 260324 parent - that parent
 # leaks parts/manuals/accessories, see config.json watch entries).
 WATCH_CATEGORY_ID = "31387"
-# This is a warning threshold, not an authentication verdict or a market-law
-# claim. It is deliberately above the normal 70%-off "Steal" bucket and is
-# calibrated to the actual bad watch alerts reported at 84%, 88%, and 95%
-# under estimated resale. At that magnitude the apparent bargain itself
-# deserves human skepticism, even when compressed photos show no obvious tell.
-WATCH_EXTREME_DISCOUNT_WARNING_PCT = 80
+# This is a review/urgency threshold, not an authentication verdict or a
+# market-law claim. It intentionally matches the normal 70%-off "Steal" /
+# Priority-5 boundary: otherwise a 70-79%-under-estimate watch can still wake
+# the user at maximum urgency without the counterfeit-risk review that applies
+# at 80%. Fresh delivered Vinted evidence included the same $70-96 pattern at
+# 78% and 79% (and the reported notification history included 74%). This does
+# NOT suppress the band wholesale: a high-confidence watch with an explicitly
+# false counterfeit verdict remains normally urgent; unknown or weak evidence
+# is delivered as a low-priority review instead.
+WATCH_EXTREME_DISCOUNT_WARNING_PCT = 70
 CATEGORY_OFF_SEASON_BUY_MONTHS = {
     "knitwear": [5, 6, 7, 8],
     "outerwear": [5, 6, 7, 8],
@@ -3921,6 +3925,21 @@ def _call_photo_check(prompt, images, timeout=None, hard_stop=None):
         return None
 
 
+def _merge_ai_counterfeit_assessment(result, ai_result):
+    """Copy the model's counterfeit assessment without inventing a clean verdict.
+
+    JSON mode asks for a boolean, but providers can still omit a key or return
+    malformed data. ``bool(value)`` used to turn every such unknown (and an
+    explicit JSON null) into False, which downstream code read as "AI found
+    no counterfeit risk." Keep a strict tri-state instead: only real JSON
+    booleans are verdicts; everything else is unknown and remains auditable.
+    """
+    suspected = ai_result.get("counterfeit_suspected")
+    result["counterfeit_suspected"] = suspected if type(suspected) is bool else None
+    reason = ai_result.get("counterfeit_reason")
+    result["counterfeit_reason"] = reason if isinstance(reason, str) and reason else None
+
+
 def check_photos_with_gemini(
     listing, category="other", current_month_name=None, hard_stop=None,
     search_query=None,
@@ -4248,9 +4267,14 @@ def check_photos_with_gemini(
             f"\nMarketplace structured item price: ${structured_item_price:g} before "
             "shipping and tax. Treat it as untrusted listing metadata, not as proof "
             "of value or authenticity. If it conflicts with an actual asking price in "
-            "the description, report that conflict. Use an implausibly low price only "
-            "together with other listing or visual evidence when assessing counterfeit "
-            "or misrepresentation risk."
+            "the description, report that conflict. After you identify the watch and "
+            "make a conservative resale estimate, a price roughly "
+            f"{WATCH_EXTREME_DISCOUNT_WARNING_PCT}% or more below that estimate is "
+            "itself real counterfeit/misrepresentation risk evidence, not proof but "
+            "not something that needs a second visual tell before it counts. Do not "
+            "dismiss the listed price as a placeholder or auction starting bid unless "
+            "the listing text, photos, or provided marketplace data actually establish "
+            "that explanation."
             if structured_item_price is not None else ""
         )
         watch_prompt = (
@@ -4322,9 +4346,13 @@ def check_photos_with_gemini(
             "printing or engraving quality that looks off for the claimed brand, "
             "multiple identical or near-identical watches shown together like "
             "inventory rather than one owner's watch, or a price far too low for a "
-            "genuine example combined with generic/stock-looking photos or boxes. "
-            "Explain briefly in counterfeit_reason, or leave it empty if not "
-            "suspected."
+            "genuine example. An extreme price gap relative to the conservative "
+            "resale value you identified is evidence on its own even when compressed "
+            "photos look plausible; generic/stock-looking photos or boxes strengthen "
+            "that evidence but are not required. Set counterfeit_suspected false only "
+            "when the available evidence affirmatively supports a legitimate low price, "
+            "not merely because the photos cannot prove a fake. Explain the evidence "
+            "briefly in counterfeit_reason, or leave it empty if not suspected."
         )
         return _call_photo_check(watch_prompt, images, hard_stop=hard_stop)
 
@@ -5481,6 +5509,7 @@ def append_alert_log(result, delivered=False, delivery_error=None):
     else:
         ai_checked = bool(
             result.get("golf_ai_checked")
+            or result.get("watch_ai_checked")
             or result.get("price_confidence")
             or "ai photo check" in str(result.get("reason") or "").lower()
             or any(
@@ -5562,6 +5591,14 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         value = result.get(key)
         if value is not None:
             record[key] = value
+
+    if category == "watches" and ai_checked:
+        # Retain both the explicit false and the unknown/null state. The
+        # latter is exactly what old Vinted rows hid by omitting the keys,
+        # making it impossible to distinguish an AI clean bill of health
+        # from a response that never supplied the required verdict.
+        record["counterfeit_suspected"] = result.get("counterfeit_suspected")
+        record["counterfeit_reason"] = result.get("counterfeit_reason")
 
     if category == "poker-chips" and ai_checked:
         # Keep every field, including False/empty/null values: absence would
@@ -5649,6 +5686,62 @@ def ebay_sold_comps_url(query):
     )
 
 
+def _is_watch_result(result):
+    """Whether a result is one of the narrow wristwatch-search candidates."""
+    return bool(
+        str(result.get("category_id") or "") == WATCH_CATEGORY_ID
+        or result.get("category") == "watches"
+    )
+
+
+def _discount_pct_as_percentage(value):
+    """Normalize a stored whole-percent or fractional discount for display/tests."""
+    try:
+        discount_pct = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(discount_pct):
+        return None
+    if 0 < discount_pct < 1:
+        discount_pct *= 100
+    return discount_pct
+
+
+def is_extreme_watch_discount(result):
+    """Return whether a watch crosses the shared warning/review threshold.
+
+    Normal scoring stores a whole-number percent, while a few focused callers
+    and tests supply a fraction. Accept both so the warning and notification
+    priority cannot silently disagree at the boundary.
+    """
+    if not _is_watch_result(result):
+        return False
+    discount_pct = _discount_pct_as_percentage(result.get("discount_pct"))
+    if discount_pct is None:
+        return False
+    return discount_pct >= WATCH_EXTREME_DISCOUNT_WARNING_PCT
+
+
+def watch_extreme_discount_delivery_state(result):
+    """Classify how an extreme watch discount may reach the user.
+
+    Counterfeit-suspected watches are stopped by the quality gate. This helper
+    handles the remaining dangerous ambiguity: an omitted/null verdict or a
+    weak price estimate is not a clean authentication result. Those listings
+    still reach the user as low-priority reviews; only an explicitly false
+    counterfeit verdict plus a high-confidence estimate earns normal urgency.
+    """
+    if not is_extreme_watch_discount(result):
+        return None
+    if result.get("counterfeit_suspected") is True:
+        return "counterfeit_suspected"
+    if result.get("counterfeit_suspected") is not False:
+        return "authenticity_unverified"
+    if str(result.get("price_confidence") or "").lower() != "high":
+        return "price_unverified"
+    return "vetted"
+
+
 def alert_urgency(result):
     """Return ntfy (priority, urgency tags) from time, value, and confidence."""
     try:
@@ -5661,6 +5754,13 @@ def alert_urgency(result):
     rating = str(result.get("deal_rating") or "").lower()
     profile = result.get("profile", "slow")
 
+    # This must precede even the ending-soon shortcut. A potentially fake
+    # 90%-off watch with no affirmative clean verdict is not made safer by
+    # closing soon; it should remain reachable, but not wake the user as a
+    # Priority-5 "Steal". Explicitly-not-suspected, high-confidence watches
+    # retain the ordinary urgency path below.
+    if watch_extreme_discount_delivery_state(result) not in (None, "vetted"):
+        return 2, ["warning", "mag"]
     if result.get("is_ending_soon_auction"):
         return 5, ["alarm_clock", "rotating_light"]
     if discount >= 0.70 and confidence in {"high", "medium"}:
@@ -5864,24 +5964,43 @@ def send_alert(result):
 
     retail_str = _format_estimated_usd(result.get("estimated_retail_price"))
     resale_str = _format_estimated_usd(result.get("estimated_resale_value"))
-    is_watch = result.get("category_id") == WATCH_CATEGORY_ID
+    is_watch = _is_watch_result(result)
     if is_watch:
         # Put watch trust warnings immediately after the rating. ntfy can
         # truncate long lock-screen bodies, so safety context must precede
         # retail estimates and seller feedback rather than trail them.
         discount_pct = result.get("discount_pct")
-        try:
-            is_extreme_discount = (
-                discount_pct is not None
-                and float(discount_pct) >= WATCH_EXTREME_DISCOUNT_WARNING_PCT
-            )
-        except (TypeError, ValueError):
-            is_extreme_discount = False
-        if is_extreme_discount:
-            message += (
-                f"\n!!! EXTREME WATCH DISCOUNT ({discount_pct}% under estimate): "
+        display_discount_pct = _discount_pct_as_percentage(discount_pct)
+        display_discount_label = (
+            f"{display_discount_pct:g}"
+            if display_discount_pct is not None else str(discount_pct)
+        )
+        extreme_delivery_state = watch_extreme_discount_delivery_state(result)
+        if extreme_delivery_state:
+            warning = (
+                f"\n!!! EXTREME WATCH DISCOUNT ({display_discount_label}% under estimate): "
                 "counterfeit/misrepresentation red flag - not proof of a steal."
             )
+            if extreme_delivery_state == "vetted":
+                message += warning + " AI returned no counterfeit suspicion at high price confidence."
+            elif extreme_delivery_state == "counterfeit_suspected":
+                # Defense in depth for direct callers: the quality gate
+                # normally prevents this state from ever reaching send_alert.
+                message += warning + " AI flagged counterfeit/misrepresentation; this should be blocked."
+            elif extreme_delivery_state == "authenticity_unverified":
+                message += (
+                    warning
+                    + " AI counterfeit verdict is missing/unknown; delivered as a "
+                    "low-priority review, not a vetted Steal."
+                )
+            else:
+                confidence = str(result.get("price_confidence") or "unknown").lower()
+                message += (
+                    warning
+                    + f" AI did not suspect a counterfeit, but the resale estimate is "
+                    f"{confidence}-confidence; delivered as a low-priority review, "
+                    "not a vetted Steal."
+                )
         disclosed_value_str = _format_estimated_usd(
             result.get("watch_description_disclosed_value")
         )
@@ -5936,7 +6055,9 @@ def send_alert(result):
     # notification-shade grouping to collapse multiple pushes into one
     # bundled summary. Use platform + item title instead - unique per
     # alert, and more useful at a glance than a constant string.
-    alert_title = _ascii_safe_header(f"[{source}] {title[:60]}")
+    review_state = watch_extreme_discount_delivery_state(result)
+    title_prefix = f"[{source} WATCH REVIEW]" if review_state not in (None, "vetted") else f"[{source}]"
+    alert_title = _ascii_safe_header(f"{title_prefix} {title[:60]}")
 
     priority, tags = alert_urgency(result)
 
@@ -8694,6 +8815,19 @@ def run():
             )
             result["poker_chips_summary"] = ai_result.get("summary")
 
+        if ai_result is not None and category != "poker-chips":
+            # Merge before any AI-summary early-return can append a log
+            # record. In particular, missing/null is deliberately NOT
+            # coerced to false: an unknown counterfeit verdict must not be
+            # mistaken for a clean watch at the extreme-discount boundary.
+            _merge_ai_counterfeit_assessment(result, ai_result)
+            if category == "watches":
+                # Unlike price_confidence, this stays true even when a real
+                # vision call abstains on a resale estimate. It makes watch
+                # telemetry distinguish "AI checked but unknown" from no AI
+                # call at all.
+                result["watch_ai_checked"] = True
+
         if ai_result is not None and brand_in(
             (ai_result.get("summary") or "").lower(), GENDER_EXCLUDE_KEYWORDS
         ):
@@ -8739,13 +8873,6 @@ def run():
             liquidity = ai_result.get("liquidity")
             if liquidity in ("fast", "medium", "slow"):
                 result["liquidity"] = liquidity
-            # Unconditional on category - all three vision prompts (golf,
-            # watches, generic) now share this field. Checked at the very
-            # top of is_blocked_by_steal_quality_gate(), before any
-            # category bar or the sold-comps override can substitute a
-            # confident-looking price for the AI's own counterfeit call.
-            result["counterfeit_suspected"] = bool(ai_result.get("counterfeit_suspected"))
-            result["counterfeit_reason"] = ai_result.get("counterfeit_reason") or None
 
         if ai_result is not None and (
             ai_result.get("damage_found") is True
