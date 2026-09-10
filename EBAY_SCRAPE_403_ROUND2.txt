@@ -1,0 +1,111 @@
+eBay scrape HTTP 403 — round 2 investigation log
+Started: 2026-09-10 (America/New_York)
+
+Repository baseline
+- `git log -1 --format="%H %s"` returned:
+  `c5670de0aeb7d89bbe50ecc72df71ebfb69a59aa chore: update poll state [skip ci]`
+- `git status --short` returned no entries: the checkout was clean before this log was created.
+- `git log -p -- ebay_scrape.py` showed one local path-history commit: the current commit adds the file with the round-1 cross-site navigation-header change, proxy URL validation/redaction, and non-200 response metadata diagnostics.
+- No fetch, pull, or clone was performed.
+
+Path history cross-check
+- GitHub's path-filtered commits API returned seven commits for `ebay_scrape.py` (2026-08-24 through 2026-09-09). The relevant round-1 change is `86597318d49b44e5bd84a6fa8f9a860392565779`, authored 2026-09-09T21:10:46Z, titled `eBay scrape lane: fix Sec-Fetch-Site fingerprint mismatch causing 100% 403s`.
+- That commit's own message correctly says its local same-query 403 -> 200 A/B was encouraging but not production proof, and identifies fingerprint or proxy-exit reputation as remaining possibilities.
+- Because the local checkout is depth-one, I also read the complete `ebay_scrape.py` patch for round-1 commit `86597318...` through `gh api`. It confirms the exact scope described above: explicit cross-site navigation headers, proxy validation/redaction, one transport attempt, and safe non-200 metadata. No round-1 cookie/session persistence existed.
+
+Fresh production evidence (first current completed run inspected)
+- `gh run list --repo FB464CC/ebay-deal-alert --workflow poll.yml --limit 10` was run fresh. At inspection time, run `34512143293` was in progress; the newest completed run was `34511639716` (2026-09-10T18:00:14Z, success).
+- Full logs for `34511639716` were pulled with `gh run view ... --log` and filtered only after the complete output proved too large for the terminal capture.
+- This run does **not** show 16/16 scrape requests returning 403. It shows nine consecutive HTTP 403 responses followed by one successful scrape request that parsed 16 extra listings for the Seiko query: 9/10 requests blocked, 1/10 successful.
+- Every observed 403 in this run reached `www.ebay.com` through the configured proxy and had `Server: AkamaiGHost`, no `Via`, no `Proxy-Status`, `Content-Type: text/html`, no logged x-ebay request/version headers, and a body size of 1,977-1,979 bytes.
+- The successful exception disproves a literal always-on hard block of every request from the configured proxy route. More runs still need quantification before distinguishing sticky/rotating exit reputation from a challenge/fingerprint policy.
+
+Fresh 10-run production sample
+- The initially in-progress run `34512143293` completed while sampling and is now the newest completed run, at current checkout SHA `c5670de0aeb7d89bbe50ecc72df71ebfb69a59aa`.
+- I counted the canonical Scrapling `INFO: Fetched (<status>) <GET https://www.ebay.com/sch/i.html...>` line once per request (the application emits a second duplicate-looking log record) and cross-checked every 403 against this module's warning. Results, newest first:
+  - 34512143293: 16 attempts = 1 HTTP 200, 15 HTTP 403
+  - 34511639716: 10 attempts = 1 HTTP 200, 9 HTTP 403
+  - 34511128640: 16 attempts = 0 HTTP 200, 16 HTTP 403
+  - 34510628356: 16 attempts = 0 HTTP 200, 16 HTTP 403
+  - 34510119098: 16 attempts = 0 HTTP 200, 16 HTTP 403
+  - 34509619392: 16 attempts = 0 HTTP 200, 16 HTTP 403
+  - 34509100897: 16 attempts = 0 HTTP 200, 16 HTTP 403
+  - 34508601955: 16 attempts = 1 HTTP 200, 15 HTTP 403
+  - 34508087145: 10 attempts = 0 HTTP 200, 10 HTTP 403
+  - 34507678104: 16 attempts = 0 HTTP 200, 16 HTTP 403
+- Aggregate: 148 attempts, 3 HTTP 200, 145 HTTP 403 = **97.97% blocked**, with no transport failures and no other HTTP statuses. Each 200 produced parsed listings. Seven of ten runs were 100% blocked; three runs had exactly one success.
+- Therefore the severe production outage is confirmed, but the stronger assertion “literally every request, zero exceptions” is false for the fresh sample. This pattern is compatible with a proxy pool containing rare acceptable exits, a mostly-burned/sticky exit with occasional reassignment, or probabilistic Akamai bot scoring. It does not support calling the proxy credential dead, and by itself cannot distinguish IP reputation from a non-browser fingerprint.
+
+403 response-shape evidence
+- Across all 145 production 403s in the ten-run sample, the logged header signature was identical: final host `www.ebay.com`, server `AkamaiGHost`, no Via/Proxy-Status, `text/html`, and no x-ebay request/version headers. Body-size distribution: 1,976 bytes x2; 1,977 x17; 1,978 x40; 1,979 x86. The 3-byte spread tracks small query-dependent/error-page variation, not radically different block modes.
+- Production logging intentionally excludes body content, so the Actions logs alone cannot establish whether the body contains an `_abck` sensor challenge. It would be false to claim the historical body was “read” from those logs.
+- A single bounded local request using this exact module/header path, with **no local proxy configured**, returned HTTP 403 with the same `AkamaiGHost`, `text/html`, and exactly 1,978 bytes. This exact signature/length match makes it strong (not absolute) evidence that the local body is the same response template production receives.
+- The local body is an eBay-branded, `noindex,nofollow` HTML page titled `Error Page | eBay`, not the classic tiny Akamai `Access Denied`/`errors.edgesuite.net` body. It contains a script tag but no literal `_abck`, `bm_sz`, “Access Denied”, “Pardon Our Interruption”, CAPTCHA, “challenge”, or “sensor” text.
+- Response headers set `bm_s` and `bm_so` cookies for `.ebay.com` and include `x-akamai-transformed: 0 - 0 -`. Cookie values were deliberately not persisted in this log. The `bm_*` names are concrete Bot Manager evidence; the exact role of these two cookies still needs authoritative research before concluding that JavaScript execution is required.
+
+First state-persistence experiment
+- Source inspection of installed Scrapling 0.4.15 confirms `Fetcher.get()` uses a `FetcherClient` one-off `CurlSession()` and closes it in `finally` after every call. The production code therefore discards both response cookies and connection state after each search. Scrapling also exposes `FetcherSession`, whose context holds one curl session across requests.
+- In one fresh local `FetcherSession` using the exact same headers and no proxy, three same-URL requests produced **403 -> 200 -> 200**. The first response was the same 1,978-byte eBay error template and set only `bm_s`/`bm_so`; the next responses were real 1.27-1.29 MB search-result pages and set normal eBay session cookies plus `bm_s`.
+- Visible first-response text was a generic eBay “SORRY / Something went wrong on our end” page with a per-request reference code. Its only script tag was a deferred, randomized same-origin path. No JavaScript was executed by `FetcherSession`, yet request 2 succeeded.
+- Given the measured production one-off success rate of only 3/148 (~2.0%), two consecutive successes immediately after one 403 are unlikely under independent random blocking (~0.04% using that empirical rate). This is real evidence that retaining state—not merely waiting or a random header—is relevant locally. A cookie-only replay test is next to separate cookies from TCP/TLS connection reuse.
+
+Cookie-only controlled A/B
+- On a different real query, a one-off `Fetcher.get()` returned the matching 1,978-byte 403 and exposed response cookies `bm_s` and `bm_so`.
+- Replaying exactly those cookies through a **new** one-off `Fetcher.get()` (fresh curl session/connection) immediately returned HTTP 200 with a 1,802,589-byte real search page containing `s-card` results.
+- A third new one-off control request, identical except with no replayed cookies, immediately returned the 1,978-byte HTTP 403 again.
+- Sequence: **403 (no cookies) -> 200 (403 cookies replayed) -> 403 (no-cookie control)**. This isolates cookie state from connection reuse and is direct evidence of the actual local blocking mechanism. A JavaScript engine was not needed to mint the accepted cookies: Akamai supplied them on the 403 itself.
+- Production applicability caveat: the real residential proxy credential is unavailable locally. If that provider assigns a different exit IP on each connection and Akamai binds `bm_*` state to the exit IP, replay through separate one-off calls may fail there. An immediate retry inside one persistent `FetcherSession` would retain both cookies and the connection/exit and is the most evidence-aligned implementation candidate.
+
+Timing and browser-path evidence
+- A persistent lightweight `FetcherSession` was tested across four different real queries. Statuses were 403, 200, 200, 200; timings were 0.139 s for the small challenge response and 1.765/1.354/1.330 s for full 1.18-2.20 MB result pages, 4.590 s total. Challenge state carried across different query URLs.
+- Fresh Actions run `34512143293` shows the real production scrape segment spanning about 35.95 s (first scrape response at 18:07:19.480Z through last at 18:07:55.427Z), and the entire Python process ran about 151.32 s (18:05:26.231Z to 18:07:57.547Z). The module's requests are sequential and occur after the marketplace prefetch. `MARKETPLACE_FETCH_BUDGET_SECONDS` is 90 s but governs the earlier parallel marketplace prefetch, not this scrape lane; the applicable whole-run guards are `RUN_BUDGET_SECONDS=390` and the workflow's 8-minute timeout.
+- Official Scrapling documentation confirms `StealthyFetcher` is Playwright/Patchright browser automation, that browser dependencies require a separate `scrapling install`, and that session classes keep one browser open across requests. Sources: https://github.com/D4Vinci/Scrapling and https://github.com/D4Vinci/Scrapling/blob/main/docs/fetching/stealthy.md
+- Real local browser benchmark against the same eBay URL: a one-off `StealthyFetcher` took 1.789 s and still returned HTTP 403/the eBay error page. A `StealthySession` took 0.858 s to start, then three real searches returned 200 in 2.161, 2.950, and 2.545 s (8.847 s total including startup). At the observed 16 searches, the measured steady-state rate projects to about 41 s of page fetches plus ~0.9 s startup locally. That is not inherently over the 390 s run budget, but it is slower/more complex than the lightweight session and its first one-off did not bypass the block.
+- Current Actions installs Scrapling 0.4.15 and curl_cffi 0.16.3 from `pip install -r requirements.txt`; it does not run `scrapling install`. Because lightweight cookie persistence already clears the matching response locally without JavaScript, adding a browser install/workflow change is not evidence-justified in this round (and workflow YAML is outside the stated edit scope).
+
+Alternative endpoint tests
+- `https://m.ebay.com/sch/i.html?...` redirected to the same `https://www.ebay.com/sch/i.html?...` and ended in the matching 1,979-byte HTTP 403. It is not a separately protected mobile search endpoint.
+- Adding the historic `&_rss=1` flag to the main search URL ended in the matching 1,978-byte HTTP 403 and returned no RSS/XML.
+- `https://www.ebay.com/sch/rss?...` and `https://www.ebay.com/sch/ajax/?...` both returned real HTML search results in initial follow-redirect tests, but neither is a JSON/RSS alternative. With redirects disabled, each is an HTTP 302 from `ebay-proxy-server` to `/sch/i.html?...`, and each 302 sets normal eBay cookies plus `bm_s`/`bm_so`. Following the redirect within one curl session carries those cookies and is why the final page succeeds.
+- This independently corroborates the root cause: an eBay navigation that obtains and carries state succeeds; a fresh stateless hit on `/sch/i.html` is challenged. Relying on undocumented legacy `/sch/rss` or `/sch/ajax/` redirect behavior would be less robust than explicitly retaining the challenge cookies with Scrapling's supported `FetcherSession` API.
+- eBay's own current developer documentation says the old Finding and Shopping APIs were decommissioned in Q1 2025 and directs item search users to the Browse API, which this repo already uses as its official quota-limited lane. No other supported quota-free listing-search API/feed was found. Sources: https://www.developer.ebay.com/updates/newsletter/q1_2025 and https://developer.ebay.com/api-docs/buy/api-browse.html
+
+Implemented change (production verification still unavailable)
+- `ebay_scrape.py` now uses Scrapling's public `FetcherSession` instead of stateless `Fetcher.get()` calls. One session is retained per calling thread and proxy configuration, preserving cookies and—where the proxy/server permits—its connection/exit across the sequential scrape searches.
+- A retry is narrowly gated: exactly one retry only when the first response is HTTP 403, `Server` identifies Akamai, and the response actually sets `bm_s` or `bm_so`. Generic 403s, 407s, transport failures, and other statuses remain single-attempt failures. A final failed retry closes/discards the session so the next search can get a fresh route.
+- The initial challenge is logged at INFO with the same safe response metadata and no cookie values. A final failure still returns `[]` and logs a warning that says the stateful retry was attempted. Transport errors still redact proxy URL/host/user/password.
+- Added unit coverage for challenge -> success, challenge -> challenge bounded failure/session close, non-cookie 403 no-retry, cookie values absent from logs, and successful session reuse across different queries. Existing fetch/proxy/header/failure/parser tests were adapted to the session API.
+- Focused suite after the edit: `python -m pytest -q test_ebay_scrape.py` -> `23 passed in 0.60s`.
+- Real post-change local function check, no configured proxy: first query logged the matching 1,979-byte Akamai cookie challenge, retried in-session, returned HTTP 200 and parsed 63 listings in 1.310 s; the second different query reused the session, returned HTTP 200 without a challenge, and parsed 103 listings in 1.606 s.
+- This is much stronger mechanistic evidence than round 1's header-only A/B, but it still does **not** prove the production proxy will accept the state: its credentials/exit behavior are unavailable locally and no commit/push/deployment is authorized. The first deployed Actions run remains the required production test.
+
+Authoritative Akamai context
+- Akamai's current Bot Manager reporting documentation says standard web-client telemetry uses first-party cookies to associate/transmit behavior, and explicitly lists `Unknown Bots (Session Validation Failed)` as a possible triggered detection. This aligns with the observed stateless-fail/stateful-pass result without proving eBay's private rule configuration: https://techdocs.akamai.com/security-ctr/docs/dimensions-new
+- Akamai's detection-method documentation says transparent detection evaluates request traits including header order/signatures and browser-version mismatches, while active detection uses browser interaction: https://techdocs.akamai.com/cloud-security/docs/detection-methods
+- Round 1 addressed one transparent header inconsistency, but round 2's controlled cookie A/B shows session validation is the remaining mechanism for this exact response locally. Akamai also exposes JA4/TLS fingerprint fields in its SIEM data, but the same curl_cffi fingerprint succeeds when state is retained, so TLS fingerprint alone cannot explain this specific local 403.
+
+Validation checkpoint
+- Local dependency versions were aligned with the newest Actions log: Scrapling 0.4.15 and curl_cffi 0.16.3.
+- Focused suite re-run on those versions: `23 passed in 0.58s`.
+- Requested full suite: `python3 -m pytest -q` -> `692 passed, 3 warnings, 499 subtests passed in 17.42s` (exit 0). The warnings are one pre-existing invalid-escape `SyntaxWarning` in `test_ebay_deal_alert.py` and two lxml `strip_cdata` deprecations in an existing integration test.
+
+Browser-install nuance
+- The exact GitHub runner image used by the sampled run (`ubuntu-24.04`, image `20260907.300.1`) includes Google Chrome. GitHub's runner-image inventory confirms Chrome is preinstalled: https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md
+- Scrapling documents a `real_chrome=True` option. A local one-off `StealthyFetcher` using installed real Chrome returned a full result page in 6.056 s. Multiplying that one-off cost by 16 is ~96.9 s, replacing the observed ~36 s scrape segment and projecting the ~151 s run to roughly ~212 s—still below `RUN_BUDGET_SECONDS=390`, though proxy/network variance remains.
+- Thus a browser fallback is not ruled out on wall-clock grounds, and `real_chrome=True` might avoid a separate browser download on the current runner image. It is still not the right first change: one default-browser trial returned the identical 403, browser state/cookies are what matter, and the lightweight session solves that exact mechanism at materially lower cost. No workflow edit was made.
+
+Final verdict and deployment decision tree
+- The remaining blocker is best identified as **Akamai/eBay session-cookie validation**, not a JavaScript-only `_abck` sensor challenge, a TLS fingerprint that can never pass, or a literal hard block of the entire production proxy route. The decisive evidence is the controlled 403/no-cookie -> 200/same-cookies -> 403/no-cookie A/B with otherwise fresh connections, plus successful lightweight session reuse across queries.
+- The fresh production rate is still catastrophically bad before this change (145/148 = 97.97% 403), but the three real 200s mean “100% forever / hard ASN block” is not supported. IP/exit reputation can still influence Akamai scoring and cannot be ruled out for the production proxy pool.
+- This change is intended to clear the diagnosed block cheaply, and it did so locally against the exact response signature. It is **not claimed production-fixed**: no real proxy credential is available here and no commit/push/deploy was performed.
+- On the first deployed run, look for one `retryable Akamai cookie challenge` INFO followed by successful `eBay scrape lane: N extra listing(s)` records. If that happens, later searches should reuse the accepted session without repeated challenge logs.
+- If the deployed log shows the retryable challenge and then `after one same-session Akamai-cookie retry` on repeated final 403s, the provider may be changing/losing the exit even inside the session or the production exit is subject to stricter active/reputation checks. Next test a persistent `StealthySession` through that proxy (measured 2.161-2.950 s/search plus 0.858 s startup locally; real-Chrome one-off 6.056 s). The current runner already includes Chrome.
+- If a persistent browser through the same proxy also fails, stop request-shape tweaks: the remaining evidence would point to the proxy exit pool/reputation, and the practical fix is a provider/sticky residential session with cleaner exits. Do not add retries that hammer the same denied route.
+- If the initial 403 does not classify as retryable in production, extend diagnostics only to log **cookie names**, never cookie values/body/query secrets, before making another behavioral change.
+
+Final validation
+- Exact requested AST command: `python3 -c "import ast; ast.parse(open('ebay_scrape.py', encoding='utf-8').read())"` -> exit 0, no output.
+- Exact requested full suite: `python3 -m pytest -q` -> `692 passed, 2 warnings, 499 subtests passed in 17.94s` (exit 0). Both warnings are the existing lxml `strip_cdata` deprecation from `test_mid_run_429_also_stops_the_auction_lane`.
+- `git diff --check` passed (only Git's informational LF-to-CRLF warnings appeared).
+- Final `git status --short`: modified `ebay_scrape.py`, modified `test_ebay_scrape.py`, untracked required `EBAY_SCRAPE_403_ROUND2.txt`; no other paths touched.
+- Baseline commit remained `c5670de0aeb7d89bbe50ecc72df71ebfb69a59aa chore: update poll state [skip ci]`. No fetch, pull, clone, commit, or push was performed.

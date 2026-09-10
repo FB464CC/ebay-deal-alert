@@ -20,16 +20,26 @@ neither a residential route nor browser-like HTTP fingerprints guarantee
 access: eBay/Akamai can still deny them. On any HTTP, transport, configuration,
 or parse failure this returns an empty list and logs a safe diagnostic. It
 never raises - a scrape failure must never take down the run.
+
+Round-2 live finding: after the navigation-header fix, a fresh production
+sample still returned Akamai 403s on 145/148 requests. The matching local 403
+sets `bm_s`/`bm_so`; replaying those response cookies in a fresh connection
+turned the same request 403 -> 200, while a no-cookie control stayed 403. No
+JavaScript ran. `Fetcher.get()` creates and closes a new curl session on every
+call, so it discarded the state eBay had just supplied. This module therefore
+uses `FetcherSession`, retains it across sequential searches on the same
+thread, and retries exactly once only for that concrete Akamai-cookie response.
 """
 
 import logging
 import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from urllib.parse import unquote, urlencode, urlsplit
 
-from scrapling.fetchers import Fetcher
+from scrapling.fetchers import FetcherSession
 
 from platforms import make_listing
 
@@ -75,6 +85,12 @@ _RESPONSE_DIAGNOSTIC_HEADERS = (
     "x-ebay-c-request-id",
     "x-ebay-c-version",
 )
+_AKAMAI_STATE_COOKIE_NAMES = {"bm_s", "bm_so"}
+# The production loop is sequential, but thread-local ownership keeps this
+# safe if another caller ever searches concurrently. A successful session is
+# intentionally kept for the short-lived CLI process so later queries carry
+# the state that Akamai accepted; failures close it through the helper below.
+_fetcher_thread_state = threading.local()
 
 # Each result card starts with this marker; splitting on it turns the page
 # into one chunk per listing. Regex over raw HTML, not html.parser - eBay's
@@ -107,6 +123,83 @@ _TIME_UNIT_MINUTES = {"d": 1440, "h": 60, "m": 1, "s": 1 / 60}
 def _build_request_headers():
     """Return a fresh browser-navigation header mapping for one request."""
     return dict(_EBAY_NAVIGATION_HEADERS)
+
+
+def _discard_fetch_session(session=None):
+    """Close this thread's retained HTTP session, if it is the requested one."""
+    active_session = getattr(_fetcher_thread_state, "session", None)
+    if session is not None and active_session is not session:
+        return
+    manager = getattr(_fetcher_thread_state, "session_manager", None)
+    _fetcher_thread_state.session = None
+    _fetcher_thread_state.session_manager = None
+    _fetcher_thread_state.proxy_url = None
+    if manager is not None:
+        try:
+            manager.__exit__(None, None, None)
+        except Exception:
+            pass
+
+
+def _get_fetch_session(proxy_url):
+    """Return a same-thread session whose cookies and proxy route are stable."""
+    session = getattr(_fetcher_thread_state, "session", None)
+    if (
+        session is not None
+        and getattr(_fetcher_thread_state, "proxy_url", None) == proxy_url
+    ):
+        return session
+    if session is not None:
+        _discard_fetch_session(session)
+
+    session_kwargs = {
+        "timeout": 15,
+        # There are up to 16 independent searches in a run. Transport-level
+        # retries against a dead proxy only delay the next observable attempt
+        # and can make Scrapling log a credential-bearing proxy URL.
+        "retries": 1,
+        "impersonate": "chrome",
+        "headers": _build_request_headers(),
+    }
+    if proxy_url:
+        session_kwargs["proxy"] = proxy_url
+
+    manager = FetcherSession(**session_kwargs)
+    session = manager.__enter__()
+    _fetcher_thread_state.session_manager = manager
+    _fetcher_thread_state.session = session
+    _fetcher_thread_state.proxy_url = proxy_url
+    return session
+
+
+def _is_akamai_cookie_challenge(response):
+    """Whether this is the observed 403 that one stateful retry can clear."""
+    if getattr(response, "status", None) != 403:
+        return False
+    try:
+        headers = {
+            str(key).lower(): value
+            for key, value in (getattr(response, "headers", {}) or {}).items()
+        }
+    except (AttributeError, TypeError, ValueError):
+        headers = {}
+    if "akamai" not in str(headers.get("server", "")).lower():
+        return False
+
+    try:
+        cookie_names = {
+            str(name).lower()
+            for name in (getattr(response, "cookies", {}) or {})
+        }
+    except (TypeError, ValueError):
+        cookie_names = set()
+    set_cookie = str(headers.get("set-cookie", ""))
+    cookie_names.update(
+        name
+        for name in _AKAMAI_STATE_COOKIE_NAMES
+        if re.search(rf"(?:^|,\s*){re.escape(name)}=", set_cookie, re.I)
+    )
+    return bool(cookie_names & _AKAMAI_STATE_COOKIE_NAMES)
 
 
 def _proxy_config_error(proxy_url):
@@ -294,43 +387,54 @@ def search_ebay_scraped(query, max_price=None, category_id=None):
         )
         return []
 
-    request_kwargs = {
-        "timeout": 15,
-        # This function is called repeatedly for different queries. Retrying a
-        # dead static proxy three times inside every call only delays the next
-        # observable attempt and makes Scrapling log the credential-bearing
-        # proxy URL. One bounded attempt keeps failures safe and diagnosable.
-        "retries": 1,
-        "impersonate": "chrome",
-        "headers": _build_request_headers(),
-    }
-    if proxy_url:
-        request_kwargs["proxy"] = proxy_url
-
+    session = None
+    challenge_retried = False
     try:
-        response = Fetcher.get(url, **request_kwargs)
+        session = _get_fetch_session(proxy_url)
+        response = session.get(url)
+        if _is_akamai_cookie_challenge(response):
+            logger.info(
+                "eBay scrape received retryable Akamai cookie challenge via %s "
+                "for %r; retrying once in the same session (%s)",
+                "configured proxy" if proxy_url else "direct connection",
+                query,
+                _response_diagnostics(response),
+            )
+            challenge_retried = True
+            response = session.get(url)
     except Exception as exc:
+        if session is not None:
+            _discard_fetch_session(session)
         logger.warning(
-            "eBay scrape transport failure via %s for %r: %s: %s",
+            "eBay scrape transport failure via %s for %r%s: %s: %s",
             "configured proxy" if proxy_url else "direct connection",
             query,
+            " during Akamai-cookie retry" if challenge_retried else "",
             type(exc).__name__,
             _sanitize_exception_message(exc, proxy_url),
         )
         return []
 
     if response.status != 200:
+        _discard_fetch_session(session)
+        retry_suffix = (
+            " after one same-session Akamai-cookie retry"
+            if challenge_retried
+            else ""
+        )
         if proxy_url and response.status == 407:
             logger.warning(
-                "eBay scrape proxy authentication failed with HTTP 407 for %r (%s)",
+                "eBay scrape proxy authentication failed with HTTP 407%s for %r (%s)",
+                retry_suffix,
                 query,
                 _response_diagnostics(response),
             )
         else:
             logger.warning(
-                "eBay scrape received HTTP %s via %s for %r (%s)",
+                "eBay scrape received HTTP %s via %s%s for %r (%s)",
                 response.status,
                 "configured proxy" if proxy_url else "direct connection",
+                retry_suffix,
                 query,
                 _response_diagnostics(response),
             )

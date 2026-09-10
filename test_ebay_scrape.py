@@ -1,6 +1,6 @@
 """Unit tests for ebay_scrape.py - the supplementary scraped eBay lane.
 
-No live network calls: Fetcher.get is mocked/replaced with a fake response
+No live network calls: FetcherSession is mocked/replaced with fake responses
 built from an inline HTML fixture modeled on eBay's real search results
 markup (confirmed live: <li class="s-card ...> cards, each carrying a
 data-listingid, a "s-card__title" span, a "$"-formatted "s-card__price"
@@ -11,7 +11,13 @@ must be skipped).
 import logging
 from unittest.mock import patch
 
-from ebay_scrape import search_ebay_scraped, _parse_listings
+import pytest
+
+from ebay_scrape import (
+    _discard_fetch_session,
+    _parse_listings,
+    search_ebay_scraped,
+)
 
 # Two real-shaped listing cards + one "Shop on eBay" ad placeholder card,
 # same structural pattern eBay's live search page uses.
@@ -40,17 +46,38 @@ FIXTURE_HTML = """
 
 
 class FakeResponse:
-    def __init__(self, status, html_content="", *, url="", headers=None):
+    def __init__(
+        self,
+        status,
+        html_content="",
+        *,
+        url="",
+        headers=None,
+        cookies=None,
+    ):
         self.status = status
         self.html_content = html_content
         self.url = url
         self.headers = headers or {}
+        self.cookies = cookies or {}
         self.body = html_content.encode("utf-8")
 
 
+@pytest.fixture(autouse=True)
+def clean_fetch_session():
+    """Keep the production thread-local session from leaking across tests."""
+    _discard_fetch_session()
+    yield
+    _discard_fetch_session()
+
+
+def _session_get(mock_session_factory):
+    return mock_session_factory.return_value.__enter__.return_value.get
+
+
 def test_extracts_real_listings_from_fixture_html():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(200, FIXTURE_HTML)
         results = search_ebay_scraped("rolex")
 
     assert len(results) == 2
@@ -61,8 +88,8 @@ def test_extracts_real_listings_from_fixture_html():
 
 
 def test_listing_shape_matches_make_listing_output():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(200, FIXTURE_HTML)
         results = search_ebay_scraped("rolex")
 
     rolex = next(r for r in results if "Rolex" in r["title"])
@@ -79,8 +106,8 @@ def test_listing_shape_matches_make_listing_output():
 
 
 def test_price_parsing_handles_comma_thousands_format():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(200, FIXTURE_HTML)
         results = search_ebay_scraped("rolex")
 
     rolex = next(r for r in results if "Rolex" in r["title"])
@@ -103,8 +130,8 @@ def test_title_html_entities_are_decoded():
 
 
 def test_non_200_response_returns_empty_list():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(403, "")
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(403, "")
         results = search_ebay_scraped("rolex")
 
     assert results == []
@@ -114,22 +141,22 @@ def test_proxy_env_var_gets_passed_to_fetcher():
     # Real fix: eBay 403s 100% of calls from GitHub Actions' shared runner
     # IP range (confirmed live against a real GH Actions run), vs ~1-in-10
     # from a residential IP. EBAY_SCRAPE_PROXY_URL routes through a real
-    # residential proxy instead - must reach Fetcher.get's proxy kwarg.
-    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+    # residential proxy instead - must reach FetcherSession's proxy kwarg.
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
          patch.dict("os.environ", {"EBAY_SCRAPE_PROXY_URL": "http://user:pass@proxy.example:8888"}):
-        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+        _session_get(mock_fetcher).return_value = FakeResponse(200, FIXTURE_HTML)
         search_ebay_scraped("rolex")
 
-    assert mock_fetcher.get.call_args.kwargs.get("proxy") == "http://user:pass@proxy.example:8888"
+    assert mock_fetcher.call_args.kwargs.get("proxy") == "http://user:pass@proxy.example:8888"
 
 
 def test_fetch_uses_consistent_browser_navigation_headers():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
          patch.dict("os.environ", {}, clear=True):
-        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+        _session_get(mock_fetcher).return_value = FakeResponse(200, FIXTURE_HTML)
         search_ebay_scraped("rolex")
 
-    kwargs = mock_fetcher.get.call_args.kwargs
+    kwargs = mock_fetcher.call_args.kwargs
     headers = kwargs["headers"]
     assert headers["Accept"].startswith("text/html,application/xhtml+xml")
     assert headers["Accept-Language"] == "en-US,en;q=0.9"
@@ -150,23 +177,23 @@ def test_fetch_uses_consistent_browser_navigation_headers():
 def test_no_proxy_configured_calls_fetcher_without_proxy_kwarg():
     # Optional by design - unset, this must still work exactly as before
     # (direct call, no proxy kwarg at all), not pass proxy=None.
-    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
          patch.dict("os.environ", {}, clear=True):
-        mock_fetcher.get.return_value = FakeResponse(200, FIXTURE_HTML)
+        _session_get(mock_fetcher).return_value = FakeResponse(200, FIXTURE_HTML)
         search_ebay_scraped("rolex")
 
-    assert "proxy" not in mock_fetcher.get.call_args.kwargs
+    assert "proxy" not in mock_fetcher.call_args.kwargs
 
 
 def test_malformed_proxy_is_rejected_without_a_network_call(caplog):
     malformed_proxy = "not-a-proxy-url"
-    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
          patch.dict("os.environ", {"EBAY_SCRAPE_PROXY_URL": malformed_proxy}), \
          caplog.at_level(logging.WARNING, logger="ebay_scrape"):
         results = search_ebay_scraped("rolex")
 
     assert results == []
-    mock_fetcher.get.assert_not_called()
+    mock_fetcher.assert_not_called()
     assert "proxy configuration is invalid" in caplog.text
     assert "missing or unsupported URL scheme" in caplog.text
     assert malformed_proxy not in caplog.text
@@ -177,10 +204,10 @@ def test_proxy_transport_failure_logs_type_route_and_redacts_credentials(caplog)
     error = TimeoutError(
         "could not reach proxy.example for alice using s3cr@t " + proxy_url
     )
-    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
          patch.dict("os.environ", {"EBAY_SCRAPE_PROXY_URL": proxy_url}), \
          caplog.at_level(logging.WARNING, logger="ebay_scrape"):
-        mock_fetcher.get.side_effect = error
+        _session_get(mock_fetcher).side_effect = error
         results = search_ebay_scraped("rolex")
 
     assert results == []
@@ -203,13 +230,13 @@ def test_proxied_http_403_logs_safe_response_provenance(caplog):
             "X-eBay-C-Request-Id": "request-123",
         },
     )
-    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
          patch.dict(
              "os.environ",
              {"EBAY_SCRAPE_PROXY_URL": "http://user:pass@proxy.example:8888"},
          ), \
          caplog.at_level(logging.WARNING, logger="ebay_scrape"):
-        mock_fetcher.get.return_value = response
+        _session_get(mock_fetcher).return_value = response
         results = search_ebay_scraped("rolex")
 
     assert results == []
@@ -221,6 +248,85 @@ def test_proxied_http_403_logs_safe_response_provenance(caplog):
     assert "body_bytes=26" in caplog.text
     assert "transport failure" not in caplog.text
     assert "proxy authentication failed" not in caplog.text
+    # A generic 403 without the observed Bot Manager cookies is not retried.
+    assert _session_get(mock_fetcher).call_count == 1
+
+
+def test_akamai_cookie_challenge_retries_once_and_recovers(caplog):
+    challenge = FakeResponse(
+        403,
+        "<html><title>Error Page | eBay</title></html>",
+        url="https://www.ebay.com/sch/i.html?_nkw=rolex",
+        headers={"Server": "AkamaiGHost", "Content-Type": "text/html"},
+        cookies={"bm_s": "sensitive-state-1", "bm_so": "sensitive-state-2"},
+    )
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
+         patch.dict(
+             "os.environ",
+             {"EBAY_SCRAPE_PROXY_URL": "http://user:pass@proxy.example:8888"},
+         ), \
+         caplog.at_level(logging.INFO, logger="ebay_scrape"):
+        session_get = _session_get(mock_fetcher)
+        session_get.side_effect = [challenge, FakeResponse(200, FIXTURE_HTML)]
+
+        results = search_ebay_scraped("rolex")
+
+    assert len(results) == 2
+    assert mock_fetcher.call_count == 1
+    assert session_get.call_count == 2
+    assert session_get.call_args_list[0].args == session_get.call_args_list[1].args
+    assert "retryable Akamai cookie challenge" in caplog.text
+    assert "retrying once in the same session" in caplog.text
+    assert "sensitive-state" not in caplog.text
+
+
+def test_failed_akamai_cookie_retry_still_fails_safe_and_closes_session(caplog):
+    challenge = FakeResponse(
+        403,
+        "<html><title>Error Page | eBay</title></html>",
+        url="https://www.ebay.com/sch/i.html?_nkw=rolex",
+        headers={
+            "Server": "AkamaiGHost",
+            "Content-Type": "text/html",
+            "Set-Cookie": "bm_s=state; Secure, bm_so=state; Secure",
+        },
+    )
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
+         caplog.at_level(logging.INFO, logger="ebay_scrape"):
+        session_get = _session_get(mock_fetcher)
+        session_get.side_effect = [challenge, challenge]
+
+        results = search_ebay_scraped("rolex")
+
+    assert results == []
+    assert session_get.call_count == 2
+    assert "after one same-session Akamai-cookie retry" in caplog.text
+    mock_fetcher.return_value.__exit__.assert_called_once_with(None, None, None)
+
+
+def test_successful_session_is_reused_across_queries():
+    challenge = FakeResponse(
+        403,
+        "<html><title>Error Page | eBay</title></html>",
+        headers={"Server": "AkamaiGHost"},
+        cookies={"bm_s": "state", "bm_so": "state"},
+    )
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
+         patch.dict("os.environ", {}, clear=True):
+        session_get = _session_get(mock_fetcher)
+        session_get.side_effect = [
+            challenge,
+            FakeResponse(200, FIXTURE_HTML),
+            FakeResponse(200, FIXTURE_HTML),
+        ]
+
+        first_results = search_ebay_scraped("rolex")
+        second_results = search_ebay_scraped("seiko")
+
+    assert len(first_results) == 2
+    assert len(second_results) == 2
+    mock_fetcher.assert_called_once()
+    assert session_get.call_count == 3
 
 
 def test_http_407_is_identified_as_proxy_authentication_failure(caplog):
@@ -230,13 +336,13 @@ def test_http_407_is_identified_as_proxy_authentication_failure(caplog):
         url="https://www.ebay.com/sch/i.html?_nkw=rolex",
         headers={"Server": "proxy-gateway"},
     )
-    with patch("ebay_scrape.Fetcher") as mock_fetcher, \
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher, \
          patch.dict(
              "os.environ",
              {"EBAY_SCRAPE_PROXY_URL": "http://user:pass@proxy.example:8888"},
          ), \
          caplog.at_level(logging.WARNING, logger="ebay_scrape"):
-        mock_fetcher.get.return_value = response
+        _session_get(mock_fetcher).return_value = response
         results = search_ebay_scraped("rolex")
 
     assert results == []
@@ -248,15 +354,17 @@ def test_malformed_or_empty_html_returns_empty_list():
     assert _parse_listings("") == []
     assert _parse_listings("<html><body>not eBay markup at all</body></html>") == []
 
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, "<html>garbage</html>")
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(
+            200, "<html>garbage</html>"
+        )
         results = search_ebay_scraped("rolex")
     assert results == []
 
 
 def test_network_exception_returns_empty_list_never_raises():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.side_effect = Exception("connection reset")
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).side_effect = Exception("connection reset")
         results = search_ebay_scraped("rolex")
 
     assert results == []
@@ -303,8 +411,10 @@ AUCTION_CARD_HTML = """
 
 
 def test_auction_card_gets_tagged_with_buying_options_and_bid_count():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(
+            200, AUCTION_CARD_HTML
+        )
         results = search_ebay_scraped("omega")
 
     auction = next(r for r in results if "Speedmaster" in r["title"])
@@ -314,8 +424,10 @@ def test_auction_card_gets_tagged_with_buying_options_and_bid_count():
 
 
 def test_auction_card_synthesized_end_date_is_far_out_days_from_now():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(
+            200, AUCTION_CARD_HTML
+        )
         results = search_ebay_scraped("omega")
 
     from datetime import datetime, timezone
@@ -329,8 +441,10 @@ def test_auction_card_synthesized_end_date_is_far_out_days_from_now():
 
 
 def test_fixed_price_card_gets_no_auction_fields():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(
+            200, AUCTION_CARD_HTML
+        )
         results = search_ebay_scraped("omega")
 
     fixed = next(r for r in results if "Casio" in r["title"])
@@ -339,8 +453,10 @@ def test_fixed_price_card_gets_no_auction_fields():
 
 
 def test_ending_soon_auction_card_end_date_is_within_minutes():
-    with patch("ebay_scrape.Fetcher") as mock_fetcher:
-        mock_fetcher.get.return_value = FakeResponse(200, AUCTION_CARD_HTML)
+    with patch("ebay_scrape.FetcherSession") as mock_fetcher:
+        _session_get(mock_fetcher).return_value = FakeResponse(
+            200, AUCTION_CARD_HTML
+        )
         results = search_ebay_scraped("omega")
 
     from datetime import datetime, timezone
