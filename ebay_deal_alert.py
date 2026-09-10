@@ -420,6 +420,14 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "REPLACE_ME_careeros_deals")
 
 DB_PATH = "seen_items.db"
 AI_SPEND_DB_PATH = "ai_spend.db"
+# A completed AI call may transiently abstain, so preserve two real retries.
+# Three identical completed abstentions for one stable marketplace item id are
+# enough evidence that another unchanged call is wasting the next run's slot.
+# Production proof: facebook:1058342503583019 returned AI_NO_PRICE 22 times
+# against the same queued payload before a 23rd call merely confirmed it was
+# not a deal. The first three attempts would have preserved the original
+# transient-recovery intent while avoiding the next nineteen paid checks.
+AI_NO_PRICE_MAX_ATTEMPTS = 3
 # Per-run Scout acknowledgement state. A queue row is registered only after
 # it is routed to a saved search, and acknowledged only when mark_seen()
 # records a genuine final disposition (or an explicit permanent skip does).
@@ -1493,10 +1501,24 @@ def init_db():
     # mark_seen()'s docstring - these are deliberately left unseen so they
     # get another shot next run) so PASS 2 can age-prioritize them instead
     # of leaving them to _ai_check_priority's price-only tiebreak forever.
-    # See that function's comment for the real bug this fixes.
+    # It also counts only completed AI_NO_PRICE outcomes; budget deferrals and
+    # total provider failures remain retryable without consuming that cap.
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)"
+        "CREATE TABLE IF NOT EXISTS ai_pending "
+        "(item_id TEXT PRIMARY KEY, first_seen_at TEXT, "
+        "ai_no_price_attempts INTEGER NOT NULL DEFAULT 0)"
     )
+    # In-place migration for the existing checked-in seen_items.db. Keeping
+    # this on ai_pending reuses the state already dedicated to unresolved AI
+    # candidates instead of adding another table or state file.
+    ai_pending_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(ai_pending)").fetchall()
+    }
+    if "ai_no_price_attempts" not in ai_pending_columns:
+        conn.execute(
+            "ALTER TABLE ai_pending ADD COLUMN "
+            "ai_no_price_attempts INTEGER NOT NULL DEFAULT 0"
+        )
     # Silent-scraper-breakage detection (see prefetch_marketplaces): one row
     # per (platform, run) recording how many listings that platform's scrape
     # returned, so a sudden drop to zero - a scraper's JSON shape drifted -
@@ -1750,7 +1772,27 @@ def get_ai_pending_minutes(conn, item_ids):
     return result
 
 
-def mark_ai_pending(conn, item_id):
+def get_ai_no_price_attempts(conn, item_ids):
+    """Return completed AI_NO_PRICE counts for unresolved item ids."""
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"SELECT item_id, ai_no_price_attempts FROM ai_pending "
+        f"WHERE item_id IN ({placeholders})",
+        list(item_ids),
+    ).fetchall()
+    return {item_id: int(attempts or 0) for item_id, attempts in rows}
+
+
+def mark_ai_pending(conn, item_id, *, ai_no_price=False):
+    """Persist an unresolved AI candidate and return its no-price count.
+
+    ``ai_no_price`` is deliberately narrow: it means a completed vision call
+    returned a usable response but abstained on resale value. Merely missing
+    this run's AI slot, or a total provider failure that returned ``None``,
+    keeps the candidate pending without moving it toward the retry cap.
+    """
     # Real live bug: this never committed. sqlite3's default isolation_level
     # opens an implicit transaction on the first INSERT, and conn.close()
     # (run()'s final line) rolls back anything uncommitted - so every
@@ -1766,7 +1808,19 @@ def mark_ai_pending(conn, item_id):
         "INSERT OR IGNORE INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)",
         (item_id, datetime.now(timezone.utc).isoformat()),
     )
+    if ai_no_price:
+        conn.execute(
+            "UPDATE ai_pending "
+            "SET ai_no_price_attempts = ai_no_price_attempts + 1 "
+            "WHERE item_id = ?",
+            (item_id,),
+        )
+    row = conn.execute(
+        "SELECT ai_no_price_attempts FROM ai_pending WHERE item_id = ?",
+        (item_id,),
+    ).fetchone()
     conn.commit()
+    return int(row[0]) if row else 0
 
 
 def is_new(conn, item_id):
@@ -1785,9 +1839,11 @@ def mark_seen(conn, item_id, fingerprint=None, price=None):
     collided with its OWN fingerprint and got silently skipped as "a relist
     at the same or higher price" - dropped for good, never actually
     retried. Bundling both writes into this one function, called only at
-    genuine final-disposition points (rejected for a real reason, or
-    alerted), means an item that DIDN'T reach a verdict this run gets
-    neither write, and is genuinely fresh on retry."""
+    genuine final-disposition points (rejected for a real reason, alerted, or
+    capped after repeated completed AI price abstentions), means an item that
+    DIDN'T reach a verdict this run gets neither write, and is genuinely fresh
+    on retry. One or two AI_NO_PRICE outcomes are still unfinished; the third
+    for the same item_id is the evidence-backed final boundary."""
     conn.execute(
         "INSERT OR IGNORE INTO seen (item_id, seen_at) VALUES (?, ?)",
         (item_id, datetime.now(timezone.utc).isoformat()),
@@ -5346,10 +5402,11 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
         return "DELIVERY_FAILED"
     rules = (
         # A completed golf vision call that abstained on price is different
-        # from a candidate that never received an AI slot. Both remain retry-
-        # eligible through the shared "no AI price" reason marker, but keeping
-        # their analytics distinct prevents the $265 null-estimate gap from
-        # disappearing into apparent budget starvation again.
+        # from a candidate that never received an AI slot. The first two
+        # completed abstentions remain retry-eligible through the shared
+        # "no AI price" marker; the third is finalized and kept analytically
+        # distinct so capped waste is visible rather than looking starved.
+        (("ai no-price retry cap reached",), "AI_NO_PRICE_CAPPED"),
         (("ai check returned no usable resale value",), "AI_NO_PRICE"),
         (("stale fixed-price listing",), "STALE_LISTING"),
         (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
@@ -8036,8 +8093,12 @@ def run():
     if _run_deadline_reached("before AI prioritization"):
         review_candidates = {}
         pending_minutes_by_item = {}
+        no_price_attempts_by_item = {}
     else:
         pending_minutes_by_item = get_ai_pending_minutes(
+            conn, list(review_candidates)
+        )
+        no_price_attempts_by_item = get_ai_no_price_attempts(
             conn, list(review_candidates)
         )
 
@@ -8268,6 +8329,27 @@ def run():
         saved_search = candidate["saved_search"]
         fingerprint = candidate["fingerprint"]
         total_price = candidate["total_price"]
+
+        # Normally the attempt that reaches the cap is mark_seen() below in
+        # the same pass. This pre-spend guard handles the important failure
+        # boundary where the counter committed but the final seen write did
+        # not (for example, a locked SQLite DB or process termination). A
+        # persisted cap must never buy a fourth identical vision call.
+        prior_no_price_attempts = no_price_attempts_by_item.get(item_id, 0)
+        if prior_no_price_attempts >= AI_NO_PRICE_MAX_ATTEMPTS:
+            result["verdict"] = "PASS"
+            result["reason"] = (
+                "blocked by steal-quality gate: AI no-price retry cap reached "
+                f"after {prior_no_price_attempts} previously completed attempts"
+            )
+            logger.info(
+                "Finalizing %s before AI spend: no-price cap already reached (%s)",
+                item_id,
+                prior_no_price_attempts,
+            )
+            append_alert_log(result)
+            mark_seen(conn, item_id, fingerprint, total_price)
+            continue
 
         # Don't spend a scarce AI call on a candidate the gate already
         # rejects for a reason an AI check can't change. Everything that
@@ -8890,32 +8972,43 @@ def run():
             result["verdict"] = "PASS"
             result["reason"] = f"blocked by steal-quality gate: {gate_reason}"
             logger.info("Gate-blocked %s: %s", item_id, gate_reason)
-            append_alert_log(result)
             # NOT marked seen when the block reason is "never got an AI
-            # check" (all 4 variants of this gate contain "no AI price") -
-            # covers watches/knitwear/suit/crown-crafted candidates starved
-            # by GEMINI_CALL_LIMIT, not ones the AI actually evaluated and
-            # rejected. Live miss: Vinted alone surfaces 5,000-6,500
-            # listings/run against an 8-call AI budget, so the overwhelming
-            # majority of "watches" candidates (which can NEVER blind-trust
-            # through without AI) were hitting this exact gate reason and
-            # then getting permanently mark_seen'd anyway - thrown away
-            # forever after never once being evaluated, not just delayed to
-            # a later run. User report: "vinted watches...sell almost
-            # instantly before I could even do any research" - a real
-            # steal that never got its shot reads identically to one that
-            # sold fast, except this one never even got the chance. Leaving
-            # it unseen means it competes for a slot again on the very next
-            # run (5 min later) instead of never again.
-            if "no AI price" not in gate_reason:
+            # check" (all variants contain "no AI price"). The historical
+            # substring was later reused for completed golf calls that
+            # abstained on resale value, so those get two retries but cannot
+            # consume a paid slot forever. Budget deferrals and total provider
+            # failures do not increment this completed-abstention count.
+            retry_eligible = "no AI price" in gate_reason
+            ai_no_price_attempts = 0
+            if retry_eligible:
+                completed_ai_no_price = disposition_code_for(result) == "AI_NO_PRICE"
+                ai_no_price_attempts = mark_ai_pending(
+                    conn,
+                    item_id,
+                    ai_no_price=completed_ai_no_price,
+                )
+                if (
+                    completed_ai_no_price
+                    and ai_no_price_attempts >= AI_NO_PRICE_MAX_ATTEMPTS
+                ):
+                    retry_eligible = False
+                    result["reason"] += (
+                        f"; AI no-price retry cap reached after "
+                        f"{ai_no_price_attempts} completed attempts"
+                    )
+                    logger.info(
+                        "Finalizing %s after %s completed AI checks returned no price",
+                        item_id,
+                        ai_no_price_attempts,
+                    )
+
+            append_alert_log(result)
+            if not retry_eligible:
                 mark_seen(conn, item_id, fingerprint, total_price)
             else:
-                # Record (or preserve, via INSERT OR IGNORE) when this
-                # candidate first got stuck waiting for an AI check, so
-                # next run's _ai_check_priority can age it up instead of
-                # letting it lose to pricier newcomers forever - see that
-                # function's comment for the real 4-hour-starvation bug
-                # this closes.
+                # mark_ai_pending() above recorded (or preserved) when this
+                # candidate first got stuck, so next run's priority sort can
+                # age it up instead of letting it lose to pricier newcomers.
                 #
                 # An ending-soon auction deferred here is a PERMANENT miss,
                 # not a "try again in 5 min" - the next run arrives after it
@@ -8930,7 +9023,6 @@ def run():
                         "next ~5-min run arrives too late): deferred with no AI check",
                         item_id, minutes_left,
                     )
-                mark_ai_pending(conn, item_id)
             continue
 
         # Ending-soon auctions deliberately bypass the seen-dedupe in

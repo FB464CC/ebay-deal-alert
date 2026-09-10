@@ -1,0 +1,46 @@
+AI retry-waste investigation — incremental log
+
+2026-09-10 — Baseline
+- Confirmed the repository was already checked out and the worktree was clean; no fetch/pull/clone performed.
+- Current HEAD: 68778a87d9812888da47705a73212dc00de3d382 Marketplace scheduler: fix Vinted/Poshmark shared-pool starvation + backoff bug
+- Initial source scan found explicit comments saying no-AI-price candidates are deliberately left unseen so they can retry, plus separate disposition mapping for a completed AI call that abstained on price.
+
+2026-09-10 — Fresh production-log verification
+- Pulled the current `alerts_log.jsonl` through the requested GitHub Contents API endpoint. PowerShell mangled the binary pipeline, so the exact `gh api ... --jq '.content' | base64 -d` decode was rerun under Bash and produced 704 valid JSONL rows.
+- Restricted to golf-equipment rows from 2026-09-10T01:17:00Z through 16:49:59Z: 392 rows (actual first/last 01:17:56.617377Z / 16:49:30.609443Z), 0 delivered.
+- Dispositions exactly reproduce the reported evidence: NO_AI_BUDGET 193, AI_NO_PRICE 94, GOLF_REJECT 32, GOLF_WRONG_ITEM 24, CONDITION_REJECT 16, STALE_LISTING 13, BELOW_MARGIN 11, OVER_MAX_PRICE 5, GENDER_EXCLUDE 4.
+- 91/94 AI_NO_PRICE rows were Facebook (96.8%).
+- `facebook:1058342503583019` had 22 AI_NO_PRICE rows from 01:21:59.201104Z through 07:32:45.058010Z. Every row had `ai_checked=true`, the same title (`Golf Clubs Complete Set with Golf Bag and Range Balls`), the same item price ($100), total price ($106), URL, query, config hash, and exact reason (`golf-equipment bar: no AI price estimate - AI check returned no usable resale value`). Thus these were paid/completed checks, not budget skips, and item-id/fetched listing identity was stable.
+- The same item also logged 51 interspersed NO_AI_BUDGET passes without an AI call, then its 23rd completed AI check at 07:41:34Z produced a $75 resale estimate and a final GOLF_REJECT. This does not negate the waste: the first 22 completed abstentions were consecutive among completed calls and consumed budget; it does show that a cap trades an extremely remote later recovery against finite AI capacity.
+
+2026-09-10 — Root cause and history
+- Local `git blame` attributes the whole file to HEAD because this checkout is grafted/shallow at one commit. Used read-only `gh api` commit history/patches to recover upstream provenance without fetching the repo.
+- Commit c3673e573e73676ed49511102044c1ae2b0a21f6 (2026-08-14) moved fingerprint writes into `mark_seen()` so unfinished candidates genuinely retry. This was a dedupe correctness fix: unpriced/budget-starved candidates must not fingerprint themselves out before a verdict.
+- Commit 528f9cc49f8942fd7b8ce321af0cad84aa26cc36 (2026-08-15) introduced the decisive branch: if `gate_reason` contains case-sensitive `"no AI price"`, skip `mark_seen()`. Its stated scope was candidates the AI *never got to evaluate* after budget exhaustion.
+- Commit e114842efc2b27a117b1298c69cbfeeab634f76a (2026-08-16) added `ai_pending` only to age-prioritize retrying item_ids. It stores first-seen time, not attempts; `INSERT OR IGNORE` cannot cap retries. Current HEAD additionally fixes a missing commit on this table, but still has no retry counter.
+- Commit 22b457c5a6d44d34dbfef2c382a82a4cd579664f (2026-09-07) added the golf completed-abstention text and `AI_NO_PRICE` disposition. Its patch/comment explicitly says that a completed call with no usable value stays retry-eligible by sharing the older `"no AI price"` marker. This broadened the Aug-15 never-evaluated exception to completed abstentions, with no cap.
+- Current flow confirms the consequence: PASS 3 increments the appropriate AI-call budget before invoking vision; golf merges `golf_ai_checked=True` for any non-None response; missing resale produces the AI_NO_PRICE reason; the substring branch appends the log and calls `mark_ai_pending()` but never `mark_seen()`. `is_new()` therefore admits it next run, and Scout acknowledgement is also withheld because that is tied to `mark_seen()`.
+- There is no retry-limit constant, attempt column, attempt query, or other cap anywhere in current source. The only persistence is seen membership, best-price fingerprint, and ai_pending first-seen time.
+- The production Scout payload was identical at the first and last abstention refs: same item_id, title, $100 ask, URL, image URL, description, and discoveredAt. It has no seller, so `listing_fingerprint()` deterministically hashes normalized title + `platform:facebook`; computed hash `3c03b5b67bb9e51bf5d4e33a2ce4bf8748173638ba9470ff9e880286949c6c4f` is stable. The historical DB at the last-failure ref had neither the item_id in `seen` nor this hash in `fingerprints`, exactly because no final `mark_seen()` occurred. This is not fingerprint drift.
+- GitHub compare from the first through last AI_NO_PRICE refs reports 368 intervening state-ingest/poll commits but only alerts_log.jsonl, platform_backoff_state.json, scout_queue.jsonl, scout_seen.db, and search_activity_state.json changed; `ebay_deal_alert.py` did not. The one commit between the 22nd abstention and the later $75 rejection also changed only alerts_log.jsonl, scout_queue.jsonl, and search_activity_state.json. Thus no code/prompt change explains either the repeated failures or eventual recovery.
+
+2026-09-10 — Chosen design
+- Cap at 3 completed AI_NO_PRICE outcomes per item_id: the initial attempt plus two genuine retries. After one or two misses the item remains unseen/retryable exactly as before; the third makes it final and calls `mark_seen()`. In this real 22-failure incident that would spend 3 calls and avoid the next 19. The later 23rd-call recovery only proved the item was worth $75 and produced GOLF_REJECT, so no delivered deal would have been lost here.
+- Track the integer on the existing `ai_pending` row in seen_items.db rather than add a new table/file. Budget-starved rows and total provider failures do not increment it; only the distinct completed-call AI_NO_PRICE disposition does. Any other completed outcome already reaches a final disposition and `mark_seen()` deletes the pending row, which naturally resets the consecutive sequence.
+- Permanently `mark_seen()` the exact item_id at the cap. This is the smallest mechanism and matches all other final dispositions. Marketplace relists normally receive a new item_id; an edit to the same live Facebook ID is still the same candidate, and neither the existing fingerprint (title/platform only) nor Scout payload exposes a reliable “photos improved” revision identity. Building speculative revision-state machinery would be larger and less truthful than the evidence supports.
+
+2026-09-10 — Implementation completed, validation pending
+- Added fixed `AI_NO_PRICE_MAX_ATTEMPTS = 3` without changing any AI allocation, category fairness, or staleness constants.
+- Extended the existing ai_pending schema in place with `ai_no_price_attempts INTEGER NOT NULL DEFAULT 0`, including a migration for the checked-in legacy schema. No new table or state file was introduced.
+- `mark_ai_pending(..., ai_no_price=True)` now atomically increments and commits only a completed-abstention attempt; ordinary budget/provider deferrals preserve the row/count and remain retryable.
+- PASS 3 uses `disposition_code_for(result) == "AI_NO_PRICE"` to keep completed abstentions distinct from NO_AI_BUDGET. Attempts 1 and 2 remain unseen. Attempt 3 gets a final reason, `AI_NO_PRICE_CAPPED`, `mark_seen()`, fingerprint persistence, ai_pending cleanup, and Scout acknowledgement.
+- Added a pre-spend persisted-cap guard so a crash/SQLite failure after the counter commit but before mark_seen cannot buy a fourth call next run.
+- Updated mark_seen/disposition comments to describe the new final boundary.
+- Added primitive/migration tests and an end-to-end Facebook Scout regression using the exact production item_id/title/$100 ask. It runs the unchanged no-price result through 22 runs, asserts only 3 AI calls occur, asserts attempts 1/2 remain retryable, asserts the cap marks seen and acknowledges the queue, and proves a fresh item_id still gets its first normal attempt.
+
+2026-09-10 — Validation
+- `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"` exited 0 with no output.
+- `git diff --check` exited 0 (Git printed only its Windows LF-to-CRLF working-copy notices).
+- Focused persistence/migration + 22-run replay + disposition checks: `9 passed, 1 warning, 10 subtests passed in 1.82s`; warning was a pre-existing unrelated SyntaxWarning in a later test docstring.
+- Required full command `python3 -m pytest -q`: `674 passed, 1 warning, 497 subtests passed in 16.74s`. The only warning was an unrelated lxml `strip_cdata` deprecation in `test_mid_run_429_also_stops_the_auction_lane`.
+- Final scope audit: only ebay_deal_alert.py, test_ebay_deal_alert.py, and this requested progress file are modified/untracked. GEMINI_CALL_LIMIT, GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP, and STALE_FIXED_PRICE_LISTING_DAYS remain unchanged. No fetch, pull, clone, commit, or push was performed.

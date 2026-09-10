@@ -2214,7 +2214,11 @@ class MarkSeenFingerprintTiming(unittest.TestCase):
         self.conn.execute(
             "CREATE TABLE fingerprints (fingerprint TEXT PRIMARY KEY, best_price REAL, seen_at TEXT)"
         )
-        self.conn.execute("CREATE TABLE ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)")
+        self.conn.execute(
+            "CREATE TABLE ai_pending "
+            "(item_id TEXT PRIMARY KEY, first_seen_at TEXT, "
+            "ai_no_price_attempts INTEGER NOT NULL DEFAULT 0)"
+        )
 
     def test_fingerprint_not_written_without_mark_seen(self):
         # Merely computing a fingerprint (as PASS 1 does for every listing,
@@ -2265,7 +2269,11 @@ class AiPendingBacklogAging(unittest.TestCase):
         self.conn.execute(
             "CREATE TABLE fingerprints (fingerprint TEXT PRIMARY KEY, best_price REAL, seen_at TEXT)"
         )
-        self.conn.execute("CREATE TABLE ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)")
+        self.conn.execute(
+            "CREATE TABLE ai_pending "
+            "(item_id TEXT PRIMARY KEY, first_seen_at TEXT, "
+            "ai_no_price_attempts INTEGER NOT NULL DEFAULT 0)"
+        )
 
     def tearDown(self):
         self.conn.close()
@@ -2288,6 +2296,44 @@ class AiPendingBacklogAging(unittest.TestCase):
         m.mark_ai_pending(self.conn, "item1")  # simulates a later run re-hitting the same block
         minutes = m.get_ai_pending_minutes(self.conn, ["item1"])
         self.assertGreater(minutes["item1"], 55)
+
+    def test_only_completed_no_price_outcomes_increment_retry_count(self):
+        self.assertEqual(m.mark_ai_pending(self.conn, "item1"), 0)
+        self.assertEqual(m.mark_ai_pending(self.conn, "item1", ai_no_price=True), 1)
+        self.assertEqual(
+            m.mark_ai_pending(self.conn, "item1"),
+            1,
+            "a budget/provider deferral must not consume a completed-abstention retry",
+        )
+        self.assertEqual(m.mark_ai_pending(self.conn, "item1", ai_no_price=True), 2)
+        self.assertEqual(m.get_ai_no_price_attempts(self.conn, ["item1"]), {"item1": 2})
+
+    def test_init_db_migrates_legacy_pending_rows_without_counting_them(self):
+        legacy_path = f"{self.tmpdir}/legacy.db"
+        legacy = sqlite3.connect(legacy_path)
+        legacy.execute(
+            "CREATE TABLE ai_pending (item_id TEXT PRIMARY KEY, first_seen_at TEXT)"
+        )
+        legacy.execute(
+            "INSERT INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)",
+            ("legacy-item", datetime.now(timezone.utc).isoformat()),
+        )
+        legacy.commit()
+        legacy.close()
+
+        with mock.patch.object(m, "DB_PATH", legacy_path):
+            migrated = m.init_db()
+        try:
+            columns = {
+                row[1] for row in migrated.execute("PRAGMA table_info(ai_pending)")
+            }
+            self.assertIn("ai_no_price_attempts", columns)
+            self.assertEqual(
+                m.get_ai_no_price_attempts(migrated, ["legacy-item"]),
+                {"legacy-item": 0},
+            )
+        finally:
+            migrated.close()
 
     def test_mark_seen_clears_pending_backlog_row(self):
         # Once an item reaches a genuine final disposition, it's resolved -
@@ -7230,6 +7276,121 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(queue_path.read_text(encoding="utf-8"), "",
                          "successfully alerted Scout row must be acknowledged")
 
+    def test_real_facebook_no_price_loop_is_capped_after_three_completed_calls(self):
+        """Replay the 22-call production failure against the real run loop."""
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("SCOUT_AI_CHECK_LIMIT", 1)
+        self._patch("MARKETPLACES_ENABLED", [])
+        self._patch("prefetch_marketplaces", _REAL_PREFETCH_MARKETPLACES)
+        saved_search = {
+            "id": "golf-golf-club-set",
+            "query": "golf club set -junior -youth -kids -ladies -womens "
+                     "-\"left hand\" -lefty -\"left handed\" -scarf",
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "size": None,
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+            "platforms": ["facebook"],
+        }
+        self._serve(saved_search, [])
+        self.ai_result = {
+            "clubs_identified": "mixed clubs, bag, and range balls",
+            "identified_brand": "unknown",
+            "brand_claims_present": False,
+            "brand_claims_confirmed": False,
+            "is_playable_first_set": True,
+            "is_starter_kit_quality": True,
+            "is_left_handed": False,
+            "handedness_confirmed": True,
+            "damage_found": False,
+            "weird_logo_found": False,
+            "looks_good": True,
+            "counterfeit_suspected": False,
+            "counterfeit_reason": "",
+            "summary": "usable mixed right-handed set, but not enough detail to price",
+            "estimated_resale_value": None,
+            "price_confidence": "low",
+        }
+        queue_path = self.tmpdir / "scout_queue.jsonl"
+        production_row = {
+            "platform": "facebook",
+            "itemId": "1058342503583019",
+            "title": "Golf Clubs Complete Set with Golf Bag and Range Balls",
+            "price": 100,
+            "itemWebUrl": (
+                "https://www.facebook.com/marketplace/item/1058342503583019/"
+            ),
+            "imageUrl": "https://example.test/1058342503583019.jpg",
+            "description": "Location: West Columbia, SC",
+        }
+        queue_path.write_text(json.dumps(production_row) + "\n", encoding="utf-8")
+
+        with mock.patch.object(m.scout_queue, "SCOUT_QUEUE_PATH", queue_path):
+            # One miss and one retry retain the old behavior: two real calls,
+            # still unseen, still queued, and therefore eligible for attempt 3.
+            m.run()
+            m.run()
+            item_id = "facebook:1058342503583019"
+            self.assertEqual(self.ai_calls, [item_id, item_id])
+            with sqlite3.connect(m.DB_PATH) as conn:
+                self.assertTrue(m.is_new(conn, item_id))
+                self.assertEqual(
+                    m.get_ai_no_price_attempts(conn, [item_id]),
+                    {item_id: 2},
+                )
+            self.assertTrue(queue_path.read_text(encoding="utf-8").strip())
+
+            # Continue the exact 22-run failure. Attempt 3 reaches the cap;
+            # the next 19 runs must spend no further AI budget on this id.
+            for _ in range(20):
+                m.run()
+
+            self.assertEqual(
+                self.ai_calls,
+                [item_id] * m.AI_NO_PRICE_MAX_ATTEMPTS,
+                "22 identical abstaining runs must spend only the capped 3 calls",
+            )
+            with sqlite3.connect(m.DB_PATH) as conn:
+                self.assertFalse(m.is_new(conn, item_id))
+                self.assertEqual(m.get_ai_no_price_attempts(conn, [item_id]), {})
+            self.assertEqual(
+                queue_path.read_text(encoding="utf-8"),
+                "",
+                "the capped final disposition must acknowledge the Scout row",
+            )
+
+            target_records = [
+                row for row in self._alert_log_records()
+                if row["item_id"] == item_id
+            ]
+            self.assertEqual(
+                [row["disposition_code"] for row in target_records],
+                ["AI_NO_PRICE", "AI_NO_PRICE", "AI_NO_PRICE_CAPPED"],
+            )
+
+            # A genuinely new id still gets its normal first attempt and stays
+            # retry-eligible after that single abstention.
+            fresh_row = dict(
+                production_row,
+                itemId="fresh-golf-set",
+                title="Ping G30 Right Hand Golf Club Set 5-PW with Bag",
+                itemWebUrl=(
+                    "https://www.facebook.com/marketplace/item/fresh-golf-set/"
+                ),
+            )
+            queue_path.write_text(json.dumps(fresh_row) + "\n", encoding="utf-8")
+            m.run()
+            fresh_id = "facebook:fresh-golf-set"
+            self.assertEqual(self.ai_calls[-1], fresh_id)
+            with sqlite3.connect(m.DB_PATH) as conn:
+                self.assertTrue(m.is_new(conn, fresh_id))
+                self.assertEqual(
+                    m.get_ai_no_price_attempts(conn, [fresh_id]),
+                    {fresh_id: 1},
+                )
+
     def test_golf_wrong_item_is_logged_without_spending_ai(self):
         item_id = "v1|golf-tie|0"
         saved_search = {
@@ -8462,6 +8623,7 @@ class AlertLogPriceSemantics(unittest.TestCase):
         cases = {
             "no AI price estimate - every alert must be AI-vetted": "NO_AI_BUDGET",
             "golf-equipment bar: no AI price estimate - AI check returned no usable resale value": "AI_NO_PRICE",
+            "AI no-price retry cap reached after 3 completed attempts": "AI_NO_PRICE_CAPPED",
             "counterfeit/replica disclosure": "COUNTERFEIT",
             "over max price: $400 landed": "OVER_MAX_PRICE",
             "wrong size filter": "SIZE_MISMATCH",
