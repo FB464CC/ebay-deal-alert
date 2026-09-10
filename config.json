@@ -1122,7 +1122,7 @@
       "category": "golf-equipment"
     },
     {
-      "query": "complete golf iron set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
+      "query": "complete golf iron set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf -curling -beachwaver -crimper -waver -\"flat iron\" -\"hair iron\" -\"curling iron\"",
       "size": null,
       "max_price": 300,
       "enabled": true,
@@ -1178,7 +1178,7 @@
       "category": "golf-equipment"
     },
     {
-      "query": "golf irons set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
+      "query": "golf irons set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf -curling -beachwaver -crimper -waver -\"flat iron\" -\"hair iron\" -\"curling iron\"",
       "size": null,
       "max_price": 300,
       "enabled": true,
@@ -1498,7 +1498,7 @@
       "category": "golf-equipment"
     },
     {
-      "query": "game improvement irons regular flex -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "query": "game improvement irons regular flex -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior -curling -beachwaver -crimper -waver -\"flat iron\" -\"hair iron\" -\"curling iron\"",
       "size": null,
       "max_price": 220,
       "enabled": true,
