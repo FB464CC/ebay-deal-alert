@@ -7068,6 +7068,64 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     return found_snapshot
 
 
+def _pretriage_score(candidate, ai_no_price_attempts):
+    """How worth spending a scarce real AI-check slot on `candidate` is,
+    using ONLY signals already attached before any AI call runs - no new
+    network calls. Returns (repeat_failure_tier, promise_score):
+    _ai_check_priority sorts ascending on repeat_failure_tier (0 = never
+    failed a real AI check yet) and descending on promise_score (more
+    pre-AI corroborating evidence first).
+
+    repeat_failure_tier is the one term with hard evidence. Real production
+    today: two Facebook item_ids each burned dozens of real AI checks before
+    AI_NO_PRICE_MAX_ATTEMPTS existed to cap them, every single check
+    returning the identical unusable result - a static listing's photos
+    don't change between retries, so a repeat check buys zero new
+    information. Even bounded by that cap, a candidate on its 1st or 2nd
+    failed attempt was still able to out-rank a never-tried candidate purely
+    via _ai_check_priority's pending_minutes aging tiebreak, which grows on
+    every failed attempt too (see mark_ai_pending()). This tier is placed
+    ahead of that tiebreak so a repeat-failure candidate can no longer win a
+    slot just by accumulating its own failure-age. Capped at
+    AI_NO_PRICE_MAX_ATTEMPTS since a further attempt never happens - the cap
+    finalizes the item via mark_seen() first.
+
+    promise_score bonuses are real pre-existing fields, but genuinely
+    unvalidated against today's data (see each field's own comment below) -
+    kept as a light, low-priority tiebreak rather than forced into a stronger
+    position the evidence doesn't support. A "price vs. category max_price
+    headroom" term was tried and dropped: today's worst repeat-failure
+    listing had MORE headroom than the delivered watches, actively
+    contradicting the -price tiebreak a few lines below in
+    _ai_check_priority (see that tiebreak's own "$14.73 Rolex crystal"
+    comment - cheapest-matches-a-brand-token is usually a part, not the
+    item).
+    """
+    repeat_failure_tier = min(int(ai_no_price_attempts or 0), AI_NO_PRICE_MAX_ATTEMPTS)
+
+    listing = candidate.get("listing") or {}
+    result = candidate.get("result") or {}
+    promise_score = 0.0
+    # Real sold-comp backing is treated as strong evidence elsewhere in the
+    # gate (see is_blocked_by_steal_quality_gate's comp-override path).
+    # Honesty note: most marketplaces (facebook/vinted/shopgoodwill/depop)
+    # never populate this field - it's a light bonus when present, not a
+    # signal every candidate can compete on.
+    if listing.get("sold_comp_median") is not None and (listing.get("sold_comp_count") or 0) > 0:
+        promise_score += 2.0
+    # Same honesty caveat: only the eBay lane's _attach_seller_feedback
+    # populates this.
+    feedback_score = result.get("seller_feedback_score")
+    feedback_pct = result.get("seller_feedback_percentage")
+    if (
+        feedback_score is not None
+        and feedback_score >= 50
+        and (feedback_pct is None or feedback_pct >= 95)
+    ):
+        promise_score += 1.0
+    return repeat_failure_tier, promise_score
+
+
 def _is_golf_shared_scrape_candidate(candidate):
     """Whether a scrape candidate belongs in golf's bounded shared share."""
     listing = candidate.get("listing") or {}
@@ -8305,6 +8363,19 @@ def run():
         # run. Sorted soonest-first among themselves too (least negative
         # minutes_remaining = most urgent = sorts first).
         is_ending_soon_auction = bool(result.get("is_ending_soon_auction"))
+        # Pre-AI "how likely is this actually worth the slot" triage (see
+        # _pretriage_score). repeat_failure_tier is placed ahead of the
+        # pending_minutes aging tiebreak below on purpose - pending_minutes
+        # grows every time a candidate gets stuck, INCLUDING every time it
+        # gets a real AI check and fails, so without this a repeat-failure
+        # candidate could keep winning purely by accumulating more of its
+        # own failure-age. promise_score is placed AFTER pending_minutes/
+        # stale age instead: it's a weaker, less-validated signal and must
+        # not override the already-tested anti-starvation aging for
+        # candidates that simply haven't had their first real AI check yet.
+        repeat_failure_tier, promise_score = _pretriage_score(
+            candidate, no_price_attempts_by_item.get(candidate["item_id"], 0)
+        )
         return (
             0 if is_ending_soon_auction else 1,
             result.get("auction_minutes_remaining") or 0,
@@ -8321,11 +8392,13 @@ def run():
             0 if fresh_scout else 1,
             0 if must_have_ai else 1,
             1 if mass_market_watch else 0,
+            repeat_failure_tier,
             # Preserve backlog aging inside the still-fresh cohort, but once
             # a listing crosses the stale boundary prefer the least-old/never-
             # retried candidate if idle capacity ever reaches this tail.
             pending_minutes if stale_before_ai else -pending_minutes,
             candidate.get("_stale_listing_age_days") or 0,
+            -promise_score,
             -(result.get("price") or 0.0),
         )
 

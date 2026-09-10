@@ -2425,6 +2425,131 @@ class SeenTablePruning(unittest.TestCase):
         self.assertIn("recent-item", pending)
 
 
+class PretriageScoring(unittest.TestCase):
+    """_pretriage_score() is the pre-AI "how likely is this actually worth
+    the slot" triage that decides which candidates spend the shared,
+    money-limited AI-check budget first (see PRETRIAGE_DESIGN.txt for the
+    real 2026-09-10 production evidence behind every weight below - 704
+    real alerts_log.jsonl rows from that day, not invented numbers).
+
+    Pure function, no I/O: (candidate dict, ai_no_price_attempts) ->
+    (repeat_failure_tier, promise_score). _ai_check_priority sorts
+    ascending on the tier and descending on the score. ai_no_price_attempts
+    reuses the same counter AI_NO_PRICE_MAX_ATTEMPTS/mark_ai_pending()
+    already persist for the hard retry cap - this is a second, independent
+    use of that same evidence: deprioritizing a repeat-failure candidate in
+    the run(s) BEFORE it hits the cap, not just cutting it off once it does.
+    """
+
+    def _sort_key(self, candidate, ai_no_price_attempts=0):
+        tier, promise = m._pretriage_score(candidate, ai_no_price_attempts)
+        return (tier, -promise)
+
+    def test_missing_fields_do_not_crash_and_score_zero(self):
+        # A bare candidate (no listing/result/saved_search enrichments)
+        # must not raise - most candidates in any given run won't carry
+        # every optional field.
+        self.assertEqual(m._pretriage_score({}, 0), (0, 0.0))
+
+    def test_repeat_ai_failures_move_to_a_later_tier_than_never_checked(self):
+        # The one signal with hard evidence: real Facebook item_ids burned
+        # dozens of real AI checks apiece before AI_NO_PRICE_MAX_ATTEMPTS
+        # existed to cap them, every single one returning the identical
+        # unusable result. A candidate that already failed a real AI check
+        # must never sort ahead of one that hasn't been checked yet.
+        never_checked_tier, _ = m._pretriage_score({}, 0)
+        checked_once_tier, _ = m._pretriage_score({}, 1)
+        checked_many_times_tier, _ = m._pretriage_score({}, 22)
+        self.assertLess(never_checked_tier, checked_once_tier)
+        self.assertLessEqual(checked_once_tier, checked_many_times_tier)
+
+    def test_repeat_failure_tier_is_capped_at_the_hard_retry_cap(self):
+        # Bounded by the same AI_NO_PRICE_MAX_ATTEMPTS a candidate can never
+        # actually exceed - the 4th attempt never happens, mark_seen()
+        # finalizes it first. One pathological item must not need an
+        # unbounded number of distinct tiers.
+        tier_at_10, _ = m._pretriage_score({}, 10)
+        tier_at_70, _ = m._pretriage_score({}, 70)
+        self.assertEqual(tier_at_10, tier_at_70)
+        self.assertEqual(tier_at_10, m.AI_NO_PRICE_MAX_ATTEMPTS)
+
+    def test_sold_comp_backing_raises_promise_score(self):
+        with_comps = {"listing": {"sold_comp_median": 900.0, "sold_comp_count": 3}}
+        without_comps = {"listing": {}}
+        _, score_with = m._pretriage_score(with_comps, 0)
+        _, score_without = m._pretriage_score(without_comps, 0)
+        self.assertGreater(score_with, score_without)
+
+    def test_sold_comp_count_of_zero_does_not_count_as_backing(self):
+        # A median with no actual comps behind it isn't real evidence.
+        candidate = {"listing": {"sold_comp_median": 900.0, "sold_comp_count": 0}}
+        _, score = m._pretriage_score(candidate, 0)
+        _, baseline = m._pretriage_score({}, 0)
+        self.assertEqual(score, baseline)
+
+    def test_strong_seller_feedback_raises_promise_score(self):
+        strong = {"result": {"seller_feedback_score": 1200, "seller_feedback_percentage": 99.4}}
+        weak = {"result": {"seller_feedback_score": 3, "seller_feedback_percentage": 60.0}}
+        _, score_strong = m._pretriage_score(strong, 0)
+        _, score_weak = m._pretriage_score(weak, 0)
+        self.assertGreater(score_strong, score_weak)
+
+    def test_price_vs_max_price_headroom_is_deliberately_not_scored(self):
+        # Tried and DROPPED, not merely left weak: today's real worst
+        # repeat-failure listing ($100 vs a $300 cap, 33% of ceiling) had
+        # MORE headroom below its cap than the delivered watches (53-64%
+        # of their caps) - "cheaper relative to the cap scores higher"
+        # actively contradicts the existing, evidence-backed -price
+        # tiebreak in _ai_check_priority (cheapest-matches-a-brand-token is
+        # usually a part, not the item - the real "$14.73 Rolex crystal"
+        # bug). Same saved_search/max_price either way must score
+        # identically regardless of price.
+        far_below_cap = {"result": {"price": 50.0}, "saved_search": {"max_price": 300}}
+        at_cap = {"result": {"price": 300.0}, "saved_search": {"max_price": 300}}
+        _, score_below = m._pretriage_score(far_below_cap, 0)
+        _, score_at_cap = m._pretriage_score(at_cap, 0)
+        self.assertEqual(score_below, score_at_cap)
+
+    def test_promising_candidate_outranks_mediocre_and_repeat_failure_junk(self):
+        # Modeled directly on today's real production evidence: a
+        # "promising" candidate carries real sold-comp backing and strong
+        # eBay seller feedback (like the profile _attach_seller_feedback
+        # gives eBay candidates); "repeat_failure_junk" is shaped exactly
+        # like the real facebook golf-bag listing ($100 vs a $300 cap, no
+        # comps, no feedback, already failed at the hard retry cap);
+        # "mediocre_fresh" has never been checked but carries none of the
+        # corroborating evidence either. The scorer must rank them
+        # promising > mediocre > repeat-failure junk.
+        promising = {
+            "listing": {"sold_comp_median": 900.0, "sold_comp_count": 4},
+            "result": {"price": 90.0, "seller_feedback_score": 1200,
+                       "seller_feedback_percentage": 99.4},
+            "saved_search": {"max_price": 300},
+        }
+        mediocre_fresh = {
+            "listing": {},
+            "result": {"price": 280.0},
+            "saved_search": {"max_price": 300},
+        }
+        repeat_failure_junk = {
+            "listing": {},
+            "result": {"price": 100.0},
+            "saved_search": {"max_price": 300},
+        }
+        ranked = sorted(
+            [
+                ("promising", promising, 0),
+                ("mediocre_fresh", mediocre_fresh, 0),
+                ("repeat_failure_junk", repeat_failure_junk, m.AI_NO_PRICE_MAX_ATTEMPTS),
+            ],
+            key=lambda row: self._sort_key(row[1], row[2]),
+        )
+        self.assertEqual(
+            [row[0] for row in ranked],
+            ["promising", "mediocre_fresh", "repeat_failure_junk"],
+        )
+
+
 class ScoreListingHardFails(unittest.TestCase):
     def _listing(self, title, price=50.0, description=None):
         listing = {"title": title, "price": {"value": price, "currency": "USD"}, "itemId": "t1"}
