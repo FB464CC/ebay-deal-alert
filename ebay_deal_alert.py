@@ -355,20 +355,20 @@ EBAY_SCRAPE_ENABLED = bool(_CONFIG.get("EBAY_SCRAPE_ENABLED", True))
 # listings/run, and every one of those competed for the SAME fixed
 # GEMINI_CALL_LIMIT as the official-API lane, starving watch AI-checks
 # (measured live: 209 blocked in one run). EBAY_SCRAPE_ENABLED was flipped
-# to false in config.json over exactly this. Capping the lane at 1 check/run
-# of its own means a scrape flood can never eat the main pipeline's budget
-# again - the lane just surfaces MORE candidates for the same queries, and
-# the best one can still get a real AI check without taking one away from a
-# candidate the official API found.
+# to false in config.json over exactly this. Capping non-shared-category
+# scrape rows at 1 check/run means a general scrape flood can never eat the
+# main pipeline's budget again. Golf and poker are deliberate evidence-backed
+# exceptions: their productive scrape supply uses their existing shared-
+# category allocations within GEMINI_CALL_LIMIT instead of this extra counter.
 #
 # Dollar ceiling, per explicit user instruction ("ideally $0 or less a
-# month, IF this works as perfectly intended"): the lane can spend at most
-# 1 check/run, at ~300 runs/day (measured real GH Actions cadence) that's
-# ~9,000 checks/month worst case. DeepSeek is now primary because Gemini's
-# free tier proved persistently unhealthy, so this lane normally makes a paid
-# request. Its reservation still shares the hard AI_PAID_MONTHLY_BUDGET_USD
-# ledger with every other paid call; this counter isolates throughput, not
-# spend, and cannot bypass the monthly dollar ceiling.
+# month, IF this works as perfectly intended"): non-shared scrape categories
+# can spend at most 1 check/run, at ~300 runs/day (measured real GH Actions
+# cadence) that's ~9,000 checks/month worst case. DeepSeek is now primary
+# because Gemini's free tier proved persistently unhealthy, so this lane
+# normally makes a paid request. Its reservation still shares the hard
+# AI_PAID_MONTHLY_BUDGET_USD ledger with every other paid call; this counter
+# isolates throughput, not spend, and cannot bypass the monthly dollar ceiling.
 EBAY_SCRAPE_AI_CHECK_LIMIT = int(_CONFIG.get("EBAY_SCRAPE_AI_CHECK_LIMIT", 1))
 # Same reasoning, same fix pattern, applied to the Scout browser-extension
 # queue: load_scout_queue() returns the WHOLE queue unbounded (it's only
@@ -491,19 +491,22 @@ GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
 # Soft fairness share for the normal shared pool. While both golf and non-golf
 # are waiting, up to this many normal per-run slots are kept reachable by golf
 # and the remainder by other categories. Either side can reclaim capacity the
-# other side cannot use. Ending-soon auctions are exempt; Scout and non-golf
-# eBay-scrape rows keep their isolated budgets, while golf scrape rows use this
-# bounded share (the live golf supply is overwhelmingly scrape-sourced).
+# other side cannot use. Ending-soon auctions are exempt; Scout and unrelated
+# eBay-scrape rows keep their isolated budgets, while golf and poker scrape
+# rows use their bounded shared shares. Both categories' live supply is now
+# substantially scrape-sourced, so leaving either one in the one-call
+# flood-control lane would make its configured share unreachable.
 GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP = int(
     _CONFIG.get("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 6)
 )
-# Poker's regular, non-scrape candidates are a meaningful but much smaller
+# Poker's regular and eBay-scrape candidates are a meaningful but much smaller
 # part of the shared pool than golf's: a fresh live-log replay found 51 poker
-# shared-lane rows versus 166 golf rows (and 118 watches).  Two of twelve
-# slots gives poker its needed floor without copying golf's six-slot share or
-# crowding out the other categories.  Its 98 eBay-scrape rows deliberately
-# remain under EBAY_SCRAPE_AI_CHECK_LIMIT; this reservation must not turn a
-# bounded flood-control lane back into a shared-pool flood.
+# shared-lane rows versus 166 golf rows (and 118 watches). Two of twelve slots
+# gives poker its needed floor without copying golf's six-slot share or
+# crowding out the other categories. The poker scrape rows use this existing
+# share, just as golf scrape rows do: that is a within-12 reallocation, not an
+# extra call or a way around the paid-AI ceiling. The separate one-call scrape
+# lane remains flood control for other scrape categories.
 POKER_CHIPS_SHARED_AI_SOFT_CAP = int(
     _CONFIG.get("POKER_CHIPS_SHARED_AI_SOFT_CAP", 2)
 )
@@ -7189,6 +7192,92 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     return found_snapshot
 
 
+def _poker_scrape_title_quality_score(candidate):
+    """Return a narrow, non-gating title signal for poker scrape rows.
+
+    Fresh production evidence showed the one-call scrape lane repeatedly
+    spending its oldest-pending check on obvious non-sets: a clear acrylic
+    carry case, a `Deluxe ... 300 Bulk Full Clay` listing whose photos showed
+    ten ABS/sticker samples, and a chip carousel whose photos showed eight
+    novelty chips. A bare material or count claim is therefore never treated
+    as proof. This only ranks candidates: title claims still require the
+    existing photo-based poker gate before an alert can be sent.
+
+    A known collector maker plus an explicit >=100-chip set claim is stronger
+    pre-AI evidence than a generic title. Obvious accessory/sample/novelty
+    wording is demoted. A genuine set can still mention a case, so none of
+    these terms reject or discard a candidate.
+    """
+    listing = candidate.get("listing") or {}
+    if (
+        candidate.get("category") != "poker-chips"
+        or not listing.get("_from_scrape_lane")
+        or listing.get("_from_scout_queue")
+    ):
+        return 0.0
+
+    title = listing.get("title")
+    if not isinstance(title, str):
+        return 0.0
+    title = title.lower()
+
+    declared_counts = []
+    for pattern in (
+        r"\b(\d{1,4})\s*[- ]?(?:chip|pc|piece)s?\b",
+        r"\b(?:set|lot)\s+(?:of\s+)?(\d{1,4})\b",
+        r"\bx\s*(\d{1,4})\s*(?:lot|chips?)\b",
+    ):
+        declared_counts.extend(int(match) for match in re.findall(pattern, title))
+    declared_count = max(declared_counts, default=None)
+    # These are the maker terms supported by this incident's fresh title and
+    # vision evidence. Keep the initial ranking signal deliberately narrow;
+    # adding every conceivable chip maker would turn a cheap triage cue into
+    # an unvalidated authenticity claim.
+    collector_maker = bool(re.search(r"\b(?:paulson|chipco)\b", title))
+    specific_material = bool(re.search(
+        r"\b(?:compression[-\s]?molded\s+clay|ceramic)\b", title
+    ))
+    obvious_non_set = bool(re.search(
+        r"\b(?:sample(?:\s+set)?|carousel|rack(?:s)?|tray(?:s)?|"
+        r"trays?\s+not\s+included|capacity)\b",
+        title,
+    ))
+    case_or_theme = bool(re.search(
+        r"\b(?:carry(?:ing)?\s+case|casino\s+theme)\b", title
+    ))
+    mass_market_pattern = bool(re.search(
+        r"\bdeluxe\b.*\bbulk\b|\bbulk\b.*\bpoker\s+chips?\b|"
+        r"\bclay\s+composite\b",
+        title,
+    ))
+
+    score = 0.0
+    # The actual gate requires a visually supported 100-chip minimum. A
+    # seller's title cannot establish that fact, but it is a cheap way to
+    # prioritize a plausible usable set over an explicit tiny lot.
+    if declared_count is not None and declared_count >= POKER_CHIPS_MIN_SET_SIZE:
+        score += 1.0
+        if collector_maker:
+            score += 2.0
+        if specific_material:
+            score += 1.0
+    elif declared_count is not None:
+        score -= 2.0
+    if obvious_non_set:
+        # Even a title that claims a famous maker and 300 chips cannot turn a
+        # stated sample/carousel/rack/capacity into a usable set. Keep this a
+        # ranking penalty rather than a gate, but make it strong enough to
+        # remain below a neutral candidate when those claims coexist.
+        score -= 5.0
+    if case_or_theme:
+        # A case can accompany a genuine set, unlike a sample or empty
+        # capacity listing, so this is intentionally only a light demotion.
+        score -= 1.0
+    if mass_market_pattern:
+        score -= 2.0
+    return score
+
+
 def _pretriage_score(candidate, ai_no_price_attempts):
     """How worth spending a scarce real AI-check slot on `candidate` is,
     using ONLY signals already attached before any AI call runs - no new
@@ -7214,10 +7303,13 @@ def _pretriage_score(candidate, ai_no_price_attempts):
     promise_score bonuses are real pre-existing fields, but genuinely
     unvalidated against today's data (see each field's own comment below) -
     kept as a light, low-priority tiebreak rather than forced into a stronger
-    position the evidence doesn't support. A "price vs. category max_price
-    headroom" term was tried and dropped: today's worst repeat-failure
-    listing had MORE headroom than the delivered watches, actively
-    contradicting the -price tiebreak a few lines below in
+    position the evidence doesn't support. The narrow poker scrape title
+    signal intentionally remains separate: its own evidence showed an old
+    novelty backlog repeatedly winning that source's scarce capacity, so
+    _ai_check_priority reads it before backlog age only for that exact source.
+    A "price vs. category max_price headroom" term was tried and dropped:
+    today's worst repeat-failure listing had MORE headroom than the delivered
+    watches, actively contradicting the -price tiebreak a few lines below in
     _ai_check_priority (see that tiebreak's own "$14.73 Rolex crystal"
     comment - cheapest-matches-a-brand-token is usually a part, not the
     item).
@@ -7247,11 +7339,11 @@ def _pretriage_score(candidate, ai_no_price_attempts):
     return repeat_failure_tier, promise_score
 
 
-def _is_golf_shared_scrape_candidate(candidate):
-    """Whether a scrape candidate belongs in golf's bounded shared share."""
+def _is_shared_ai_scrape_candidate(candidate):
+    """Whether a scrape candidate belongs in its category's shared share."""
     listing = candidate.get("listing") or {}
     return bool(
-        candidate.get("category") == "golf-equipment"
+        candidate.get("category") in {"golf-equipment", "poker-chips"}
         and listing.get("_from_scrape_lane")
         and not listing.get("_from_scout_queue")
     )
@@ -7263,10 +7355,10 @@ def _apply_shared_ai_category_fairness(
     """Give golf and poker bounded, early shares of the normal AI window.
 
     `candidates` has already been priority-sorted. Ending-soon auctions and
-    isolated-budget rows stay in their exact positions. Golf eBay-scrape rows
-    deliberately join this window: production showed that 240/241 golf budget
-    misses came from that source, where a separate one-call lane made the
-    configured golf share unreachable.
+    isolated-budget rows stay in their exact positions. Golf and poker
+    eBay-scrape rows deliberately join this window: production showed that a
+    separate one-call lane made each category's configured share unreachable
+    once its scrape source became productive.
 
     Select up to each category's configured soft cap, fill the remainder with
     other categories, and let every group reclaim genuinely idle capacity.
@@ -7290,7 +7382,7 @@ def _apply_shared_ai_category_fairness(
             return True
         return bool(
             listing.get("_from_scrape_lane")
-            and not _is_golf_shared_scrape_candidate(candidate)
+            and not _is_shared_ai_scrape_candidate(candidate)
         )
 
     ending_shared = sum(
@@ -7751,10 +7843,10 @@ def run():
                         )
                         for _scraped_listing in scraped:
                             # Internal marker only: makes PASS 3's budget
-                            # branch route this listing against the scrape
-                            # lane's OWN tiny AI-check budget
-                            # (EBAY_SCRAPE_AI_CHECK_LIMIT) instead of the
-                            # shared GEMINI_CALL_LIMIT pool. Leading
+                            # branch route this listing by source/category:
+                            # golf and poker use their existing shared
+                            # fairness allocations; other scrape categories
+                            # use EBAY_SCRAPE_AI_CHECK_LIMIT. Leading
                             # underscore so make_listing()/score_listing()/
                             # every downstream consumer never looks at it.
                             # Rides the listing dict itself (not the itemId,
@@ -8494,9 +8586,14 @@ def run():
         # stale age instead: it's a weaker, less-validated signal and must
         # not override the already-tested anti-starvation aging for
         # candidates that simply haven't had their first real AI check yet.
+        # The narrowly evidenced poker scrape title score is deliberately
+        # separate: production showed old carry-case/sample/novelty rows
+        # repeatedly consuming that source's scarce capacity, so it belongs
+        # before pending age only for those rows.
         repeat_failure_tier, promise_score = _pretriage_score(
             candidate, no_price_attempts_by_item.get(candidate["item_id"], 0)
         )
+        poker_scrape_title_quality = _poker_scrape_title_quality_score(candidate)
         return (
             0 if is_ending_soon_auction else 1,
             result.get("auction_minutes_remaining") or 0,
@@ -8514,6 +8611,7 @@ def run():
             0 if must_have_ai else 1,
             1 if mass_market_watch else 0,
             repeat_failure_tier,
+            -poker_scrape_title_quality,
             # Preserve backlog aging inside the still-fresh cohort, but once
             # a listing crosses the stale boundary prefer the least-old/never-
             # retried candidate if idle capacity ever reaches this tail.
@@ -8609,16 +8707,16 @@ def run():
         ai_result = None
         is_scrape_lane = bool(listing.get("_from_scrape_lane"))
         is_scout = bool(listing.get("_from_scout_queue"))
-        is_shared_golf_scrape = _is_golf_shared_scrape_candidate(candidate)
-        is_isolated_scrape = is_scrape_lane and not is_shared_golf_scrape
+        is_shared_category_scrape = _is_shared_ai_scrape_candidate(candidate)
+        is_isolated_scrape = is_scrape_lane and not is_shared_category_scrape
         # Once the normal Gemini budget is spent, one extra call is still
         # granted to an ending-soon auction so a closing auction can't be
         # starved out by the cap - see AUCTION_AI_RESERVED_CALLS for the
         # full tradeoff and the cap that keeps many simultaneous auctions
         # from eating the whole day's budget. Scout and scrape candidates never
-        # qualify: isolated rows have their own budgets below, while golf scrape
-        # already participates in the ordinary shared pool and is not an auction
-        # feed. Neither may consume the reserved auction slot.
+        # qualify: isolated rows have their own budgets below, while golf and
+        # poker scrape rows already participate in the ordinary shared pool and
+        # are not auction feeds. Neither may consume the reserved auction slot.
         use_reserved_auction_slot = (
             not is_scrape_lane
             and not is_scout
@@ -8626,12 +8724,12 @@ def run():
             and bool(result.get("is_ending_soon_auction"))
             and auction_reserved_calls < AUCTION_AI_RESERVED_CALLS
         )
-        # Non-golf scrape candidates draw from their own tiny budget
-        # (EBAY_SCRAPE_AI_CHECK_LIMIT), and Scout candidates from theirs
-        # (SCOUT_AI_CHECK_LIMIT). Golf scrape candidates are the deliberate
-        # exception: they compete in the shared pool under the six-slot golf
-        # fairness bound above. Live data showed almost all golf supply came
-        # through scrape, so isolating it made that configured share inert.
+        # Non-shared-category scrape candidates draw from their own tiny
+        # budget (EBAY_SCRAPE_AI_CHECK_LIMIT), and Scout candidates from theirs
+        # (SCOUT_AI_CHECK_LIMIT). Golf and poker scrape candidates are the
+        # deliberate exceptions: they compete in the shared pool under their
+        # existing category fairness bounds. Live data showed that isolating a
+        # productive category's scrape supply makes its configured share inert.
         # The AI check itself is identical; only which counter gates it changes.
         if is_isolated_scrape:
             budget_granted = ebay_scrape_ai_calls < EBAY_SCRAPE_AI_CHECK_LIMIT

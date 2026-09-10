@@ -1,0 +1,90 @@
+# Poker scrape flood fix: incremental investigation log
+
+## 2026-09-10 — start
+
+- Confirmed the supplied fresh checkout without fetching, pulling, or cloning:
+  `2df63c3f5a0bf8019a86d5235c46115f13b12883 Scout ingest: 3 listing(s) from extension`
+- Began independent fresh production-log analysis and source-path tracing. No implementation decision has been made yet.
+
+## 2026-09-10 — fresh production evidence
+
+- Freshly decoded `alerts_log.jsonl` through the requested GitHub API path. (On
+  this Windows shell, PowerShell inserts CRLF into the native pipeline, so the
+  equivalent successful decode used `base64 -d --ignore-garbage`; the API
+  request itself was fresh.) The current log has 987 rows from
+  `2026-09-10T19:18:38Z` through `2026-09-10T22:03:29Z`.
+- Freshly queried the remote `ai_spend.db` in memory: September is
+  `reserved_usd=10.000000000000188`, `calls=2232`. The $10 hard paid-AI
+  ceiling is still fully reserved; there is no evidence-based spend slack for
+  a cap increase.
+- The most recent 45-minute window (through 22:03Z) contains 166 poker rows,
+  153 `NO_AI_BUDGET` (all `ebay_scraped`), and no poker deliveries. It also
+  contains 41 golf-equipment rows with 10 `NO_AI_BUDGET` rows. Fresh data thus
+  does **not** support the stale claim that golf's reservation is unused or
+  available to fund a larger scrape limit.
+- Source trace so far: all candidates are globally priority-sorted before
+  fairness; isolated scrape rows preserve that order, and PASS 3 gives the
+  first isolated scrape row the limited counter. `_pretriage_score()` is
+  technically applied, but fresh poker scrape rows normally have neither of
+  its current promise signals (sold comps/seller feedback), so its poker
+  choices still lack poker-specific evidence.
+
+## 2026-09-10 — decision from the evidence
+
+- A fixed 45-minute post-surge slice (`19:43Z`–`20:28Z`) has 281 poker rows
+  (258 `NO_AI_BUDGET`, 7 checked, 0 delivered) and 57 golf-equipment rows
+  (7 `NO_AI_BUDGET`, 25 checked). Across the fresh log, golf scrape has
+  54 checked rows and 16 `NO_AI_BUDGET` rows. This refutes a claim that golf
+  has a reliably idle share to trim.
+- The golf/poker values are *soft allocation shares*, not spend reservations:
+  unused shared slots backfill. Reducing golf's soft cap would not pay for a
+  second isolated scrape call. Raising `EBAY_SCRAPE_AI_CHECK_LIMIT` would add
+  a possible paid call, while the ledger is already full, so it is not
+  justified.
+- The supported cost-neutral/non-increasing fix is instead to route poker
+  scrape candidates through poker's already-configured two-slot shared share,
+  exactly like the existing golf exception. That changes no numeric cap and
+  cannot add a paid call: poker now displaces a shared candidate, while the
+  one isolated scrape call remains available only to another scrape category.
+  (If no such category is present, actual calls can be lower.) It makes
+  poker's existing reservation reachable rather than adding capacity.
+- Fresh title-level evidence also supports a narrow pre-AI ranking signal,
+  not a rejection: recent isolated picks were an acrylic carry case, a
+  `Deluxe ... 300 Bulk Full Clay` sample (vision: ABS/stickers, visible count
+  10), and a rotating chip carousel (vision: ABS, visible count 8). The
+  title's bare `clay` and `300` claims were therefore not treated as proof.
+  The implementation will only rank evidence-shaped >=100-chip maker/set
+  language ahead of obvious accessory/sample/novelty language, retaining all
+  rows for later retry.
+- Fresh duplicate check found zero duplicate item IDs and zero normalized
+  title+price pairs within each of 60 poker-scrape query/run groups (and the
+  eight 50–81-row combined runs). No speculative title+price dedup will be
+  added. Cross-run recurrence is real but is a different problem.
+
+## 2026-09-10 — implementation and final fresh re-check
+
+- Implemented no numeric config change. Poker scrape rows now join the
+  existing poker shared window; the nested fairness `is_isolated()` path and
+  PASS 3 budget branch use the same shared-scrape predicate. Other scrape
+  categories retain `EBAY_SCRAPE_AI_CHECK_LIMIT=1`.
+- Added a ranking-only title tier before backlog age for poker scrape rows.
+  It recognizes only the fresh-evidence maker terms `Paulson`/`ChipCo` when
+  paired with an explicit >=100-chip claim and specific material wording;
+  it strongly demotes sample/carousel/rack/tray/capacity text and lightly
+  demotes carrying-case/casino-theme wording. It never rejects a row or
+  trusts a seller count/material claim as the poker gate.
+- Added regressions for: poker scrape using the existing shared reservation
+  while the isolated cap is zero; poker scrape not also consuming an isolated
+  call when shared capacity is zero; title quality beating an older real
+  Phoenix-style novelty backlog row; explicit sample wording overriding
+  claimed maker/material/count; and the remaining isolated lane honoring
+  `_pretriage_score()` over raw scrape return order.
+- Final fresh API re-check: log range `19:53:03Z`–`22:11:07Z`; its latest
+  45 minutes had poker 221 rows / 207 `NO_AI_BUDGET` / 3 checked / 0
+  delivered (all 207 misses scraped) and golf 39 / 10 / 15 / 1 (6 scraped
+  misses). Remote September ledger remains `$10.000000000000188`, 2,232
+  calls. This continues to rule out increasing a cap or claiming golf slack.
+- Focused regression command passed: 6 selected tests, 0 failures.
+- Final validation passed: `ast.parse` of `ebay_deal_alert.py`, JSON parse of
+  untouched `config.json`, and full `python3 -m pytest -q`:
+  `698 passed, 2 warnings, 499 subtests passed`.

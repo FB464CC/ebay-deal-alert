@@ -2494,6 +2494,63 @@ class PretriageScoring(unittest.TestCase):
         _, score_weak = m._pretriage_score(weak, 0)
         self.assertGreater(score_strong, score_weak)
 
+    def test_poker_scrape_title_signal_prefers_evidence_shaped_set_over_obvious_novelty(self):
+        # Directly modeled on fresh production evidence: the old isolated
+        # slot chose a `Deluxe ... 300 Bulk Full Clay` item whose photos
+        # showed ten ABS/sticker samples. Bare `clay`/`300` wording is not
+        # enough. A known maker plus explicit usable-set-size and specific
+        # material wording is only a rank signal--the real photo gate still
+        # decides whether it is genuine and visually countable.
+        novelty = {
+            "category": "poker-chips",
+            "listing": {
+                "_from_scrape_lane": True,
+                "title": (
+                    "Deluxe 10gm Phoenix 300 Bulk Full Clay Poker Chips - "
+                    "Great for Most Casino Games"
+                ),
+            },
+        }
+        evidence_shaped_set = {
+            "category": "poker-chips",
+            "listing": {
+                "_from_scrape_lane": True,
+                "title": (
+                    "Paulson Top Hat & Cane Compression-Molded Clay Poker "
+                    "Chip Set - 300 Chips"
+                ),
+            },
+        }
+
+        self.assertGreater(
+            m._poker_scrape_title_quality_score(evidence_shaped_set), 0,
+            "the stronger title must be recognized before a scarce slot is assigned",
+        )
+        self.assertLess(
+            m._poker_scrape_title_quality_score(novelty), 0,
+            "known bulk/sample wording must not win merely from a seller's clay/count claim",
+        )
+        claimed_sample = {
+            "category": "poker-chips",
+            "listing": {
+                "_from_scrape_lane": True,
+                "title": "Paulson Ceramic Poker Chip Sample Set - 300 Chips",
+            },
+        }
+        self.assertLess(
+            m._poker_scrape_title_quality_score(claimed_sample), 0,
+            "sample wording must outrank seller-provided maker/material/count claims as a demotion",
+        )
+
+    def test_poker_title_signal_is_scoped_to_scrape_candidates(self):
+        candidate = {
+            "category": "poker-chips",
+            "listing": {
+                "title": "Paulson Compression-Molded Clay Poker Chip Set 300 Chips",
+            },
+        }
+        self.assertEqual(m._poker_scrape_title_quality_score(candidate), 0.0)
+
     def test_price_vs_max_price_headroom_is_deliberately_not_scored(self):
         # Tried and DROPPED, not merely left weak: today's real worst
         # repeat-failure listing ($100 vs a $300 cap, 33% of ceiling) had
@@ -7572,6 +7629,162 @@ class RunIntegration(unittest.TestCase):
             1,
         )
 
+    def test_poker_scrape_candidates_use_existing_shared_poker_budget(self):
+        # This is the poker counterpart to the golf scrape regression above.
+        # EBAY_SCRAPE_AI_CHECK_LIMIT=0 is the mutation probe: the two calls
+        # can only happen if poker scrape rows enter their pre-existing
+        # two-slot shared reservation. No new per-run capacity is introduced.
+        self._patch("GEMINI_CALL_LIMIT", 2)
+        self._patch("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 0)
+        self._patch("POKER_CHIPS_SHARED_AI_SOFT_CAP", 2)
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 0)
+        saved_search = {
+            "query": "paulson poker chips",
+            "category": "poker-chips",
+            "category_id": "166570",
+            "max_price": 150,
+            "enabled": True,
+            "profile": "fast",
+        }
+        self._serve(saved_search, [])
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        self.ai_result = {"chip_type": "unknown"}
+        scraped = [
+            self._ebay_item(
+                "v1|poker-scrape-shared-1|0",
+                "Paulson Compression-Molded Clay Poker Chip Set - 300 Chips",
+                90,
+            ),
+            self._ebay_item(
+                "v1|poker-scrape-shared-2|0",
+                "ChipCo Ceramic Poker Chip Set - 500 Chips",
+                75,
+            ),
+        ]
+        # The real HTML scrape does not carry Browse API seller feedback;
+        # remove the integration fixture's convenience enrichment so this
+        # uses the same pre-AI fields as production scrape rows.
+        for item in scraped:
+            item.pop("seller_feedback_score", None)
+            item.pop("seller_feedback_percentage", None)
+
+        with mock.patch.object(
+            m.ebay_scrape,
+            "search_ebay_scraped",
+            lambda query, max_price=None, category_id=None: scraped,
+        ):
+            m.run()
+
+        self.assertEqual(
+            set(self.ai_calls),
+            {"v1|poker-scrape-shared-1|0", "v1|poker-scrape-shared-2|0"},
+            "poker scrape rows must use their existing shared two-slot share, not the zeroed isolated lane",
+        )
+
+    def test_poker_scrape_does_not_add_an_isolated_call_when_shared_budget_is_zero(self):
+        # The complementary budget invariant: once poker scrape is routed to
+        # the shared pool, it must not also fall through to the one extra
+        # isolated scrape call. This keeps the change non-increasing for paid
+        # AI spend even when another scrape category is absent.
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("POKER_CHIPS_SHARED_AI_SOFT_CAP", 1)
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 1)
+        saved_search = {
+            "query": "paulson poker chips",
+            "category": "poker-chips",
+            "category_id": "166570",
+            "max_price": 150,
+            "enabled": True,
+            "profile": "fast",
+        }
+        self._serve(saved_search, [])
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        item = self._ebay_item(
+            "v1|poker-scrape-no-fallback|0",
+            "Paulson Compression-Molded Clay Poker Chip Set - 300 Chips",
+            90,
+        )
+        item.pop("seller_feedback_score", None)
+        item.pop("seller_feedback_percentage", None)
+
+        with mock.patch.object(
+            m.ebay_scrape,
+            "search_ebay_scraped",
+            lambda query, max_price=None, category_id=None: [item],
+        ):
+            m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertTrue(
+            m.is_new(self._db(), item["itemId"]),
+            "a poker scrape row with no shared capacity remains retryable rather than taking an extra isolated call",
+        )
+
+    def test_poker_scrape_quality_tier_beats_older_novelty_for_shared_slot(self):
+        # Fresh production picked this exact high-price Phoenix bulk wording
+        # after it aged in ai_pending; vision then found ten ABS/sticker
+        # samples. The lower-priced Paulson-shaped set is only prioritized,
+        # not trusted: the fake AI below still rejects it as unknown.
+        self._patch("GEMINI_CALL_LIMIT", 1)
+        self._patch("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 0)
+        self._patch("POKER_CHIPS_SHARED_AI_SOFT_CAP", 1)
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 0)
+        saved_search = {
+            "query": "paulson poker chips",
+            "category": "poker-chips",
+            "category_id": "166570",
+            "max_price": 150,
+            "enabled": True,
+            "profile": "fast",
+        }
+        self._serve(saved_search, [])
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        self.ai_result = {"chip_type": "unknown"}
+        novelty_id = "v1|poker-scrape-phoenix|0"
+        evidence_id = "v1|poker-scrape-paulson|0"
+        novelty = self._ebay_item(
+            novelty_id,
+            "Deluxe 10gm Phoenix 300 Bulk Full Clay Poker Chips - Great for Most Casino Games",
+            125.99,
+        )
+        evidence_shaped_set = self._ebay_item(
+            evidence_id,
+            "Paulson Top Hat & Cane Compression-Molded Clay Poker Chip Set - 300 Chips",
+            75.00,
+        )
+        for item in (novelty, evidence_shaped_set):
+            item.pop("seller_feedback_score", None)
+            item.pop("seller_feedback_percentage", None)
+
+        conn = m.init_db()
+        try:
+            conn.execute(
+                "INSERT INTO ai_pending (item_id, first_seen_at) VALUES (?, ?)",
+                (
+                    novelty_id,
+                    (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with mock.patch.object(
+            m.ebay_scrape,
+            "search_ebay_scraped",
+            lambda query, max_price=None, category_id=None: [novelty, evidence_shaped_set],
+        ):
+            m.run()
+
+        self.assertEqual(
+            self.ai_calls,
+            [evidence_id],
+            "the scarce poker scrape slot must favor the evidence-shaped set over an older obvious novelty row",
+        )
+        logged = {row["item_id"]: row for row in self._alert_log_records()}
+        self.assertIn("no AI price", logged[novelty_id]["reason"])
+        self.assertTrue(m.is_new(self._db(), novelty_id))
+
     def test_facebook_golf_queue_row_reaches_golf_gate_and_alerts(self):
         # Exercise the real queue loader, Scout router, run loop, golf merge,
         # golf gate, and alert path together. Only network/provider edges are
@@ -8158,6 +8371,62 @@ class RunIntegration(unittest.TestCase):
         logged = {r["item_id"]: r for r in self._alert_log_records()}
         self.assertIn("no AI price", logged[deferred_id]["reason"],
             "deferred scrape-lane candidate carries the shared 'no AI price' retry marker")
+
+    def test_remaining_isolated_scrape_slot_uses_pretriage_not_scrape_return_order(self):
+        # Poker scrape rows now use their existing shared reservation. This
+        # locks down the remaining one-call scrape lane itself: a completed
+        # no-price retry must not take its slot merely because it was returned
+        # first and costs more than a never-checked candidate. That is the
+        # hard-evidence repeat_failure_tier in _pretriage_score().
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("EBAY_SCRAPE_AI_CHECK_LIMIT", 1)
+        repeat_id = "v1|isolated-repeat-watch|0"
+        fresh_id = "v1|isolated-fresh-watch|0"
+        self._serve(
+            {
+                "query": "omega watch",
+                "category": "watches",
+                "category_id": "31387",
+                "max_price": 400,
+                "enabled": True,
+                "profile": "fast",
+            },
+            [],
+        )
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        repeat = self._ebay_item(
+            repeat_id, "Omega Seamaster Automatic Watch", 300.0,
+        )
+        fresh = self._ebay_item(
+            fresh_id, "Omega Speedmaster Professional Watch", 150.0,
+        )
+        conn = m.init_db()
+        try:
+            conn.execute(
+                "INSERT INTO ai_pending (item_id, first_seen_at, ai_no_price_attempts) "
+                "VALUES (?, ?, ?)",
+                (
+                    repeat_id,
+                    (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+                    1,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with mock.patch.object(
+            m.ebay_scrape,
+            "search_ebay_scraped",
+            lambda query, max_price=None, category_id=None: [repeat, fresh],
+        ):
+            m.run()
+
+        self.assertEqual(
+            self.ai_calls,
+            [fresh_id],
+            "the isolated scrape slot must reach the never-checked watch, not the first/older retry",
+        )
 
     def test_knitwear_candidate_needing_ai_is_also_not_discarded(self):
         # Sibling of the test below, deliberately routed through a DIFFERENT
@@ -9427,10 +9696,11 @@ class SharedAiCategoryFairness(unittest.TestCase):
         )
 
     def test_poker_share_reaches_executable_prefix_while_golf_uses_its_share(self):
-        # Poker is deliberately last in the incoming priority order here.
-        # Without its own share, the old golf-vs-non-golf helper selects the
-        # two earlier watches as all available non-golf capacity and poker
-        # gets no shared AI check at all.
+        # Poker scrape rows are deliberately last in the incoming priority
+        # order here. Without the shared-scrape exception, the old isolated
+        # lane leaves them outside this window entirely; without poker's
+        # existing share, the old golf-vs-non-golf helper selects the two
+        # earlier watches as all available non-golf capacity.
         candidates = [
             self._candidate(f"watch-{index}", "watches")
             for index in range(8)
@@ -9438,7 +9708,7 @@ class SharedAiCategoryFairness(unittest.TestCase):
             self._candidate(f"golf-{index}", "golf-equipment")
             for index in range(8)
         ] + [
-            self._candidate(f"poker-{index}", "poker-chips")
+            self._candidate(f"poker-{index}", "poker-chips", scrape=True)
             for index in range(4)
         ]
 
