@@ -1,0 +1,189 @@
+AI BUDGET EXHAUSTION INVESTIGATION
+Started: 2026-09-13 (America/New_York)
+
+Scope and baseline
+- Repository was already checked out; no fetch/pull/clone performed.
+- Baseline commit: 242dd89ff6c0da3a8de2a87758691a2fca0e5962 Scout ingest: 1 listing(s) from extension
+- Initial worktree was clean (`git status --short` produced no entries).
+- Current config defaults observed before edits: GEMINI_CALL_LIMIT=12,
+  AI_PHOTO_PROVIDER="deepseek", AI_PAID_MONTHLY_BUDGET_USD=10.
+- Current code defaults differ when config keys are absent: call limit 3 and monthly
+  budget $18; production config therefore deliberately overrides both.
+- Current reservation defaults: paid vision $0.005/call, paid text $0.001/call.
+
+Investigation log
+- Began fresh production evidence collection from GitHub Contents and Actions APIs.
+- Fresh GitHub Contents pulls completed on 2026-09-13. The downloaded SQLite
+  database passes `PRAGMA integrity_check` (`ok`). Its exact schema is:
+  `CREATE TABLE ai_paid_spend (month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL,
+  calls INTEGER NOT NULL)`.
+- The complete production ledger still has exactly one row:
+  `('2026-09', 10.000000000000188, 2232)`. Thus the persisted counter is exactly
+  frozen at the hard configured $10 monthly ceiling and 2,232 reservations.
+- Fresh alerts_log.jsonl changed while this investigation was beginning (expected
+  because Actions is live). The byte-preserving pull contained 779 retained rows,
+  2026-09-13T02:13:14Z through 18:37:33Z. Disposition counts: NO_AI_BUDGET 583,
+  STALE_LISTING 38, CONDITION_REJECT 35, GATE_REJECTED 35, GOLF_WRONG_ITEM 24,
+  OVER_MAX_PRICE 16, GOLF_REJECT 15, GENDER_EXCLUDE 15, BELOW_MARGIN 10,
+  COUNTERFEIT 6, DELIVERED 1, AI_NO_PRICE 1. Categories: golf-equipment 295,
+  poker-chips 271, watches 189, knitwear 23, tailoring 1.
+- This fresh snapshot independently confirms system-wide budget starvation is
+  still active. One retained DELIVERED disposition is not evidence of a new paid
+  call; its timestamp/provider path will be examined separately below.
+- Follow-up on that row: run 34775076437 logged the $10 cap rejection, fell back
+  to Gemini, and delivered `vinted:9992635896` at 18:37:33Z; the ledger did not
+  move. Therefore "paid capacity is completely dead" is exact, while "literally
+  no alert can ever deliver" is slightly too strong: a free Gemini fallback can
+  still succeed sporadically. The observed service state remains near-total
+  outage (1 delivered versus 583 NO_AI_BUDGET in the fresh retained window),
+  not guaranteed mathematical zero.
+
+Cap timing and persistence evidence
+- GitHub's commit history for `ai_spend.db` ends at 2026-09-08T22:58:37Z;
+  no later commit changes that file. The last two changed snapshots are
+  9.999000000000189 / 2,231 calls at 22:41:01Z and
+  10.000000000000188 / 2,232 calls at 22:58:37Z.
+- The first recoverable Actions-log rejection at the cap is more precise:
+  run 34285369560 first logged `Paid AI monthly cap reached ($10.00 reserved
+  of $10.00)` at 2026-09-08T22:28:38.985Z. The preceding sampled runs
+  34283616996, 34284049839, and 34284924343 logged zero cap rejections.
+  Subsequent runs 34285798223 and 34286225799 logged 12 and 13 respectively.
+  Therefore the cap was first reached locally during run 34285369560; the exact
+  $10 state became the durable branch snapshot by 22:58:37Z.
+- Sampled successful production runs well after exhaustion independently:
+  2026-09-09 run 34419001746 (3 cap rejections), 2026-09-10 run 34544238059
+  (7), 2026-09-11 run 34659816990 (14), 2026-09-12 run 34726638692 (8), and
+  2026-09-13 run 34775338278 (2). Every run completed successfully while its
+  paid calls were rejected. This proves a multi-day silent functional outage,
+  not an inactive workflow or a two-point coincidence.
+- The database's historical snapshots are not perfectly monotonic (examples:
+  $9.983 at 22:02Z followed by $9.963 at 22:08Z; $9.871 at 21:34Z followed by
+  $9.867 at 21:41Z). This is consistent with whole-SQLite-file state commits and
+  rebases occasionally landing an older local snapshot. It biases the ledger
+  toward UNDER-counting, not toward the suspected overbilling; it cannot explain
+  an early false exhaustion. Fixing workflow persistence is outside the explicit
+  file scope, so no workflow logic will be changed here.
+
+Reservation arithmetic
+- 2,232 * $0.005 = $11.16, so the ledger is not 2,232 vision calls. There are
+  two reservation sizes in current code: vision $0.005 and text $0.001. Solving
+  `vision + text = 2232` and `.005*vision + .001*text = 10` gives exactly
+  1,942 vision reservations and 290 text reservations. The accounting total is
+  internally consistent (ordinary floating-point residue aside).
+
+Budget decision history
+- 2026-08-26 commit 405eddf introduced the guard at $18/month, explicitly as a
+  conservative ceiling leaving headroom under a stated $20/month limit.
+- 2026-09-01 commit c5221d6 changed it to $0 after the explicit instruction
+  "i really want to keep this entire thing free." Commit fa5f3f2 then restored
+  $2/month after the follow-up "im fine with a few pennies from deepseek...only
+  if it adds real value."
+- 2026-09-04 commit 762ce62 raised $2 to $10 because the September ledger was
+  already $2.839 when the $2 limit landed and production went dark after Gemini
+  free quota exhaustion. The commit called $10 real headroom and explicitly left
+  throttling as a cheaper future lever if it became tight. Thus $10 was informed
+  as an emergency mid-month operating choice, but it was not volume-sized for
+  the later DeepSeek-primary configuration and expanded golf/poker demand.
+
+Accounting durability and real demand
+- End-of-day Git snapshots expose a more serious accounting defect. September's
+  ledger was $2.839 / 695 reservations on Sep 1, then after the Sep 4 history
+  rewrite/reconciliation it was only $0.605 / 153. It subsequently grew to
+  $3.770 / 846 (Sep 5), $5.227 / 1,199 (Sep 6), $7.134 / 1,622 (Sep 7), and
+  $10.000 / 2,232 (Sep 8). The dedicated file therefore lost a prior $2.839
+  monthly balance; the actual sequence contains at least 2,927 reservations
+  totaling $12.839 (2,478 vision + 449 text), even though the current ledger
+  reports only $10/2,232. This is not double-counting. It is a fail-open rollback
+  that made the nominal $10 guard permit more provider work than intended.
+- From the post-reset Sep 4 snapshot through exhaustion, reservations grew about
+  $9.395 in roughly 3.95 days: about $2.38 reserved/day or $71/month at unchanged
+  demand. The $10 pool therefore represented only about 4.2 days of current
+  throughput, matching the observed Sep 4-to-Sep 8 lifetime.
+- At current volume, $10/month can sustain roughly 22% of the reservation demand
+  (`10 / 71`). Merely redistributing the per-run slots cannot change that.
+
+Provider/billing audit
+- Current code checks the DeepSeek key, reserves exactly once, then makes exactly
+  one HTTP request. The photo router does not retry DeepSeek: on None/error it
+  falls back to Gemini. Text second-opinion and pre-alert sanity calls each make
+  their own separately priced $0.001 reservation. No code path bills the same
+  DeepSeek HTTP attempt twice.
+- Reservations currently remain charged on timeouts, HTTP errors, malformed JSON,
+  and unusable output by deliberate fail-closed design. Real sampled pre-cap logs
+  do show this class of conservative waste: run 34283616996 had one DeepSeek read
+  timeout; run 34284924343 had two; run 34285369560 had one before reaching the
+  cap. Whether a timed-out server-side completion was actually billed cannot be
+  proven from the client log, so refunding failed attempts would be speculative
+  and unsafe. Successful responses, however, include authoritative token usage
+  and can be safely settled downward from a conservative reservation.
+- Fresh official DeepSeek documentation says the configured legacy model name is
+  still accepted but now routes to `deepseek-flash` (V4.1 Flash) at the same Flash
+  pricing. Images are billed as input tokens, independently per image, with up to
+  1,024 tokens/image; this bot sends at most eight. Current peak prices are
+  $0.30/million cache-miss input tokens and $1.20/million output tokens (off-peak
+  is half; cache hits are cheaper). The API response exposes prompt/cache-miss/
+  cache-hit/completion token counts and explicitly calls returned usage the source
+  of truth.
+- A concrete efficiency bug exists after the model rollover: current DeepSeek
+  requests omit the `thinking` control, while current official docs say thinking
+  is enabled by default at high effort. These calls ask for compact deterministic
+  JSON classification, so paying for hidden reasoning output is avoidable. The
+  implementation will explicitly disable thinking, cap JSON output, and settle
+  each successful reservation to a conservative PEAK-rate calculation from the
+  provider's own returned usage. Failed/unknown-usage calls will keep the full
+  reservation. This reduces ledger consumption without assuming free failures or
+  increasing the $10 cap.
+
+Implemented remediation
+- AI_PAID_MONTHLY_BUDGET_USD remains exactly $10. No code or configuration change
+  increases the monthly dollar ceiling. The larger $0.010 vision and $0.002 text
+  figures are pre-request safety ceilings, not assumed per-call charges: every
+  successful response is now settled down from authoritative token usage at the
+  documented PEAK cache-miss input/output rates. Missing usage, timeouts, HTTP
+  errors, and malformed responses retain the entire reservation. Output is capped
+  at 2,048 vision / 512 text tokens and DeepSeek thinking is explicitly disabled.
+- Added monotonic aggregate accounting (`gross_reserved_usd` and
+  `settled_credit_usd`) while preserving the existing `ai_paid_spend` compatibility
+  table. The accounting is mirrored into the existing cache-backed SQLite state
+  and component-wise reconciled before reservation. This prevents the observed
+  whole-file rollback from lowering either cumulative component, without adding
+  a per-call table that would rapidly bloat the git-backed database.
+- Added a durable, once-per-(UTC month, configured cap) ntfy notification titled
+  `[AI BUDGET EXHAUSTED]`. It says the outage is system-wide, states effective
+  spend/cap and the UTC reset date, and explains that Gemini fallback may still
+  be quota-limited. The notification claim is mirrored; a failed ntfy request
+  releases the claim so a later run retries instead of suppressing the warning.
+- Alert-log schema v4 now writes `MONTHLY_BUDGET_EXHAUSTED` plus the effective
+  balance, cap, and reset timestamp. This is distinct from ordinary
+  `NO_AI_BUDGET` per-run pacing. These candidates remain retryable rather than
+  being permanently marked seen. The weekly digest now prints an explicit
+  `AI monthly budget: EXHAUSTED` line with the reset date.
+- Gemini fallback behavior is deliberately preserved: production evidence shows
+  it can still deliver sporadically after DeepSeek is capped. No speculative
+  refund for ambiguous failed HTTP requests, no unproven batching change, and no
+  new candidate-filter heuristic was introduced.
+
+Decision-grade capacity conclusion
+- The prior flat-reservation data implies roughly $71/month of nominal demand,
+  whereas the configured decision is $10/month. The implemented usage settlement
+  and disabled thinking remove real accounting/provider waste, but production
+  usage telemetry under the new code is required to quantify the new steady-state
+  monthly cost honestly. The current September legacy balance is not retroactively
+  credited because historical token usage is unavailable. If live settled usage
+  still follows the old rate, sustaining all prior demand would require about
+  $71/month; sustaining it at $10 would require about a 78% reduction in paid-call
+  demand. Raising the cap remains a user decision and was not done here.
+
+Validation and scope audit (2026-09-13)
+- `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  passed with exit code 0.
+- `python3 -c "import json; json.load(open('config.json'))"` passed with exit code 0.
+- `python3 -m pytest -q` passed: `704 passed, 3 warnings, 499 subtests passed in
+  19.73s`. The warnings are one pre-existing test-docstring escape warning and
+  two lxml deprecations.
+- `git diff --check` passed (only Git's existing LF-to-CRLF notices were printed).
+- The only tracked files changed are `ebay_deal_alert.py`, `config.json`, and the
+  two matching test files. The required investigation report is untracked. No
+  SQLite database is changed, and no commit or push was made.
+- The config diff is confined to numeric paid-AI pricing/reservation/output-limit
+  constants. No saved-search query, enabled flag, category_id, or max_price changed.

@@ -28,6 +28,7 @@ import threading
 import time
 import requests
 from collections import Counter
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -538,11 +539,32 @@ DEEPSEEK_BASE_URL = _CONFIG.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 # early, which is the safe failure mode for a hard personal budget.
 AI_PAID_MONTHLY_BUDGET_USD = float(_CONFIG.get("AI_PAID_MONTHLY_BUDGET_USD", 18.0))
 AI_PAID_VISION_RESERVATION_USD = float(
-    _CONFIG.get("AI_PAID_VISION_RESERVATION_USD", 0.005)
+    _CONFIG.get("AI_PAID_VISION_RESERVATION_USD", 0.01)
 )
 AI_PAID_TEXT_RESERVATION_USD = float(
-    _CONFIG.get("AI_PAID_TEXT_RESERVATION_USD", 0.001)
+    _CONFIG.get("AI_PAID_TEXT_RESERVATION_USD", 0.002)
 )
+# DeepSeek now returns authoritative token usage for every successful response.
+# Reserve a safe per-request ceiling before the network call, then settle down
+# using PEAK (never cheaper off-peak/cache-hit) rates. That keeps the $10 cap
+# conservative without pretending every compact JSON response cost the full
+# reservation. Prices are config-driven because provider pricing can change.
+DEEPSEEK_PEAK_INPUT_USD_PER_MILLION_TOKENS = float(
+    _CONFIG.get("DEEPSEEK_PEAK_INPUT_USD_PER_MILLION_TOKENS", 0.30)
+)
+DEEPSEEK_PEAK_OUTPUT_USD_PER_MILLION_TOKENS = float(
+    _CONFIG.get("DEEPSEEK_PEAK_OUTPUT_USD_PER_MILLION_TOKENS", 1.20)
+)
+DEEPSEEK_VISION_MAX_OUTPUT_TOKENS = int(
+    _CONFIG.get("DEEPSEEK_VISION_MAX_OUTPUT_TOKENS", 2048)
+)
+DEEPSEEK_TEXT_MAX_OUTPUT_TOKENS = int(
+    _CONFIG.get("DEEPSEEK_TEXT_MAX_OUTPUT_TOKENS", 512)
+)
+# Set only after this process observes an effective monthly-cap rejection. Run
+# analytics use the structured snapshot to distinguish it from per-run slot
+# pacing. Reset at the start of run() so tests/manual reuse cannot leak state.
+_PAID_AI_BUDGET_EXHAUSTION = None
 # Every alert now requires a real AI check, and GEMINI_CALL_LIMIT paces that
 # to a handful per run so the daily Gemini quota lasts the whole day (see
 # GEMINI_CALL_LIMIT's comment). Ending-soon auctions sort FIRST in the AI
@@ -3558,95 +3580,255 @@ def _make_deepseek_image_block(content, mime_type):
     }
 
 
-def _reserve_paid_ai_spend(amount_usd):
-    """Atomically reserve estimated paid-AI spend for the current UTC month.
+def _paid_ai_ledger_paths():
+    """Return the dedicated ledger and cache-backed safety mirror paths."""
+    paths = []
+    seen = set()
+    for raw_path in (AI_SPEND_DB_PATH, DB_PATH):
+        path = Path(raw_path)
+        key = str(path.resolve())
+        if key not in seen:
+            seen.add(key)
+            paths.append(path)
+    return paths
 
-    Uses a separate short-lived connection so provider helpers remain usable
-    outside run() and concurrent/manual invocations cannot both pass the cap.
-    Returns False on a full ledger or any ledger error: paid AI is optional,
-    while accidentally failing open on cost control is not.
+
+def _ensure_paid_ai_schema(conn):
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ai_paid_spend "
+        "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
+    )
+    # Gross reservations and settlement credits are separately monotonic. That
+    # makes component-wise max reconciliation safe after either whole SQLite
+    # file rolls back, without a per-call journal that would bloat the git-backed
+    # DB on every five-minute state commit.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ai_paid_accounting ("
+        "month TEXT PRIMARY KEY, gross_reserved_usd REAL NOT NULL, "
+        "settled_credit_usd REAL NOT NULL, calls INTEGER NOT NULL, "
+        "vision_calls INTEGER NOT NULL, text_calls INTEGER NOT NULL, "
+        "settlements INTEGER NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ai_budget_exhaustion_notified ("
+        "event_key TEXT PRIMARY KEY, notified_at TEXT NOT NULL)"
+    )
+
+
+def _seed_paid_ai_accounting(conn, month):
+    """Convert one pre-accounting aggregate into monotonic components."""
+    if conn.execute(
+        "SELECT 1 FROM ai_paid_accounting WHERE month = ?", (month,)
+    ).fetchone():
+        return
+    row = conn.execute(
+        "SELECT reserved_usd, calls FROM ai_paid_spend WHERE month = ?", (month,)
+    ).fetchone()
+    if not row:
+        return
+    reserved_usd, calls = float(row[0] or 0), int(row[1] or 0)
+    if reserved_usd <= 0 and calls <= 0:
+        return
+    conn.execute(
+        "INSERT INTO ai_paid_accounting("
+        "month, gross_reserved_usd, settled_credit_usd, calls, vision_calls, "
+        "text_calls, settlements) VALUES (?, ?, 0, ?, 0, 0, 0)",
+        (month, reserved_usd, calls),
+    )
+
+
+def _reconcile_paid_ai_ledgers(month):
+    """Reconcile monotonic accounting components across both persistence paths."""
+    rows = []
+    paths = _paid_ai_ledger_paths()
+    for path in paths:
+        with closing(sqlite3.connect(path, timeout=10)) as ledger:
+            _ensure_paid_ai_schema(ledger)
+            _seed_paid_ai_accounting(ledger, month)
+            ledger.commit()
+            row = ledger.execute(
+                "SELECT gross_reserved_usd, settled_credit_usd, calls, "
+                "vision_calls, text_calls, settlements FROM ai_paid_accounting "
+                "WHERE month = ?",
+                (month,),
+            ).fetchone()
+            if row:
+                rows.append(row)
+    merged = tuple(
+        max((float(row[index]) if index < 2 else int(row[index])) for row in rows)
+        if rows else 0
+        for index in range(6)
+    )
+    gross, credits, calls, vision_calls, text_calls, settlements = merged
+    effective = max(0.0, gross - credits)
+    for path in paths:
+        with closing(sqlite3.connect(path, timeout=10)) as ledger:
+            ledger.execute("BEGIN IMMEDIATE")
+            _ensure_paid_ai_schema(ledger)
+            ledger.execute(
+                "INSERT INTO ai_paid_accounting("
+                "month, gross_reserved_usd, settled_credit_usd, calls, vision_calls, "
+                "text_calls, settlements) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(month) DO UPDATE SET "
+                "gross_reserved_usd=excluded.gross_reserved_usd, "
+                "settled_credit_usd=excluded.settled_credit_usd, calls=excluded.calls, "
+                "vision_calls=excluded.vision_calls, text_calls=excluded.text_calls, "
+                "settlements=excluded.settlements",
+                (month, gross, credits, calls, vision_calls, text_calls, settlements),
+            )
+            ledger.execute(
+                "INSERT INTO ai_paid_spend(month, reserved_usd, calls) VALUES (?, ?, ?) "
+                "ON CONFLICT(month) DO UPDATE SET "
+                "reserved_usd=excluded.reserved_usd, calls=excluded.calls",
+                (month, effective, calls),
+            )
+            ledger.commit()
+    return effective, calls
+
+
+def _paid_ai_budget_snapshot(required_usd=0.0, now=None):
+    now = now or datetime.now(timezone.utc)
+    month = now.strftime("%Y-%m")
+    try:
+        reserved_usd, calls = _reconcile_paid_ai_ledgers(month)
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        logger.error("Paid AI spend ledger unavailable: %s", exc)
+        return None
+    cap = max(0.0, float(AI_PAID_MONTHLY_BUDGET_USD))
+    required = max(0.0, float(required_usd))
+    exhausted = cap <= 0 or reserved_usd + required > cap + 1e-9
+    if now.month == 12:
+        reset_at = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        reset_at = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+    return {
+        "month": month,
+        "reserved_usd": reserved_usd,
+        "calls": calls,
+        "cap_usd": cap,
+        "required_usd": required,
+        "exhausted": exhausted,
+        "reset_at": reset_at,
+        "event_key": f"{month}:{cap:.6f}",
+    }
+
+
+def _record_paid_ai_budget_exhaustion(snapshot):
+    global _PAID_AI_BUDGET_EXHAUSTION
+    _PAID_AI_BUDGET_EXHAUSTION = dict(snapshot)
+
+
+def _reserve_paid_ai_spend(amount_usd, kind="unknown"):
+    """Atomically reserve a paid call and return True, or False.
+
+    The dedicated DB is mirrored into the cache-backed seen DB and reconciled
+    before every reservation. Monotonic gross/credit components fix the observed
+    whole-file rollback that erased $2.839 from September's nominal hard cap.
+    Provider helpers settle a successful response from authoritative token usage;
+    failures keep the full reservation so uncertain billing never fails open.
     """
     if amount_usd <= 0 or AI_PAID_MONTHLY_BUDGET_USD <= 0:
         return False
-    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    now = datetime.now(timezone.utc)
+    month = now.strftime("%Y-%m")
     conn = None
     try:
+        _reconcile_paid_ai_ledgers(month)
         conn = sqlite3.connect(AI_SPEND_DB_PATH, timeout=10)
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS ai_paid_spend "
-            "(month TEXT PRIMARY KEY, reserved_usd REAL NOT NULL, calls INTEGER NOT NULL)"
-        )
-        # One-way conservative migration from releases that stored the
-        # ledger in seen_items.db. max(), rather than addition, makes this
-        # idempotent when the old table remains in a checkout, while ensuring
-        # the dedicated ledger can never start below already-reserved spend.
-        legacy_reserved = 0.0
-        legacy_calls = 0
-        legacy_path = Path(DB_PATH)
-        if legacy_path.exists() and legacy_path.resolve() != Path(AI_SPEND_DB_PATH).resolve():
-            legacy_conn = None
-            try:
-                legacy_conn = sqlite3.connect(
-                    f"file:{legacy_path.resolve().as_posix()}?mode=ro", uri=True, timeout=10
-                )
-                has_legacy_table = legacy_conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ai_paid_spend'"
-                ).fetchone()
-                if has_legacy_table:
-                    legacy_row = legacy_conn.execute(
-                        "SELECT reserved_usd, calls FROM ai_paid_spend WHERE month = ?", (month,)
-                    ).fetchone()
-                    if legacy_row:
-                        legacy_reserved = float(legacy_row[0])
-                        legacy_calls = int(legacy_row[1])
-            finally:
-                if legacy_conn is not None:
-                    legacy_conn.close()
-        existing_before_migration = conn.execute(
-            "SELECT reserved_usd, calls FROM ai_paid_spend WHERE month = ?", (month,)
-        ).fetchone()
-        migration_changed = bool(
-            (legacy_reserved > (float(existing_before_migration[0]) if existing_before_migration else 0.0))
-            or (legacy_calls > (int(existing_before_migration[1]) if existing_before_migration else 0))
-        )
-        if legacy_reserved > 0 or legacy_calls > 0:
-            conn.execute(
-                "INSERT INTO ai_paid_spend(month, reserved_usd, calls) VALUES (?, ?, ?) "
-                "ON CONFLICT(month) DO UPDATE SET "
-                "reserved_usd = MAX(reserved_usd, excluded.reserved_usd), "
-                "calls = MAX(calls, excluded.calls)",
-                (month, legacy_reserved, legacy_calls),
-            )
+        _ensure_paid_ai_schema(conn)
         row = conn.execute(
-            "SELECT reserved_usd FROM ai_paid_spend WHERE month = ?", (month,)
+            "SELECT gross_reserved_usd, settled_credit_usd, calls, vision_calls, "
+            "text_calls, settlements FROM ai_paid_accounting WHERE month = ?",
+            (month,),
         ).fetchone()
-        already_reserved = float(row[0]) if row else 0.0
+        if row:
+            gross, credits, calls, vision_calls, text_calls, settlements = row
+        else:
+            gross, credits, calls, vision_calls, text_calls, settlements = (0, 0, 0, 0, 0, 0)
+        already_reserved = max(0.0, float(gross) - float(credits))
         if already_reserved + amount_usd > AI_PAID_MONTHLY_BUDGET_USD + 1e-9:
-            # Persist a newly imported legacy balance even though this new
-            # reservation is rejected. Rolling the migration back here would
-            # leave the dedicated file empty precisely when the old ledger is
-            # full; a later seen_items.db conflict could then erase the only
-            # record of the cap having been reached.
-            if migration_changed:
-                conn.commit()
-            else:
-                conn.rollback()
+            conn.rollback()
+            snapshot = _paid_ai_budget_snapshot(required_usd=amount_usd, now=now) or {
+                "month": month,
+                "reserved_usd": already_reserved,
+                "calls": calls,
+                "cap_usd": AI_PAID_MONTHLY_BUDGET_USD,
+                "required_usd": amount_usd,
+                "exhausted": True,
+                "reset_at": None,
+                "event_key": f"{month}:{AI_PAID_MONTHLY_BUDGET_USD:.6f}",
+            }
+            _record_paid_ai_budget_exhaustion(snapshot)
             logger.warning(
-                "Paid AI monthly cap reached ($%.2f reserved of $%.2f); skipping paid call",
+                "Paid AI monthly cap reached ($%.3f effective of $%.2f; next call "
+                "needs $%.3f); skipping paid call",
                 already_reserved,
                 AI_PAID_MONTHLY_BUDGET_USD,
+                amount_usd,
             )
             return False
+        vision_increment = 1 if kind == "vision" else 0
+        text_increment = 1 if kind == "text" else 0
+        gross = float(gross) + float(amount_usd)
+        calls = int(calls) + 1
+        vision_calls = int(vision_calls) + vision_increment
+        text_calls = int(text_calls) + text_increment
         conn.execute(
-            "INSERT INTO ai_paid_spend(month, reserved_usd, calls) VALUES (?, ?, 1) "
-            "ON CONFLICT(month) DO UPDATE SET "
-            "reserved_usd = reserved_usd + excluded.reserved_usd, calls = calls + 1",
-            (month, amount_usd),
+            "UPDATE ai_paid_accounting SET gross_reserved_usd=?, calls=?, "
+            "vision_calls=?, text_calls=? WHERE month=?",
+            (gross, calls, vision_calls, text_calls, month),
+        )
+        conn.execute(
+            "UPDATE ai_paid_spend SET reserved_usd=?, calls=? WHERE month=?",
+            (max(0.0, gross - float(credits)), calls, month),
         )
         conn.commit()
+        # Copy the new monotonic totals to the mirror immediately. A mirror error fails
+        # closed for this attempt: the primary reservation stays charged, but no
+        # provider request is made without redundant durable accounting.
+        mirror_paths = _paid_ai_ledger_paths()[1:]
+        try:
+            for path in mirror_paths:
+                with closing(sqlite3.connect(path, timeout=10)) as mirror:
+                    mirror.execute("BEGIN IMMEDIATE")
+                    _ensure_paid_ai_schema(mirror)
+                    mirror.execute(
+                        "INSERT INTO ai_paid_accounting("
+                        "month, gross_reserved_usd, settled_credit_usd, calls, vision_calls, "
+                        "text_calls, settlements) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(month) DO UPDATE SET "
+                        "gross_reserved_usd=MAX(gross_reserved_usd, excluded.gross_reserved_usd), "
+                        "settled_credit_usd=MAX(settled_credit_usd, excluded.settled_credit_usd), "
+                        "calls=MAX(calls, excluded.calls), "
+                        "vision_calls=MAX(vision_calls, excluded.vision_calls), "
+                        "text_calls=MAX(text_calls, excluded.text_calls), "
+                        "settlements=MAX(settlements, excluded.settlements)",
+                        (month, gross, credits, calls, vision_calls, text_calls, settlements),
+                    )
+                    mirror_row = mirror.execute(
+                        "SELECT gross_reserved_usd, settled_credit_usd, calls FROM "
+                        "ai_paid_accounting WHERE month=?", (month,)
+                    ).fetchone()
+                    mirror_effective = max(0.0, float(mirror_row[0]) - float(mirror_row[1]))
+                    mirror.execute(
+                        "INSERT INTO ai_paid_spend(month, reserved_usd, calls) VALUES (?, ?, ?) "
+                        "ON CONFLICT(month) DO UPDATE SET reserved_usd=excluded.reserved_usd, "
+                        "calls=excluded.calls",
+                        (month, mirror_effective, int(mirror_row[2])),
+                    )
+                    mirror.commit()
+        except (OSError, sqlite3.Error) as exc:
+            logger.error(
+                "Paid AI mirror unavailable after reservation; skipping provider call: %s", exc
+            )
+            # The network call has definitely not started, so this is the one
+            # failure mode that is safe to settle to zero rather than retaining
+            # a conservative charge for possibly-billed provider work.
+            _settle_paid_ai_spend(amount_usd, 0.0)
+            return False
         return True
-    except sqlite3.Error as exc:
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
         if conn is not None:
             conn.rollback()
         logger.error("Paid AI spend ledger unavailable; skipping paid call: %s", exc)
@@ -3656,12 +3838,88 @@ def _reserve_paid_ai_spend(amount_usd):
             conn.close()
 
 
+def _settle_paid_ai_spend(reserved_usd, actual_usd):
+    """Replace a successful call's ceiling with a peak-rate usage estimate."""
+    if reserved_usd is None or actual_usd is None:
+        return False
+    reserved = max(0.0, float(reserved_usd))
+    settled = max(0.0, float(actual_usd))
+    credit = max(0.0, reserved - settled)
+    overage = max(0.0, settled - reserved)
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    updated_any = False
+    try:
+        _reconcile_paid_ai_ledgers(month)
+        for path in _paid_ai_ledger_paths():
+            with closing(sqlite3.connect(path, timeout=10)) as ledger:
+                ledger.execute("BEGIN IMMEDIATE")
+                _ensure_paid_ai_schema(ledger)
+                row = ledger.execute(
+                    "SELECT gross_reserved_usd, settled_credit_usd, calls, settlements "
+                    "FROM ai_paid_accounting WHERE month = ?",
+                    (month,),
+                ).fetchone()
+                if not row:
+                    ledger.rollback()
+                    continue
+                gross, credits, calls, settlements = row
+                ledger.execute(
+                    "UPDATE ai_paid_accounting SET gross_reserved_usd=?, "
+                    "settled_credit_usd=?, settlements=? WHERE month=?",
+                    (
+                        float(gross) + overage,
+                        float(credits) + credit,
+                        int(settlements) + 1,
+                        month,
+                    ),
+                )
+                effective = max(0.0, float(gross) + overage - float(credits) - credit)
+                ledger.execute(
+                    "UPDATE ai_paid_spend SET reserved_usd=?, calls=? WHERE month=?",
+                    (effective, int(calls), month),
+                )
+                ledger.commit()
+                updated_any = True
+        if overage > 1e-9:
+            logger.warning(
+                "Paid AI call cost $%.6f exceeded its $%.6f reservation",
+                settled, reserved,
+            )
+        return updated_any
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        logger.error("Unable to settle paid AI usage; keeping full reservation: %s", exc)
+        return False
+
+
+def _deepseek_peak_cost_from_usage(usage):
+    """Conservative successful-call cost: peak, all prompt tokens cache-miss."""
+    if not isinstance(usage, dict):
+        return None
+    try:
+        prompt_tokens = int(usage["prompt_tokens"])
+        completion_tokens = int(usage["completion_tokens"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if prompt_tokens < 0 or completion_tokens < 0:
+        return None
+    cost = (
+        prompt_tokens * DEEPSEEK_PEAK_INPUT_USD_PER_MILLION_TOKENS
+        + completion_tokens * DEEPSEEK_PEAK_OUTPUT_USD_PER_MILLION_TOKENS
+    ) / 1_000_000
+    # Round upward to the nearest micro-dollar so floating point can never
+    # turn settlement into an optimistic undercount.
+    return math.ceil(cost * 1_000_000) / 1_000_000
+
+
 def _call_deepseek_json(prompt, images, timeout=30):
     deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
     if not deepseek_api_key:
         logger.warning("Skipping DeepSeek photo check: DEEPSEEK_API_KEY is not configured")
         return None
-    if not _reserve_paid_ai_spend(AI_PAID_VISION_RESERVATION_USD):
+    reservation_made = _reserve_paid_ai_spend(
+        AI_PAID_VISION_RESERVATION_USD, kind="vision"
+    )
+    if not reservation_made:
         return None
     content = [{"type": "text", "text": prompt}]
     for content_bytes, mime_type in images:
@@ -3672,7 +3930,10 @@ def _call_deepseek_json(prompt, images, timeout=30):
         # DeepSeek JSON mode guarantees valid JSON but requires the literal
         # word "json" in the prompt - every caller's prompt says "JSON".
         "response_format": {"type": "json_object"},
-        "max_tokens": 8192,
+        # Current Flash enables high-effort thinking by default. These calls
+        # need compact schema-bound classification, not paid hidden reasoning.
+        "thinking": {"type": "disabled"},
+        "max_tokens": DEEPSEEK_VISION_MAX_OUTPUT_TOKENS,
     }
     url = f"{DEEPSEEK_BASE_URL}/chat/completions"
     resp = requests.post(
@@ -3682,7 +3943,11 @@ def _call_deepseek_json(prompt, images, timeout=30):
         timeout=timeout,
     )
     resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"]
+    response_payload = resp.json()
+    actual_usd = _deepseek_peak_cost_from_usage(response_payload.get("usage"))
+    if actual_usd is not None:
+        _settle_paid_ai_spend(AI_PAID_VISION_RESERVATION_USD, actual_usd)
+    text = response_payload["choices"][0]["message"]["content"]
     return json.loads(_strip_json_code_fence(text))
 
 
@@ -3695,7 +3960,10 @@ def _call_deepseek_text_json(prompt, timeout=15):
     if not deepseek_api_key:
         logger.warning("Skipping DeepSeek sanity check: DEEPSEEK_API_KEY is not configured")
         return None
-    if not _reserve_paid_ai_spend(AI_PAID_TEXT_RESERVATION_USD):
+    reservation_made = _reserve_paid_ai_spend(
+        AI_PAID_TEXT_RESERVATION_USD, kind="text"
+    )
+    if not reservation_made:
         return None
     payload = {
         "model": DEEPSEEK_MODEL,
@@ -3703,7 +3971,8 @@ def _call_deepseek_text_json(prompt, timeout=15):
         # DeepSeek JSON mode guarantees valid JSON but requires the literal
         # word "json" in the prompt - the sanity prompt says "JSON".
         "response_format": {"type": "json_object"},
-        "max_tokens": 1024,
+        "thinking": {"type": "disabled"},
+        "max_tokens": DEEPSEEK_TEXT_MAX_OUTPUT_TOKENS,
     }
     url = f"{DEEPSEEK_BASE_URL}/chat/completions"
     resp = requests.post(
@@ -3713,7 +3982,11 @@ def _call_deepseek_text_json(prompt, timeout=15):
         timeout=timeout,
     )
     resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"]
+    response_payload = resp.json()
+    actual_usd = _deepseek_peak_cost_from_usage(response_payload.get("usage"))
+    if actual_usd is not None:
+        _settle_paid_ai_spend(AI_PAID_TEXT_RESERVATION_USD, actual_usd)
+    text = response_payload["choices"][0]["message"]["content"]
     return json.loads(_strip_json_code_fence(text))
 
 
@@ -4537,17 +4810,79 @@ def draft_resale_listing(image_paths):
 # ALERT DISPATCH
 # ---------------------------------------------------------------------------
 
-def notify_bot_down(message):
+def notify_bot_down(message, title="[ALERT-BOT DOWN]"):
     try:
         resp = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=message.encode("utf-8"),
-            headers={"Title": "[ALERT-BOT DOWN]"},
+            headers={"Title": title},
             timeout=10,
         )
         resp.raise_for_status()
+        return True
     except requests.exceptions.RequestException:
         logger.exception("Failed to send bot-down notification")
+        return False
+
+
+def _notify_paid_ai_budget_exhausted_once(snapshot):
+    """Send one durable notification per (UTC month, configured cap)."""
+    if not snapshot or not snapshot.get("exhausted"):
+        return False
+    event_key = snapshot["event_key"]
+    paths = _paid_ai_ledger_paths()
+    try:
+        # Check both persistence paths before claiming. A rollback of either
+        # file must not turn a monthly outage into a five-minute notification
+        # storm as long as the other copy survived.
+        for path in paths:
+            with closing(sqlite3.connect(path, timeout=10)) as ledger:
+                _ensure_paid_ai_schema(ledger)
+                if ledger.execute(
+                    "SELECT 1 FROM ai_budget_exhaustion_notified WHERE event_key = ?",
+                    (event_key,),
+                ).fetchone():
+                    return False
+        notified_at = datetime.now(timezone.utc).isoformat()
+        for path in paths:
+            with closing(sqlite3.connect(path, timeout=10)) as ledger:
+                _ensure_paid_ai_schema(ledger)
+                ledger.execute(
+                    "INSERT OR IGNORE INTO ai_budget_exhaustion_notified "
+                    "(event_key, notified_at) VALUES (?, ?)",
+                    (event_key, notified_at),
+                )
+                ledger.commit()
+    except (OSError, sqlite3.Error) as exc:
+        logger.error("Unable to persist AI-budget exhaustion notification claim: %s", exc)
+        return False
+
+    reset_at = snapshot.get("reset_at")
+    reset_label = reset_at.strftime("%Y-%m-%d 00:00 UTC") if reset_at else "next UTC month"
+    message = (
+        "Paid AI monthly budget is exhausted: "
+        f"${snapshot['reserved_usd']:.3f} effective spend/reservations against "
+        f"the ${snapshot['cap_usd']:.2f} cap. Paid photo checks are blocked until "
+        f"{reset_label}; Gemini fallback may also be quota-limited, so deal alerts "
+        "can fall to zero. This is a system-wide monthly outage, not an ordinary "
+        "per-run round-robin miss."
+    )
+    if notify_bot_down(message, title="[AI BUDGET EXHAUSTED]"):
+        return True
+
+    # A failed ntfy request is not a delivered warning. Release the claim so a
+    # later run retries instead of silently suppressing the only outage signal.
+    for path in paths:
+        try:
+            with closing(sqlite3.connect(path, timeout=10)) as ledger:
+                ledger.execute(
+                    "DELETE FROM ai_budget_exhaustion_notified WHERE event_key = ?",
+                    (event_key,),
+                )
+                ledger.commit()
+        except (OSError, sqlite3.Error):
+            logger.exception("Unable to release failed AI-budget notification claim")
+    return False
 
 
 def _sane_ai_price(value):
@@ -5430,7 +5765,9 @@ def _format_estimated_usd(value):
 
 # v3 adds the complete poker-vision decision evidence to category rows and
 # makes their ai_checked bit depend on the explicit completed-call marker.
-ALERT_LOG_SCHEMA_VERSION = 3
+# v4 distinguishes a system-wide monthly paid-budget outage from an ordinary
+# per-run AI-slot miss and persists the cap/reset evidence on every such row.
+ALERT_LOG_SCHEMA_VERSION = 4
 
 
 def disposition_code_for(result, delivered=False, delivery_error=None):
@@ -5441,6 +5778,8 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
     reason = str(result.get("reason") or "; ".join(result.get("flags", []))).lower()
     if delivery_error or verdict == "DELIVERY_FAILED":
         return "DELIVERY_FAILED"
+    if result.get("monthly_ai_budget_exhausted"):
+        return "MONTHLY_BUDGET_EXHAUSTED"
     rules = (
         # A completed golf vision call that abstained on price is different
         # from a candidate that never received an AI slot. The first two
@@ -5466,6 +5805,14 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
         if any(phrase in reason for phrase in phrases):
             return code
     return "GATE_REJECTED" if verdict == "PASS" else "EVALUATED"
+
+
+def _ai_gate_is_retry_eligible(gate_reason, result):
+    """Budget deferrals must survive until capacity or the UTC month resets."""
+    return (
+        "no AI price" in str(gate_reason)
+        or bool(result.get("monthly_ai_budget_exhausted"))
+    )
 
 
 def _alert_search_metadata(result):
@@ -5590,6 +5937,10 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_counterfeit_suspected",
         "golf_identified_brand",
         "damage_found",
+        "monthly_ai_budget_exhausted",
+        "ai_paid_reserved_usd",
+        "ai_paid_budget_cap_usd",
+        "ai_paid_budget_reset_at",
     ):
         value = result.get(key)
         if value is not None:
@@ -6408,6 +6759,10 @@ def send_weekly_digest():
         if search_id not in delivered_search_ids
     )
     weekly_ai_spend, current_ai_total = _weekly_ai_spend(now)
+    paid_budget_snapshot = _paid_ai_budget_snapshot(
+        required_usd=AI_PAID_VISION_RESERVATION_USD,
+        now=now,
+    )
 
     rating_parts = []
     for label in ("Steal", "Great Deal", "Good Deal", "Fair", "Marginal"):
@@ -6445,7 +6800,17 @@ def send_weekly_digest():
         )
         message += f"\nLatest delivery error: {latest_error}"
     message += f"\nTop brand/search: {top_label}"
-    message += f"\nAI dollars spent: ${weekly_ai_spend:.2f} (reserved estimate since prior digest)"
+    message += (
+        f"\nAI dollars spent: ${weekly_ai_spend:.2f} "
+        "(effective peak-rate estimate since prior digest)"
+    )
+    if paid_budget_snapshot and paid_budget_snapshot["exhausted"]:
+        message += (
+            "\nAI monthly budget: EXHAUSTED - "
+            f"${paid_budget_snapshot['reserved_usd']:.3f}/"
+            f"${paid_budget_snapshot['cap_usd']:.2f}; paid checks blocked until "
+            f"{paid_budget_snapshot['reset_at'].strftime('%Y-%m-%d 00:00 UTC')}"
+        )
     if biggest_verified:
         message += (
             f"\nBiggest verified discount: {biggest_verified['discount_pct']:.0%} - "
@@ -7505,7 +7870,8 @@ def _is_fresh_scout_candidate(candidate, now):
 
 
 def run():
-    global SAVED_SEARCHES
+    global SAVED_SEARCHES, _PAID_AI_BUDGET_EXHAUSTION
+    _PAID_AI_BUDGET_EXHAUSTION = None
     SAVED_SEARCHES, config_warnings = validate_config(
         {"SAVED_SEARCHES": SAVED_SEARCHES}
     )
@@ -7536,6 +7902,12 @@ def run():
     _SCOUT_QUEUE_PROCESSED_KEYS.clear()
     logger.info("Starting eBay deal alert run")
     conn = init_db()
+    budget_snapshot = _paid_ai_budget_snapshot(
+        required_usd=AI_PAID_VISION_RESERVATION_USD
+    )
+    if budget_snapshot and budget_snapshot["exhausted"]:
+        _record_paid_ai_budget_exhaustion(budget_snapshot)
+        _notify_paid_ai_budget_exhausted_once(budget_snapshot)
     flush_quiet_alert_queue(conn)
     search_activity = load_search_activity()
     quiet_queued_ids = {
@@ -8843,6 +9215,10 @@ def run():
                 current_month_name=current_month_name,
                 hard_stop=hard_stop,
             )
+            if _PAID_AI_BUDGET_EXHAUSTION:
+                _notify_paid_ai_budget_exhausted_once(
+                    _PAID_AI_BUDGET_EXHAUSTION
+                )
             if _run_deadline_reached("after an AI vision check"):
                 break
             # Moved here from right after the budget check above (real live
@@ -9306,9 +9682,26 @@ def run():
         # run rather than being discarded. A real steal is deferred by a
         # few minutes, not lost.
         if not gate_reason and ai_result is None:
-            gate_reason = (
-                "no AI price estimate - every alert must be AI-vetted before sending"
-            )
+            if _PAID_AI_BUDGET_EXHAUSTION:
+                budget_state = _PAID_AI_BUDGET_EXHAUSTION
+                result["monthly_ai_budget_exhausted"] = True
+                result["ai_paid_reserved_usd"] = round(
+                    float(budget_state["reserved_usd"]), 6
+                )
+                result["ai_paid_budget_cap_usd"] = float(
+                    budget_state["cap_usd"]
+                )
+                reset_at = budget_state.get("reset_at")
+                if reset_at:
+                    result["ai_paid_budget_reset_at"] = reset_at.isoformat()
+                gate_reason = (
+                    "monthly paid AI budget exhausted - every alert requires AI "
+                    "vetting; paid checks are unavailable until the next UTC month"
+                )
+            else:
+                gate_reason = (
+                    "no AI price estimate - every alert must be AI-vetted before sending"
+                )
         if gate_reason:
             result["verdict"] = "PASS"
             result["reason"] = f"blocked by steal-quality gate: {gate_reason}"
@@ -9319,7 +9712,7 @@ def run():
             # abstained on resale value, so those get two retries but cannot
             # consume a paid slot forever. Budget deferrals and total provider
             # failures do not increment this completed-abstention count.
-            retry_eligible = "no AI price" in gate_reason
+            retry_eligible = _ai_gate_is_retry_eligible(gate_reason, result)
             ai_no_price_attempts = 0
             if retry_eligible:
                 completed_ai_no_price = disposition_code_for(result) == "AI_NO_PRICE"

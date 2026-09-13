@@ -8991,10 +8991,19 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
     could therefore present a week heavy on blocked junk as if it were
     alerts the user actually received."""
 
-    def _digest_message(self, records, weekly_spend=(0.0, 0.0), starved=()):
+    def _digest_message(
+        self, records, weekly_spend=(0.0, 0.0), starved=(), budget_snapshot=None
+    ):
         captured = {}
         fake_resp = mock.Mock()
         fake_resp.raise_for_status = lambda: None
+        if budget_snapshot is None:
+            budget_snapshot = {
+                "reserved_usd": weekly_spend[1],
+                "cap_usd": m.AI_PAID_MONTHLY_BUDGET_USD,
+                "exhausted": False,
+                "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+            }
 
         def fake_post(url, data=None, headers=None, timeout=None):
             captured["message"] = data.decode("utf-8")
@@ -9002,6 +9011,7 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
 
         with mock.patch.object(m, "_read_alert_log_records", return_value=records), \
              mock.patch.object(m, "_weekly_ai_spend", return_value=weekly_spend), \
+             mock.patch.object(m, "_paid_ai_budget_snapshot", return_value=budget_snapshot), \
              mock.patch.object(m, "_persist_weekly_ai_spend_snapshot"), \
              mock.patch.object(m, "starved_searches", return_value=list(starved)), \
              mock.patch("requests.post", side_effect=fake_post):
@@ -9101,6 +9111,21 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
             weekly, current = m._weekly_ai_spend(now)
         self.assertAlmostEqual(weekly, 2.25)
         self.assertAlmostEqual(current, 3.50)
+
+    def test_digest_calls_out_system_wide_monthly_budget_exhaustion(self):
+        message = self._digest_message(
+            [],
+            weekly_spend=(0.0, 10.0),
+            budget_snapshot={
+                "reserved_usd": 10.0,
+                "cap_usd": 10.0,
+                "exhausted": True,
+                "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+            },
+        )
+        self.assertIn("AI monthly budget: EXHAUSTED", message)
+        self.assertIn("$10.000/$10.00", message)
+        self.assertIn("blocked until 2026-10-01 00:00 UTC", message)
 
     def test_starved_searches_are_surfaced_separately(self):
         message = self._digest_message([], starved=[{
@@ -9274,7 +9299,7 @@ class AlertLogPriceSemantics(unittest.TestCase):
             "reason": "excluded gender keyword in title/description",
         }
         record = self._write_and_read(result)
-        self.assertEqual(record["schema_version"], 3)
+        self.assertEqual(record["schema_version"], m.ALERT_LOG_SCHEMA_VERSION)
         self.assertEqual(record["disposition_code"], "GENDER_EXCLUDE")
         self.assertEqual(record["search_id"], search["id"])
         self.assertEqual(record["category"], "golf-equipment")
@@ -9308,6 +9333,18 @@ class AlertLogPriceSemantics(unittest.TestCase):
             m.disposition_code_for({"verdict": "DELIVERY_FAILED"}),
             "DELIVERY_FAILED",
         )
+        self.assertEqual(
+            m.disposition_code_for({
+                "verdict": "PASS",
+                "reason": "monthly paid AI budget exhausted",
+                "monthly_ai_budget_exhausted": True,
+            }),
+            "MONTHLY_BUDGET_EXHAUSTED",
+        )
+        self.assertTrue(m._ai_gate_is_retry_eligible(
+            "monthly paid AI budget exhausted",
+            {"monthly_ai_budget_exhausted": True},
+        ))
 
     def test_golf_ai_gate_inputs_are_logged_for_masked_failure_analysis(self):
         result = {
@@ -9407,7 +9444,7 @@ class AlertLogPriceSemantics(unittest.TestCase):
                 }
                 record = self._write_and_read(result, delivered=delivered)
 
-                self.assertEqual(record["schema_version"], 3)
+                self.assertEqual(record["schema_version"], m.ALERT_LOG_SCHEMA_VERSION)
                 self.assertTrue(record["ai_checked"])
                 self.assertEqual(record["delivered"], delivered)
                 self.assertEqual(

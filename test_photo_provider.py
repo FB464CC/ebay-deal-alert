@@ -17,8 +17,11 @@ Pure stdlib unittest, mirroring test_ebay_deal_alert.py's conventions. Run:
 """
 import base64
 import pathlib
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
+from datetime import datetime, timezone
 from unittest import mock
 
 import requests
@@ -72,9 +75,26 @@ class CallDeepseekJson(unittest.TestCase):
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["model"], m.DEEPSEEK_MODEL)
         self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["max_tokens"], m.DEEPSEEK_VISION_MAX_OUTPUT_TOKENS)
         content = payload["messages"][0]["content"]
         self.assertEqual(content[0]["type"], "text")
         self.assertEqual(content[1]["type"], "image_url")
+
+    def test_successful_usage_settles_peak_rate_cost(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status.return_value = None
+        fake_resp.json.return_value = {
+            "choices": [{"message": {"content": '{"a": 1}'}}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100},
+        }
+        with mock.patch.object(m, "_reserve_paid_ai_spend", return_value=True), \
+             mock.patch.object(m, "_settle_paid_ai_spend") as settle, \
+             mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": "k"}), \
+             mock.patch("requests.post", return_value=fake_resp):
+            result = m._call_deepseek_json("prompt JSON", [])
+        self.assertEqual(result, {"a": 1})
+        settle.assert_called_once_with(m.AI_PAID_VISION_RESERVATION_USD, 0.00042)
 
     def test_code_fence_stripped(self):
         fake_resp = mock.Mock()
@@ -112,6 +132,82 @@ class PaidAiSpendGuard(unittest.TestCase):
              mock.patch("requests.post") as post:
             self.assertIsNone(m._call_deepseek_json("prompt JSON", []))
         post.assert_not_called()
+
+    def test_successful_call_settles_below_the_conservative_reservation(self):
+        self.assertTrue(m._reserve_paid_ai_spend(0.005, kind="vision"))
+        self.assertTrue(m._settle_paid_ai_spend(0.005, 0.001234))
+        with closing(sqlite3.connect(m.AI_SPEND_DB_PATH)) as ledger:
+            aggregate = ledger.execute(
+                "SELECT reserved_usd, calls FROM ai_paid_spend"
+            ).fetchone()
+            accounting = ledger.execute(
+                "SELECT gross_reserved_usd, settled_credit_usd, vision_calls, "
+                "settlements FROM ai_paid_accounting"
+            ).fetchone()
+        self.assertAlmostEqual(aggregate[0], 0.001234)
+        self.assertEqual(aggregate[1], 1)
+        self.assertAlmostEqual(accounting[0], 0.005)
+        self.assertAlmostEqual(accounting[1], 0.003766)
+        self.assertEqual(accounting[2:], (1, 1))
+
+    def test_cache_mirror_restores_a_rolled_back_primary_journal(self):
+        self.assertTrue(m._reserve_paid_ai_spend(0.005, kind="vision"))
+        with closing(sqlite3.connect(m.AI_SPEND_DB_PATH)) as ledger:
+            ledger.execute("DELETE FROM ai_paid_accounting")
+            ledger.execute("UPDATE ai_paid_spend SET reserved_usd = 0, calls = 0")
+            ledger.commit()
+        snapshot = m._paid_ai_budget_snapshot(required_usd=0)
+        self.assertAlmostEqual(snapshot["reserved_usd"], 0.005)
+        self.assertEqual(snapshot["calls"], 1)
+        with closing(sqlite3.connect(m.AI_SPEND_DB_PATH)) as ledger:
+            restored = ledger.execute(
+                "SELECT gross_reserved_usd, calls FROM ai_paid_accounting"
+            ).fetchone()
+        self.assertEqual(restored, (0.005, 1))
+
+
+class PaidAiBudgetExhaustionNotification(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.db_patch = mock.patch.object(
+            m, "AI_SPEND_DB_PATH", pathlib.Path(self.tmpdir.name) / "spend.db"
+        )
+        self.seen_patch = mock.patch.object(
+            m, "DB_PATH", pathlib.Path(self.tmpdir.name) / "seen.db"
+        )
+        self.db_patch.start()
+        self.seen_patch.start()
+
+    def tearDown(self):
+        self.seen_patch.stop()
+        self.db_patch.stop()
+        self.tmpdir.cleanup()
+
+    def _snapshot(self):
+        return {
+            "month": "2026-09",
+            "reserved_usd": 10.0,
+            "calls": 2232,
+            "cap_usd": 10.0,
+            "required_usd": 0.01,
+            "exhausted": True,
+            "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+            "event_key": "2026-09:10.000000",
+        }
+
+    def test_notifies_once_across_both_persistent_ledgers(self):
+        with mock.patch.object(m, "notify_bot_down", return_value=True) as notify:
+            self.assertTrue(m._notify_paid_ai_budget_exhausted_once(self._snapshot()))
+            self.assertFalse(m._notify_paid_ai_budget_exhausted_once(self._snapshot()))
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["title"], "[AI BUDGET EXHAUSTED]")
+        self.assertIn("system-wide monthly outage", notify.call_args.args[0])
+
+    def test_failed_delivery_releases_claim_for_next_run(self):
+        with mock.patch.object(m, "notify_bot_down", side_effect=[False, True]) as notify:
+            self.assertFalse(m._notify_paid_ai_budget_exhausted_once(self._snapshot()))
+            self.assertTrue(m._notify_paid_ai_budget_exhausted_once(self._snapshot()))
+        self.assertEqual(notify.call_count, 2)
 
 
 class CallPhotoCheckRouting(unittest.TestCase):
