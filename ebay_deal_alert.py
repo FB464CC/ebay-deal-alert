@@ -507,6 +507,18 @@ EBAY_BACKOFF_MAX_MINUTES = 120
 # plausible per-run budget), "raise the limit to match demand" no longer
 # applies the way it did on Aug 9; the only lever left is pacing.
 GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
+# Only the already-free Gemini fallback is eligible for request coalescing.
+# Three real historical candidates (nine images total) returned three complete,
+# explicitly ID-mapped verdicts in one live Gemini 3.5 Flash-Lite request. Keep
+# this deliberately small: correctness and run latency matter more than the
+# model's much larger theoretical context window.
+GEMINI_BATCH_SIZE = max(1, int(_CONFIG.get("GEMINI_BATCH_SIZE", 3)))
+# The generateContent image guide caps the complete inline request at 20 MB.
+# Base64 expands raw bytes by about 4/3, so 12 MB leaves roughly 4 MB for the
+# three long category prompts, schema, JSON framing, and future small drift.
+GEMINI_BATCH_MAX_RAW_IMAGE_BYTES = max(
+    1, int(_CONFIG.get("GEMINI_BATCH_MAX_RAW_IMAGE_BYTES", 12_000_000))
+)
 # Soft fairness share for the normal shared pool. While both golf and non-golf
 # are waiting, up to this many normal per-run slots are kept reachable by golf
 # and the remainder by other categories. Either side can reclaim capacity the
@@ -3833,7 +3845,8 @@ def _gemini_key_usage_snapshot():
         ]
 
 
-def _call_gemini_json(prompt, image_parts, timeout=20):
+def _call_gemini_parts_json(parts, timeout=20, generation_config=None):
+    """Send one Gemini request through the existing credential pool."""
     key_candidates = _gemini_key_candidates()
     if not _configured_gemini_api_keys():
         logger.warning(
@@ -3845,13 +3858,12 @@ def _call_gemini_json(prompt, image_parts, timeout=20):
         return None
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 
+    config = {"responseMimeType": "application/json"}
+    if generation_config:
+        config.update(generation_config)
     payload = {
-        "contents": [{
-            "parts": [{"text": prompt}] + image_parts,
-        }],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-        },
+        "contents": [{"parts": parts}],
+        "generationConfig": config,
     }
     # Keep credentials out of the URL so an HTTP exception cannot print a key
     # in logs. A 429 disables only that credential slot for the rest of this
@@ -3893,6 +3905,164 @@ def _call_gemini_json(prompt, image_parts, timeout=20):
         return result
     logger.warning("Gemini call failed: every available credential slot returned 429")
     return None
+
+
+def _call_gemini_json(prompt, image_parts, timeout=20):
+    return _call_gemini_parts_json(
+        [{"text": prompt}] + list(image_parts), timeout=timeout
+    )
+
+
+def _parse_gemini_batch_results(payload, candidate_ids):
+    """Map batch verdicts by explicit ID, failing closed per candidate.
+
+    Array position is never consulted. Missing, duplicated, malformed, and
+    unexpected IDs cannot cause one listing's verdict to be applied to another.
+    The returned mapping always contains every requested ID; an affected value
+    is None so the normal no-AI gate leaves that listing retryable.
+    """
+    expected = [str(candidate_id) for candidate_id in candidate_ids]
+    results = {candidate_id: None for candidate_id in expected}
+    if len(set(expected)) != len(expected):
+        logger.error("Gemini batch request contained duplicate candidate IDs")
+        return results
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        logger.warning("Gemini batch response omitted the results array")
+        return results
+
+    seen = set()
+    duplicated = set()
+    for entry in payload["results"]:
+        if not isinstance(entry, dict):
+            continue
+        candidate_id = entry.get("candidate_id")
+        verdict = entry.get("result")
+        if candidate_id not in results:
+            logger.warning("Gemini batch response returned an unexpected candidate ID")
+            continue
+        if candidate_id in seen:
+            duplicated.add(candidate_id)
+            results[candidate_id] = None
+            continue
+        seen.add(candidate_id)
+        if isinstance(verdict, dict):
+            results[candidate_id] = verdict
+    for candidate_id in duplicated:
+        results[candidate_id] = None
+    missing = sum(value is None for value in results.values())
+    if missing:
+        logger.warning(
+            "Gemini batch response left %s/%s candidate verdicts unusable; "
+            "those listings will fail closed and retry later",
+            missing,
+            len(results),
+        )
+    return results
+
+
+def _gemini_batch_raw_image_bytes(requests_to_batch):
+    """Return the raw image payload size, or an over-limit sentinel if malformed."""
+    total = 0
+    try:
+        for request in requests_to_batch:
+            for content, _mime_type in request["images"]:
+                total += len(content)
+    except (KeyError, TypeError):
+        return GEMINI_BATCH_MAX_RAW_IMAGE_BYTES + 1
+    return total
+
+
+def _call_gemini_batch_json(requests_to_batch, timeout=20):
+    """Evaluate independent photo checks in one synchronous Gemini request."""
+    candidate_ids = [str(request["candidate_id"]) for request in requests_to_batch]
+    if not requests_to_batch:
+        return {}
+    if _gemini_batch_raw_image_bytes(requests_to_batch) > GEMINI_BATCH_MAX_RAW_IMAGE_BYTES:
+        logger.warning(
+            "Gemini batch exceeds the safe inline-image payload ceiling; "
+            "all affected listings will fail closed and retry later"
+        )
+        return {candidate_id: None for candidate_id in candidate_ids}
+    parts = [{
+        "text": (
+            f"Evaluate exactly {len(requests_to_batch)} independent marketplace "
+            "candidates. Candidate boundaries are authoritative. For each candidate, "
+            "use only the text and images between its BEGIN/END markers. Never "
+            "transfer a brand, condition, count, damage finding, price, or any other "
+            "evidence between candidates. Return one result for every candidate, "
+            "keyed by the exact candidate_id. Do not omit, merge, or rename IDs."
+        )
+    }]
+    for request in requests_to_batch:
+        candidate_id = str(request["candidate_id"])
+        parts.append({
+            "text": (
+                f"BEGIN CANDIDATE {candidate_id}\n"
+                f"The following instructions and listing text apply only to "
+                f"{candidate_id}:\n{request['prompt']}\n"
+                f"IMAGES FOR {candidate_id} BEGIN"
+            )
+        })
+        parts.extend(
+            _make_gemini_inline_part(content, mime_type)
+            for content, mime_type in request["images"]
+        )
+        parts.append({
+            "text": (
+                f"IMAGES FOR {candidate_id} END\n"
+                f"END CANDIDATE {candidate_id}"
+            )
+        })
+    parts.append({
+        "text": (
+            "Return strict JSON only with this wrapper: "
+            '{"results":[{"candidate_id":"exact ID","result":'
+            "{...the complete verdict object requested inside that candidate prompt...}}]}. "
+            "The results array must contain exactly one object for each requested "
+            "candidate_id. candidate_id is a mapping key, never an array-position "
+            "convention."
+        )
+    })
+    payload = _call_gemini_parts_json(
+        parts,
+        timeout=timeout,
+        generation_config={
+            "temperature": 0,
+            "maxOutputTokens": min(65536, 2048 * len(requests_to_batch)),
+            "responseJsonSchema": {
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array",
+                        "minItems": len(requests_to_batch),
+                        "maxItems": len(requests_to_batch),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "candidate_id": {
+                                    "type": "string",
+                                    "enum": candidate_ids,
+                                },
+                                # Category prompts intentionally have different
+                                # verdict shapes. The outer mapping is strict;
+                                # the existing per-category merge/gates validate
+                                # the inner verdict exactly as for an unbatched call.
+                                "result": {
+                                    "type": "object",
+                                    "additionalProperties": True,
+                                },
+                            },
+                            "required": ["candidate_id", "result"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["results"],
+                "additionalProperties": False,
+            },
+        },
+    )
+    return _parse_gemini_batch_results(payload, candidate_ids)
 
 
 def _make_deepseek_image_block(content, mime_type):
@@ -4541,9 +4711,15 @@ def _merge_ai_counterfeit_assessment(result, ai_result):
     result["counterfeit_reason"] = reason if isinstance(reason, str) and reason else None
 
 
+def _finish_or_prepare_photo_check(prompt, images, hard_stop, prepare_only):
+    if prepare_only:
+        return {"prompt": prompt, "images": images}
+    return _call_photo_check(prompt, images, hard_stop=hard_stop)
+
+
 def check_photos_with_gemini(
     listing, category="other", current_month_name=None, hard_stop=None,
-    search_query=None,
+    search_query=None, prepare_only=False,
 ):
     # Use Google's rolling "-latest" alias instead of a pinned model name -
     # gemini-2.0-flash and gemini-2.5-flash/-flash-lite all 404 for this key
@@ -4716,7 +4892,9 @@ def check_photos_with_gemini(
             "any uncertainty, including the basis for the count, without making a price "
             "or resale-value judgment."
         )
-        return _call_photo_check(poker_chips_prompt, images, hard_stop=hard_stop)
+        return _finish_or_prepare_photo_check(
+            poker_chips_prompt, images, hard_stop, prepare_only
+        )
 
     if category == "golf-equipment":
         # Entirely different prompt/JSON shape from the clothing one below -
@@ -4845,7 +5023,9 @@ def check_photos_with_gemini(
             "stock-looking photos. Explain briefly in counterfeit_reason, or leave it "
             "empty if not suspected."
         )
-        return _call_photo_check(golf_prompt, images, hard_stop=hard_stop)
+        return _finish_or_prepare_photo_check(
+            golf_prompt, images, hard_stop, prepare_only
+        )
 
     if category == "watches":
         # Real live miss: an "Oris Star Automatic" ($149.99) was genuinely
@@ -4955,7 +5135,9 @@ def check_photos_with_gemini(
             "not merely because the photos cannot prove a fake. Explain the evidence "
             "briefly in counterfeit_reason, or leave it empty if not suspected."
         )
-        return _call_photo_check(watch_prompt, images, hard_stop=hard_stop)
+        return _finish_or_prepare_photo_check(
+            watch_prompt, images, hard_stop, prepare_only
+        )
 
     # Keep the shared clothing schema, but add only category calibrations
     # supported by this audit's production rows and completed-sale evidence.
@@ -5099,7 +5281,7 @@ def check_photos_with_gemini(
         f"{category_specific_guidance}"
     )
 
-    return _call_photo_check(prompt, images, hard_stop=hard_stop)
+    return _finish_or_prepare_photo_check(prompt, images, hard_stop, prepare_only)
 
 
 def draft_resale_listing(image_paths):
@@ -8265,6 +8447,62 @@ def _is_fresh_scout_candidate(candidate, now):
     return timedelta(0) <= age <= timedelta(minutes=SCOUT_FRESH_PRIORITY_MINUTES)
 
 
+def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
+    """Re-run gates whose evidence may arrive with an eBay detail fetch.
+
+    Non-eBay candidates already had their description in PASS 1, so this is
+    normally a no-op for them. Keeping the checks pure lets a Gemini batch
+    look ahead by at most two candidates without ever reviewing an eBay item
+    before its condition and description have passed the same safety gates as
+    the current item.
+    """
+    structured_fail = _ebay_structured_condition_hard_fail_reason(listing)
+    if structured_fail:
+        return structured_fail
+
+    if category == "poker-chips":
+        poker_fail = poker_pre_ai_hard_fail_reason(
+            listing.get("title"), listing.get("description")
+        )
+        if poker_fail:
+            return f"poker pre-AI reject: {poker_fail}"
+    elif category == "watches":
+        watch_fail = watch_pre_ai_hard_fail_reason(listing, result.get("price"))
+        if watch_fail:
+            return watch_fail
+
+    if is_jacket_only_suit_listing(
+        listing.get("title", ""),
+        saved_search.get("query", ""),
+        listing.get("description"),
+        category=category,
+    ):
+        return "incomplete item: jacket only / blazer only, no matching pants or trousers"
+
+    if category == "tailoring" and is_wrong_suit_body_size(
+        listing.get("title", ""), listing.get("description")
+    ):
+        return "suit/blazer body size (chest/cut) outside 41L-43L in description"
+
+    if listing.get("description"):
+        late_haystack = (
+            f"{listing.get('title', '').lower()} {listing['description'].lower()}"
+        )
+        text_fail = _text_safety_hard_fails(late_haystack)
+        if text_fail is None:
+            condition_hit = matched_keyword(
+                late_haystack, CONDITION_HARD_FAIL_KEYWORDS
+            )
+            if condition_hit is not None:
+                text_fail = (
+                    "condition hard-fail keyword in title/description: "
+                    f"{condition_hit!r}"
+                )
+        if text_fail:
+            return text_fail
+    return None
+
+
 def run():
     global SAVED_SEARCHES, _PAID_AI_BUDGET_EXHAUSTION
     _PAID_AI_BUDGET_EXHAUSTION = None
@@ -9419,8 +9657,21 @@ def run():
     gemini_budget_logged = False
     ebay_scrape_budget_logged = False
     scout_budget_logged = False
+    prefetched_gemini_results = {}
+    free_fallback_batching = False
+    if AI_PHOTO_PROVIDER == "deepseek" and GEMINI_BATCH_SIZE > 1:
+        paid_snapshot = _paid_ai_budget_snapshot(
+            required_usd=AI_PAID_VISION_RESERVATION_USD
+        )
+        if paid_snapshot and paid_snapshot["exhausted"]:
+            # Only coalesce requests when the paid primary is already known to
+            # be unavailable before this run's first vision attempt. If paid
+            # capacity exists, every DeepSeek request and any exceptional
+            # fallback retain their established one-candidate shape.
+            _record_paid_ai_budget_exhaustion(paid_snapshot)
+            free_fallback_batching = True
     delivery_failures = []
-    for candidate in review_candidates:
+    for candidate_index, candidate in enumerate(review_candidates):
         # PASS 3 has its own PASS/delivery append paths. Keep the same
         # within-run bound here after PASS 1 has finished collecting.
         prune_alert_log_if_oversized()
@@ -9543,133 +9794,238 @@ def run():
                     and not listing.get("ebay_condition_id")
                 )
             )
-            if is_ebay_source and needs_ebay_details:
+            details_already_attempted = listing.pop(
+                "_gemini_batch_ebay_details_attempted", False
+            )
+            if is_ebay_source and needs_ebay_details and not details_already_attempted:
                 if _run_deadline_reached("before an eBay item-detail fetch"):
                     break
                 details = fetch_ebay_item_details(token, item_id)
                 if details:
                     listing.update(details)
 
-            # Critical for scrape-lane watches: the first structured check
-            # ran before item details existed. Real delivered Oris item
-            # 287464714587 was conditionId 7000 on eBay but reached AI with
-            # no condition fields because this re-check did not exist.
-            late_structured_condition_fail = (
-                _ebay_structured_condition_hard_fail_reason(listing)
+            # Critical for eBay/scrape candidates: title-only PASS 1 could not
+            # see structured condition or description-only safety facts. The
+            # shared pure helper is also used by the bounded batch look-ahead,
+            # so no future eBay candidate can enter a Gemini request first.
+            late_hard_fail = _late_pre_ai_hard_fail_reason(
+                listing, result, category, saved_search
             )
-            if late_structured_condition_fail:
+            if late_hard_fail:
                 logger.info(
-                    "Skipping %s: late eBay structured-condition hard-fail - %s",
+                    "Skipping %s: late pre-AI hard-fail - %s",
                     item_id,
-                    late_structured_condition_fail,
+                    late_hard_fail,
                 )
                 result["verdict"] = "PASS"
-                result["reason"] = late_structured_condition_fail
+                result["reason"] = late_hard_fail
                 append_alert_log(result)
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
-
-            # Category-specific text/price facts can also arrive only in an
-            # eBay detail description. Re-run the same pure helpers before
-            # vision; no threshold is relaxed or inferred here.
-            late_category_fail = None
-            if category == "poker-chips":
-                poker_fail = poker_pre_ai_hard_fail_reason(
-                    listing.get("title"), listing.get("description")
-                )
-                if poker_fail:
-                    late_category_fail = f"poker pre-AI reject: {poker_fail}"
-            elif category == "watches":
-                late_category_fail = watch_pre_ai_hard_fail_reason(
-                    listing, result.get("price")
-                )
-            if late_category_fail:
-                logger.info(
-                    "Skipping %s: late category pre-AI hard-fail - %s",
-                    item_id,
-                    late_category_fail,
-                )
-                result["verdict"] = "PASS"
-                result["reason"] = late_category_fail
-                append_alert_log(result)
-                mark_seen(conn, item_id, fingerprint, total_price)
-                continue
-            # eBay's description only becomes available HERE (it costs a
-            # separate per-item call, deliberately budget-gated), so the
-            # PASS 1 jacket-only check ran title-only for eBay listings.
-            # Re-check now that the disclaimer text is readable - see
-            # is_jacket_only_suit_listing()'s docstring for why the
-            # description is the only place "jacket only"/"pants not
-            # included" usually appears on an otherwise complete-looking
-            # "Suit" title. Cheap (pure regex, no extra call) and catches
-            # the exact case the user reported.
-            if is_jacket_only_suit_listing(
-                listing.get("title", ""), saved_search["query"], listing.get("description"),
-                category=category,
-            ):
-                logger.info(
-                    "Skipping %s: description discloses jacket/blazer-only, no pants "
-                    "(standing no-jackets rule)",
-                    item_id,
-                )
-                result["verdict"] = "PASS"
-                result["reason"] = (
-                    "incomplete item: jacket only / blazer only, no matching pants or trousers"
-                )
-                append_alert_log(result)
-                mark_seen(conn, item_id, fingerprint, total_price)
-                continue
-            # Same gap as the jacket-only re-check above, for the suit
-            # body-size hard-fail: PASS 1 ran it title-only for eBay
-            # listings too, since the description doesn't exist yet then.
-            # Re-check now that it's readable.
-            if category == "tailoring" and is_wrong_suit_body_size(
-                listing.get("title", ""), listing.get("description")
-            ):
-                logger.info(
-                    "Skipping %s: description reveals suit/blazer body size outside 41L-43L on re-check",
-                    item_id,
-                )
-                result["verdict"] = "PASS"
-                result["reason"] = "suit/blazer body size (chest/cut) outside 41L-43L in description"
-                append_alert_log(result)
-                mark_seen(conn, item_id, fingerprint, total_price)
-                continue
-            # Same gap as the jacket-only re-check above: PASS 1 ran EVERY
-            # cheap deterministic text hard-fail (counterfeit signals,
-            # condition hard-fails, gender/pet/packaging exclusions) against
-            # title + an empty description, since the eBay description
-            # doesn't exist yet at that point. A signal that only appears in
-            # the real description (e.g. "inspired handmade tribute" for a
-            # counterfeit, or a condition hard-fail word) was invisible then
-            # and would otherwise burn a scarce paid vision call below for
-            # nothing. Re-run them now that the real text is in hand.
-            if listing.get("description"):
-                late_haystack = f"{listing.get('title', '').lower()} {listing['description'].lower()}"
-                late_hard_fail = _text_safety_hard_fails(late_haystack)
-                if late_hard_fail is None:
-                    condition_hit = matched_keyword(late_haystack, CONDITION_HARD_FAIL_KEYWORDS)
-                    if condition_hit is not None:
-                        late_hard_fail = f"condition hard-fail keyword in title/description: {condition_hit!r}"
-                if late_hard_fail:
-                    logger.info(
-                        "Skipping %s: description hard-fail on re-check (avoided a wasted AI call) - %s",
-                        item_id,
-                        late_hard_fail,
-                    )
-                    result["verdict"] = "PASS"
-                    result["reason"] = late_hard_fail
-                    append_alert_log(result)
-                    mark_seen(conn, item_id, fingerprint, total_price)
-                    continue
             if _run_deadline_reached("before an AI vision check"):
                 break
-            ai_result = check_photos_with_gemini(
-                listing,
-                category=category,
-                current_month_name=current_month_name,
-                hard_stop=hard_stop,
-            )
+            if item_id in prefetched_gemini_results:
+                # Presence, rather than truthiness, matters: None is an
+                # intentionally fail-closed malformed/missing batch verdict.
+                ai_result = prefetched_gemini_results.pop(item_id)
+            elif (
+                free_fallback_batching
+                and not use_reserved_auction_slot
+            ):
+                # The current candidate has already completed every late
+                # detail/description gate above, including eBay enrichment,
+                # so it is safe to make it the first member of a batch.
+                prepared = check_photos_with_gemini(
+                    listing,
+                    category=category,
+                    current_month_name=current_month_name,
+                    hard_stop=hard_stop,
+                    prepare_only=True,
+                )
+                requests_to_batch = []
+                if prepared:
+                    requests_to_batch.append({
+                        "candidate_id": item_id,
+                        "prompt": prepared["prompt"],
+                        "images": prepared["images"],
+                    })
+
+                if is_isolated_scrape:
+                    current_lane = "isolated_scrape"
+                    remaining_lane_slots = max(
+                        0, EBAY_SCRAPE_AI_CHECK_LIMIT - ebay_scrape_ai_calls
+                    )
+                elif is_scout:
+                    current_lane = "scout"
+                    remaining_lane_slots = max(
+                        0, SCOUT_AI_CHECK_LIMIT - scout_ai_calls
+                    )
+                else:
+                    current_lane = "shared"
+                    remaining_lane_slots = max(0, GEMINI_CALL_LIMIT - gemini_calls)
+
+                # A current item with no usable photos has no request to
+                # anchor. Do not prefetch a future-only batch and then try to
+                # read that response as this item's verdict.
+                wanted_extras = (
+                    min(
+                        GEMINI_BATCH_SIZE - len(requests_to_batch),
+                        remaining_lane_slots,
+                    )
+                    if prepared else 0
+                )
+                for future in review_candidates[candidate_index + 1:]:
+                    if wanted_extras <= 0:
+                        break
+                    future_listing = future.get("listing") or {}
+                    future_result = future.get("result") or {}
+                    future_item_id = future.get("item_id")
+                    # Candidates known to finalize before vision consume no
+                    # lane slot, so looking past them preserves call order.
+                    future_attempts = no_price_attempts_by_item.get(
+                        future_item_id, 0
+                    )
+                    if future_attempts >= AI_NO_PRICE_MAX_ATTEMPTS:
+                        continue
+                    future_pre_block = is_blocked_by_steal_quality_gate(
+                        future_result, category=future.get("category")
+                    )
+                    if (
+                        future_pre_block
+                        and "no AI price" not in future_pre_block
+                    ):
+                        continue
+
+                    future_is_scrape = bool(
+                        future_listing.get("_from_scrape_lane")
+                    )
+                    future_is_scout = bool(
+                        future_listing.get("_from_scout_queue")
+                    )
+                    future_is_shared_scrape = _is_shared_ai_scrape_candidate(
+                        future
+                    )
+                    if future_is_scrape and not future_is_shared_scrape:
+                        future_lane = "isolated_scrape"
+                    elif future_is_scout:
+                        future_lane = "scout"
+                    else:
+                        future_lane = "shared"
+                    # Never jump across another counter lane. For an adjacent
+                    # eBay candidate, do its already-budgeted detail fetch and
+                    # the exact same late gates now, before downloading images
+                    # or placing it in this request. Non-eBay descriptions were
+                    # already available to PASS 1.
+                    future_is_ebay = (
+                        not future_listing.get("platform")
+                        or future_listing.get("platform") == "ebay_scraped"
+                    )
+                    if future_lane != current_lane:
+                        break
+                    future_saved_search = future.get("saved_search") or {}
+                    future_needs_ebay_details = (
+                        not future_listing.get("description")
+                        or (
+                            not future_listing.get("ebay_condition")
+                            and not future_listing.get("ebay_condition_id")
+                        )
+                    )
+                    if future_is_ebay and future_needs_ebay_details:
+                        if _run_deadline_reached(
+                            "before a batched eBay item-detail fetch"
+                        ):
+                            break
+                        details = fetch_ebay_item_details(token, future_item_id)
+                        # The normal iteration must not repeat even a failed
+                        # external request; it will pop this internal marker
+                        # and re-run the pure gates before using the cached ID.
+                        future_listing["_gemini_batch_ebay_details_attempted"] = True
+                        if details:
+                            future_listing.update(details)
+                    future_late_fail = _late_pre_ai_hard_fail_reason(
+                        future_listing,
+                        future_result,
+                        future.get("category", "other"),
+                        future_saved_search,
+                    )
+                    if future_late_fail:
+                        # Preserve the normal final-disposition/logging path.
+                        # This candidate consumes its historical per-run slot,
+                        # so do not jump past it to manufacture a fuller batch.
+                        break
+                    future_prepared = check_photos_with_gemini(
+                        future_listing,
+                        category=future.get("category", "other"),
+                        current_month_name=current_month_name,
+                        hard_stop=hard_stop,
+                        prepare_only=True,
+                    )
+                    if not future_prepared:
+                        break
+                    future_request = {
+                        "candidate_id": future_item_id,
+                        "prompt": future_prepared["prompt"],
+                        "images": future_prepared["images"],
+                    }
+                    if _gemini_batch_raw_image_bytes(
+                        [*requests_to_batch, future_request]
+                    ) > GEMINI_BATCH_MAX_RAW_IMAGE_BYTES:
+                        # Preserve candidate order. The oversized future item
+                        # will take its established one-item route on its turn.
+                        break
+                    requests_to_batch.append(future_request)
+                    wanted_extras -= 1
+
+                if len(requests_to_batch) > 1:
+                    batch_timeout = _deadline_timeout(
+                        hard_stop, GEMINI_VISION_TIMEOUT_SECONDS
+                    )
+                    try:
+                        batch_results = (
+                            _call_gemini_batch_json(
+                                requests_to_batch, timeout=batch_timeout
+                            )
+                            if batch_timeout is not None else
+                            {
+                                request["candidate_id"]: None
+                                for request in requests_to_batch
+                            }
+                        )
+                    except (
+                        requests.exceptions.RequestException,
+                        KeyError,
+                        IndexError,
+                        json.JSONDecodeError,
+                    ) as exc:
+                        logger.warning(
+                            "Gemini photo batch failed; all affected listings "
+                            "will fail closed and retry later: %s",
+                            exc,
+                        )
+                        batch_results = {
+                            request["candidate_id"]: None
+                            for request in requests_to_batch
+                        }
+                    prefetched_gemini_results.update(batch_results)
+                    ai_result = prefetched_gemini_results.pop(item_id)
+                elif prepared:
+                    # A batch of one is not a batching win. Preserve the
+                    # normal router, including its exhausted paid-primary
+                    # check, while reusing the images already downloaded.
+                    ai_result = _call_photo_check(
+                        prepared["prompt"],
+                        prepared["images"],
+                        hard_stop=hard_stop,
+                    )
+                else:
+                    ai_result = None
+            else:
+                ai_result = check_photos_with_gemini(
+                    listing,
+                    category=category,
+                    current_month_name=current_month_name,
+                    hard_stop=hard_stop,
+                )
             if _PAID_AI_BUDGET_EXHAUSTION:
                 _notify_paid_ai_budget_exhausted_once(
                     _PAID_AI_BUDGET_EXHAUSTION

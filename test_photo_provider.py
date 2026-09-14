@@ -129,6 +129,117 @@ class GeminiKeyPool(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
 
 
+class GeminiSynchronousBatching(unittest.TestCase):
+    @staticmethod
+    def _request(candidate_id, content=b"img"):
+        return {
+            "candidate_id": candidate_id,
+            "prompt": f"prompt for {candidate_id}",
+            "images": [(content, "image/jpeg")],
+        }
+
+    def test_results_are_mapped_by_explicit_id_not_array_position(self):
+        payload = {
+            "results": [
+                {"candidate_id": "candidate-c", "result": {"value": "C"}},
+                {"candidate_id": "candidate-a", "result": {"value": "A"}},
+                {"candidate_id": "candidate-b", "result": {"value": "B"}},
+            ]
+        }
+
+        actual = m._parse_gemini_batch_results(
+            payload, ["candidate-a", "candidate-b", "candidate-c"]
+        )
+
+        self.assertEqual(actual["candidate-a"], {"value": "A"})
+        self.assertEqual(actual["candidate-b"], {"value": "B"})
+        self.assertEqual(actual["candidate-c"], {"value": "C"})
+
+    def test_malformed_missing_and_duplicate_entries_fail_closed_per_candidate(self):
+        payload = {
+            "results": [
+                {"candidate_id": "good", "result": {"looks_good": True}},
+                {"candidate_id": "duplicate", "result": {"looks_good": True}},
+                {"candidate_id": "duplicate", "result": {"looks_good": False}},
+                {"candidate_id": "wrong-shape", "result": "not an object"},
+                {"candidate_id": "not-requested", "result": {"looks_good": True}},
+            ]
+        }
+
+        actual = m._parse_gemini_batch_results(
+            payload, ["good", "duplicate", "wrong-shape", "missing"]
+        )
+
+        self.assertEqual(actual["good"], {"looks_good": True})
+        self.assertIsNone(actual["duplicate"])
+        self.assertIsNone(actual["wrong-shape"])
+        self.assertIsNone(actual["missing"])
+        self.assertEqual(set(actual), {"good", "duplicate", "wrong-shape", "missing"})
+
+    def test_batch_payload_has_boundaries_and_an_exact_outer_schema(self):
+        requests_to_batch = [self._request("vinted:1"), self._request("vinted:2")]
+        response = {
+            "results": [
+                {"candidate_id": "vinted:2", "result": {"value": 2}},
+                {"candidate_id": "vinted:1", "result": {"value": 1}},
+            ]
+        }
+        with mock.patch.object(
+            m, "_call_gemini_parts_json", return_value=response
+        ) as call:
+            actual = m._call_gemini_batch_json(requests_to_batch)
+
+        self.assertEqual(actual, {"vinted:1": {"value": 1}, "vinted:2": {"value": 2}})
+        parts = call.call_args.args[0]
+        text_parts = "\n".join(part["text"] for part in parts if "text" in part)
+        self.assertIn("BEGIN CANDIDATE vinted:1", text_parts)
+        self.assertIn("END CANDIDATE vinted:1", text_parts)
+        self.assertIn("BEGIN CANDIDATE vinted:2", text_parts)
+        self.assertIn("END CANDIDATE vinted:2", text_parts)
+        self.assertEqual(
+            sum("inline_data" in part for part in parts), 2,
+            "each candidate's images must stay between its own explicit markers",
+        )
+        schema = call.call_args.kwargs["generation_config"]["responseJsonSchema"]
+        results_schema = schema["properties"]["results"]
+        self.assertEqual(results_schema["minItems"], 2)
+        self.assertEqual(results_schema["maxItems"], 2)
+        self.assertEqual(
+            set(results_schema["items"]["properties"]["candidate_id"]["enum"]),
+            {"vinted:1", "vinted:2"},
+        )
+        self.assertEqual(
+            set(results_schema["items"]["required"]), {"candidate_id", "result"}
+        )
+
+    def test_oversized_inline_batch_fails_closed_without_network_call(self):
+        requests_to_batch = [self._request("a", b"aa"), self._request("b", b"bb")]
+        with mock.patch.object(m, "GEMINI_BATCH_MAX_RAW_IMAGE_BYTES", 3), \
+             mock.patch.object(m, "_call_gemini_parts_json") as call:
+            actual = m._call_gemini_batch_json(requests_to_batch)
+
+        self.assertEqual(actual, {"a": None, "b": None})
+        call.assert_not_called()
+
+    def test_prepare_only_downloads_once_without_calling_a_provider(self):
+        listing = {
+            "itemId": "vinted:prepare",
+            "title": "Ermenegildo Zegna Wool Sweater",
+            "price": {"value": 50, "currency": "USD"},
+            "image": {"imageUrl": "https://example.test/image.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"photo", "image/jpeg")
+        ), mock.patch.object(m, "_call_photo_check") as photo_check:
+            prepared = m.check_photos_with_gemini(
+                listing, category="knitwear", prepare_only=True
+            )
+
+        self.assertEqual(prepared["images"], [(b"photo", "image/jpeg")])
+        self.assertIn("Ermenegildo Zegna Wool Sweater", prepared["prompt"])
+        photo_check.assert_not_called()
+
+
 class CallDeepseekJson(unittest.TestCase):
     def setUp(self):
         self.spend_patch = mock.patch.object(m, "_reserve_paid_ai_spend", return_value=True)

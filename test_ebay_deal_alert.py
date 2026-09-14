@@ -7003,6 +7003,9 @@ class RunIntegration(unittest.TestCase):
         # the AI budget, no auction lane unless a test asks for one.
         self._patch("GEMINI_INTER_CALL_SLEEP_SECONDS", 0)
         self._patch("GEMINI_CALL_LIMIT", 3)
+        # Existing orchestration tests exercise the historical one-candidate
+        # path unless they explicitly opt into and mock synchronous batching.
+        self._patch("GEMINI_BATCH_SIZE", 1)
         self._patch("EBAY_AUCTION_SEARCHES", [])
 
         # Every external edge. Anything left unpatched here is a real
@@ -7096,6 +7099,341 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(self.ai_calls), 2, "both REVIEW candidates get an AI check")
         self.assertFalse(m.is_new(self._db(), "v1|297183440152|0"),
                          "a hard-failed listing is a final disposition - mark it seen")
+
+    def test_exhausted_paid_lane_batches_three_gemini_fallback_outcomes(self):
+        self._patch("AI_PHOTO_PROVIDER", "deepseek")
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: {
+                "month": "2026-09", "reserved_usd": 10.0, "calls": 2232,
+                "cap_usd": 10.0, "required_usd": required_usd,
+                "exhausted": True, "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+                "event_key": "2026-09:10.000000",
+            },
+        )
+        self._patch("_notify_paid_ai_budget_exhausted_once", mock.Mock(return_value=False))
+        prepared_ids = []
+        batch_calls = []
+
+        def prepare_photo(listing, category="other", current_month_name=None,
+                          hard_stop=None, search_query=None, prepare_only=False):
+            self.assertTrue(prepare_only, "exhausted fallback candidates should be prepared, not sent singly")
+            candidate_id = listing["itemId"]
+            prepared_ids.append(candidate_id)
+            return {"prompt": f"prompt for {candidate_id}",
+                    "images": [(candidate_id.encode(), "image/jpeg")]}
+
+        def batch_photo(requests_to_batch, timeout=20):
+            ids = [request["candidate_id"] for request in requests_to_batch]
+            batch_calls.append(ids)
+            return {candidate_id: dict(self.AI_STEAL) for candidate_id in ids}
+
+        self._patch("check_photos_with_gemini", prepare_photo)
+        self._patch("_call_gemini_batch_json", batch_photo)
+        listings = [
+            p.make_listing("vinted", "batch-1", "Ermenegildo Zegna Cashmere Sweater Navy", 20,
+                           "https://example.test/batch-1", image_url="https://example.test/1.jpg"),
+            p.make_listing("vinted", "batch-2", "Ermenegildo Zegna Cashmere Sweater Grey", 21,
+                           "https://example.test/batch-2", image_url="https://example.test/2.jpg"),
+            p.make_listing("vinted", "batch-3", "Ermenegildo Zegna Cashmere Sweater Green", 22,
+                           "https://example.test/batch-3", image_url="https://example.test/3.jpg"),
+        ]
+        self._serve({
+            "query": "zegna sweater", "category": "knitwear", "max_price": 400,
+            "category_id": "260012", "enabled": True, "profile": "fast",
+        }, listings)
+
+        m.run()
+
+        expected_ids = {"vinted:batch-1", "vinted:batch-2", "vinted:batch-3"}
+        self.assertEqual(set(prepared_ids), expected_ids)
+        self.assertEqual(len(batch_calls), 1)
+        self.assertEqual(set(batch_calls[0]), expected_ids)
+        self.assertEqual(
+            {alert["listing"]["itemId"] for alert in self.alerts}, expected_ids,
+            "one Gemini request should safely produce three independently gated outcomes",
+        )
+
+    def test_available_paid_lane_keeps_one_deepseek_request_per_candidate(self):
+        self._patch("AI_PHOTO_PROVIDER", "deepseek")
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: {
+                "month": "2026-09", "reserved_usd": 1.0, "calls": 100,
+                "cap_usd": 10.0, "required_usd": required_usd,
+                "exhausted": False, "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+                "event_key": "2026-09:10.000000",
+            },
+        )
+        batch_photo = self._patch("_call_gemini_batch_json", mock.Mock())
+        listings = [
+            p.make_listing("vinted", "paid-1", "Ermenegildo Zegna Cashmere Sweater Navy", 20,
+                           "https://example.test/paid-1", image_url="https://example.test/1.jpg"),
+            p.make_listing("vinted", "paid-2", "Ermenegildo Zegna Cashmere Sweater Grey", 21,
+                           "https://example.test/paid-2", image_url="https://example.test/2.jpg"),
+            p.make_listing("vinted", "paid-3", "Ermenegildo Zegna Cashmere Sweater Green", 22,
+                           "https://example.test/paid-3", image_url="https://example.test/3.jpg"),
+        ]
+        self._serve({
+            "query": "zegna sweater", "category": "knitwear", "max_price": 400,
+            "category_id": "260012", "enabled": True, "profile": "fast",
+        }, listings)
+
+        m.run()
+
+        batch_photo.assert_not_called()
+        self.assertEqual(
+            set(self.ai_calls), {"vinted:paid-1", "vinted:paid-2", "vinted:paid-3"}
+        )
+
+    def test_unpreparable_current_candidate_does_not_anchor_a_future_only_batch(self):
+        self._patch("AI_PHOTO_PROVIDER", "deepseek")
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: {
+                "month": "2026-09", "reserved_usd": 10.0, "calls": 2232,
+                "cap_usd": 10.0, "required_usd": required_usd,
+                "exhausted": True, "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+                "event_key": "2026-09:10.000000",
+            },
+        )
+        self._patch("_notify_paid_ai_budget_exhausted_once", mock.Mock(return_value=False))
+
+        def prepare_photo(listing, category="other", current_month_name=None,
+                          hard_stop=None, search_query=None, prepare_only=False):
+            candidate_id = listing["itemId"]
+            if candidate_id == "vinted:no-photos":
+                return None
+            return {"prompt": f"prompt for {candidate_id}",
+                    "images": [(candidate_id.encode(), "image/jpeg")]}
+
+        batches = []
+
+        def batch_photo(requests_to_batch, timeout=20):
+            ids = [request["candidate_id"] for request in requests_to_batch]
+            batches.append(ids)
+            return {candidate_id: dict(self.AI_STEAL) for candidate_id in ids}
+
+        self._patch("check_photos_with_gemini", prepare_photo)
+        self._patch("_call_gemini_batch_json", batch_photo)
+        listings = [
+            p.make_listing("vinted", "no-photos", "Ermenegildo Zegna Cashmere Sweater Navy", 20,
+                           "https://example.test/no-photos"),
+            p.make_listing("vinted", "photos-2", "Ermenegildo Zegna Cashmere Sweater Grey", 21,
+                           "https://example.test/photos-2", image_url="https://example.test/2.jpg"),
+            p.make_listing("vinted", "photos-3", "Ermenegildo Zegna Cashmere Sweater Green", 22,
+                           "https://example.test/photos-3", image_url="https://example.test/3.jpg"),
+        ]
+        self._serve({
+            "query": "zegna sweater", "category": "knitwear", "max_price": 400,
+            "category_id": "260012", "enabled": True, "profile": "fast",
+        }, listings)
+
+        m.run()
+
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(set(batches[0]), {"vinted:photos-2", "vinted:photos-3"})
+        self.assertEqual(
+            {alert["listing"]["itemId"] for alert in self.alerts},
+            {"vinted:photos-2", "vinted:photos-3"},
+        )
+        first = {
+            record["item_id"]: record for record in self._alert_log_records()
+        }["vinted:no-photos"]
+        self.assertEqual(first["disposition_code"], "MONTHLY_BUDGET_EXHAUSTED")
+        self.assertTrue(m.is_new(self._db(), "vinted:no-photos"))
+
+    def test_incomplete_gemini_batch_only_defers_affected_candidates(self):
+        self._patch("AI_PHOTO_PROVIDER", "deepseek")
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        snapshot = {
+            "month": "2026-09", "reserved_usd": 10.0, "calls": 2232,
+            "cap_usd": 10.0, "required_usd": 0.01, "exhausted": True,
+            "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+            "event_key": "2026-09:10.000000",
+        }
+        self._patch("_paid_ai_budget_snapshot", lambda required_usd=0.0, now=None: dict(snapshot))
+        self._patch("_notify_paid_ai_budget_exhausted_once", mock.Mock(return_value=False))
+
+        def prepare_photo(listing, category="other", current_month_name=None,
+                          hard_stop=None, search_query=None, prepare_only=False):
+            candidate_id = listing["itemId"]
+            return {"prompt": f"prompt for {candidate_id}",
+                    "images": [(candidate_id.encode(), "image/jpeg")]}
+
+        self._patch("check_photos_with_gemini", prepare_photo)
+        model_response = {
+            "results": [
+                {"candidate_id": "vinted:batch-good", "result": dict(self.AI_STEAL)},
+                {"candidate_id": "vinted:batch-malformed", "result": "wrong shape"},
+                # batch-missing is deliberately omitted.
+            ]
+        }
+        gemini_request = self._patch(
+            "_call_gemini_parts_json", mock.Mock(return_value=model_response)
+        )
+        listings = [
+            p.make_listing("vinted", "batch-good", "Ermenegildo Zegna Cashmere Sweater Navy", 20,
+                           "https://example.test/good", image_url="https://example.test/good.jpg"),
+            p.make_listing("vinted", "batch-malformed", "Ermenegildo Zegna Cashmere Sweater Grey", 21,
+                           "https://example.test/malformed", image_url="https://example.test/bad.jpg"),
+            p.make_listing("vinted", "batch-missing", "Ermenegildo Zegna Cashmere Sweater Green", 22,
+                           "https://example.test/missing", image_url="https://example.test/missing.jpg"),
+        ]
+        self._serve({
+            "query": "zegna sweater", "category": "knitwear", "max_price": 400,
+            "category_id": "260012", "enabled": True, "profile": "fast",
+        }, listings)
+
+        m.run()
+
+        self.assertEqual(gemini_request.call_count, 1)
+        self.assertEqual(
+            [alert["listing"]["itemId"] for alert in self.alerts],
+            ["vinted:batch-good"],
+        )
+        records = {record["item_id"]: record for record in self._alert_log_records()}
+        self.assertEqual(records["vinted:batch-good"]["disposition_code"], "DELIVERED")
+        for candidate_id in ("vinted:batch-malformed", "vinted:batch-missing"):
+            self.assertEqual(
+                records[candidate_id]["disposition_code"], "MONTHLY_BUDGET_EXHAUSTED"
+            )
+            self.assertTrue(
+                m.is_new(self._db(), candidate_id),
+                "an unusable per-item verdict must fail closed and remain retryable",
+            )
+
+    def test_ebay_candidates_are_batched_only_after_each_detail_gate(self):
+        self._patch("AI_PHOTO_PROVIDER", "deepseek")
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: {
+                "month": "2026-09", "reserved_usd": 10.0, "calls": 2232,
+                "cap_usd": 10.0, "required_usd": required_usd,
+                "exhausted": True, "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+                "event_key": "2026-09:10.000000",
+            },
+        )
+        self._patch("_notify_paid_ai_budget_exhausted_once", mock.Mock(return_value=False))
+        detail_calls = []
+
+        def details(_token, item_id):
+            detail_calls.append(item_id)
+            return {
+                "description": "Authentic cashmere sweater in clean used condition",
+                "ebay_condition": "Used",
+                "ebay_condition_id": "3000",
+            }
+
+        prepared_ids = []
+
+        def prepare_photo(listing, category="other", current_month_name=None,
+                          hard_stop=None, search_query=None, prepare_only=False):
+            self.assertTrue(prepare_only)
+            self.assertEqual(listing.get("ebay_condition_id"), "3000")
+            self.assertIn("clean used condition", listing.get("description", ""))
+            prepared_ids.append(listing["itemId"])
+            return {"prompt": f"prompt for {listing['itemId']}",
+                    "images": [(listing["itemId"].encode(), "image/jpeg")]}
+
+        batches = []
+
+        def batch_photo(requests_to_batch, timeout=20):
+            ids = [request["candidate_id"] for request in requests_to_batch]
+            batches.append(ids)
+            return {candidate_id: dict(self.AI_STEAL) for candidate_id in ids}
+
+        self._patch("fetch_ebay_item_details", details)
+        self._patch("check_photos_with_gemini", prepare_photo)
+        self._patch("_call_gemini_batch_json", batch_photo)
+        ids = ["v1|700000000001|0", "v1|700000000002|0", "v1|700000000003|0"]
+        listings = [
+            self._ebay_item(ids[0], "Ermenegildo Zegna Cashmere Sweater Navy", 20),
+            self._ebay_item(ids[1], "Ermenegildo Zegna Cashmere Sweater Grey", 21),
+            self._ebay_item(ids[2], "Ermenegildo Zegna Cashmere Sweater Green", 22),
+        ]
+        self._serve({
+            "query": "zegna sweater", "category": "knitwear", "max_price": 400,
+            "category_id": "260012", "enabled": True, "profile": "fast",
+        }, listings)
+
+        m.run()
+
+        self.assertEqual(set(detail_calls), set(ids))
+        self.assertEqual(len(detail_calls), 3, "look-ahead details must not be fetched twice")
+        self.assertEqual(set(prepared_ids), set(ids))
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(set(batches[0]), set(ids))
+
+    def test_late_rejected_future_ebay_item_never_enters_a_batch(self):
+        self._patch("AI_PHOTO_PROVIDER", "deepseek")
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: {
+                "month": "2026-09", "reserved_usd": 10.0, "calls": 2232,
+                "cap_usd": 10.0, "required_usd": required_usd,
+                "exhausted": True, "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+                "event_key": "2026-09:10.000000",
+            },
+        )
+        self._patch("_notify_paid_ai_budget_exhausted_once", mock.Mock(return_value=False))
+        rejected_id = "v1|710000000002|0"
+        detail_calls = []
+
+        def details(_token, item_id):
+            detail_calls.append(item_id)
+            if item_id == rejected_id:
+                return {
+                    "description": "For parts or repair",
+                    "ebay_condition": "For parts or not working",
+                    "ebay_condition_id": "7000",
+                }
+            return {
+                "description": "Authentic cashmere sweater in clean used condition",
+                "ebay_condition": "Used",
+                "ebay_condition_id": "3000",
+            }
+
+        prepared_ids = []
+
+        def prepare_photo(listing, category="other", current_month_name=None,
+                          hard_stop=None, search_query=None, prepare_only=False):
+            self.assertTrue(prepare_only)
+            prepared_ids.append(listing["itemId"])
+            return {"prompt": f"prompt for {listing['itemId']}",
+                    "images": [(listing["itemId"].encode(), "image/jpeg")]}
+
+        batch_photo = self._patch("_call_gemini_batch_json", mock.Mock())
+        individual_photo = self._patch(
+            "_call_photo_check", mock.Mock(return_value=dict(self.AI_STEAL))
+        )
+        self._patch("fetch_ebay_item_details", details)
+        self._patch("check_photos_with_gemini", prepare_photo)
+        ids = ["v1|710000000001|0", rejected_id, "v1|710000000003|0"]
+        listings = [
+            self._ebay_item(ids[0], "Ermenegildo Zegna Cashmere Sweater Navy", 20),
+            self._ebay_item(ids[1], "Ermenegildo Zegna Cashmere Sweater Grey", 21),
+            self._ebay_item(ids[2], "Ermenegildo Zegna Cashmere Sweater Green", 22),
+        ]
+        self._serve({
+            "query": "zegna sweater", "category": "knitwear", "max_price": 400,
+            "category_id": "260012", "enabled": True, "profile": "fast",
+        }, listings)
+
+        m.run()
+
+        self.assertNotIn(rejected_id, prepared_ids)
+        batch_photo.assert_not_called()
+        self.assertEqual(individual_photo.call_count, 2)
+        self.assertEqual(len(detail_calls), 3, "prefetched failed details must not be repeated")
+        records = {record["item_id"]: record for record in self._alert_log_records()}
+        self.assertEqual(records[rejected_id]["disposition_code"], "CONDITION_REJECT")
+        self.assertFalse(m.is_new(self._db(), rejected_id))
 
     def test_real_hamilton_structured_for_parts_item_never_reaches_ai_or_alert(self):
         item_id = "v1|398378480317|0"
