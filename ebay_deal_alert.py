@@ -746,24 +746,6 @@ def validate_config(config=None):
 # EBAY AUTH + SEARCH
 # ---------------------------------------------------------------------------
 
-def _get_ebay_token_uncached():
-    """Client credentials OAuth flow — app-level token, no user login needed."""
-    client_id = os.environ["EBAY_CLIENT_ID"]
-    client_secret = os.environ["EBAY_CLIENT_SECRET"]
-    resp = requests.post(
-        "https://api.ebay.com/identity/v1/oauth2/token",
-        auth=(client_id, client_secret),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "grant_type": "client_credentials",
-            "scope": "https://api.ebay.com/oauth/api_scope",
-        },
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
-
-
 def _read_cached_ebay_token():
     if not TOKEN_CACHE_PATH.exists():
         return None
@@ -4825,6 +4807,24 @@ def notify_bot_down(message, title="[ALERT-BOT DOWN]"):
         return False
 
 
+def _release_paid_ai_budget_notification_claim(paths, event_key):
+    """Best-effort rollback of a mirrored notification claim."""
+    released = True
+    for path in paths:
+        try:
+            with closing(sqlite3.connect(path, timeout=10)) as ledger:
+                _ensure_paid_ai_schema(ledger)
+                ledger.execute(
+                    "DELETE FROM ai_budget_exhaustion_notified WHERE event_key = ?",
+                    (event_key,),
+                )
+                ledger.commit()
+        except (OSError, sqlite3.Error):
+            released = False
+            logger.exception("Unable to release failed AI-budget notification claim")
+    return released
+
+
 def _notify_paid_ai_budget_exhausted_once(snapshot):
     """Send one durable notification per (UTC month, configured cap)."""
     if not snapshot or not snapshot.get("exhausted"):
@@ -4855,6 +4855,13 @@ def _notify_paid_ai_budget_exhausted_once(snapshot):
                 ledger.commit()
     except (OSError, sqlite3.Error) as exc:
         logger.error("Unable to persist AI-budget exhaustion notification claim: %s", exc)
+        # The two SQLite files cannot share a transaction. If the first
+        # commit worked and the mirror failed, leaving that partial claim
+        # behind would make every later run treat an alert that was never
+        # sent as already delivered. Clear both copies so the next run can
+        # retry; one surviving claim still suppresses duplicates after a
+        # fully claimed, successfully delivered notification.
+        _release_paid_ai_budget_notification_claim(paths, event_key)
         return False
 
     reset_at = snapshot.get("reset_at")
@@ -4872,16 +4879,7 @@ def _notify_paid_ai_budget_exhausted_once(snapshot):
 
     # A failed ntfy request is not a delivered warning. Release the claim so a
     # later run retries instead of silently suppressing the only outage signal.
-    for path in paths:
-        try:
-            with closing(sqlite3.connect(path, timeout=10)) as ledger:
-                ledger.execute(
-                    "DELETE FROM ai_budget_exhaustion_notified WHERE event_key = ?",
-                    (event_key,),
-                )
-                ledger.commit()
-        except (OSError, sqlite3.Error):
-            logger.exception("Unable to release failed AI-budget notification claim")
+    _release_paid_ai_budget_notification_claim(paths, event_key)
     return False
 
 
@@ -5810,7 +5808,7 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
 def _ai_gate_is_retry_eligible(gate_reason, result):
     """Budget deferrals must survive until capacity or the UTC month resets."""
     return (
-        "no AI price" in str(gate_reason)
+        "no ai price" in str(gate_reason).lower()
         or bool(result.get("monthly_ai_budget_exhausted"))
     )
 
@@ -6056,7 +6054,10 @@ def _discount_pct_as_percentage(value):
         return None
     if not math.isfinite(discount_pct):
         return None
-    if 0 < discount_pct < 1:
+    # Production values are rounded integer percentage points. Any non-zero
+    # value strictly inside (-1, 1) is therefore a legacy fractional ratio,
+    # including an over-resale negative such as -0.25 (-25%).
+    if 0 < abs(discount_pct) < 1:
         discount_pct *= 100
     return discount_pct
 
@@ -6228,6 +6229,29 @@ def flush_quiet_alert_queue(conn, now=None):
         result = entry.get("result", entry)
         listing = result.get("listing") or {}
         item_id = listing.get("itemId")
+
+        # A successful push is followed by a seen write and then an atomic
+        # queue rewrite. If that last filesystem operation failed on a prior
+        # run, the delivered row is still in the queue. Trust the durable
+        # dedupe marker and clean up the stale queue row without pushing it a
+        # second time. Previously flush ignored seen state entirely, so one
+        # failed queue rewrite caused a duplicate every morning forever.
+        try:
+            already_seen = bool(item_id) and not is_new(conn, item_id)
+        except Exception:
+            logger.exception(
+                "Unable to check seen state for queued alert %s; leaving it queued",
+                item_id,
+            )
+            continue
+        if already_seen:
+            logger.warning(
+                "Removing already-delivered alert %s from the quiet-hours queue",
+                item_id,
+            )
+            remaining.remove(entry)
+            save_quiet_alert_queue(remaining)
+            continue
         try:
             send_alert(result)
         except Exception as exc:
@@ -6239,10 +6263,28 @@ def flush_quiet_alert_queue(conn, now=None):
             continue
 
         fingerprint = listing_fingerprint(listing)
-        try:
-            mark_seen(conn, item_id, fingerprint, result.get("price"))
-        except Exception:
-            logger.exception("Queued alert delivered but seen marker failed for %s", item_id)
+        seen_error = None
+        for attempt in range(1, 4):
+            try:
+                mark_seen(conn, item_id, fingerprint, result.get("price"))
+                seen_error = None
+                break
+            except Exception as exc:
+                seen_error = exc
+                if attempt < 3:
+                    time.sleep(0.2 * attempt)
+        if seen_error is not None:
+            logger.error(
+                "Queued alert %s was delivered, but its seen marker failed after "
+                "3 attempts; a duplicate is possible",
+                item_id,
+                exc_info=seen_error,
+            )
+            notify_bot_down(
+                f"{item_id}: quiet-hours alert delivered but failed to persist "
+                f"its seen marker after retries ({seen_error}); a duplicate "
+                "alert is possible."
+            )
         if not append_alert_log(result, delivered=True):
             notify_bot_down(
                 f"{item_id}: quiet-hours alert delivered but its alert-log record failed"
@@ -6254,7 +6296,11 @@ def flush_quiet_alert_queue(conn, now=None):
         if matched_search:
             record_search_activity(activity, matched_search, now, alerted=True)
         remaining.remove(entry)
-        save_quiet_alert_queue(remaining)
+        if not save_quiet_alert_queue(remaining):
+            notify_bot_down(
+                f"{item_id}: quiet-hours alert delivered but queue cleanup failed. "
+                "Its seen marker will suppress redelivery while cleanup retries."
+            )
         delivered_count += 1
     save_search_activity(activity)
     return delivered_count
@@ -6726,12 +6772,17 @@ def send_weekly_digest():
     top_query = query_counts.most_common(1)
     top_label = top_query[0][0] if top_query else "n/a"
 
+    # compute_deal_rating() and the production log store whole percentage
+    # points (80 means 80%). Older tests/handwritten rows may contain a ratio
+    # (0.80). Normalize before both ranking and rendering: raw mixed-unit
+    # sorting can put 80 ahead of 0.90, and Python's `.0%` formatter turns a
+    # production 80 into the nonsensical 8000%.
     ranked_delivered = sorted(
         (
             record for record in delivered_records
-            if isinstance(record.get("discount_pct"), (int, float))
+            if _discount_pct_as_percentage(record.get("discount_pct")) is not None
         ),
-        key=lambda record: record["discount_pct"],
+        key=lambda record: _discount_pct_as_percentage(record["discount_pct"]),
         reverse=True,
     )
     interesting = ranked_delivered[:3]
@@ -6813,12 +6864,14 @@ def send_weekly_digest():
         )
     if biggest_verified:
         message += (
-            f"\nBiggest verified discount: {biggest_verified['discount_pct']:.0%} - "
+            "\nBiggest verified discount: "
+            f"{_discount_pct_as_percentage(biggest_verified['discount_pct']):.0f}% - "
             f"{biggest_verified.get('title') or biggest_verified.get('query') or 'listing'}"
         )
     if interesting:
         message += "\nTop delivered deals: " + " | ".join(
-            f"{record['discount_pct']:.0%} {record.get('title') or record.get('query') or 'listing'}"
+            f"{_discount_pct_as_percentage(record['discount_pct']):.0f}% "
+            f"{record.get('title') or record.get('query') or 'listing'}"
             for record in interesting
         )
     if zero_delivery_ai_searches:
@@ -9681,8 +9734,22 @@ def run():
         # mark_ai_pending() ages it up so it wins an AI slot on a later
         # run rather than being discarded. A real steal is deferred by a
         # few minutes, not lost.
-        if not gate_reason and ai_result is None:
-            if _PAID_AI_BUDGET_EXHAUSTION:
+        if ai_result is None:
+            # Category-specific gates usually create their own retryable
+            # "no AI price" reason first (watch/golf/poker in particular).
+            # The original exhaustion branch required gate_reason to be
+            # empty, so those rows could never receive the new structured
+            # monthly-budget disposition even during a system-wide outage.
+            # Override only an absent or retryable no-AI reason; a permanent
+            # condition/authenticity/wrong-item rejection keeps its real cause.
+            exhaustion_applies = bool(
+                _PAID_AI_BUDGET_EXHAUSTION
+                and (
+                    not gate_reason
+                    or _ai_gate_is_retry_eligible(gate_reason, result)
+                )
+            )
+            if exhaustion_applies:
                 budget_state = _PAID_AI_BUDGET_EXHAUSTION
                 result["monthly_ai_budget_exhausted"] = True
                 result["ai_paid_reserved_usd"] = round(
@@ -9698,7 +9765,7 @@ def run():
                     "monthly paid AI budget exhausted - every alert requires AI "
                     "vetting; paid checks are unavailable until the next UTC month"
                 )
-            else:
+            elif not gate_reason:
                 gate_reason = (
                     "no AI price estimate - every alert must be AI-vetted before sending"
                 )

@@ -9,7 +9,7 @@ This is not 24/7 coverage. Alarm scans run only while Chrome is open (and Chrome
 1. Generate a long random secret. Set it as `SCOUT_INGEST_SECRET` in the Vercel project alongside the existing `GITHUB_TOKEN` and `GITHUB_REPO` variables, then redeploy. The Python bot does not need this secret because it reads the committed queue file directly. Do not put the secret in this repository or in a GitHub Actions secret.
 2. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select this `chrome-extension` directory.
 3. Open Deal Scout's popup. Enter the deployed URL, such as `https://YOUR-PROJECT.vercel.app/api/scout-ingest`, and the same secret; click **Save setup** and approve the endpoint permission prompt.
-4. Sign in to Facebook and confirm Marketplace is located around Columbia, South Carolina. The shipped targets are eight golf queries labelled **`<query>` — Columbia +40mi**; each mirrors an enabled saved search in `config.json` and is enabled by default.
+4. Sign in to Facebook and confirm Marketplace is located around Columbia, South Carolina. The shipped targets are nine golf and six poker-chip queries labelled **`<query>` — Columbia +40mi**; each mirrors an enabled saved search in `config.json` and is enabled by default.
 5. Click **Scan Now**. The popup should show the target, the number found, accepted, and dropped. The background service worker console (`chrome://extensions` → Deal Scout → **service worker**) contains detailed per-target errors.
 
 ## Adding categories and sites

@@ -20,6 +20,8 @@ DELETION_MODULE = (ROOT / "web" / "api" / "ebay-account-deletion.js").as_posix()
 HISTORY_MODULE = (ROOT / "web" / "api" / "history.js").as_posix()
 INDEX_HTML = ROOT / "web" / "index.html"
 BACKGROUND_JS = ROOT / "chrome-extension" / "background.js"
+ROOT_CONFIG = ROOT / "config.json"
+POLL_WORKFLOW = ROOT / ".github" / "workflows" / "poll.yml"
 
 
 def run_node(expression):
@@ -323,9 +325,62 @@ class TelegramUrlSafetyTests(unittest.TestCase):
         self.assertIn("Listed price: $150", prompt)
         self.assertIn("seller takes $100", prompt)
         self.assertNotIn("response_format", deepseek_request)
+        self.assertEqual(deepseek_request["thinking"], {"type": "disabled"})
+        self.assertEqual(deepseek_request["max_tokens"], 512)
+        self.assertIn("signal", result["calls"][0]["options"])
         telegram_request = json.loads(result["calls"][1]["options"]["body"])
         self.assertEqual(telegram_request["text"], "Yes, $100 changes this to a buy.")
         self.assertEqual(telegram_request["reply_to_message_id"], 102)
+
+    def test_structured_deepseek_call_disables_thinking_caps_output_and_has_timeout(self):
+        answer = json.dumps({"verdict": "buy"})
+        script = f"""
+let captured;
+global.fetch = async (_url, options) => {{
+  captured = options;
+  return {{
+    status: 200,
+    ok: true,
+    json: async () => ({{choices: [{{message: {{content: {json.dumps(answer)}}}}}]}})
+  }};
+}};
+process.env.DEEPSEEK_API_KEY = 'deepseek-test-key';
+const t = require({json.dumps(TELEGRAM_MODULE)})._test;
+t.callDeepSeek('Return JSON', [], true).then(value => process.stdout.write(JSON.stringify({{
+  value,
+  body: JSON.parse(captured.body),
+  hasSignal: Boolean(captured.signal)
+}}))).catch(error => {{ process.stderr.write(error.stack); process.exit(2); }});
+"""
+        result = run_node_script(script)
+        self.assertEqual(result["value"], {"verdict": "buy"})
+        self.assertEqual(result["body"]["thinking"], {"type": "disabled"})
+        self.assertEqual(result["body"]["max_tokens"], 2048)
+        self.assertEqual(result["body"]["response_format"], {"type": "json_object"})
+        self.assertTrue(result["hasSignal"])
+
+    def test_listing_images_start_concurrently_and_keep_the_four_image_cap(self):
+        script = f"""
+const t = require({json.dumps(TELEGRAM_MODULE)})._test;
+const started = [];
+const resolvers = [];
+const pending = t.fetchListingImages(['a', 'b', 'c', 'd', 'e'], (url) => {{
+  started.push(url);
+  return new Promise((resolve) => resolvers.push(resolve));
+}});
+const startedBeforeAnySettled = started.slice();
+resolvers[0]({{data: 'a'}});
+resolvers[1](null);
+resolvers[2]({{data: 'c'}});
+resolvers[3]({{data: 'd'}});
+pending.then(images => process.stdout.write(JSON.stringify({{
+  startedBeforeAnySettled,
+  images
+}}))).catch(error => {{ process.stderr.write(error.stack); process.exit(2); }});
+"""
+        result = run_node_script(script)
+        self.assertEqual(result["startedBeforeAnySettled"], ["a", "b", "c", "d"])
+        self.assertEqual(result["images"], [{"data": "a"}, {"data": "c"}, {"data": "d"}])
 
     def test_reply_to_own_bot_caption_is_also_a_follow_up(self):
         message = {
@@ -484,6 +539,62 @@ class ExtensionFacebookExtractionTests(unittest.TestCase):
             "location": {"reverse_geocode": {"city": "Chapin"}},
         }})
         self.assertEqual(self._extract(html)[0]["description"], "")
+
+    def test_stalled_facebook_fetch_is_aborted(self):
+        function_source = background_javascript(
+            "const FACEBOOK_FETCH_TIMEOUT_MS = 20000;",
+            "\nasync function scanTarget",
+        )
+        script = (
+            "const FACEBOOK_BLOCKED_PATH_RE=/$a/;"
+            "const extractFacebookListingsFromHtml=()=>[];"
+            "let aborted=false;"
+            "global.fetch=(_url,options)=>new Promise((_resolve,reject)=>{"
+            "options.signal.addEventListener('abort',()=>{"
+            "aborted=options.signal.aborted;const error=new Error('aborted');"
+            "error.name='AbortError';reject(error);},{once:true});});"
+            + function_source
+            + "\nscanFacebookTargetViaFetch({platform:'facebook'},"
+            "'https://www.facebook.com/marketplace/category/search/',5)"
+            ".then(()=>{throw new Error('expected timeout')},error=>{"
+            "process.stdout.write(JSON.stringify({message:error.message,aborted}));});"
+        )
+        self.assertEqual(
+            run_node_script(script),
+            {"message": "Facebook search request timed out after 5ms", "aborted": True},
+        )
+
+
+class ExtensionConfigContractTests(unittest.TestCase):
+    def test_every_shipped_target_has_one_enabled_matching_saved_search(self):
+        query_source = background_javascript(
+            "const GOLF_QUERIES =",
+            "// Stable per-default id",
+        )
+        queries = run_node_script(
+            "const GOLF_ORIGIN={radius:65};"
+            + query_source
+            + "process.stdout.write(JSON.stringify({golf:GOLF_QUERIES,poker:POKER_QUERIES}));"
+        )
+        config = json.loads(ROOT_CONFIG.read_text(encoding="utf-8"))
+
+        def clean_query(search):
+            return search.get("query", "").split(" -", 1)[0].strip()
+
+        for category, target_queries in (
+            ("golf-equipment", queries["golf"]),
+            ("poker-chips", queries["poker"]),
+        ):
+            for query in target_queries:
+                matches = [
+                    search
+                    for search in config["SAVED_SEARCHES"]
+                    if search.get("enabled", True)
+                    and "facebook" in (search.get("platforms") or [])
+                    and clean_query(search) == query
+                ]
+                self.assertEqual(len(matches), 1, query)
+                self.assertEqual(matches[0].get("category"), category, query)
 
 
 class ScoutIngestValidationTests(unittest.TestCase):
@@ -1144,6 +1255,23 @@ class MobileSettingsUiTests(unittest.TestCase):
                 ["Bought price must be a non-negative number.", "error"],
                 ["Sold price must be a non-negative number.", "error"],
             ],
+        )
+
+
+class WorkflowStateSafetyTests(unittest.TestCase):
+    def test_old_dedupe_caches_are_pruned_only_after_a_successful_save(self):
+        workflow = POLL_WORKFLOW.read_text(encoding="utf-8")
+        save_start = workflow.index("      - name: Save seen_items.db")
+        prune_start = workflow.index(
+            "      - name: Prune superseded seen_items.db caches", save_start
+        )
+        save_block = workflow[save_start:prune_start]
+        prune_block = workflow[prune_start:workflow.index("        env:", prune_start)]
+
+        self.assertIn("id: seen-cache-save", save_block)
+        self.assertIn(
+            "if: always() && steps.seen-cache-save.outcome == 'success'",
+            prune_block,
         )
 
 

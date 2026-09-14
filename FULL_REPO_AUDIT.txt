@@ -1,0 +1,275 @@
+FULL REPOSITORY QUALITY AUDIT
+=============================
+
+Audit started: 2026-09-13
+Scope: End-to-end marketplace deal-alert flow and all repository source/config/tests.
+
+Progress log
+------------
+
+1. Baseline repository state established.
+   - Working tree was clean at audit start: main tracking origin/main.
+   - Initial HEAD: aa0b91e18dfc81bd1a559701c65c9ce110cca3f2
+     ("chore: update poll state [skip ci]").
+   - The newest commits are automated poll-state and scout-ingest data commits, so
+     the code-change history must be traced farther back than the top 30 entries.
+   - No AGENTS.md is present in the repository.
+
+2. History constraint identified and visible history reviewed.
+   - This is a shallow checkout: .git/shallow contains
+     7df5c9ac9a35f9945d27cb37af551ea571a9f24f.
+   - The brief-referenced commit 1ae0244 and its ancestors are therefore absent
+     locally. Per the explicit instruction not to fetch/pull/clone, no network
+     history operation was attempted.
+   - `git log --oneline -30` and the available 60-commit log were read.
+   - The patches/file lists for the latest 15 commits were inspected. All 15 are
+     automated runtime-data changes (scout_queue.jsonl, alerts_log.jsonl, state
+     JSON, and in one case scout_seen.db); none changes application source,
+     tests, workflows, or config. The shallow base commit contains the complete
+     source snapshot and repository fix reports, which are being used to recover
+     the rationale for already-settled code decisions.
+
+3. Settled decisions and baseline tests reviewed.
+   - Read the retained reports for the monthly ledger/DeepSeek settlement fix,
+     completed AI_NO_PRICE retry cap, eBay structured-condition gate, marketplace
+     scheduler/backoff isolation, golf/poker shared-pool fairness, poker scrape
+     routing, and golf title/type/valuation gates.
+   - The deliberate $10 monthly paid-AI ceiling and all existing per-run category
+     allocations remain unchanged.
+   - Baseline full suite passed before audit edits:
+       704 passed, 3 warnings, 499 subtests passed in 23.39s
+     The warnings are the known invalid escape in a test docstring and two lxml
+     strip_cdata deprecations.
+
+Confirmed findings (before implementation)
+------------------------------------------
+
+F1 - Weekly digest multiplies production discounts by 100 (analytics bug).
+     `compute_deal_rating()` returns and `append_alert_log()` persists whole
+     percentage points (for example 80 means 80%). The current retained log has
+     123 numeric discount_pct values ranging from -1746 through 88, confirming
+     the production unit. `send_weekly_digest()` instead uses the `.0%` ratio
+     formatter for "Biggest verified discount" and every "Top delivered deal",
+     so a stored 80 is rendered as 8000%. Existing digest tests use 0.80-shaped
+     fixtures even though the production writer stores 80, masking the defect.
+
+F2 - A quiet-hours queue write failure causes duplicate notifications.
+     After a queued alert is delivered, `flush_quiet_alert_queue()` marks the
+     item seen but ignores a false return from the atomic queue rewrite. On the
+     next flush it sends the still-present queue row without consulting the
+     seen table. A temporary-file reproduction forced the queue save to fail:
+     two consecutive flushes both returned 1 and `send_alert()` was called
+     twice even though `is_new()` was already false after the first delivery.
+     This path also uses only one seen-marker attempt, unlike the normal
+     delivery path's three attempts and loud health alert.
+
+F3 - A stalled Facebook GET wedges every extension scan indefinitely.
+     The ingest POST already has a 20-second AbortController, but
+     `scanFacebookTargetViaFetch()` has no timeout. `runScan()` serializes all
+     targets and coalesces later alarms into the existing `runningPromise`, so
+     one never-settling fetch blocks the remaining targets and every later
+     alarm until Chrome kills/restarts the worker. A Node reproduction with an
+     unresolved fetch remained pending; there is no internal escape path.
+
+F4 - Cache pruning is allowed to destroy the last good dedupe snapshot after
+     a failed cache save. The workflow's save and prune steps both use bare
+     `if: always()`. If actions/cache/save fails, prune still deletes every
+     prior `seen-items-db-v1-*` key except the new key that was never created.
+     The next run then falls back to the stale git seed (phase 1) or fails
+     closed (phase 2). Pruning must be conditional on confirmed save success.
+
+F5 - The Telegram analysis webhook retains the same paid DeepSeek waste that
+     was just removed from the main poller. Its request has no timeout, omits
+     the explicit thinking-disable control, and permits 8,192 output tokens
+     for both compact JSON and a 2-4 sentence follow-up. A harness confirmed
+     the emitted payload is max_tokens=8192, has no thinking control, and has
+     no abort signal. In addition, up to four 12-second image downloads run
+     serially before that unbounded call inside a 60-second serverless route.
+     Independent image fetches can safely run concurrently; output ceilings
+     should match the already-settled 2,048 vision / 512 text limits.
+
+F6 - Operator documentation contradicts deployed behavior.
+     The root README says the workflow commits `seen_items.db`, says the
+     AI ledger is inside that DB, and advertises an $18 default; production
+     now caches seen_items.db, commits ai_spend.db separately, and config fixes
+     the user's ceiling at $10. The extension README says there are eight golf
+     targets, while the shipped code has nine golf plus six poker targets.
+
+F7 - `_get_ebay_token_uncached()` is unreachable duplicate OAuth code.
+     Repository-wide reference search finds only its definition. The active
+     `get_ebay_token()` implements the same request plus caching and bounded
+     retries. Retaining the duplicate creates a second, stale auth contract
+     that tests and production never exercise.
+
+F8 - The new MONTHLY_BUDGET_EXHAUSTED disposition is bypassed by every
+     category that has its own no-AI gate. PASS 3 computes `gate_reason`
+     first; watches, golf equipment, poker chips, knitwear, and several
+     scoped bars return a retryable "no AI price" reason. The exhaustion
+     annotation is guarded by `if not gate_reason and ai_result is None`, so
+     it runs only when no category reason exists. Current production evidence
+     matches the trace: the retained schema-v4 log has 127 NO_AI_BUDGET rows
+     and zero MONTHLY_BUDGET_EXHAUSTED rows, including post-cap watch/golf
+     rows with none of the new cap/reset fields. A new end-to-end watch test
+     reproduced the defect before the fix: expected MONTHLY_BUDGET_EXHAUSTED,
+     actually received NO_AI_BUDGET. The correction must override only a
+     retryable no-AI reason, never an unrelated permanent category rejection.
+
+F9 - A partial mirrored exhaustion-notification claim suppresses the outage
+     warning forever. The notifier commits its claim to ai_spend.db and
+     seen_items.db sequentially, but its persistence exception path did not
+     undo an earlier successful commit. On the next run, the surviving first
+     claim is interpreted as proof that the ntfy warning was already sent,
+     even though sending occurs only after both commits. A SQLite trigger that
+     rejects the second insert reproduced this: the first invocation returned
+     without notifying and every later invocation remained suppressed after
+     the database recovered. This is specifically the self-healing warning
+     path added by the latest budget work, not a change to its $10 policy.
+
+Implemented fixes and focused verification
+------------------------------------------
+
+- Weekly digest ranking and display now normalize both current whole-percent
+  values and legacy fractional values. Added a mixed-unit regression proving
+  0.90 ranks above 80 and renders as 90% / 80%, never 8000%.
+- Quiet-hours flush now checks durable seen state before sending, retries its
+  post-delivery seen marker three times, emits a health alert on persistent
+  bookkeeping failure, and reports queue-cleanup failure. Added a regression
+  that forces both cleanup writes to fail and proves two flushes produce one
+  external send, not two.
+- Facebook background fetches now abort after 20 seconds (including a stalled
+  response body), so one target cannot wedge the serialized scanner. A Node
+  test drives the timeout at 5ms and confirms both abort state and diagnostic.
+- Cache prune now depends on the preceding save step's successful outcome.
+  A workflow contract test locks the state-safety dependency in place.
+- Telegram DeepSeek calls explicitly disable thinking, use 2,048-token JSON /
+  512-token text ceilings, and abort after 30 seconds. The four independent
+  image downloads now start concurrently under the same four-image cap.
+  Node-backed tests inspect both request modes and prove all four downloads
+  start before any settles.
+- Added a configuration contract test proving every one of the extension's
+  nine golf and six poker defaults maps to exactly one enabled Facebook saved
+  search with the expected category.
+- Monthly exhaustion now overrides category-specific retryable no-AI reasons,
+  attaches the cap/reset metadata, and preserves the intended retryable seen
+  state. An end-to-end watch-category run now records
+  MONTHLY_BUDGET_EXHAUSTED; permanent category rejections are not overridden.
+- A failed second-database exhaustion-notification claim now releases any
+  first-database commit before returning. A fault-injection regression proves
+  that once the mirror recovers, the next run sends exactly one warning and
+  persists the durable claim to both ledgers.
+- Removed the unreachable duplicate OAuth helper and corrected the root and
+  extension READMEs (plus stale test rationale) to describe the actual
+  persistence, budget, and targets.
+- Removed the repository-owned invalid-escape SyntaxWarning by making the two
+  regex-heavy test docstrings raw strings. The remaining lxml warnings arise
+  inside the installed dependency's deprecated no-op `strip_cdata` option.
+
+Focused post-change checks:
+  - Python AST parse (all touched Python): passed.
+  - node --check (background.js and telegram.js): passed.
+  - Digest/quiet regressions: 2 passed.
+  - Web/extension/workflow regressions: 5 passed.
+  - Monthly disposition and mirrored-claim fault injection: 2 passed.
+
+Live integration evidence
+-------------------------
+
+- The supplementary eBay HTML lane was exercised against the live search page
+  on 2026-09-13 with `golf club set` and a $500 ceiling. The first direct
+  request received the documented Akamai 403/cookie challenge; the stateful
+  retry received HTTP 200 and the current s-card selectors parsed 60 listings,
+  including item IDs, titles, prices, canonical item URLs, and image URLs.
+  This directly verifies the current listing-card selectors in ebay_scrape.py;
+  no speculative selector change is warranted.
+
+End-to-end areas traced
+-----------------------
+
+- Configuration loading/validation and saved-search identity; eBay Browse API
+  and supplemental HTML search; current-card parsing; condition normalization;
+  auction lane and circuit breaker; multi-marketplace prefetch/routing; Scout
+  queue ingestion and dedupe; per-platform backoff; pretriage; paid/free AI
+  reservation, settlement, fallback, and exhaustion; category quality gates;
+  disposition mapping; quiet-hours persistence; delivery bookkeeping; weekly
+  analytics; Chrome extension scan/ingest; and owner-authenticated Telegram
+  analysis were traced through their production callers and tests.
+- `config.json` contains 209 saved searches (94 enabled at audit time), has no
+  duplicate search IDs or duplicate enabled platform/query definitions, and
+  passes the repository validator without warnings. All nine golf and six poker
+  extension defaults have exact enabled Facebook counterparts.
+- alerts_log.jsonl contains 601 parseable records with no malformed rows. Its
+  delivered records have unique item IDs; no undelivered REVIEW row lacks an
+  error. scout_queue.jsonl contains 91 parseable records. SQLite integrity_check
+  returned `ok` for seen_items.db, ai_spend.db, and scout_seen.db.
+- A repository-wide top-level-definition/reference scan found no other safe,
+  unambiguous duplicate implementation to delete. Public helpers referenced by
+  tests or likely external/serverless callers were retained.
+
+Final validation (after all edits)
+----------------------------------
+
+- Required Python parse checks:
+    AST OK: ebay_deal_alert.py, test_ebay_deal_alert.py, test_web_api.py
+- JSON parse check (config was deliberately not modified):
+    JSON OK: config.json, 209 saved searches
+- JavaScript syntax checks:
+    node --check chrome-extension/background.js: exit 0
+    node --check web/api/telegram.js: exit 0
+- Full test suite:
+    713 passed, 2 warnings, 499 subtests passed in 21.76s
+  Both warnings are lxml's dependency-owned `strip_cdata` deprecation; there
+  are no repository-authored warnings and no failures.
+- `git diff --check`: passed. Only the eight source/test/documentation files
+  listed below plus this report are changed; config.json and all runtime state
+  files are unchanged by the audit.
+- Confirmed final HEAD remains
+    aa0b91e18dfc81bd1a559701c65c9ce110cca3f2
+  No fetch, pull, clone, commit, or push was performed.
+
+Files changed
+-------------
+
+- .github/workflows/poll.yml
+- README.md
+- chrome-extension/README.md
+- chrome-extension/background.js
+- ebay_deal_alert.py
+- test_ebay_deal_alert.py
+- test_web_api.py
+- web/api/telegram.js
+- FULL_REPO_AUDIT.txt (new audit artifact)
+
+Risks deliberately flagged rather than guessed at
+--------------------------------------------------
+
+- The Facebook Marketplace DOM could not be re-verified in a live authenticated
+  Chrome session from this checkout. Its parser remains covered by captured DOM
+  shapes and extraction tests, and target/config parity is now enforced, but an
+  authenticated manual Scan Now remains the right deployment smoke test.
+- Telegram's separate serverless DeepSeek path is not part of the poller's
+  mirrored $10 SQLite ledger. Token/time waste was removed here, but enforcing a
+  cross-runtime dollar cap needs a shared authoritative store or a provider-side
+  cap; inventing a second local counter would not be safe. This limitation is now
+  explicit in README.md.
+- `telegramSend()` neither times out nor checks Telegram's HTTP status. A naive
+  throw-on-error change can turn webhook retries into duplicate paid AI calls;
+  correcting this safely requires update-id idempotency before changing delivery
+  error semantics. It is left as an explicit follow-up, not silently papered over.
+- The workflow still carries its documented phase-1 tracked seen_items.db seed.
+  Removing that seed is an operational migration: first confirm a healthy recent
+  cache exists, then untrack it and remove the temporary checkout-discard line.
+- The local checkout is shallow and does not contain brief-referenced commit
+  1ae0244, so claims about that missing patch are based on the retained repository
+  investigation reports and current code, not an unavailable git diff.
+
+Conclusion
+----------
+
+The repository was already substantially hardened by its recent sessions, so
+this pass did not change architecture, category allocations, or spending policy.
+It found and fixed nine concrete issues with production evidence, deterministic
+reproductions, or executable contract checks. The configured
+AI_PAID_MONTHLY_BUDGET_USD remains exactly $10 and no deliberate dollar decision
+was changed. The resulting suite is green, current eBay selectors work against a
+live page, and the remaining items above need operational state or idempotency
+design rather than an unsupervised guess.

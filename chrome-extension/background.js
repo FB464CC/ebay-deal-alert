@@ -310,18 +310,39 @@ function extractFacebookListingsFromHtml(html) {
 // non-Facebook site) still use the tab-based path below, since arbitrary
 // third-party domains aren't covered by this extension's host_permissions
 // for a background fetch.
-async function scanFacebookTargetViaFetch(target, targetUrl) {
-  const response = await fetch(targetUrl, { credentials: "include" });
-  let finalPath = "";
-  try { finalPath = new URL(response.url || targetUrl).pathname; } catch (_error) { /* leave blank */ }
-  if (FACEBOOK_BLOCKED_PATH_RE.test(finalPath)) {
-    throw new Error(`Facebook redirected to a login/checkpoint page (${finalPath}) - session likely logged out`);
+const FACEBOOK_FETCH_TIMEOUT_MS = 20000;
+
+async function scanFacebookTargetViaFetch(target, targetUrl, timeoutMs = FACEBOOK_FETCH_TIMEOUT_MS) {
+  // runScan() serializes targets and coalesces later alarms into the current
+  // promise. Without an abort, one wedged Facebook connection therefore
+  // blocks every remaining target and every future alarm for the lifetime of
+  // the service worker. Keep the timer alive through response.text() too: a
+  // response whose headers arrive but whose body stalls is still a timeout.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(targetUrl, {
+      credentials: "include",
+      signal: controller.signal
+    });
+    let finalPath = "";
+    try { finalPath = new URL(response.url || targetUrl).pathname; } catch (_error) { /* leave blank */ }
+    if (FACEBOOK_BLOCKED_PATH_RE.test(finalPath)) {
+      throw new Error(`Facebook redirected to a login/checkpoint page (${finalPath}) - session likely logged out`);
+    }
+    if (!response.ok) {
+      throw new Error(`Facebook search request failed: HTTP ${response.status}`);
+    }
+    const html = await response.text();
+    return extractFacebookListingsFromHtml(html).map((listing) => ({ ...listing, platform: target.platform }));
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Facebook search request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!response.ok) {
-    throw new Error(`Facebook search request failed: HTTP ${response.status}`);
-  }
-  const html = await response.text();
-  return extractFacebookListingsFromHtml(html).map((listing) => ({ ...listing, platform: target.platform }));
 }
 
 async function scanTarget(target) {

@@ -15,6 +15,11 @@ const MAX_REDIRECTS = 3;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 12000;
+const DEEPSEEK_TIMEOUT_MS = 30000;
+// Match the compact, schema-bound ceilings used by the main poller. The
+// prior 8,192-token limit applied even to a 2-4 sentence follow-up.
+const DEEPSEEK_JSON_MAX_TOKENS = 2048;
+const DEEPSEEK_TEXT_MAX_TOKENS = 512;
 
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
@@ -333,6 +338,17 @@ const fetchImage = async (url) => {
   }
 };
 
+const fetchListingImages = async (imageUrls, imageFetcher = fetchImage) => {
+  // These downloads are independent. Serial 12-second timeouts could spend
+  // 48 of this function's 60 serverless seconds before paid analysis even
+  // started; concurrency keeps the same four-image/memory ceiling while
+  // bounding the group to the slowest request rather than their sum.
+  const images = await Promise.all(
+    imageUrls.slice(0, MAX_IMAGES).map((imageUrl) => imageFetcher(imageUrl))
+  );
+  return images.filter(Boolean).slice(0, MAX_IMAGES);
+};
+
 const stripFence = (text) => text.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
 
 const secretMatches = (provided, expected) => {
@@ -352,7 +368,11 @@ const callDeepSeek = async (prompt, images, jsonMode = true) => {
   const body = {
     model: DEEPSEEK_MODEL,
     messages: [{ role: "user", content }],
-    max_tokens: 8192
+    // Current Flash models enable paid hidden reasoning by default. These
+    // calls need a compact JSON classification or short conversational text,
+    // not a long reasoning trace.
+    thinking: { type: "disabled" },
+    max_tokens: jsonMode ? DEEPSEEK_JSON_MAX_TOKENS : DEEPSEEK_TEXT_MAX_TOKENS
   };
   if (jsonMode) {
     body.response_format = { type: "json_object" };
@@ -363,7 +383,8 @@ const callDeepSeek = async (prompt, images, jsonMode = true) => {
       Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS)
   });
   if (!resp.ok) {
     throw new Error(`DeepSeek returned ${resp.status}`);
@@ -700,16 +721,7 @@ module.exports = async (req, res) => {
     const month = new Date().toLocaleString("en-US", { month: "long", timeZone: "UTC" });
     const prompt = buildPrompt(category, title, description, month, price);
 
-    const images = [];
-    for (const imageUrl of imageUrls) {
-      const img = await fetchImage(imageUrl);
-      if (img) {
-        images.push(img);
-      }
-      if (images.length >= MAX_IMAGES) {
-        break;
-      }
-    }
+    const images = await fetchListingImages(imageUrls);
     if (!images.length) {
       await reply("I couldn't download the listing photos.");
       return sendJson(res, 200, { ok: true });
@@ -736,5 +748,7 @@ module.exports._test = {
   extractListingPrice,
   formatListingPrice,
   counterfeitListingLanguage,
-  buildPrompt
+  buildPrompt,
+  fetchListingImages,
+  callDeepSeek
 };

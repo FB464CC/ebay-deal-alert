@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
@@ -5326,6 +5327,38 @@ class QuietHoursTests(unittest.TestCase):
             self.assertTrue(m.is_new(conn, "quiet-fail"))
             conn.close()
 
+    def test_failed_queue_cleanup_does_not_redeliver_an_already_seen_item(self):
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        result = {
+            "listing": {
+                "itemId": "quiet-cleanup-fail",
+                "title": "Queued item",
+                "price": {"value": 10},
+            },
+            "verdict": "REVIEW",
+            "profile": "slow",
+            "price": 11.0,
+        }
+        with mock.patch.object(m, "DB_PATH", str(tmpdir / "seen.db")), \
+             mock.patch.object(m, "QUIET_ALERT_QUEUE_PATH", tmpdir / "queue.json"), \
+             mock.patch.object(m, "ALERTS_LOG_PATH", tmpdir / "log.jsonl"), \
+             mock.patch.object(m, "SEARCH_ACTIVITY_STATE_PATH", tmpdir / "activity.json"):
+            conn = m.init_db()
+            self.assertTrue(m.enqueue_quiet_alert(result))
+            with mock.patch.object(m, "send_alert") as send, \
+                 mock.patch.object(m, "save_quiet_alert_queue", return_value=False), \
+                 mock.patch.object(m, "notify_bot_down") as notify:
+                self.assertEqual(m.flush_quiet_alert_queue(conn), 1)
+                self.assertFalse(m.is_new(conn, "quiet-cleanup-fail"))
+                # The disk row is deliberately still present because both
+                # simulated cleanup writes failed. Seen state must prevent a
+                # second external push while cleanup keeps retrying.
+                self.assertEqual(m.flush_quiet_alert_queue(conn), 0)
+            send.assert_called_once_with(result)
+            notify.assert_called_once()
+            self.assertEqual(len(m.load_quiet_alert_queue()), 1)
+            conn.close()
+
 
 class EbaySoldCompsUrl(unittest.TestCase):
     """Feature 2 helper: build eBay's public sold/completed-listings search
@@ -5552,15 +5585,62 @@ class ScoutPrefetchIntegration(unittest.TestCase):
 
 
 class PaidAiSpendLedger(unittest.TestCase):
+    def test_failed_mirror_claim_does_not_suppress_exhaustion_notification_forever(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            spend_path = root / "ai_spend.db"
+            seen_path = root / "seen.db"
+            event_key = "2026-09:10.000000"
+            for path in (spend_path, seen_path):
+                with closing(sqlite3.connect(path)) as ledger:
+                    m._ensure_paid_ai_schema(ledger)
+                    ledger.commit()
+            with closing(sqlite3.connect(seen_path)) as ledger:
+                ledger.execute(
+                    "CREATE TRIGGER reject_budget_notification_claim "
+                    "BEFORE INSERT ON ai_budget_exhaustion_notified "
+                    "BEGIN SELECT RAISE(ABORT, 'simulated mirror write failure'); END"
+                )
+                ledger.commit()
+
+            snapshot = {
+                "event_key": event_key,
+                "exhausted": True,
+                "reserved_usd": 10.0,
+                "cap_usd": 10.0,
+                "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+            }
+            notifier = mock.Mock(return_value=True)
+            with mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)), \
+                 mock.patch.object(m, "DB_PATH", str(seen_path)), \
+                 mock.patch.object(m, "notify_bot_down", notifier):
+                first_sent = m._notify_paid_ai_budget_exhausted_once(snapshot)
+                with closing(sqlite3.connect(seen_path)) as ledger:
+                    ledger.execute("DROP TRIGGER reject_budget_notification_claim")
+                    ledger.commit()
+                second_sent = m._notify_paid_ai_budget_exhausted_once(snapshot)
+
+            self.assertFalse(first_sent)
+            self.assertTrue(
+                second_sent,
+                "a failed mirror write must release the first claim so the next run can alert",
+            )
+            notifier.assert_called_once()
+            for path in (spend_path, seen_path):
+                with closing(sqlite3.connect(path)) as ledger:
+                    claimed = ledger.execute(
+                        "SELECT 1 FROM ai_budget_exhaustion_notified WHERE event_key = ?",
+                        (event_key,),
+                    ).fetchone()
+                self.assertIsNotNone(claimed)
+
     def test_ledger_is_independent_of_seen_db_and_remains_fail_closed(self):
         tempdir = pathlib.Path(tempfile.mkdtemp())
         seen_path = tempdir / "seen.db"
         spend_path = tempdir / "ai_spend.db"
-        # Real-money spend is disabled in the live config (paid AI budget is
-        # $0 - DeepSeek always fails closed and every check falls back to
-        # Gemini's free tier), but this test is about the legacy-ledger
-        # migration path specifically, so it patches its own positive
-        # budget rather than depending on config.json's live value.
+        # This test is about the legacy-ledger migration path specifically,
+        # so it patches its own historical $18 fixture rather than depending
+        # on config.json's operator-controlled live ceiling.
         with mock.patch.object(m, "DB_PATH", str(seen_path)), \
              mock.patch.object(m, "AI_SPEND_DB_PATH", str(spend_path)), \
              mock.patch.object(m, "AI_PAID_MONTHLY_BUDGET_USD", 18.0):
@@ -5599,9 +5679,8 @@ class PaidAiSpendLedger(unittest.TestCase):
 
     def test_full_legacy_ledger_is_persisted_when_new_reservation_is_rejected(self):
         # Same rationale as test_ledger_is_independent_of_seen_db_and_
-        # remains_fail_closed above: patches its own positive budget so
-        # this "ledger already full" scenario is exercised regardless of
-        # the live config's $0 paid-AI budget.
+        # remains_fail_closed above: patch an isolated historical fixture so
+        # this "ledger already full" scenario does not depend on live config.
         tempdir = pathlib.Path(tempfile.mkdtemp())
         seen_path = tempdir / "seen.db"
         spend_path = tempdir / "ai_spend.db"
@@ -8928,6 +9007,49 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(auction_calls, [],
                          "a mid-run 429 must also stop the auction lane, not just the regular rotation")
 
+    def test_exhausted_monthly_budget_overrides_category_no_ai_disposition(self):
+        snapshot = {
+            "month": "2026-09",
+            "reserved_usd": 10.0,
+            "calls": 1000,
+            "cap_usd": 10.0,
+            "required_usd": 0.01,
+            "exhausted": True,
+            "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+            "event_key": "2026-09:10.000000",
+        }
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: dict(snapshot),
+        )
+        budget_notify = self._patch(
+            "_notify_paid_ai_budget_exhausted_once", mock.Mock(return_value=True)
+        )
+        self.ai_result = None
+        item_id = "v1|budget-watch|0"
+        self._serve(
+            {
+                "query": "omega watch",
+                "category": "watches",
+                "category_id": "31387",
+                "max_price": 1000,
+                "enabled": True,
+                "profile": "fast",
+            },
+            [self._ebay_item(item_id, "Omega Seamaster Automatic Mens Watch", 500)],
+        )
+
+        m.run()
+
+        (record,) = self._alert_log_records()
+        self.assertEqual(record["disposition_code"], "MONTHLY_BUDGET_EXHAUSTED")
+        self.assertTrue(record["monthly_ai_budget_exhausted"])
+        self.assertEqual(record["ai_paid_reserved_usd"], 10.0)
+        self.assertEqual(record["ai_paid_budget_cap_usd"], 10.0)
+        self.assertEqual(record["ai_paid_budget_reset_at"], "2026-10-01T00:00:00+00:00")
+        self.assertTrue(m.is_new(self._db(), item_id), "budget deferral must remain retryable")
+        self.assertGreaterEqual(budget_notify.call_count, 1)
+
     def test_ending_soon_auction_gets_a_reserved_ai_slot(self):
         # Every alert needs a real AI check, and GEMINI_CALL_LIMIT paces
         # that to a handful per run. An auction closing in minutes that
@@ -9091,6 +9213,26 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
         self.assertIn("Biggest verified discount: 80% - Verified Omega", message)
         self.assertIn("Top delivered deals: 80% Verified Omega | 60% Canali Suit | 40% Alden Shoes", message)
         self.assertIn("AI checked, zero alerts: tudor watch", message)
+
+    def test_digest_normalizes_production_and_legacy_discount_units_before_ranking(self):
+        ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        records = [
+            {"timestamp": ts, "verdict": "REVIEW", "delivered": True,
+             "title": "Production Eighty", "discount_pct": 80,
+             "price_confidence": "high", "query": "omega watch"},
+            {"timestamp": ts, "verdict": "REVIEW", "delivered": True,
+             "title": "Legacy Ninety", "discount_pct": 0.90,
+             "query": "canali suit"},
+        ]
+
+        message = self._digest_message(records)
+
+        self.assertIn("Biggest verified discount: 80% - Production Eighty", message)
+        self.assertIn(
+            "Top delivered deals: 90% Legacy Ninety | 80% Production Eighty",
+            message,
+        )
+        self.assertNotIn("8000%", message)
 
     def test_weekly_ai_spend_uses_persisted_monthly_delta_without_changing_reservations(self):
         tmpdir = pathlib.Path(tempfile.mkdtemp())
@@ -9557,7 +9699,7 @@ class CircuitBreakerCorruptTimestampSelfHeals(unittest.TestCase):
 
 
 class SaneAiPriceNegativeStrings(unittest.TestCase):
-    """_sane_ai_price stripped non-digits with re.sub(r"[^\d.]"), which
+    r"""_sane_ai_price stripped non-digits with re.sub(r"[^\d.]"), which
     ate the minus sign - so the STRING "-100" became 100.0, silently
     reintroducing the exact fabricated-"Steal" bug the function was
     written to prevent. Only the string path had the hole; the numeric
@@ -9574,7 +9716,7 @@ class SaneAiPriceNegativeStrings(unittest.TestCase):
 
 
 class GluedSizeDefeatsJacketOnlyFilter(unittest.TestCase):
-    """Real live miss, reported by the user: "Brioni Roma Wool Palatino
+    r"""Real live miss, reported by the user: "Brioni Roma Wool Palatino
     Blazer42R Italy 3 Button Flaws" ALERTED as a Steal despite being a
     blazer with no pants - a standing no-standalone-jackets violation.
 
