@@ -167,6 +167,22 @@ EBAY_NONFUNCTIONAL_CONDITION_KEYWORDS = (
     "salvage",
     "restoration required",
 )
+# A seller can disclose a dead movement without using eBay's exact 7000
+# label or the generic configured phrases above. Fresh production contained
+# multiple scrape-lane titles saying "Not Running"; those have no structured
+# condition until the late item-detail enrichment and previously consumed an
+# AI slot (or sat in NO_AI_BUDGET) even though a photo cannot prove a movement
+# runs. Deliberately watch-scoped and limited to unequivocal function claims.
+WATCH_NONFUNCTIONAL_TEXT_SIGNALS = re.compile(
+    r"\bnot\s+(?:currently\s+)?running\b|"
+    r"\b(?:does\s+not|doesn['\N{RIGHT SINGLE QUOTATION MARK}]?t|"
+    r"won['\N{RIGHT SINGLE QUOTATION MARK}]?t|will\s+not)\s+(?:run|wind|tick)\b|"
+    r"\bnon[\s-]?functional\b|\bnot\s+functional\b|"
+    r"\bstopped\s+(?:running|working)\b|"
+    r"\bnot\s+keeping(?:\s+accurate)?\s+time\b|"
+    r"\bdead\s+(?:watch\s+)?movement\b",
+    re.IGNORECASE,
+)
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
 FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
 GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
@@ -1431,8 +1447,10 @@ def get_ebay_rate_limit_remaining(token):
 # free). See the note at its former call site for the full reasoning.
 
 
-def fetch_ebay_item_description(token, item_id):
-    """GET /item/{item_id} for the full listing description - Browse API's
+def fetch_ebay_item_details(token, item_id):
+    """GET /item/{item_id} for description and structured condition.
+
+    Browse API's
     item_summary/search (what search_ebay() calls) never includes it, only
     this separate per-item call does. Per explicit user instruction: "not
     all sizes etc are in the titles. take the descriptions as well...
@@ -1445,9 +1463,14 @@ def fetch_ebay_item_description(token, item_id):
     it piggybacks on that existing budget rather than adding an independent
     one. Never call this unconditionally per review candidate.
 
-    Returns plain text (HTML stripped, decoded, whitespace-collapsed) or
-    None on any failure - description enrichment is a nice-to-have, never
-    worth failing or slowing down a run over."""
+    The scraped eBay lane has no condition metadata at all. Returning the
+    detail response's condition fields from this already-budgeted request is
+    therefore also the authoritative bridge that prevents a scrape result
+    marked "For parts or not working" from reaching paid vision.
+
+    Returns a dict containing any available normalized description/condition
+    fields, or None on failure/empty evidence. Enrichment is a nice-to-have;
+    it must never fail the whole run."""
     try:
         resp = requests.get(
             f"https://api.ebay.com/buy/browse/v1/item/{item_id}",
@@ -1455,12 +1478,36 @@ def fetch_ebay_item_description(token, item_id):
             timeout=10,
         )
         resp.raise_for_status()
-        raw = resp.json().get("description") or ""
+        body = resp.json()
     except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
-        logger.warning("Could not fetch eBay item description for %s: %s", item_id, exc)
+        logger.warning("Could not fetch eBay item details for %s: %s", item_id, exc)
         return None
-    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
-    return re.sub(r"\s+", " ", text).strip() or None
+    if not isinstance(body, dict):
+        logger.warning(
+            "Could not fetch eBay item details for %s: response was %s, not an object",
+            item_id,
+            type(body).__name__,
+        )
+        return None
+
+    details = {}
+    raw = body.get("description") or ""
+    description = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    description = re.sub(r"\s+", " ", description).strip()
+    if description:
+        details["description"] = description
+    _attach_ebay_structured_condition(body)
+    for key in ("ebay_condition", "ebay_condition_id"):
+        value = body.get(key)
+        if value:
+            details[key] = value
+    return details or None
+
+
+def fetch_ebay_item_description(token, item_id):
+    """Backward-compatible description-only wrapper for callers/tests."""
+    details = fetch_ebay_item_details(token, item_id)
+    return details.get("description") if details else None
 
 
 def fetch_vinted_item_description(item_url):
@@ -1474,7 +1521,7 @@ def fetch_vinted_item_description(item_url):
     invisible to every title-only check (GENDER_EXCLUDE_KEYWORDS included)
     because Vinted listings never carried a description at all.
 
-    UNLIKE fetch_ebay_item_description(), deliberately NOT gated behind
+    UNLIKE fetch_ebay_item_details(), deliberately NOT gated behind
     the Gemini AI budget: this is a plain public page fetch (no
     auth/session, no daily quota - confirmed live), and gender/logo/
     condition filtering has to run on every new Vinted candidate
@@ -2089,6 +2136,39 @@ POKER_CHIPS_MAX_PRICE = 150
 # individual collectibles, but that is not what these set searches are for;
 # the reported 1-, 3-, and roughly 5-chip alerts were unusable noise.
 POKER_CHIPS_MIN_SET_SIZE = 100
+# Title/description evidence used only for deterministic pre-AI rejection.
+# These makers/lines are the same explicitly targeted by the settled poker
+# searches/research; recognizing one keeps an under-described collector lot
+# eligible for vision, but never authenticates it or bypasses the final gate.
+POKER_CHIP_MAKER_SIGNALS = re.compile(
+    r"\b(?:paulson|chipco|nevada\s+jacks?|sun[\s-]?fly|br\s+pro|"
+    r"atlantic\s+standard\s+molding|classic\s+poker\s+chips?|"
+    r"blue\s+chip\s+compan(?:y|ies)|tr\s+king|top\s+hat\s*(?:&|and)\s*cane)\b|"
+    r"\b(?:asm|cpc|bcc)\b",
+    re.IGNORECASE,
+)
+POKER_CHIP_IDENTITY_SIGNALS = re.compile(
+    r"\b(?:chips?|fichas?)\b|\bchips?lot\b|"
+    r"\b(?:poker|casino|blackjack|texas\s+hold.?em)\b.{0,45}"
+    r"\b(?:sets?|games?|compendium)\b",
+    re.IGNORECASE,
+)
+POKER_INELIGIBLE_CONSTRUCTION_SIGNALS = re.compile(
+    r"\b(?:plastic|abs|clay\s+composite|metal[\s-]?core|iron[\s-]?core|"
+    r"metal[\s-]?slug(?:ged)?)\s+(?:poker\s+)?chips?\b|"
+    r"\b(?:poker\s+)?chips?\b.{0,25}\b(?:are|made\s+(?:of|from)|"
+    r"constructed\s+(?:of|from))\s+"
+    r"(?:plastic|abs|clay\s+composite|metal[\s-]?core|iron[\s-]?core|"
+    r"metal[\s-]?slug(?:ged)?)\b",
+    re.IGNORECASE,
+)
+POKER_SAMPLE_OR_EMPTY_STORAGE_SIGNALS = re.compile(
+    r"\bsample(?:\s+(?:pack|set))?\b|"
+    r"\bempty\s+(?:poker\s+)?(?:chip\s+)?(?:case|rack|tray|carousel|caddy)\b|"
+    r"\b(?:case|rack|tray|carousel|caddy)\s+only\b|"
+    r"\bno\s+chips?\s+included\b",
+    re.IGNORECASE,
+)
 GOLF_BLOCKED_BRANDS = {
     "big brother", "confidence", "ram", "founders club", "precise golf", "tour edge",
     "intech", "dunlop", "northwestern", "spalding", "knight", "pinseeker", "alien",
@@ -2144,6 +2224,12 @@ GOLF_SCOUT_IDENTITY_SIGNAL = re.compile(
     r"\bgolf\b|\bclubs?\b|"
     r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:pw|aw|sw|gw|lw)\b",
     re.IGNORECASE,
+)
+GOLF_LEFT_HANDED_TITLE_SIGNAL = re.compile(
+    r"\b(?:left[\s-]?hand(?:ed)?|lefty|lh)\b", re.IGNORECASE
+)
+GOLF_RIGHT_HANDED_TITLE_SIGNAL = re.compile(
+    r"\b(?:right[\s-]?hand(?:ed)?|righty|rh)\b", re.IGNORECASE
 )
 
 
@@ -2204,6 +2290,25 @@ def golf_wrong_item_title_reason(title, query):
         return f"non-club merchandise/accessory signal {non_club.group(0)!r}"
 
     component_kind = golf_component_search_kind(query)
+    # Final vision already rejects left-handed clubs for this right-handed
+    # buyer. When the title says only LH/left-handed (and contains no
+    # conflicting right-handed signal), paying vision to rediscover it is
+    # deterministic waste. Stand bags have no handedness.
+    if (
+        component_kind != "stand-bag"
+        and GOLF_LEFT_HANDED_TITLE_SIGNAL.search(title)
+        and not GOLF_RIGHT_HANDED_TITLE_SIGNAL.search(title)
+    ):
+        return "explicitly left-handed-only title for a right-handed buyer"
+
+    # Reuse the settled final-gate parser rather than inventing a second
+    # brand list. It only matches a brand at the start of a title segment and
+    # preserves Tour Edge Exotics, so mixed sets with an incidental cheap
+    # brand mention are left for vision.
+    blocked_brand = golf_blocked_brand(title)
+    if blocked_brand:
+        return f"title-identifiable blocked golf brand {blocked_brand!r}"
+
     if component_kind:
         if not GOLF_COMPONENT_TITLE_PATTERNS[component_kind].search(title):
             return f"targeted {component_kind} search but title does not contain that component"
@@ -2224,6 +2329,48 @@ def golf_wrong_item_title_reason(title, query):
     # equipment; the title must also identify clubs/irons or say golf set.
     if not GOLF_GROUP_TITLE_SIGNAL.search(title):
         return "set-oriented search title has no multi-club/set evidence"
+    return None
+
+
+def _declared_poker_chip_count(title):
+    """Return the largest explicit title count, or None when unstated."""
+    title = str(title or "").lower()
+    declared_counts = []
+    for pattern in (
+        r"\b(\d{1,4})\s*[- ]?(?:chip|pc|piece)s?\b",
+        # Negative decimal lookahead matters for real titles such as
+        # "Lot 2.25lb": 2 is weight, not a two-chip declaration.
+        r"\b(?:set|lot)\s+(?:of\s+)?(\d{1,4})(?![.\d])\b",
+        r"\bx\s*(\d{1,4})\s*(?:lot|chips?)\b",
+    ):
+        declared_counts.extend(int(match) for match in re.findall(pattern, title))
+    return max(declared_counts, default=None)
+
+
+def poker_pre_ai_hard_fail_reason(title, description=None):
+    """Reject poker candidates whose own text proves they cannot clear the
+    settled photo gate. Ambiguous material/count claims still reach vision.
+    """
+    title = str(title or "")
+    haystack = f"{title} {description or ''}"
+    if not (
+        POKER_CHIP_IDENTITY_SIGNALS.search(haystack)
+        or POKER_CHIP_MAKER_SIGNALS.search(haystack)
+    ):
+        return "no poker-chip/set identity or targeted collector maker in listing text"
+
+    declared_count = _declared_poker_chip_count(title)
+    if declared_count is not None and declared_count < POKER_CHIPS_MIN_SET_SIZE:
+        return (
+            f"explicit {declared_count}-piece/chip count below the settled "
+            f"{POKER_CHIPS_MIN_SET_SIZE}-chip usable-set minimum"
+        )
+    construction = POKER_INELIGIBLE_CONSTRUCTION_SIGNALS.search(haystack)
+    if construction:
+        return f"explicitly ineligible chip construction {construction.group(0)!r}"
+    non_set = POKER_SAMPLE_OR_EMPTY_STORAGE_SIGNALS.search(haystack)
+    if non_set:
+        return f"sample/empty-storage listing signal {non_set.group(0)!r}"
     return None
 
 
@@ -2618,6 +2765,39 @@ def watch_price_band(title):
     for brand, band in WATCH_PRICE_BANDS.items():
         if re.search(rf"\b{re.escape(brand)}\b", haystack):
             return band
+    return None
+
+
+def watch_pre_ai_hard_fail_reason(listing, landed_price=None):
+    """Return a deterministic watch rejection before paid vision.
+
+    Function disclosures are definitive. The price-band check is also exact,
+    not a guessed desirability threshold: the post-AI watch path clamps resale
+    to the same band ceiling and requires Great Deal/Steal (>=50% under), so a
+    landed cost above half that ceiling is mathematically unable to alert.
+    """
+    listing = listing or {}
+    haystack = f"{listing.get('title', '')} {listing.get('description') or ''}"
+    nonfunctional = WATCH_NONFUNCTIONAL_TEXT_SIGNALS.search(haystack)
+    if nonfunctional:
+        return (
+            "condition hard-fail: watch explicitly disclosed as nonfunctional "
+            f"({nonfunctional.group(0)!r})"
+        )
+
+    band = watch_price_band(listing.get("title", ""))
+    try:
+        landed = float(landed_price) if landed_price is not None else None
+    except (TypeError, ValueError):
+        landed = None
+    if band is not None and landed is not None:
+        _low, _avg, high = band
+        if landed > high * 0.50:
+            return (
+                f"watch pre-AI below margin: ${landed:.2f} landed exceeds half "
+                f"the configured ${high:g} resale ceiling, so the required "
+                "50%-under Great Deal bar is impossible"
+            )
     return None
 
 
@@ -3358,6 +3538,26 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
             "reason": structured_condition_fail,
             "listing": listing,
         }
+
+    if category == "poker-chips":
+        poker_pre_ai_fail = poker_pre_ai_hard_fail_reason(
+            listing.get("title"), listing.get("description")
+        )
+        if poker_pre_ai_fail:
+            return {
+                "verdict": "PASS",
+                "reason": f"poker pre-AI reject: {poker_pre_ai_fail}",
+                "listing": listing,
+            }
+
+    if category == "watches":
+        watch_pre_ai_fail = watch_pre_ai_hard_fail_reason(listing, price)
+        if watch_pre_ai_fail:
+            return {
+                "verdict": "PASS",
+                "reason": watch_pre_ai_fail,
+                "listing": listing,
+            }
 
     # 1. Brand/fabric/fit are apparel concerns. Golf equipment previously
     # ran through them too, which hard-rejected every normal "golf club"
@@ -4233,7 +4433,7 @@ def check_photos_with_gemini(
     # take the descriptions as well...context for the AI to help decide."
     # Only Poshmark/ShopGoodwill carry this for free today (see
     # make_listing()); eBay candidates get it fetched separately right
-    # before this call - see fetch_ebay_item_description(). Truncated:
+    # before this call - see fetch_ebay_item_details(). Truncated:
     # real descriptions run long and this is meant as size/fabric/
     # condition context, not the primary evidence (the photos are).
     description = (listing.get("description") or "").strip()
@@ -4995,6 +5195,12 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     )
     if structured_condition_fail:
         return structured_condition_fail
+    if category == "watches":
+        watch_pre_ai_fail = watch_pre_ai_hard_fail_reason(
+            result.get("listing"), result.get("price")
+        )
+        if watch_pre_ai_fail:
+            return watch_pre_ai_fail
 
     deal_rating = result.get("deal_rating")
     discount_pct = result.get("discount_pct")
@@ -5789,6 +5995,7 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
         (("stale fixed-price listing",), "STALE_LISTING"),
         (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
         (("golf wrong-item title",), "GOLF_WRONG_ITEM"),
+        (("poker pre-ai reject",), "POKER_PRETRIAGE_REJECT"),
         (("counterfeit", "replica", "not authentic", "authenticity red flag"), "COUNTERFEIT"),
         (("gender", "women's", "womens", "ladies"), "GENDER_EXCLUDE"),
         (("over max price", "exceeds $", "price cap"), "OVER_MAX_PRICE"),
@@ -7639,14 +7846,7 @@ def _poker_scrape_title_quality_score(candidate):
         return 0.0
     title = title.lower()
 
-    declared_counts = []
-    for pattern in (
-        r"\b(\d{1,4})\s*[- ]?(?:chip|pc|piece)s?\b",
-        r"\b(?:set|lot)\s+(?:of\s+)?(\d{1,4})\b",
-        r"\bx\s*(\d{1,4})\s*(?:lot|chips?)\b",
-    ):
-        declared_counts.extend(int(match) for match in re.findall(pattern, title))
-    declared_count = max(declared_counts, default=None)
+    declared_count = _declared_poker_chip_count(title)
     # These are the maker terms supported by this incident's fresh title and
     # vision evidence. Keep the initial ranking signal deliberately narrow;
     # adding every conceivable chip maker would turn a cheap triage cue into
@@ -8113,7 +8313,8 @@ def run():
             EBAY_FAST_SEARCHES_PER_RUN
             + EBAY_SLOW_SEARCHES_PER_RUN
             + len([s for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)])
-            + GEMINI_CALL_LIMIT  # fetch_ebay_item_description(), one per AI check
+            + GEMINI_CALL_LIMIT  # fetch_ebay_item_details(), one per AI check
+            + EBAY_SCRAPE_AI_CHECK_LIMIT  # scrape-lane item details/condition
             + AUCTION_AI_RESERVED_CALLS  # the reserved auction slot may fetch a description too
         )
         if remaining is not None:
@@ -9180,18 +9381,76 @@ def run():
                         break
                 gemini_calls += 1
             # eBay's item_summary/search (search_ebay()) never returns a
-            # description - only this separate per-item call does.
+            # description, while the supplementary HTML scraper returns
+            # neither description nor structured condition. This one
+            # already-budgeted item-detail call fills both gaps.
             # Poshmark/ShopGoodwill already carry it for free (see
             # make_listing()); Vinted/Grailed don't return it at all.
             # Deliberately gated behind the SAME gemini_calls budget check
             # above, not an independent one - see fetch_ebay_item_
-            # description()'s docstring for why that distinction matters.
-            if not listing.get("platform") and not listing.get("description"):
-                if _run_deadline_reached("before an eBay description fetch"):
+            # details()'s docstring for why that distinction matters.
+            is_ebay_source = (
+                not listing.get("platform")
+                or listing.get("platform") == "ebay_scraped"
+            )
+            needs_ebay_details = (
+                not listing.get("description")
+                or (
+                    not listing.get("ebay_condition")
+                    and not listing.get("ebay_condition_id")
+                )
+            )
+            if is_ebay_source and needs_ebay_details:
+                if _run_deadline_reached("before an eBay item-detail fetch"):
                     break
-                description = fetch_ebay_item_description(token, item_id)
-                if description:
-                    listing["description"] = description
+                details = fetch_ebay_item_details(token, item_id)
+                if details:
+                    listing.update(details)
+
+            # Critical for scrape-lane watches: the first structured check
+            # ran before item details existed. Real delivered Oris item
+            # 287464714587 was conditionId 7000 on eBay but reached AI with
+            # no condition fields because this re-check did not exist.
+            late_structured_condition_fail = (
+                _ebay_structured_condition_hard_fail_reason(listing)
+            )
+            if late_structured_condition_fail:
+                logger.info(
+                    "Skipping %s: late eBay structured-condition hard-fail - %s",
+                    item_id,
+                    late_structured_condition_fail,
+                )
+                result["verdict"] = "PASS"
+                result["reason"] = late_structured_condition_fail
+                append_alert_log(result)
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
+
+            # Category-specific text/price facts can also arrive only in an
+            # eBay detail description. Re-run the same pure helpers before
+            # vision; no threshold is relaxed or inferred here.
+            late_category_fail = None
+            if category == "poker-chips":
+                poker_fail = poker_pre_ai_hard_fail_reason(
+                    listing.get("title"), listing.get("description")
+                )
+                if poker_fail:
+                    late_category_fail = f"poker pre-AI reject: {poker_fail}"
+            elif category == "watches":
+                late_category_fail = watch_pre_ai_hard_fail_reason(
+                    listing, result.get("price")
+                )
+            if late_category_fail:
+                logger.info(
+                    "Skipping %s: late category pre-AI hard-fail - %s",
+                    item_id,
+                    late_category_fail,
+                )
+                result["verdict"] = "PASS"
+                result["reason"] = late_category_fail
+                append_alert_log(result)
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
             # eBay's description only becomes available HERE (it costs a
             # separate per-item call, deliberately budget-gated), so the
             # PASS 1 jacket-only check ran title-only for eBay listings.

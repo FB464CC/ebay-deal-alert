@@ -684,6 +684,31 @@ class PokerChipsGate(unittest.TestCase):
 
 
 class PokerChipsConfiguration(unittest.TestCase):
+    def test_deterministic_text_prefilter_rejects_only_settled_gate_failures(self):
+        rejected = (
+            "Vintage Poker Chips Lot of 24",
+            "500 Plastic Poker Chips Set",
+            "Monte Carlo Poker Chip Sample Pack",
+            "Wood Dining Table and Chairs",
+        )
+        for title in rejected:
+            with self.subTest(title=title):
+                self.assertIsNotNone(m.poker_pre_ai_hard_fail_reason(title))
+
+        kept = (
+            "Slowplay Poker Chips Set 500 Count",
+            "Paulson TH&C vintage set",
+            "The Classic Collection Poker Set with wooden case",
+            "Vintage ceramic poker chip lot, count unknown",
+            "Vintage clay poker chips lot 2.25lb",
+            "Executive Texas Holdem set",
+            "Texas holdem and blackjack set",
+            "Fichas de poker",
+        )
+        for title in kept:
+            with self.subTest(title=title):
+                self.assertIsNone(m.poker_pre_ai_hard_fail_reason(title))
+
     def test_saved_searches_have_requested_shape_and_implicit_ebay_lane(self):
         expected_queries = {
             "casino poker chips set",
@@ -1205,6 +1230,24 @@ class GolfEquipmentGate(unittest.TestCase):
         for query, title in cases:
             with self.subTest(query=query, title=title):
                 self.assertIsNone(m.golf_wrong_item_title_reason(title, query))
+
+    def test_title_prefilter_moves_deterministic_final_golf_rejects_before_ai(self):
+        rejected = (
+            ("golf club set", "RAM Golf Right Hand Club Set With Bag"),
+            ("golf club set", "Callaway Complete Golf Set Left Handed LH"),
+        )
+        for query, title in rejected:
+            with self.subTest(title=title):
+                self.assertIsNotNone(m.golf_wrong_item_title_reason(title, query))
+
+        # Conflicting seller shorthand is ambiguous and the settled premium
+        # Tour Edge sub-line remains eligible for the photo gate.
+        self.assertIsNone(m.golf_wrong_item_title_reason(
+            "Ping PAL Putter LH Steel Right Handed", "ping putter"
+        ))
+        self.assertIsNone(m.golf_wrong_item_title_reason(
+            "Tour Edge Exotics CBX Forged 4-PW Iron Set RH", "golf iron set"
+        ))
 
     def test_requested_single_component_can_clear_without_being_a_set(self):
         reason = m.is_blocked_by_steal_quality_gate(
@@ -1847,6 +1890,17 @@ class WatchPriceBand(unittest.TestCase):
         low, avg, high = band
         self.assertEqual(low, 60, "sanity check against the real band that produced the live miss")
         self.assertEqual(m.clamp_watch_resale_estimate(10, band), 10, "must stay at the AI's real number, not jump to the floor")
+
+    def test_nonfunctional_text_is_a_final_delivery_backstop(self):
+        reason = m.is_blocked_by_steal_quality_gate({
+            "listing": {"title": "Vintage Oris Watch - Not Running"},
+            "price": 40,
+            "deal_rating": "Steal",
+            "discount_pct": 90,
+            "price_confidence": "high",
+            "watch_brand_mismatch": False,
+        }, category="watches")
+        self.assertIn("condition hard-fail", reason)
 
 
 class WatchDescriptionValueEvidence(unittest.TestCase):
@@ -2715,6 +2769,32 @@ class ScoreListingHardFails(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertIn("condition hard-fail keyword", result["reason"])
         self.assertIn("not working", result["reason"])
+
+    def test_watch_nonfunctional_phrases_missing_from_generic_list_hard_fail(self):
+        for disclosure in (
+            "Beautiful dial, not running",
+            "Movement does not run",
+            "This watch is nonfunctional",
+            "Stopped working last year",
+            "It is not keeping accurate time",
+        ):
+            with self.subTest(disclosure=disclosure):
+                result = m.score_listing(
+                    self._listing("Vintage Longines Watch", description=disclosure),
+                    gap_report=None,
+                    category="watches",
+                )
+                self.assertEqual(result["verdict"], "PASS")
+                self.assertIn("condition hard-fail", result["reason"])
+
+    def test_watch_impossible_configured_band_margin_skips_ai(self):
+        result = m.score_listing(
+            self._listing("Seiko Automatic Watch", price=1000.01),
+            gap_report=None,
+            category="watches",
+        )
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertIn("50%-under Great Deal bar is impossible", result["reason"])
 
     def test_real_hamilton_title_still_blocks_via_description_keyword_path(self):
         # Preserve the existing text defense independently of the new
@@ -4520,6 +4600,20 @@ class EbayItemDescription(unittest.TestCase):
             text = m.fetch_ebay_item_description("fake-token", "v1|123|0")
         self.assertIsNone(text)
 
+    def test_item_details_return_description_and_structured_condition(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.json = lambda: {
+            "description": "<p>Movement does not run.</p>",
+            "condition": "For parts or not working",
+            "conditionId": "7000",
+        }
+        with mock.patch("requests.get", return_value=fake_resp):
+            details = m.fetch_ebay_item_details("fake-token", "v1|287464714587|0")
+        self.assertEqual(details["description"], "Movement does not run.")
+        self.assertEqual(details["ebay_condition"], "For parts or not working")
+        self.assertEqual(details["ebay_condition_id"], "7000")
+
 
 class EbayEndingSoonAuctions(unittest.TestCase):
     """Per explicit user instruction: "auctions that are underwatched and
@@ -5348,12 +5442,16 @@ class QuietHoursTests(unittest.TestCase):
             with mock.patch.object(m, "send_alert") as send, \
                  mock.patch.object(m, "save_quiet_alert_queue", return_value=False), \
                  mock.patch.object(m, "notify_bot_down") as notify:
-                self.assertEqual(m.flush_quiet_alert_queue(conn), 1)
+                # This is a morning-flush test; pin morning explicitly so it
+                # does not fail merely because pytest is run during the
+                # configured 23:00-07:00 owner-time quiet window.
+                morning = datetime(2026, 9, 1, 13, tzinfo=timezone.utc)
+                self.assertEqual(m.flush_quiet_alert_queue(conn, morning), 1)
                 self.assertFalse(m.is_new(conn, "quiet-cleanup-fail"))
                 # The disk row is deliberately still present because both
                 # simulated cleanup writes failed. Seen state must prevent a
                 # second external push while cleanup keeps retrying.
-                self.assertEqual(m.flush_quiet_alert_queue(conn), 0)
+                self.assertEqual(m.flush_quiet_alert_queue(conn, morning), 0)
             send.assert_called_once_with(result)
             notify.assert_called_once()
             self.assertEqual(len(m.load_quiet_alert_queue()), 1)
@@ -6912,7 +7010,7 @@ class RunIntegration(unittest.TestCase):
         self._patch("get_ebay_token", lambda: "fake-oauth-token")
         self._patch("get_ebay_rate_limit_remaining", lambda token: (5000, 5000))
         self._patch("fetch_gap_report", lambda: None)
-        self._patch("fetch_ebay_item_description", lambda token, item_id: None)
+        self._patch("fetch_ebay_item_details", lambda token, item_id: None)
         self._patch("fetch_vinted_item_description", lambda url: None)
         self._patch("fetch_offerup_item_description", lambda url: None)
         self._patch("prefetch_marketplaces", lambda now, conn, **kwargs: {})
@@ -7358,8 +7456,12 @@ class RunIntegration(unittest.TestCase):
         fetch_description.assert_called_once_with(listing["itemWebUrl"])
         self.assertEqual(listing["price"]["value"], 450.0)
         self.assertEqual(listing["offerup_search_price"], 1.0)
-        self.assertEqual(self.ai_calls, [listing["itemId"]])
+        # $450 plus tax exceeds half Tissot's configured $900 ceiling, so
+        # even a clamped best-case AI estimate cannot reach 50%-under.
+        self.assertEqual(self.ai_calls, [])
         self.assertEqual(self.alerts, [])
+        self.assertIn("50%-under Great Deal bar is impossible",
+                      self._alert_log_records()[0]["reason"])
 
     def test_offerup_zero_dollar_watch_uses_450_description_ask(self):
         # Regression for the $0-drop finding: a genuine $0/free-listing
@@ -7394,8 +7496,10 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(listing["price"]["value"], 450.0)
         self.assertTrue(listing["offerup_price_from_description"])
         self.assertNotIn("offerup_placeholder_price", listing)
-        self.assertEqual(self.ai_calls, [listing["itemId"]])
+        self.assertEqual(self.ai_calls, [])
         self.assertEqual(self.alerts, [])
+        self.assertIn("50%-under Great Deal bar is impossible",
+                      self._alert_log_records()[0]["reason"])
 
     def test_offerup_zero_dollar_watch_unresolved_hard_fails(self):
         # If the detail page never yields a real ask, the $0 card must be
@@ -7482,11 +7586,13 @@ class RunIntegration(unittest.TestCase):
             "category_id": "11484", "enabled": True, "profile": "fast",
         }, [item])
         self._patch(
-            "fetch_ebay_item_description",
-            lambda token, item_id: (
-                "This is my own version / inspired handmade tribute of the "
-                "classic design, not the real thing."
-            ),
+            "fetch_ebay_item_details",
+            lambda token, item_id: {
+                "description": (
+                    "This is my own version / inspired handmade tribute of the "
+                    "classic design, not the real thing."
+                )
+            },
         )
 
         m.run()
@@ -7497,6 +7603,40 @@ class RunIntegration(unittest.TestCase):
         (record,) = self._alert_log_records()
         self.assertEqual(record["verdict"], "PASS")
         self.assertIn("counterfeit", record["reason"])
+
+    def test_real_delivered_oris_scrape_lane_condition_blocks_before_ai(self):
+        # Exact production reproduction: the scraper supplied title/price but
+        # no condition. eBay's item-detail response identifies the delivered
+        # item as conditionId 7000, which must now stop it before vision.
+        item = self._ebay_item(
+            "v1|287464714587|0",
+            "Oris Gold Filled 10 Microns 17 Jewels Mesh Band Square Face Watch W/ Box 1960s C",
+            40,
+        )
+        item["platform"] = "ebay_scraped"
+        item["_from_scrape_lane"] = True
+        self._serve({
+            "query": "oris watch", "category": "watches", "max_price": 400,
+            "category_id": "31387", "enabled": True, "profile": "fast",
+        }, [item])
+        self._patch(
+            "fetch_ebay_item_details",
+            lambda token, item_id: {
+                "description": "Vintage Oris offered for restoration.",
+                "ebay_condition": "For parts or not working",
+                "ebay_condition_id": "7000",
+            },
+        )
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertFalse(m.is_new(self._db(), item["itemId"]))
+        (record,) = self._alert_log_records()
+        self.assertEqual(record["disposition_code"], "CONDITION_REJECT")
+        self.assertEqual(record["ebay_condition_id"], "7000")
+        self.assertIn("structured condition hard-fail", record["reason"])
 
     def test_ebay_regular_and_auction_counts_reach_anomaly_history(self):
         regular = self._ebay_item(

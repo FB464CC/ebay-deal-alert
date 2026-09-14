@@ -1,0 +1,197 @@
+PRE-AI PRETRIAGE FILTER INVESTIGATION
+Started: 2026-09-13 (America/New_York)
+
+Checkpoint 1 - checkout and settled-work baseline
+- Confirmed the supplied checkout without fetch/pull/clone. `git log -1
+  --format="%H %s"` returned:
+  `1de9a37f04f8643bbf2922c82d7f1898791dfa11 Scout ingest: 1 listing(s) from extension`.
+- Initial `git status --short` was empty. HEAD differs from the dispatch's named
+  implementation commits because live Scout/poll-state commits are layered above
+  them. `93e17c9` is a confirmed ancestor of HEAD. The shallow checkout is grafted
+  below `930ca7f`, so `1ae0244` is not locally resolvable as an object; no network
+  history operation was used to change that.
+- Read in full before editing: CONDITION_GATE_FIX.txt, GOLF_MARGIN_REPORT.txt,
+  GOLF_SPEED_REPORT.txt, GOLF_ZERO_REPORT.txt, POKER_BUDGET_STARVATION_FIX.txt,
+  POKER_CHIPS_RESEARCH.txt, POKER_JACKET_GATE_REPORT.txt,
+  POKER_SCRAPE_FLOOD_FIX.txt, WATCH_COUNTERFEIT_GAP_FIX.txt,
+  WATCH_TRUST_REPORT.txt, and BUDGET_EXHAUSTION_INVESTIGATION.txt.
+- Settled constraints retained: golf already has a deterministic product/type
+  prefilter, component-aware handling, and a >=50%-under-resale delivered-deal
+  floor; poker already requires >=100 chips plus visually verified qualifying
+  clay/ceramic construction and has bounded shared-pool access; eBay conditionId
+  7000 and known structured nonfunctional labels already hard-fail before AI and
+  at the final gate; watch extreme-discount/counterfeit handling is deliberately
+  not a price-only hard block; the $10 monthly budget is a deliberate ceiling.
+- Therefore this investigation will not re-litigate those choices. Any change
+  must explain fresh production rows that the existing mechanisms do not cover.
+
+Checkpoint 2 - live telemetry and seven-day reconstruction
+- Pulled the live production log exactly through the requested GitHub Contents
+  API/base64 path. The current rolling file contains 726 rows spanning
+  2026-09-13T17:26:34Z through 2026-09-14T02:32:50Z: 365 golf-equipment,
+  124 poker-chips, 231 watches, and 6 other-category rows.
+- Its disposition counts are: NO_AI_BUDGET 135, CONDITION_REJECT 108,
+  GATE_REJECTED 89, GOLF_REJECT 89, STALE 72, BELOW_MARGIN 55, GENDER 55,
+  OVER_MAX 44, GOLF_WRONG_ITEM 43, AI_NO_PRICE 13, COUNTERFEIT 10,
+  DELIVERED 9, MONTHLY_BUDGET_EXHAUSTED 3, AI_NO_PRICE_CAPPED 1.
+- Because the live file is rolling, reconstructed Sep 7 through Sep 14 from 75
+  hourly GitHub snapshots and deduplicated exact JSON lines. This produces
+  18,583 rows (hourly cadence can miss only very short high-throughput intervals,
+  so these are conservative rather than inflated counts).
+- Golf: 7,285 rows / 3,534 distinct item IDs. Dispositions: NO_AI_BUDGET 4,260;
+  STALE 1,178; GOLF_WRONG_ITEM 484; GOLF_REJECT 464; CONDITION_REJECT 321;
+  AI_NO_PRICE 197; BELOW_MARGIN 148; OVER_MAX 115; GENDER 90; DELIVERED 19;
+  AI_NO_PRICE_CAPPED 6; COUNTERFEIT 3. There were 1,157 terminal AI-reviewed
+  rows and only 19 deliveries: 1.64% observed pre-AI precision.
+- Poker: 6,348 rows / 1,865 distinct item IDs. Dispositions: NO_AI_BUDGET 5,037;
+  GATE_REJECTED 722; STALE 517; CONDITION_REJECT 35; GENDER 13; OVER_MAX 12;
+  COUNTERFEIT 8; DELIVERED 4. Excluding old-schema rows incorrectly marked
+  ai_checked under NO_AI_BUDGET, 724 terminal AI-reviewed rows yielded four
+  deliveries: 0.55% precision. The four deliveries were one generic Vinted
+  `Poker Chips` listing and three Slowplay sets; none is evidence of the rare
+  premium/vintage steal the owner wants.
+- Watches: 4,455 rows / 1,989 distinct item IDs. Dispositions: NO_AI_BUDGET 2,689;
+  STALE 680; GENDER 394; CONDITION_REJECT 303; OVER_MAX 133; BELOW_MARGIN 111;
+  COUNTERFEIT 82; GATE_REJECTED 25; DELIVERED 21; AI_NO_PRICE 14; and
+  MONTHLY_BUDGET_EXHAUSTED 3. Excluding monthly/no-budget rows, 407 terminal
+  AI-reviewed rows yielded 21 deliveries: 5.16% precision.
+- The monthly outage was the dominant A/B suppressor, but not the whole finding:
+  thousands of rows were suppressed after 2026-09-08, while fallback AI still
+  processed hundreds at only 1.64% golf / 0.55% poker precision. Thus the
+  just-deployed accounting/disposition repairs explain the missing paid-AI
+  opportunity, but an additional evidenced efficiency problem remains: both
+  category prefilters pass far too many deterministic negatives.
+- Time split confirms there is not enough post-fix telemetry to infer an alert
+  trend. Between 1ae0244's deployment and the 93e17c9 audit, golf had 201 rows /
+  140 AI / 4 delivered and poker 62 / 48 / 0. After the audit there are only
+  about 43 minutes: golf 28 / 18 / 1 and poker 5 / 5 / 0. The new monthly
+  disposition appears, but sample size is meaningless for outcome comparison.
+
+Checkpoint 3 - concrete delivered broken-watch reproduction
+- Production delivered eBay item `v1|287464714587|0` at 2026-09-13T22:22:43Z:
+  `Oris Gold Filled 10 Microns 17 Jewels Mesh Band Square Face Watch W/ Box
+  1960s C`, landed $42.40, AI resale $100, Great Deal 58%, medium confidence.
+  Its recorded AI summary says there are no obvious major flaws.
+- The live eBay item page's structured condition is `For parts or not working`,
+  whose eBay definition explicitly says nonfunctional/defective/requires repair
+  or is missing essential components. The production log has neither
+  ebay_condition nor ebay_condition_id for this alert.
+- Code-path trace proves this is a third mechanism, not a regression in the
+  settled official Browse condition gate. Browse search results retain condition
+  and exclude conditionId 7000. `ebay_scrape.py` only extracts id/title/price/
+  image (plus auction countdown). The later item-description enrichment in
+  `run()` is guarded by `if not listing.get("platform")`, so it deliberately
+  skips `platform="ebay_scraped"`. Consequently this real listing reached AI and
+  delivery with neither structured condition nor description. Image review
+  cannot establish whether a mechanical movement runs.
+- The bounded fix is to let the existing item-detail request return description
+  plus condition/conditionId, run it for official and scraped eBay rows, merge
+  those fields before the paid call, and re-run the existing structured/text
+  condition gate. No scraper-file edit is necessary.
+
+Checkpoint 4 - full pre-AI layer audit and targeted backtest design
+- Read every pre-AI path used by enabled config categories: marketplace/title
+  relevance and exclusions; relist/size/width/fitted-shirt/max-price/suit-size
+  gates; watch identity/authenticity/lot gates; golf wrong-item detection;
+  universal gender/pet/packaging/counterfeit/structured-condition/text-condition
+  scoring; apparel brand/fabric/logo checks; staleness; repeat no-price cap;
+  sold-comparable and seller-feedback scoring; category fairness; and the final
+  poker, golf, watches, school, knitwear, tailoring, and default category gates.
+- Current numeric `_pretriage_score` is not a true steal-likelihood filter: it
+  awards at most sold-comps and seller-feedback points, then scheduling fairness
+  sends many candidates to AI whose final category gate rejects deterministic
+  facts already visible in title/description. The observed 0.55%-5.16% terminal
+  yield is the direct production measure of that looseness.
+- Replayed all seven-day terminal AI rows through current title-only prefilters,
+  then evaluated only deterministic incremental rules. Proposed golf title rules
+  remove explicit left-handed-only items and title-identifiable blocklisted
+  brands before AI. The broad historical union was 76/1,126 current survivors
+  (6.75%) and removed 0/19 delivered golf alerts; implementation will use the
+  safer non-conflicting handedness form and the existing brand parser, then
+  report the exact final count.
+- Proposed poker rules require a chip identity (or a settled premium maker),
+  reject an explicit count below the already-settled 100-chip minimum, reject
+  explicitly ineligible plastic/composite/metal-core construction, and reject
+  explicit samples/empty storage. The broad candidate union was 260/724 current
+  survivors (35.91%) and removed 0/4 delivered poker alerts. Implementation will
+  avoid speculative carousel/caddy rejection and report the narrower exact
+  result.
+- Proposed watch rules add explicit nonfunctional wording missed by the generic
+  list (`not running`, `does not run`, `nonfunctional`, etc.) and a mathematically
+  impossible margin check: if landed cost already exceeds half the model's
+  configured maximum resale band, the existing >=50%-under gate cannot ever
+  deliver it after resale clamping. Both had zero overlap with 21 delivered rows.
+- Scraper-coverage hypothesis explicitly refuted after checking the source
+  objects rather than relying on a derived summary: all 18 poker searches do
+  carry category_id `166570`, and both official Browse and the supplementary
+  scraper receive it. eBay's current primary category page independently
+  confirms 166570 is Poker Chips. There is no current category-scope defect and
+  no category/search configuration change is warranted.
+
+Checkpoint 5 - implemented rules and exact historical backtest
+- Golf: extended the existing title wrong-item gate with two facts that its
+  final AI gate already rejects: an unambiguous left-handed-only title (not a
+  stand bag, and no conflicting RH/right-handed signal) and a blocklisted brand
+  recognized by the existing conservative brand-segment parser. This preserves
+  Tour Edge Exotics and ambiguous/mixed-brand titles for vision.
+- Poker: added a deterministic pre-AI text gate that (1) requires poker-chip/
+  poker-set/casino-set identity or one of the already-targeted collector makers,
+  (2) rejects a title's explicit count below the settled 100-chip minimum,
+  (3) rejects only explicit chip construction known to be out of scope
+  (plastic/ABS/clay-composite/metal-core), and (4) rejects samples or explicitly
+  empty storage. Ambiguous sets, counts, materials, caddies, and cases still go
+  to vision. Added POKER_PRETRIAGE_REJECT telemetry.
+- Watches: added unequivocal function-language rejection for `not running`,
+  `does not run/wind/tick`, nonfunctional, stopped working, not keeping time,
+  and dead movement. Added a pre-AI mathematical margin gate only where a known
+  configured brand band exists: landed cost above half its high ceiling cannot
+  possibly reach the existing >=50%-under final bar after the existing ceiling
+  clamp. The same helper is a final-delivery backstop.
+- Scraped eBay fix: the already-budgeted `/item/{item_id}` request now returns
+  description plus normalized condition/conditionId. `run()` performs it for
+  both official and `ebay_scraped` rows, merges evidence, then repeats structured
+  condition and category text gates before vision. The exact delivered Oris
+  reproduction now logs CONDITION_REJECT with conditionId 7000, makes zero AI
+  calls, and sends zero alerts.
+- Final exact seven-day replay over terminal AI rows (provider identity is not
+  logged, so paid vs fallback cannot honestly be separated):
+  * golf: 46/1,157 calls avoided (3.98%), 0/19 deliveries removed; projected
+    precision 1.64% -> 1.71%.
+  * poker: 135/724 avoided (18.65%), comprising 61 identity noise rows plus
+    explicit sub-100 counts, 12 explicit construction failures, and 2 samples;
+    0/4 deliveries removed; projected precision 0.55% -> 0.68%.
+  * watches: 6/407 avoided (1.47%: five explicit nonfunctional titles and one
+    impossible configured-band margin), 0/21 deliveries removed; projected
+    precision 5.16% -> 5.24%. The Oris conditionId fix is additional because
+    that evidence was absent from the historical log and came from the live
+    item-detail reproduction.
+  * combined priority categories: 187/2,288 historical AI reviews avoided
+    (8.17%), with 0/44 delivered alerts removed; projected terminal precision
+    1.92% -> 2.09%.
+- This does not honestly achieve a 99% pre-AI rejection rate. It is the largest
+  safe deterministic cut supported by retained telemetry without discarding
+  ambiguous listings or inventing price signals. Poker gets the material
+  improvement; golf's low alert yield remains primarily the monthly-budget
+  outage plus a genuinely selective >=50%-under final bar, not a newly found
+  golf coverage defect.
+
+Checkpoint 6 - validation and scope audit
+- Exact requested syntax check:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  exited 0 with no output.
+- Config parse check (config was not modified):
+  `python3 -c "import json; json.load(open('config.json'))"`
+  exited 0 with no output.
+- Exact full suite: `python3 -m pytest -q` ->
+  `720 passed, 2 warnings, 518 subtests passed in 22.59s`.
+  The two warnings are the existing lxml `strip_cdata` deprecation in the
+  mid-run-429 auction test; there are zero failures.
+- One pre-existing quiet-hours test called a morning flush using wall-clock
+  `now`, so it failed when this required full suite was run at 23:00 owner time.
+  The test now pins an explicit 09:00 America/New_York-equivalent timestamp;
+  production quiet-hours code is unchanged.
+- `git diff --check` exited 0 (only Windows LF/CRLF advisory warnings). Final
+  tracked modifications are ebay_deal_alert.py and test_ebay_deal_alert.py;
+  this investigation report is new. config.json, ebay_scrape.py, saved-search
+  fields, spend constants, chrome-extension/*, web/*, and all unrelated
+  production code remain untouched. No commit or push was made.
