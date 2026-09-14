@@ -1,0 +1,89 @@
+GEMINI FREE-LANE INVESTIGATION
+Started: 2026-09-14 (America/New_York)
+
+Scope guardrails
+- Research the live Gemini vision lane, current Google quota/policy, and safe key-pool infrastructure only.
+- Do not change the paid-AI budget/accounting path or any saved-search field.
+- Do not create, provision, store, or commit any API key.
+
+Repository baseline
+- Confirmed HEAD: ba4e141c0ea18a9c17a7b2cf12f95d2abf3cf356 Scout ingest: 1 listing(s) from extension
+- The worktree was clean before this investigation file was created.
+- This HEAD is later than and contains the fixes named in the dispatch; no fetch/pull/clone was performed.
+
+Initial code facts (evidence collection still in progress)
+- config.json sets GEMINI_CALL_LIMIT=12 and AI_PHOTO_PROVIDER="deepseek".
+- ebay_deal_alert.py defaults GEMINI_MODEL to gemini-flash-lite-latest when GEMINI_MODEL is unset.
+- PASS 3 initializes an in-process gemini_calls counter and grants ordinary shared slots while gemini_calls < GEMINI_CALL_LIMIT. The provider-routing and paid-budget interaction still need exact line-by-line tracing below before drawing a conclusion.
+
+Code-path finding: the free Gemini lane DOES run after the paid cap is exhausted
+- PASS 3 grants an AI-check slot first. The ordinary shared counter is named gemini_calls, but it counts admitted photo checks regardless of which provider ultimately serves them. Isolated scrape and Scout candidates use their own small counters; one ending-soon auction can use a reserved extra slot.
+- A granted candidate calls check_photos_with_gemini(), which downloads images and calls _call_photo_check().
+- AI_PHOTO_PROVIDER="deepseek" makes _call_photo_check() try _call_deepseek_json() first.
+- _call_deepseek_json() alone calls _reserve_paid_ai_spend(). At the exhausted $10 cap, reservation returns False and _call_deepseek_json() returns None without a DeepSeek network call.
+- The router treats that None as primary-provider failure and immediately calls _call_gemini_json().
+- _call_gemini_json() reads GEMINI_API_KEY and GEMINI_MODEL, then POSTs directly to the Google Generative Language API. It contains no paid-ledger/budget check. Therefore NO_AI_BUDGET / MONTHLY_BUDGET_EXHAUSTED is not a pre-Gemini short circuit.
+- _PAID_AI_BUDGET_EXHAUSTION is only consulted after the photo-check attempt. If Gemini returned usable JSON, the result is merged and ai_checked becomes true. If no provider returned a usable result, the retryable gate reason is relabeled MONTHLY_BUDGET_EXHAUSTED. This label describes why the configured paid primary was unavailable; it does not block the free fallback.
+
+Fresh production evidence (fetched with GitHub API raw-content response on 2026-09-14)
+- Available remote log: 721 rows, ending 2026-09-14T17:18:13.363761Z. All 721 rows fall within the latest 24-hour window represented in that file.
+- 345 rows have ai_checked=true (successful usable vision results), 9 were delivered, and 63 separately carry MONTHLY_BUDGET_EXHAUSTED.
+- Daily successful-result counts in this available window: 58 on 2026-09-13 and 287 on 2026-09-14 through 17:18Z.
+- Direct delivered proof: shopgoodwill:276642973, "Taylormade R540 Xd 9.5 Driver...", timestamp 2026-09-14T00:48:29.694296Z, disposition DELIVERED, delivered=true, ai_checked=true, commit c12d34629a0b30691af380f101f96fcc1044795c.
+- Direct completed-but-no-price proof: shopgoodwill:276578314, "TaylorMade Driver", timestamp 2026-09-14T00:47:53.302751Z, disposition AI_NO_PRICE, ai_checked=true, same run commit c12d34629a0b30691af380f101f96fcc1044795c.
+- Successful AI results peaked at 11 in one minute/run proxy in this sample. This is a lower bound on Gemini requests: failed/429/invalid-response attempts do not set ai_checked=true.
+
+Current model and exact quota evidence
+- Code requests GEMINI_MODEL if set, otherwise the moving alias gemini-flash-lite-latest. Google's current model documentation says a "latest" alias is hot-swapped with every new release of that model variation; it is not a fixed model ID: https://ai.google.dev/gemini-api/docs/models
+- The authenticated, read-only Google AI Studio Rate Limit dashboard for the production ClothingDeals project identifies its active model as "Gemini 3.5 Flash Lite" and its tier as Free. This is stronger evidence of what the production key is actually using than the stale 2.5-era code comment.
+- Exact active limits shown by that dashboard: 15 RPM, 250,000 input TPM, 500 RPD. Peak usage shown for the selected 28-day window: 12/15 RPM, 88.5K/250K TPM, 567/500 RPD. The page also states: "You have reached a rate limit. Set up billing to increase your limits and unblock your work."
+- Google's current public rate-limit documentation now deliberately does not publish one universal fixed table. It says limits depend on usage tier/account status, are visible in AI Studio, specified limits are not guaranteed, quota is applied per PROJECT rather than per API key, and RPD resets at midnight Pacific: https://ai.google.dev/gemini-api/docs/rate-limits
+- Google's current pricing page confirms Gemini 2.5 Flash-Lite standard input/output is free of charge on Free Tier, but pricing is not a quota promise: https://ai.google.dev/gemini-api/docs/pricing
+
+Decision on GEMINI_CALL_LIMIT
+- Do not raise 12. The active project is already daily-quota-bound (567 observed against 500 RPD) and the current per-run peak is 12 against 15 RPM. Raising the cap would have no sustainable free capacity to draw from and would increase 429s / front-load the daily outage.
+- The current 12 leaves a 3-request (20%) RPM margin, but no RPD margin. The earlier ~1,000-RPD comment in ebay_deal_alert.py is stale for this actual project/model. At the exact five-minute schedule ceiling, 12/run could admit 3,456 ordinary requests/day before isolated/reserved slots; actual demand, not the configured counter, is the only reason it does not do so.
+- The fresh successful-result rate extrapolates to roughly 487/day (345 successes over the available ~17 hours), already 97% of 500 and excluding failed requests. AI Studio's authoritative request telemetry confirms an actual 567-request peak day (113% of the active daily limit).
+
+Multiple-key/project policy finding
+- Multiple keys in the SAME project do not multiply quota. Google explicitly says: "Rate limits are applied per project, not per API key." Source: https://ai.google.dev/gemini-api/docs/rate-limits
+- Each API key belongs to a Cloud project. Source: https://ai.google.dev/gemini-api/docs/api-key
+- Separate-project sharding can therefore work technically because the enforcement unit is a project. But doing that specifically to multiply this one bot's documented free quota is not a permitted workaround.
+- The Gemini Additional Terms (effective 2026-03-23) incorporate the Google APIs Terms: https://ai.google.dev/gemini-api/terms
+- Google APIs Terms section 2(d) says exactly: "You agree to, and will not attempt to circumvent, such limitations documented with each API." It then requires Google's express consent for use beyond the limits. Source: https://developers.google.com/terms
+- Enforcement is real, not merely theoretical. Section 3(a) says Google may suspend API access without notice when it reasonably believes the Terms were violated; section 8(a) reserves termination/discontinuation rights. Intentionally creating extra accounts/projects to shard this single workload after its 500 RPD cap is reached squarely fits the ordinary meaning of circumventing a documented limitation.
+- Plain conclusion: same-project key rotation adds zero quota; cross-project/account pooling would add technical throughput but is a ToS/ban-risk method, not a clean free tier. Losing/suspending the currently productive project would sacrifice today's working fallback lane and its observed delivered alerts.
+
+Quantified capacity / $71-demand comparison
+- The active project's 500 RPD is 15,000 requests per 30-day month. The observed AI Studio peak is 567 requests/day, so the existing project covers 500/567 = 88.18% of that peak request demand and leaves 67/day (11.82%, 2,010/month) uncovered.
+- Under the OLD conservative reservation arithmetic used to derive the ~$71/month estimate, one vision reservation was $0.005. Thus 500 free vision calls/day correspond to at most $75/month of old nominal vision reservations, while the observed 67/day overflow corresponds to $10.05/month. These are replacement-equivalent reservation figures, not actual Google charges (free is $0) or a promise about post-settlement DeepSeek cost.
+- The prior ~$71/month estimate included both vision and $0.001 text reservations and predates the new usage settlement, so it cannot honestly be converted one-for-one into Gemini capacity. Gemini fallback replaces required photo checks; optional DeepSeek text-only sanity/second-opinion calls do not currently fall back to Gemini and fail open when paid budget is unavailable.
+- Same-project additional keys: 0 extra RPM, 0 extra TPM, 0 extra RPD, $0 equivalent gap reduction.
+- Purely technical, separate-project arithmetic: N additional free projects would expose up to 500*N additional RPD (15,000*N per 30 days), subject to each project's real dashboard limits/capacity. At the observed 567/day peak, N=1 would make aggregate nominal capacity 1,000/day and fully cover current photo-request volume, leaving 433/day unused. More than one adds no realistic benefit at current volume. This is precisely the sharding pattern Google section 2(d) says not to use to circumvent documented limits, so it is not recommended or represented as a compliant plan.
+
+Implemented generic credential-pool infrastructure (no secrets or accounts)
+- ebay_deal_alert.py accepts GEMINI_API_KEYS and the backward-compatible GEMINI_API_KEY; either may contain comma/newline-separated credentials. Duplicates and blank entries are removed. Because the existing Actions workflow already passes GEMINI_API_KEY, a future user decision can supply a list without any workflow edit.
+- Calls begin round-robin across configured slots. A 429 marks only that slot unavailable for the remainder of the short-lived process and immediately tries the next slot within the original timeout deadline. A new scheduled process probes again, allowing an RPM window to recover.
+- Each slot has independent process-local attempts/successes/rate_limited/available telemetry. It is intentionally described as credential health, not independent quota: keys in one project share Google's project-level counters.
+- Key material remains environment-only. It is never placed in config.json, logs, reports, committed state, or usage snapshots. Gemini authentication moved from a URL query parameter to the x-goog-api-key request header, preventing HTTP exception text from exposing a key.
+- No real key/account/project was created, read, copied, stored, or modified. No paid-budget/accounting or saved-search field was touched. GEMINI_CALL_LIMIT remains 12 because live evidence rejects an increase.
+- Added four focused regression tests for parsing/deduplication, round-robin order and header-only authentication, 429 fall-through with independent usage, and all-slots-limited behavior. Focused result: 26 passed in 1.38s.
+
+Final validation and scope audit (2026-09-14)
+- Exact required AST command passed, exit 0:
+  python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"
+- Config JSON command passed, exit 0 (run even though config.json was not changed):
+  python3 -c "import json; json.load(open('config.json'))"
+- Exact full-suite command passed:
+  python3 -m pytest -q
+  Result: 724 passed, 2 warnings, 518 subtests passed in 24.32s. Both warnings are pre-existing lxml strip_cdata deprecations from test_mid_run_429_also_stops_the_auction_lane.
+- git diff --check passed; only Git's informational LF-to-CRLF notices were printed.
+- Final working-tree scope: modified ebay_deal_alert.py and test_photo_provider.py; new GEMINI_FREE_LANE_INVESTIGATION.txt. config.json and ai_spend.db have no diff.
+- Diff audit found no change to AI_PAID_MONTHLY_BUDGET_USD, paid reservation/settlement/reconciliation logic, saved-search queries, enabled flags, category IDs, or maximum prices.
+- No commit or push was performed.
+
+Bottom line
+- Yes: free Gemini is actively carrying required vision checks and delivered nine alerts in the fresh retained production window despite the exhausted paid ledger.
+- No: raising GEMINI_CALL_LIMIT is not a free win. The real project is already at/over its 500 RPD cap and close to its 15 RPM cap.
+- Multiple keys from the current project add no quota. Multiple projects can multiply quota technically, but intentionally using them to get around this bot's documented cap conflicts with Google's express anti-circumvention term and puts the existing working free lane at suspension/termination risk.
+- The generic pool/failover mechanism is ready without secrets, but the evidence does not support using extra projects as a quota workaround. The clean paths are: continue with the existing ~500 free checks/day, reduce AI-check demand further, obtain Google's express consent/quota increase, or use paid capacity.

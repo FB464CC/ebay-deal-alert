@@ -480,13 +480,15 @@ EBAY_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("ebay_rate_limit
 # without needing to keep manually checking.
 EBAY_BACKOFF_INITIAL_MINUTES = 30
 EBAY_BACKOFF_MAX_MINUTES = 120
-# Resized from a hardcoded 6 for the 5-min poll cadence (288 runs/day, up
-# from the old ~55min-real/day). At 6/run that's ~1,728 Gemini calls/day -
-# comfortably over a Flash-Lite free-tier's ~1,000 RPD budget, meaning most
-# days would hit 429s partway through. 3/run = ~864/day, ~86% of budget
-# with headroom for quota uncertainty and manual --draft-listing runs.
 # Config-driven (like MAX_ALERTS_PER_RUN) so it can be retuned without a
-# code push if the real quota turns out different than assumed.
+# code push, but only against the project's live AI Studio limits. Google
+# now makes those limits account/project-specific rather than publishing one
+# guaranteed table. Verified 2026-09-14 for the production free project and
+# the model behind gemini-flash-lite-latest: 15 RPM, 250k input TPM, 500 RPD;
+# AI Studio showed a 567/500 peak day. The configured 12/run already reaches
+# 80% of RPM and has no sustainable daily headroom, so raising it would only
+# front-load 429s. (The older ~1,000-RPD assumption below is history, not a
+# current quota promise.)
 #
 # History: raised 3 -> 8 on Aug 9 against real demand measured THAT day
 # (~540 candidates/day, comfortably under 1,000 RPD even at 8/run). Demand
@@ -3726,10 +3728,120 @@ def _make_gemini_inline_part(content, mime_type):
     }
 
 
+_GEMINI_KEY_POOL_LOCK = threading.Lock()
+_GEMINI_KEY_POOL_SIGNATURE = ()
+_GEMINI_KEY_POOL_CURSOR = 0
+_GEMINI_KEY_POOL_UNAVAILABLE = set()
+_GEMINI_KEY_POOL_USAGE = {}
+
+
+def _configured_gemini_api_keys():
+    """Return distinct Gemini credentials without ever logging key material.
+
+    GEMINI_API_KEYS is the explicit pool variable. GEMINI_API_KEY remains
+    backward compatible and may itself contain a comma/newline-separated pool,
+    which lets the existing GitHub Actions secret wiring opt into rotation
+    without putting secrets in config.json or changing the workflow file.
+
+    Google enforces quota per project, not per key. Multiple keys belonging to
+    one project therefore provide credential failover only, never more quota.
+    """
+    keys = []
+    seen = set()
+    for raw_value in (
+        os.environ.get("GEMINI_API_KEYS", ""),
+        os.environ.get("GEMINI_API_KEY", ""),
+    ):
+        for candidate in re.split(r"[,\r\n]+", raw_value):
+            key = candidate.strip()
+            if key and key not in seen:
+                seen.add(key)
+                keys.append(key)
+    return keys
+
+
+def _gemini_key_fingerprint(api_key):
+    """Stable non-secret identifier used only for in-process counters."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+
+def _reset_gemini_key_pool_state():
+    """Reset process-local rotation/health state (also useful for tests)."""
+    global _GEMINI_KEY_POOL_SIGNATURE, _GEMINI_KEY_POOL_CURSOR
+    with _GEMINI_KEY_POOL_LOCK:
+        _GEMINI_KEY_POOL_SIGNATURE = ()
+        _GEMINI_KEY_POOL_CURSOR = 0
+        _GEMINI_KEY_POOL_UNAVAILABLE.clear()
+        _GEMINI_KEY_POOL_USAGE.clear()
+
+
+def _gemini_key_candidates():
+    """Return available credential slots in round-robin order."""
+    global _GEMINI_KEY_POOL_SIGNATURE, _GEMINI_KEY_POOL_CURSOR
+    keys = _configured_gemini_api_keys()
+    signature = tuple(_gemini_key_fingerprint(key) for key in keys)
+    with _GEMINI_KEY_POOL_LOCK:
+        if signature != _GEMINI_KEY_POOL_SIGNATURE:
+            _GEMINI_KEY_POOL_SIGNATURE = signature
+            _GEMINI_KEY_POOL_CURSOR = 0
+            _GEMINI_KEY_POOL_UNAVAILABLE.clear()
+            _GEMINI_KEY_POOL_USAGE.clear()
+        if not keys:
+            return []
+        start = _GEMINI_KEY_POOL_CURSOR % len(keys)
+        _GEMINI_KEY_POOL_CURSOR = (start + 1) % len(keys)
+        ordered_indexes = list(range(start, len(keys))) + list(range(0, start))
+        return [
+            (index + 1, keys[index], signature[index])
+            for index in ordered_indexes
+            if signature[index] not in _GEMINI_KEY_POOL_UNAVAILABLE
+        ]
+
+
+def _record_gemini_key_outcome(fingerprint, outcome):
+    with _GEMINI_KEY_POOL_LOCK:
+        usage = _GEMINI_KEY_POOL_USAGE.setdefault(
+            fingerprint,
+            {"attempts": 0, "successes": 0, "rate_limited": 0},
+        )
+        if outcome == "attempt":
+            usage["attempts"] += 1
+        elif outcome == "success":
+            usage["successes"] += 1
+        elif outcome == "rate_limited":
+            usage["rate_limited"] += 1
+            _GEMINI_KEY_POOL_UNAVAILABLE.add(fingerprint)
+
+
+def _gemini_key_usage_snapshot():
+    """Return secret-free process-local usage ordered by configured slot."""
+    keys = _configured_gemini_api_keys()
+    with _GEMINI_KEY_POOL_LOCK:
+        return [
+            {
+                "slot": index + 1,
+                **_GEMINI_KEY_POOL_USAGE.get(
+                    _gemini_key_fingerprint(key),
+                    {"attempts": 0, "successes": 0, "rate_limited": 0},
+                ),
+                "available": (
+                    _gemini_key_fingerprint(key)
+                    not in _GEMINI_KEY_POOL_UNAVAILABLE
+                ),
+            }
+            for index, key in enumerate(keys)
+        ]
+
+
 def _call_gemini_json(prompt, image_parts, timeout=20):
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_api_key:
-        logger.warning("Skipping Gemini call: GEMINI_API_KEY is not configured")
+    key_candidates = _gemini_key_candidates()
+    if not _configured_gemini_api_keys():
+        logger.warning(
+            "Skipping Gemini call: GEMINI_API_KEY/GEMINI_API_KEYS is not configured"
+        )
+        return None
+    if not key_candidates:
+        logger.warning("Skipping Gemini call: every configured key slot was rate-limited this run")
         return None
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 
@@ -3741,15 +3853,46 @@ def _call_gemini_json(prompt, image_parts, timeout=20):
             "responseMimeType": "application/json",
         },
     }
+    # Keep credentials out of the URL so an HTTP exception cannot print a key
+    # in logs. A 429 disables only that credential slot for the rest of this
+    # short-lived process and immediately tries the next slot. State is
+    # deliberately process-local: a new five-minute run probes again after RPM
+    # windows may have recovered. This is operational health tracking, not a
+    # claim that keys from the same project have independent Google quota.
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{gemini_model}:generateContent?key={gemini_api_key}"
+        f"{gemini_model}:generateContent"
     )
-    resp = requests.post(url, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    parts = resp.json()["candidates"][0]["content"]["parts"]
-    text = "".join(part.get("text", "") for part in parts)
-    return json.loads(_strip_json_code_fence(text))
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    pool_size = len(_configured_gemini_api_keys())
+    for slot, gemini_api_key, fingerprint in key_candidates:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning("Gemini key-pool retry deadline reached")
+            return None
+        _record_gemini_key_outcome(fingerprint, "attempt")
+        resp = requests.post(
+            url,
+            headers={"x-goog-api-key": gemini_api_key},
+            json=payload,
+            timeout=remaining,
+        )
+        if resp.status_code == 429:
+            _record_gemini_key_outcome(fingerprint, "rate_limited")
+            logger.warning(
+                "Gemini credential slot %s/%s was rate-limited; trying another slot",
+                slot,
+                pool_size,
+            )
+            continue
+        resp.raise_for_status()
+        parts = resp.json()["candidates"][0]["content"]["parts"]
+        text = "".join(part.get("text", "") for part in parts)
+        result = json.loads(_strip_json_code_fence(text))
+        _record_gemini_key_outcome(fingerprint, "success")
+        return result
+    logger.warning("Gemini call failed: every available credential slot returned 429")
+    return None
 
 
 def _make_deepseek_image_block(content, mime_type):

@@ -52,6 +52,83 @@ class MakeDeepseekImageBlock(unittest.TestCase):
         self.assertEqual(block["image_url"]["url"], "data:image/jpeg;base64,/9g=")
 
 
+class GeminiKeyPool(unittest.TestCase):
+    def setUp(self):
+        m._reset_gemini_key_pool_state()
+
+    def tearDown(self):
+        m._reset_gemini_key_pool_state()
+
+    @staticmethod
+    def _response(value, status_code=200):
+        response = mock.Mock()
+        response.status_code = status_code
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"value": %d}' % value}]}}]
+        }
+        return response
+
+    def test_pool_parses_both_env_vars_and_deduplicates(self):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "GEMINI_API_KEYS": "first, second\nthird",
+                "GEMINI_API_KEY": "third\r\nfourth",
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                m._configured_gemini_api_keys(),
+                ["first", "second", "third", "fourth"],
+            )
+
+    def test_calls_round_robin_and_keeps_keys_out_of_url(self):
+        with mock.patch.dict("os.environ", {"GEMINI_API_KEY": "first,second"}, clear=True), \
+             mock.patch("requests.post", side_effect=[self._response(1), self._response(2)]) as post:
+            self.assertEqual(m._call_gemini_json("p", []), {"value": 1})
+            self.assertEqual(m._call_gemini_json("p", []), {"value": 2})
+        self.assertEqual(
+            [call.kwargs["headers"]["x-goog-api-key"] for call in post.call_args_list],
+            ["first", "second"],
+        )
+        self.assertTrue(all("?key=" not in call.args[0] for call in post.call_args_list))
+
+    def test_rate_limited_key_falls_through_and_stays_disabled_this_run(self):
+        rate_limited = self._response(0, status_code=429)
+        with mock.patch.dict("os.environ", {"GEMINI_API_KEYS": "first\nsecond"}, clear=True), \
+             mock.patch(
+                 "requests.post",
+                 side_effect=[rate_limited, self._response(2), self._response(3)],
+             ) as post:
+            self.assertEqual(m._call_gemini_json("p", []), {"value": 2})
+            self.assertEqual(m._call_gemini_json("p", []), {"value": 3})
+            usage = m._gemini_key_usage_snapshot()
+        self.assertEqual(
+            [call.kwargs["headers"]["x-goog-api-key"] for call in post.call_args_list],
+            ["first", "second", "second"],
+        )
+        self.assertEqual(
+            usage,
+            [
+                {"slot": 1, "attempts": 1, "successes": 0, "rate_limited": 1,
+                 "available": False},
+                {"slot": 2, "attempts": 2, "successes": 2, "rate_limited": 0,
+                 "available": True},
+            ],
+        )
+
+    def test_all_rate_limited_returns_none_without_reusing_a_slot(self):
+        with mock.patch.dict("os.environ", {"GEMINI_API_KEY": "one,two"}, clear=True), \
+             mock.patch(
+                 "requests.post",
+                 side_effect=[self._response(0, 429), self._response(0, 429)],
+             ) as post:
+            self.assertIsNone(m._call_gemini_json("p", []))
+            self.assertIsNone(m._call_gemini_json("p", []))
+        self.assertEqual(post.call_count, 2)
+
+
 class CallDeepseekJson(unittest.TestCase):
     def setUp(self):
         self.spend_patch = mock.patch.object(m, "_reserve_paid_ai_spend", return_value=True)
