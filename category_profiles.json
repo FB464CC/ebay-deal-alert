@@ -24,7 +24,14 @@
   },
   "poker-chips": {
     "blocked_brands": [],
-    "blocked_subtypes": [],
+    "blocked_subtypes": [
+      "plastic",
+      "abs",
+      "clay\\s+composite",
+      "metal[\\s-]?core",
+      "iron[\\s-]?core",
+      "metal[\\s-]?slug(?:ged)?"
+    ],
     "price_floor_brands": {},
     "promise_score_signals": {"positive": [], "negative": []}
   },

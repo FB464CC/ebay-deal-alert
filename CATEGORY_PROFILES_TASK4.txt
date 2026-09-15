@@ -1,0 +1,25 @@
+Task 4 progress
+
+- Confirmed HEAD: 084c9ab6183197d4d788fd275ee920ca1aaea3ed Task 3: migrate golf-equipment blocked brands into category_profiles.json
+- Confirmed initial worktree is clean.
+- Read docs/superpowers/plans/2026-09-14-category-profiles.md in full.
+- Read docs/superpowers/specs/2026-09-14-category-profiles-design.md in full.
+- Scope locked to Task 4 only: poker construction/material terms; identity, maker, count, and sample/empty-storage checks remain unchanged.
+- Re-read the live constant and function with the required sed commands before editing.
+- Exact live construction pattern fragments (present twice in the regex): plastic; abs; clay\s+composite; metal[\s-]?core; iron[\s-]?core; metal[\s-]?slug(?:ged)?
+- The live wrapper is bidirectional and more complex than the short plan description: construction-before-chips OR chips followed within 25 characters by are/made-of-or-from/constructed-of-or-from and then construction. This full wrapper will be preserved.
+- Pre-change full-suite baseline: 748 passed, 2 warnings, 528 subtests passed in 21.17s.
+- Added PokerConstructionSignalMigration with the exact live regex fragments and the plastic-chip behavior check; next step is proving the profile equality test fails before implementation.
+- Red test result: 1 failed, 1 passed, 538 deselected. Profile equality failed on all six terms; the pre-existing plastic-chip behavior still passed.
+- Populated poker-chips.blocked_subtypes with the six exact regex fragments.
+- Removed the duplicated module-level construction pattern and now compile the same bidirectional wrapper in poker_pre_ai_hard_fail_reason() from the profile fragments. Empty/missing blocked_subtypes fail open without compiling a match-all alternation.
+- Green migration test result: 2 passed, 538 deselected in 0.67s.
+- AST parse validation passed (no output, exit 0).
+- category_profiles.json parse validation passed (no output, exit 0).
+- Required poker regression selection passed: 34 passed, 506 deselected, 119 subtests passed in 0.91s.
+- Post-change full suite: 750 passed, 2 warnings, 528 subtests passed in 19.97s.
+- Baseline comparison: 748 -> 750 passed (exactly the two new Task 4 migration tests); warning count and subtest count unchanged.
+- Final audit: git diff --check passed apart from Git's informational LF-to-CRLF working-copy warnings.
+- Reconstructed the profile-driven regex and compared it byte-for-byte to the removed live pattern: identical. Representative checks for every fragment, whitespace/hyphen variants, slug/slugged, and both wrapper directions passed; a clay-chip positive control remained accepted.
+- Changed paths are only category_profiles.json, ebay_deal_alert.py, test_ebay_deal_alert.py, plus this required progress log. config.json has no diff.
+- No commit or push performed.

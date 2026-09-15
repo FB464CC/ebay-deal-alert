@@ -412,6 +412,27 @@ class GolfBlockedBrandsMigration(unittest.TestCase):
         self.assertIsNone(m.golf_blocked_brand("Wilson"))
 
 
+class PokerConstructionSignalMigration(unittest.TestCase):
+    def test_profile_lists_every_previously_hardcoded_construction_term(self):
+        profile = m.get_category_profile("poker-chips")
+        # Exact fragments copied from the current
+        # POKER_INELIGIBLE_CONSTRUCTION_SIGNALS definition.
+        previously_hardcoded = {
+            "plastic",
+            "abs",
+            r"clay\s+composite",
+            r"metal[\s-]?core",
+            r"iron[\s-]?core",
+            r"metal[\s-]?slug(?:ged)?",
+        }
+        self.assertEqual(set(profile["blocked_subtypes"]), previously_hardcoded)
+
+    def test_poker_pre_ai_hard_fail_still_rejects_plastic_chips(self):
+        self.assertIsNotNone(
+            m.poker_pre_ai_hard_fail_reason("200 plastic poker chips set")
+        )
+
+
 class PokerChipsGate(unittest.TestCase):
     def _result(self, price=100, **poker_fields):
         result = {

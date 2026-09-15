@@ -2203,15 +2203,6 @@ POKER_CHIP_IDENTITY_SIGNALS = re.compile(
     r"\b(?:sets?|games?|compendium)\b",
     re.IGNORECASE,
 )
-POKER_INELIGIBLE_CONSTRUCTION_SIGNALS = re.compile(
-    r"\b(?:plastic|abs|clay\s+composite|metal[\s-]?core|iron[\s-]?core|"
-    r"metal[\s-]?slug(?:ged)?)\s+(?:poker\s+)?chips?\b|"
-    r"\b(?:poker\s+)?chips?\b.{0,25}\b(?:are|made\s+(?:of|from)|"
-    r"constructed\s+(?:of|from))\s+"
-    r"(?:plastic|abs|clay\s+composite|metal[\s-]?core|iron[\s-]?core|"
-    r"metal[\s-]?slug(?:ged)?)\b",
-    re.IGNORECASE,
-)
 POKER_SAMPLE_OR_EMPTY_STORAGE_SIGNALS = re.compile(
     r"\bsample(?:\s+(?:pack|set))?\b|"
     r"\bempty\s+(?:poker\s+)?(?:chip\s+)?(?:case|rack|tray|carousel|caddy)\b|"
@@ -2449,7 +2440,20 @@ def poker_pre_ai_hard_fail_reason(title, description=None):
             f"explicit {declared_count}-piece/chip count below the settled "
             f"{POKER_CHIPS_MIN_SET_SIZE}-chip usable-set minimum"
         )
-    construction = POKER_INELIGIBLE_CONSTRUCTION_SIGNALS.search(haystack)
+    blocked_subtypes = get_category_profile("poker-chips").get(
+        "blocked_subtypes", []
+    )
+    construction = None
+    if blocked_subtypes:
+        construction_alternation = "|".join(blocked_subtypes)
+        construction_signal = re.compile(
+            r"\b(?:" + construction_alternation + r")\s+(?:poker\s+)?chips?\b|"
+            r"\b(?:poker\s+)?chips?\b.{0,25}\b(?:are|made\s+(?:of|from)|"
+            r"constructed\s+(?:of|from))\s+"
+            r"(?:" + construction_alternation + r")\b",
+            re.IGNORECASE,
+        )
+        construction = construction_signal.search(haystack)
     if construction:
         return f"explicitly ineligible chip construction {construction.group(0)!r}"
     non_set = POKER_SAMPLE_OR_EMPTY_STORAGE_SIGNALS.search(haystack)
