@@ -1,0 +1,36 @@
+Task 5 progress: Migrate watches into its profile (zero behavior change)
+
+2026-09-14 - Starting state
+- Confirmed HEAD: 50a6d15eba446a86cd995c323af86bd40e1daa57 Task 4: migrate poker-chips construction blocklist into category_profiles.json
+- Worktree was clean.
+- Read docs/superpowers/plans/2026-09-14-category-profiles.md in full.
+- Read docs/superpowers/specs/2026-09-14-category-profiles-design.md in full.
+- Before-change baseline: python3 -m pytest -q -> 750 passed, 2 warnings, 528 subtests passed in 21.17s.
+
+2026-09-14 - Investigation outcome
+- Re-read the real watch_pre_ai_hard_fail_reason() with the plan-specified sed command.
+- It contains the nonfunctional-text check through WATCH_NONFUNCTIONAL_TEXT_SIGNALS (already an alias of the shared NONFUNCTIONAL_CONDITION_TEXT_SIGNALS from Task 1) and price-band margin math only.
+- Grepped for WATCH_PRICE_BANDS and watch_price_band, then searched broadly for watch brand/price-floor/price-band data.
+- WATCH_PRICE_BANDS is loaded from the existing config.json and consumed by watch_price_band(); there is no separate watch-specific brand floor/block list to migrate into category_profiles.json.
+- Honest outcome: there is nothing further to migrate for watches in Task 5. The remaining hard-fail logic is computation, not a list. No list or threshold will be invented, and ebay_deal_alert.py/category_profiles.json will remain unchanged.
+- Minimal Task 5 implementation: add the approved WatchCategoryProfilePresence acceptance tests only.
+
+2026-09-14 - Initial acceptance-test run
+- python3 -m pytest test_ebay_deal_alert.py -k WatchCategoryProfilePresence -v selected 3 tests: 2 passed, 1 failed.
+- The direct real-Oris assertion from the plan expected a non-None watch_pre_ai_hard_fail_reason(), but the untouched current function returned None.
+- AST parsing and category_profiles.json parsing both passed.
+- This is being investigated against the real current condition-rejection call path before any production-code change. Zero-behavior-change remains the controlling requirement.
+
+2026-09-14 - Resolution of the Oris acceptance mismatch
+- Direct reproduction confirmed: _ebay_structured_condition_hard_fail_reason(listing) returns "eBay structured condition hard-fail: conditionId='7000'"; watch_pre_ai_hard_fail_reason(listing, 42.40) returns None; watch_price_band(title) returns [300, 900, 3000].
+- The current production path checks the generic structured-condition gate first, before calling the watch-specific function. Therefore the real Oris is rejected end to end without changing watch_pre_ai_hard_fail_reason().
+- Updated the acceptance test to assert the existing end-to-end rejection through _late_pre_ai_hard_fail_reason() and the existing direct None result from watch_pre_ai_hard_fail_reason(). Changing the production function to satisfy the stale direct-call expectation would have violated Task 5's zero-behavior-change requirement.
+
+2026-09-14 - Final validation
+- WatchCategoryProfilePresence only: 3 passed, 540 deselected in 0.67s.
+- Required watch selection: 55 passed, 488 deselected, 53 subtests passed in 1.10s.
+- After-change full suite: 753 passed, 2 warnings, 528 subtests passed in 19.85s.
+- Baseline/after comparison: 750 -> 753 passed, exactly the 3 new acceptance tests; warnings and subtest count unchanged.
+- ebay_deal_alert.py AST parse: passed (no output).
+- category_profiles.json JSON parse: passed (no output).
+- No production logic or profile data changed. Task 6 was not started.

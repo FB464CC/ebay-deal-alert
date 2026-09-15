@@ -2013,6 +2013,41 @@ class SharedNonfunctionalConditionSignal(unittest.TestCase):
         )
 
 
+class WatchCategoryProfilePresence(unittest.TestCase):
+    def test_watches_profile_entry_exists(self):
+        self.assertIn("watches", m.load_category_profiles())
+
+    def test_watch_pre_ai_hard_fail_unchanged_for_nonfunctional_listing(self):
+        listing = {"title": "Seiko 5 automatic, not running, for parts"}
+        self.assertIsNotNone(
+            m.watch_pre_ai_hard_fail_reason(listing, landed_price=20)
+        )
+
+    def test_watch_pre_ai_hard_fail_unchanged_for_the_real_oris_reproduction(self):
+        # Same real listing used in tonight's scraped-eBay condition-gap fix.
+        # Structured eBay condition is intentionally handled by the generic
+        # gate before watch-specific text/price math; preserve both parts of
+        # that existing call-path contract.
+        listing = {
+            "title": (
+                "Oris Gold Filled 10 Microns 17 Jewels Mesh Band Square Face "
+                "Watch W/ Box 1960s C"
+            ),
+            "ebay_condition_id": "7000",
+        }
+        self.assertIsNotNone(
+            m._late_pre_ai_hard_fail_reason(
+                listing,
+                {"price": 42.40},
+                category="watches",
+                saved_search={},
+            )
+        )
+        self.assertIsNone(
+            m.watch_pre_ai_hard_fail_reason(listing, landed_price=42.40)
+        )
+
+
 class WatchPriceBand(unittest.TestCase):
     def test_known_brand_returns_band(self):
         band = m.watch_price_band("Movado Museum Quartz Black Dial 40mm")
