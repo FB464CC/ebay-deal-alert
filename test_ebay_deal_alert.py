@@ -394,6 +394,24 @@ class CategoryProfileLoader(unittest.TestCase):
             m._reset_category_profiles_cache()
 
 
+class GolfBlockedBrandsMigration(unittest.TestCase):
+    def test_profile_contains_every_previously_hardcoded_brand(self):
+        # Exact set copied from the current GOLF_BLOCKED_BRANDS definition.
+        previously_hardcoded = {
+            "big brother", "confidence", "ram", "founders club", "precise golf",
+            "tour edge", "intech", "dunlop", "northwestern", "spalding", "knight",
+            "pinseeker", "alien", "macgregor", "golden bear", "top flite",
+        }
+        profile = m.get_category_profile("golf-equipment")
+        self.assertEqual(set(profile["blocked_brands"]), previously_hardcoded)
+
+    def test_golf_blocked_brand_still_rejects_a_known_brand(self):
+        self.assertEqual(m.golf_blocked_brand("Spalding"), "spalding")
+
+    def test_golf_blocked_brand_still_accepts_wilson(self):
+        self.assertIsNone(m.golf_blocked_brand("Wilson"))
+
+
 class PokerChipsGate(unittest.TestCase):
     def _result(self, price=100, **poker_fields):
         result = {

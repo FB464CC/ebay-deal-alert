@@ -1,0 +1,26 @@
+Task 3 progress
+
+- Confirmed starting HEAD: 87cbcc3541804902dcc823299a8e5c7e83b3d095 Task 2: category_profiles.json scaffold and fail-open loader
+- Confirmed the starting worktree was clean.
+- Read docs/superpowers/plans/2026-09-14-category-profiles.md in full.
+- Read docs/superpowers/specs/2026-09-14-category-profiles-design.md in full.
+- Scope locked to Task 3: migrate only golf-equipment blocked_brands; do not migrate the iron signal or any other golf logic.
+- Located the real current GOLF_BLOCKED_BRANDS set at ebay_deal_alert.py:2222-2226.
+- Exact real set: big brother, confidence, ram, founders club, precise golf, tour edge, intech, dunlop, northwestern, spalding, knight, pinseeker, alien, macgregor, golden bear, top flite.
+- Re-read the complete real golf_blocked_brand() body before editing. It includes the existing whitespace normalization, GS1 canonical matching, word-boundary matching, and Tour Edge Exotics carve-out; all must remain unchanged.
+- Pre-change full-suite baseline: 745 passed, 2 warnings, 528 subtests passed in 21.72s.
+- Added GolfBlockedBrandsMigration with the exact real set and two behavior checks.
+- Confirmed red state: 1 failed, 2 passed, 535 deselected in 1.04s. Only the profile-content test failed; Spalding rejection and Wilson acceptance already passed.
+- Populated golf-equipment.blocked_brands as a sorted JSON array containing the exact 16 real brands.
+- Removed the module-level GOLF_BLOCKED_BRANDS set and changed golf_blocked_brand() to build blocked_brands from get_category_profile("golf-equipment").
+- Preserved every other line of golf_blocked_brand() logic, including casefolding, Top-Flite canonicalization, segment splitting, whitespace normalization, GS1 matching, word-boundary matching, and Tour Edge Exotics handling.
+- Migration tests now pass: 3 passed, 535 deselected in 0.76s.
+- AST validation passed (exit 0): python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"
+- JSON validation passed (exit 0): python3 -c "import json; json.load(open('category_profiles.json'))"
+- Requested golf-focused validation passed: 58 passed, 480 deselected, 124 subtests passed in 1.06s.
+- Post-change full suite passed: 748 passed, 2 warnings, 528 subtests passed in 21.21s.
+- Before/after full-suite counts: 745 passed -> 748 passed (the three new migration tests); warnings remained 2 and subtests remained 528.
+- Final diff check passed with no whitespace errors.
+- Final scope audit: modified only ebay_deal_alert.py, test_ebay_deal_alert.py, category_profiles.json, plus this explicitly requested progress log.
+- Confirmed GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL remains module-level and unchanged. No Task 4+ work was started; config.json and the protected AI budget/call settings were untouched.
+- No commit, push, fetch, pull, or clone was performed.

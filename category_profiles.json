@@ -1,6 +1,23 @@
 {
   "golf-equipment": {
-    "blocked_brands": [],
+    "blocked_brands": [
+      "alien",
+      "big brother",
+      "confidence",
+      "dunlop",
+      "founders club",
+      "golden bear",
+      "intech",
+      "knight",
+      "macgregor",
+      "northwestern",
+      "pinseeker",
+      "precise golf",
+      "ram",
+      "spalding",
+      "top flite",
+      "tour edge"
+    ],
     "blocked_subtypes": [],
     "price_floor_brands": {},
     "promise_score_signals": {"positive": [], "negative": []}

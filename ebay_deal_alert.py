@@ -2219,12 +2219,6 @@ POKER_SAMPLE_OR_EMPTY_STORAGE_SIGNALS = re.compile(
     r"\bno\s+chips?\s+included\b",
     re.IGNORECASE,
 )
-GOLF_BLOCKED_BRANDS = {
-    "big brother", "confidence", "ram", "founders club", "precise golf", "tour edge",
-    "intech", "dunlop", "northwestern", "spalding", "knight", "pinseeker", "alien",
-    "macgregor", "golden bear", "top flite",
-}
-
 # These eight saved searches intentionally hunt one useful building block for
 # the buyer's first bag.  They cannot be evaluated by the set-only rule used by
 # the broad golf searches: a good putter is supposed to be one putter, and a
@@ -2312,13 +2306,14 @@ def golf_blocked_brand(identified_brand):
     # the title-time and final AI-confirmed checks share one blocked-brand key.
     brand_text = re.sub(r"\btop-flite\b", "top flite", brand_text)
 
+    blocked_brands = set(get_category_profile("golf-equipment").get("blocked_brands", []))
     segments = re.split(r"[,/():]|\s+[\N{EN DASH}\N{EM DASH}-]\s+", brand_text)
     for segment in segments:
         segment = re.sub(r"\s+", " ", segment).strip()
         # Canonical clone-brand spelling varies as GS.1 / GS-1 / GS 1 / GS1.
         if re.match(r"^gs[.\s_-]*1(?:\b|$)", segment):
             return "gs1"
-        for blocked_brand in GOLF_BLOCKED_BRANDS:
+        for blocked_brand in blocked_brands:
             if re.match(rf"^{re.escape(blocked_brand)}(?:\b|$)", segment):
                 # Only the actual premium sub-line earns this carve-out.
                 # "Tour Edge base/non-Exotics" is split/matched as the base
