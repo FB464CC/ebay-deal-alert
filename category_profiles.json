@@ -1,0 +1,20 @@
+{
+  "golf-equipment": {
+    "blocked_brands": [],
+    "blocked_subtypes": [],
+    "price_floor_brands": {},
+    "promise_score_signals": {"positive": [], "negative": []}
+  },
+  "poker-chips": {
+    "blocked_brands": [],
+    "blocked_subtypes": [],
+    "price_floor_brands": {},
+    "promise_score_signals": {"positive": [], "negative": []}
+  },
+  "watches": {
+    "blocked_brands": [],
+    "blocked_subtypes": [],
+    "price_floor_brands": {},
+    "promise_score_signals": {"positive": [], "negative": []}
+  }
+}

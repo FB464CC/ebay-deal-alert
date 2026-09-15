@@ -16,6 +16,7 @@ platforms.py's module docstring) applies here too. Run with:
 or
     python -m unittest test_ebay_deal_alert -v
 """
+import os
 import re
 import json
 import pathlib
@@ -352,6 +353,45 @@ class ConfigPreflight(unittest.TestCase):
         self.assertIn("invalid profile", warning_text)
         self.assertIn("has no scoring/adapter path", warning_text)
         self.assertIn("exceeds golf-equipment hard gate $300", warning_text)
+
+
+class CategoryProfileLoader(unittest.TestCase):
+    def test_loads_every_known_category_key(self):
+        profiles = m.load_category_profiles()
+        for category in ("golf-equipment", "poker-chips", "watches"):
+            self.assertIn(category, profiles)
+
+    def test_get_category_profile_returns_empty_dict_for_unknown_category(self):
+        self.assertEqual(m.get_category_profile("cars"), {})
+
+    def test_get_category_profile_fails_open_on_missing_file(self):
+        with mock.patch.object(m, "_CATEGORY_PROFILES_PATH", "does-not-exist.json"):
+            m._reset_category_profiles_cache()
+            self.assertEqual(m.get_category_profile("golf-equipment"), {})
+
+    def test_get_category_profile_fails_open_on_malformed_json(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write("{not valid json")
+            bad_path = fh.name
+        try:
+            with mock.patch.object(m, "_CATEGORY_PROFILES_PATH", bad_path):
+                m._reset_category_profiles_cache()
+                self.assertEqual(m.get_category_profile("golf-equipment"), {})
+        finally:
+            os.unlink(bad_path)
+            m._reset_category_profiles_cache()
+
+    def test_get_category_profile_fails_open_on_non_dict_top_level_value(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write("[]")
+            bad_path = fh.name
+        try:
+            with mock.patch.object(m, "_CATEGORY_PROFILES_PATH", bad_path):
+                m._reset_category_profiles_cache()
+                self.assertEqual(m.get_category_profile("golf-equipment"), {})
+        finally:
+            os.unlink(bad_path)
+            m._reset_category_profiles_cache()
 
 
 class PokerChipsGate(unittest.TestCase):

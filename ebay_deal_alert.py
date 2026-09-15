@@ -44,11 +44,43 @@ import ebay_scrape
 import scout_queue
 
 CONFIG_PATH = Path(__file__).resolve().with_name("config.json")
+_CATEGORY_PROFILES_PATH = Path(__file__).resolve().with_name("category_profiles.json")
+_category_profiles_cache = None
 
 
 def load_config():
     with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
         return json.load(config_file)
+
+
+def _reset_category_profiles_cache():
+    """Test-only hook so tests can force the next profile call to reload."""
+    global _category_profiles_cache
+    _category_profiles_cache = None
+
+
+def load_category_profiles(path=None):
+    """Load category profiles, failing open to ``{}`` for invalid input."""
+    global _category_profiles_cache
+    target_path = path or _CATEGORY_PROFILES_PATH
+    if _category_profiles_cache is not None and path is None:
+        return _category_profiles_cache
+    try:
+        with open(target_path, "r", encoding="utf-8") as profile_file:
+            data = json.load(profile_file)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if path is None:
+        _category_profiles_cache = data
+    return data
+
+
+def get_category_profile(category):
+    """Return a category profile dict, or ``{}`` when none is usable."""
+    profile = load_category_profiles().get(category)
+    return profile if isinstance(profile, dict) else {}
 
 
 _CONFIG = load_config()

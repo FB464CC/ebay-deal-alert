@@ -1,0 +1,20 @@
+Task 2 progress
+
+- Started Task 2 implementation.
+- Read the autonomous-coding skill instructions.
+- Confirmed HEAD: cae6b3f6da899615e8e8d49177bc2dbd18a15e10 Task 1: extract NONFUNCTIONAL_CONDITION_TEXT_SIGNALS as the shared generic-layer signal.
+- Read the implementation plan and design spec in full.
+- Confirmed the current config-loading convention uses CONFIG_PATH plus load_config(), rather than a direct _CONFIG = json.load(...) statement.
+- Confirmed test imports: tempfile and unittest.mock already exist; os is not currently imported.
+- Baseline full suite: 740 passed, 2 warnings, 528 subtests passed in 21.28s.
+- Added the CategoryProfileLoader tests first, including missing file, malformed JSON, and non-dict top-level fail-open cases.
+- Confirmed the red phase: 5 selected tests failed because the loader API and path constant do not yet exist.
+- Added category_profiles.json with the exact three-category empty scaffold.
+- Added the cached, fail-open loader API beside the real config-loading code, using the repository's module-relative Path convention.
+- Targeted loader suite after implementation: 5 passed, 530 deselected in 0.68s.
+- AST validation passed (exit 0).
+- category_profiles.json parse validation passed (exit 0).
+- Full suite after implementation: 745 passed, 2 warnings, 528 subtests passed in 21.02s (baseline 740; +5 loader tests; no regressions).
+- git diff --check passed; only Git's existing LF-to-CRLF working-copy notices were emitted.
+- Final scope audit: only ebay_deal_alert.py, test_ebay_deal_alert.py, category_profiles.json, and this requested progress log are changed/untracked; config.json is untouched.
+- No commit or push performed.
