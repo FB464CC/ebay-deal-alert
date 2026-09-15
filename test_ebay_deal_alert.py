@@ -2855,6 +2855,59 @@ class PretriageScoring(unittest.TestCase):
         )
 
 
+class ProfileDrivenPromiseScore(unittest.TestCase):
+    def test_positive_signal_adds_its_configured_score(self):
+        profile_patch = {
+            "promise_score_signals": {
+                "positive": [{"pattern": "mint condition", "score": 0.5}],
+                "negative": [],
+            }
+        }
+        candidate = {
+            "listing": {"title": "Widget in mint condition"},
+            "result": {},
+            "category": "test-category",
+        }
+        with mock.patch.object(m, "get_category_profile", return_value=profile_patch):
+            _, promise_score = m._pretriage_score(candidate, ai_no_price_attempts=0)
+        self.assertEqual(promise_score, 0.5)
+
+    def test_negative_signal_subtracts_its_configured_score(self):
+        profile_patch = {
+            "promise_score_signals": {
+                "positive": [],
+                "negative": [{"pattern": "assorted", "score": 0.5}],
+            }
+        }
+        candidate = {
+            "listing": {"title": "Assorted widget lot"},
+            "result": {},
+            "category": "test-category",
+        }
+        with mock.patch.object(m, "get_category_profile", return_value=profile_patch):
+            _, promise_score = m._pretriage_score(candidate, ai_no_price_attempts=0)
+        self.assertEqual(promise_score, -0.5)
+
+    def test_empty_profile_signals_leave_promise_score_unchanged(self):
+        # Zero-signal category must behave identically to today - proves this
+        # task cannot regress a category with no evidenced signals yet,
+        # including today's two existing promise-score contributions.
+        candidate = {
+            "listing": {
+                "title": "anything",
+                "sold_comp_median": 900.0,
+                "sold_comp_count": 3,
+            },
+            "result": {
+                "seller_feedback_score": 1200,
+                "seller_feedback_percentage": 99.4,
+            },
+            "category": "watches",
+        }
+        _, promise_score = m._pretriage_score(candidate, ai_no_price_attempts=0)
+        self.assertEqual(promise_score, 3.0)
+
+
 class ScoreListingHardFails(unittest.TestCase):
     def _listing(self, title, price=50.0, description=None):
         listing = {"title": title, "price": {"value": price, "currency": "USD"}, "itemId": "t1"}

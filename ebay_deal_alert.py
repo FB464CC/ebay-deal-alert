@@ -8375,6 +8375,26 @@ def _pretriage_score(candidate, ai_no_price_attempts):
         and (feedback_pct is None or feedback_pct >= 95)
     ):
         promise_score += 1.0
+
+    category = candidate.get("category")
+    title = listing.get("title") or ""
+    profile_signals = get_category_profile(category).get("promise_score_signals", {})
+    if not isinstance(profile_signals, dict):
+        profile_signals = {}
+    for direction, multiplier in (("positive", 1.0), ("negative", -1.0)):
+        signals = profile_signals.get(direction, [])
+        if not isinstance(signals, list):
+            continue
+        for signal in signals:
+            if not isinstance(signal, dict):
+                continue
+            try:
+                if re.search(signal["pattern"], title, re.IGNORECASE):
+                    promise_score += multiplier * float(signal["score"])
+            except (KeyError, TypeError, ValueError, re.error):
+                # A malformed profile signal must fail open rather than
+                # crashing or changing whether a candidate reaches AI.
+                continue
     return repeat_failure_tier, promise_score
 
 

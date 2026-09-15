@@ -1,0 +1,44 @@
+Task 6 progress: Profile-driven promise_score contributions + final regression pass
+
+2026-09-14 - Starting state
+- Confirmed HEAD: 6c46f1d5d7ba84aac2f8b1df5145a378f9328e3e Task 5: watches category profile presence (no further migration needed).
+- Confirmed the worktree was clean before starting.
+- Read docs/superpowers/plans/2026-09-14-category-profiles.md and docs/superpowers/specs/2026-09-14-category-profiles-design.md in full.
+- Read CATEGORY_PROFILES_TASK1.txt through CATEGORY_PROFILES_TASK5.txt in full and retained their documented real-code deviations, especially Task 5's stale Oris test correction.
+- Scope locked to Task 6: ebay_deal_alert.py, test_ebay_deal_alert.py, category_profiles.json, and this explicitly required progress log only. config.json and protected AI budget/call settings will not be edited.
+- Verified category_profiles.json before implementation: golf-equipment, poker-chips, and watches all have empty promise_score_signals.positive and promise_score_signals.negative lists. No unevidenced signal or score will be added.
+- Re-read the complete live _pretriage_score() before editing. Its only current promise_score contributions are sold-comp backing (+2.0) and strong seller feedback (+1.0); its return shape is (repeat_failure_tier, promise_score).
+- Confirmed the live _ai_check_priority() location independently and will not modify it.
+- Identified the pre-Task-1 baseline as ba11d9284e948713bd0f8a8d0033c121f2d02432, the parent of the Task 1 commit.
+- Untouched full-suite baseline: 753 passed, 2 warnings, 528 subtests passed in 21.75s.
+
+2026-09-14 - Red tests
+- Added the three specified ProfileDrivenPromiseScore tests before changing production code.
+- Confirmed the red phase: 2 failed, 1 passed, 543 deselected in 1.02s. Positive and negative configured signals were ignored by the existing scorer; the empty-profile baseline already passed unchanged at 0.0.
+
+2026-09-14 - Implementation and focused validation
+- Extended only _pretriage_score()'s promise_score calculation. Case-insensitive matching positive profile patterns add their configured float score; matching negative patterns subtract theirs.
+- Preserved the exact (repeat_failure_tier, promise_score) return shape and did not modify _ai_check_priority or its pending_minutes anti-starvation ordering.
+- Malformed promise_score_signals containers and entries fail open, consistent with the category-profile safety requirement.
+- Left promise_score_signals positive/negative lists empty for golf-equipment, poker-chips, and watches. There is no real backtested evidence supporting any category/title weight, so no plausible-sounding signal or invented score was added.
+- Required focused selection passed: 14 passed, 532 deselected in 0.77s.
+- AST parse validation passed with exit 0 and no output.
+- category_profiles.json parse validation passed with exit 0 and no output.
+
+2026-09-14 - Final validation and independent audit
+- Strengthened the empty-profile regression to exercise both established hardcoded contributions together: sold-comp backing (+2.0) plus strong seller feedback (+1.0) remain exactly 3.0 when the real watches profile has no configured signals.
+- Final required focused selection: 14 passed, 532 deselected in 0.74s.
+- Final full suite: 756 passed, 2 warnings, 528 subtests passed in 20.91s.
+- Before/after Task 6: 753 -> 756 passed, exactly the three new ProfileDrivenPromiseScore tests. All 753 pre-existing tests remained unmodified and passed.
+- Independently reviewed the cumulative plan diff against pre-Task-1 baseline ba11d9284e948713bd0f8a8d0033c121f2d02432.
+- config.json is byte-identical across the pre-Task-1 baseline, current HEAD, and worktree: all three git blob/hash values are 313c8c2e48fe68245a29d7be3e04be575833cb09, and git diff --exit-code against the baseline returned 0 with no diff.
+- Therefore AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE, and every saved_search field are unchanged across all six tasks.
+- The baseline-to-current history also contains unrelated committed Scout ingest updates to alerts_log.jsonl, scout_queue.jsonl, and search_activity_state.json; Task 6 did not touch them. The complete plan-specific production/test/profile diff was reviewed separately.
+- git diff --check passed; the only messages were Git's informational LF-to-CRLF working-copy warnings.
+
+Complete six-task summary
+- category_profiles.json now contains the exact migrated 16-brand golf-equipment blocklist, the exact six-fragment poker-chips construction blocklist, and an explicit watches profile with no additional migrated data. All three profiles retain empty blocked/price fields where there was nothing evidence-backed to migrate, and all three promise_score_signals positive/negative lists remain empty.
+- The profile file is loaded through the cached fail-open loader/getter added in Task 2. Task 6 makes _pretriage_score understand future positive/negative pattern+score entries without changing _ai_check_priority, pending_minutes aging, the retry tier, or the existing +2/+1 signals.
+- Deliberately still module-level/in Python by scope decision: GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL and other golf rule logic; POKER_CHIP_IDENTITY_SIGNALS, POKER_CHIP_MAKER_SIGNALS, POKER_SAMPLE_OR_EMPTY_STORAGE_SIGNALS, count/sample checks, and POKER_CHIPS_MIN_SET_SIZE; watch price-band lookup/config integration and price-margin formula; the category-specific gate functions themselves; and the shared NONFUNCTIONAL_CONDITION_TEXT_SIGNALS with its WATCH_NONFUNCTIONAL_TEXT_SIGNALS compatibility alias.
+- Cumulative six-task behavior claim: zero behavior change occurred for the currently configured golf-equipment, poker-chips, watches, or any other existing category. Each task's focused regressions passed individually, every migration preserved its established tests, all promise-score lists are inert/empty, and the final complete suite passes all 753 pre-existing tests plus the 3 new Task 6 tests (756 total). The new mechanism changes scoring only when a future evidence-backed profile signal is deliberately configured.
+- No commit, push, fetch, pull, or clone was performed.
