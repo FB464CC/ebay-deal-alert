@@ -1,0 +1,198 @@
+GOLF BLADE / TOP-FLITE INVESTIGATION
+Started: 2026-09-14 (America/New_York)
+
+Checkpoint 1 - checkout and required prior work
+- Confirmed the supplied checkout without fetch/pull/clone. `git log -1
+  --format="%H %s"` returned:
+  `d39433fb62b4f6f7399c70c2355577560c8122cf chore: update poll state [skip ci]`.
+- Read PRETRIAGE_FILTER_INVESTIGATION.txt in full before analysis or edits. Its
+  established method reconstructs rolling production history from hourly GitHub
+  snapshots, deduplicates exact JSON lines, and replays terminal AI-reviewed
+  golf rows through proposed deterministic title filters while checking overlap
+  with every delivered golf row.
+- No repository fetch, pull, clone, commit, or push has been performed.
+
+Checkpoint 2 - exact production delivery rows
+- Pulled the current rolling production file through GitHub's Contents API with
+  the raw-media equivalent of the requested base64 decode. Both rows are still
+  present, so reconstruction was not needed to recover either delivery.
+- Top-Flite, item `shopgoodwill:276873033`, timestamp
+  `2026-09-14T01:32:52.918144+00:00` (Sep 13 21:32 EDT): landed
+  $28.0794 ($12.99 item + $13.50 shipping plus configured tax), DELIVERED,
+  ai_checked=true, AI resale $75, Great Deal, 63% discount, medium confidence.
+  Full recorded AI text: `golf playability, handedness, and condition require
+  photo check; gap check: cross-reference against live gap_report output; AI
+  photo check: A complete starter golf set from Top Flite consisting of a
+  driver, 3 wood, a selection of irons (3, 5, 7, 9), a putter, and a branded
+  stand bag. The clubs appear to be right-handed and in clean, playable
+  condition suitable for a first-time adult golfer.` Recorded flags say playable
+  first set=true, starter kit=true, wanted component=false, right-handed
+  confirmed, brand claim confirmed as Top Flite, no damage/counterfeit.
+- Wilson, item `shopgoodwill:277016153`, timestamp
+  `2026-09-15T00:43:09.163714+00:00` (Sep 14 20:43 EDT): landed
+  $24.8994 ($9.99 item + $13.50 shipping plus configured tax), DELIVERED,
+  ai_checked=true, AI resale $50, Great Deal, exactly 50% discount, medium
+  confidence. Full recorded AI text: `golf playability, handedness, and
+  condition require photo check; gap check: cross-reference against live
+  gap_report output; AI photo check: Vintage Wilson X31 muscle-back blade iron
+  set consisting of 5 clubs for right-handed players in clean, decent
+  condition.` Recorded flags say playable first set=true, starter kit=false,
+  wanted component=false, right-handed confirmed, brand claim confirmed as
+  Wilson, no damage/counterfeit.
+- Neither schema-v4 row records individual resale comps, URLs, sample size, sale
+  dates, or a valuation methodology. The only valuation provenance retained is
+  the model-produced estimate and `price_confidence=medium`; therefore the log
+  itself cannot substantiate either $50/$75 estimate.
+- Verbatim complete production rows:
+  `{"schema_version":4,"timestamp":"2026-09-14T01:32:52.918144+00:00","item_id":"shopgoodwill:276873033","title":"Top-Flite Golf Club Set with Bag 3,5,7,9 Irons, Putter, 3 Wood, Driver","url":"https://shopgoodwill.com/item/276873033","price":28.079400000000003,"item_price":12.99,"verdict":"REVIEW","reason":"golf playability, handedness, and condition require photo check; gap check: cross-reference against live gap_report output; AI photo check: A complete starter golf set from Top Flite consisting of a driver, 3 wood, a selection of irons (3, 5, 7, 9), a putter, and a branded stand bag. The clubs appear to be right-handed and in clean, playable condition suitable for a first-time adult golfer.","disposition_code":"DELIVERED","search_id":"golf-golf-club-set","category":"golf-equipment","platform":"shopgoodwill","config_hash":"208dd351c390","delivered":true,"ai_checked":true,"commit_hash":"75fc798e4b9e938d3495319083864f2c86348e95","query":"golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf","shipping_cost":13.5,"estimated_resale_value":75.0,"deal_rating":"Great Deal","discount_pct":63,"price_confidence":"medium","category_id":"115280","golf_is_playable_first_set":true,"golf_is_wanted_component":false,"golf_is_starter_kit":true,"golf_is_left_handed":false,"golf_handedness_confirmed":true,"golf_brand_claims_present":true,"golf_brand_claims_confirmed":true,"golf_counterfeit_suspected":false,"golf_identified_brand":"Top Flite","damage_found":false}`
+  `{"schema_version":4,"timestamp":"2026-09-15T00:43:09.163714+00:00","item_id":"shopgoodwill:277016153","title":"Vintage 5 Wilson X31 Muscle-Back Blade Iron Golf Clubs","url":"https://shopgoodwill.com/item/277016153","price":24.899400000000004,"item_price":9.99,"verdict":"REVIEW","reason":"golf playability, handedness, and condition require photo check; gap check: cross-reference against live gap_report output; AI photo check: Vintage Wilson X31 muscle-back blade iron set consisting of 5 clubs for right-handed players in clean, decent condition.","disposition_code":"DELIVERED","search_id":"golf-golf-clubs","category":"golf-equipment","platform":"shopgoodwill","config_hash":"c5210fe691e3","delivered":true,"ai_checked":true,"commit_hash":"c9cc8b78c84da88f79a9d7226f3054561cb42a50","query":"golf clubs -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf","shipping_cost":13.5,"estimated_resale_value":50.0,"deal_rating":"Great Deal","discount_pct":50,"price_confidence":"medium","search_total_listings":4631,"category_id":"115280","golf_is_playable_first_set":true,"golf_is_wanted_component":false,"golf_is_starter_kit":false,"golf_is_left_handed":false,"golf_handedness_confirmed":true,"golf_brand_claims_present":true,"golf_brand_claims_confirmed":true,"golf_counterfeit_suspected":false,"golf_identified_brand":"Wilson","damage_found":false}`
+
+Checkpoint 3 - historical reconstruction baseline (analysis still in progress)
+- GitHub's commit API returned 1,405 alerts_log.jsonl-changing commits from
+  2026-09-07T00:00Z through 2026-09-15T02:00Z. Selected the newest snapshot in
+  each UTC hour, producing 179 hourly snapshots, then deduplicated exact JSON
+  lines across them.
+- The reconstruction contains 20,233 exact unique rows: 8,052 golf-equipment
+  rows, 1,325 rows recorded as AI-checked golf, and 22 delivered golf rows.
+  Proposed-rule overlap counts are being rerun after discovering that the first
+  PowerShell draft accidentally reused its case-insensitive automatic `$Matches`
+  variable; no overlap conclusion from that buggy draft is being relied upon.
+
+Checkpoint 4 - listing facts and current-market evidence
+- Queried ShopGoodwill's live item-detail API for both IDs. The Top-Flite lot's
+  seller description says it is mostly Top-Flite stainless clubs: only 3/5/7/9
+  irons, putter, 3 wood, 460cc driver and one extra Titleist DCI iron, with
+  moderate surface/grip wear and a used bag. It was pickup-only and closed with
+  one $12.99 bid. The production AI's phrase `complete starter golf set` is thus
+  materially too generous about composition: it omitted the odd iron gaps and
+  unrelated Titleist club even though the prompt requires exact club count/set
+  coherence. Source: https://shopgoodwill.com/item/276873033 and
+  https://buyerapi.shopgoodwill.com/api/itemDetail/GetItemDetailModelByItemId/276873033
+- The Wilson detail says exactly five right-handed X31 muscle-back/blade irons,
+  medium flex, lengths 37.5-39 inches, with both faces and overall condition
+  explicitly `Fair` (grips `Decent`). It closed with no bids at $9.99. The AI
+  instead summarized them as `clean, decent condition`, omitting the seller's
+  fair-condition assessment. Source: https://shopgoodwill.com/item/277016153
+  and https://buyerapi.shopgoodwill.com/api/itemDetail/GetItemDetailModelByItemId/277016153
+- Wilson X31 sold evidence is strong enough to diagnose the estimate. An eBay
+  3-PW eight-club set sold June 8 for $50; a 2-PW nine-club set sold July 5 for
+  $59.99. Current asks include 3-PW eight clubs at $39 + $18 shipping, 2-SW
+  nine clubs at $44.99 + $18.05, and four 6-9 irons at $24.50 + $9.75. The
+  alerted five-club fair-condition partial group was valued at the same $50 as
+  the completed-sale eight-club set. That is plausible evidence of the model
+  transferring full-set X31 comps without matching count/condition, contrary
+  to its prompt; $50 is not well supported for this exact five-club lot.
+  Sources: https://www.ebay.com/itm/198144650660,
+  https://www.ebay.com/itm/398091305047, and
+  https://www.ebay.com/shop/wilson-x31-irons?_nkw=wilson+x31+irons
+- The type mismatch is independently decisive. Manufacturer material positions
+  true muscle-back irons for the best amateurs/tour professionals, while game-
+  improvement irons use perimeter weighting for high-handicap players. Golf
+  Digest likewise describes muscle-back blades as less forgiving and difficult
+  for everyday players. The buyer is explicitly a first-time adult golfer, so a
+  five-club vintage blade partial set is the wrong product even if a collector
+  might eventually pay $50. Sources:
+  https://www.taylormadegolf.co.kr/on/demandware.static/-/Sites-TMaG-KR-Library/ko_KR/v1757131465800/docs/productspecs/Tour_Preferred_Irons.pdf
+  and https://www.golfdigest.com/story/muscleback-blades-bridgestone-invitational
+- Top-Flite's $75 estimate is broadly defensible, not a wild hallucination. A
+  vintage 13-piece Top-Flite/mixed set sold locally for $75; an eBay Top-Flite
+  set/stand bag sold for $125 + $45 shipping; current used-retailer asks are
+  $92.99 for an 11-piece set and $119.99 for a 10-club set; and a current eBay
+  complete men's set asks $75 + $20.21 shipping. The exact alerted lot is older,
+  sparse and incoherent enough that $75 may still be optimistic, but real market
+  data supports that ordinary Top-Flite sets can transact/list in this range.
+  Sources: https://offerup.com/item/detail/22ecd121-0036-3bc0-a1e7-59b493e927ac,
+  https://www.ebay.com/itm/306835087748,
+  https://playitagainsports.com/locations/matthews-nc/product/s000035608/top-flite-complete-golf-set-10-clubs,
+  and https://playssportsagain.com/product/used-top-flite-mens-golf-set-mens-complete-set-rh-11-piece-2/
+- Top-Flite is currently sold by Dick's as an inexpensive, forgiving complete
+  beginner package ($299.99 for the 2024 XL 13-piece set), which confirms the
+  user's point: it is an entry-level boxed-set tier rather than a scarce premium
+  opportunity. This is a desirability/alert-policy failure even when the used
+  market value is real. Source:
+  https://www.dickssportinggoods.com/p/top-flite-2024-xl-13-piece-complete-set-graphite-steel-23tflmtpflt23xlmrset/23tflmtpflt23xlmrset
+
+Checkpoint 5 - corrected eight-day backtest
+- Corrected replay over all 179 hourly snapshots found 17 AI-checked golf rows
+  matching the proposed narrow union: 16 title-leading Top-Flite rows and the
+  exact Wilson X31 `muscle-back blade iron` row. Three were delivered: the two
+  user-rejected alerts plus an additional `Top Flite Xl Golf Clubs With Stand
+  Bag` delivery at $35.50 landed / $75 estimate. The other 14 were already
+  rejected after consuming AI (one gender reject, one condition-independent
+  prefilter candidate, and otherwise golf/margin rejects).
+- No premium iron/set delivery matched. In particular, the iron-qualified blade
+  signal does not match any of the three delivered Ping `A Blade`/`J-BLADE`
+  putters, because `blade putter` is a different product type. The only blade-
+  iron delivery removed is the exact Wilson alert the user rejected. Wilson as
+  a brand is not excluded.
+- One rejected historical candidate was `Top-flite Golf Bag With Assorted
+  Wilson, Callaway, and Lynx Golf Clubs`. A naive raw-title brand block could
+  mistake the bag's maker for all the clubs. Implementation must preserve such
+  explicitly mixed/assorted `Top-Flite bag with ... clubs` titles for vision,
+  while the final AI-confirmed brand gate rejects a real Top-Flite club set.
+
+Checkpoint 6 - did either alert displace a better candidate?
+- No direct displacement is present in the production log. Run boundaries are
+  clear from the five-minute schedule and timestamp gaps.
+- Top-Flite's 01:32 UTC run contains six golf rows: one deterministic
+  GOLF_WRONG_ITEM and five AI-checked rows (the Top-Flite delivery plus four
+  BELOW_MARGIN/OVER_MAX outcomes). There is no golf row, or any category row,
+  with NO_AI_BUDGET/fairness-slot rejection in that run.
+- Wilson's 00:42 UTC run contains seven golf rows: one GOLF_WRONG_ITEM and six
+  AI-checked rows (the Wilson delivery, two GOLF_REJECT, and three
+  CONDITION_REJECT). Again there is no NO_AI_BUDGET/fairness-slot rejection in
+  that run.
+- Therefore both alerts consumed AI work that should have been avoided, but the
+  records do not show either one taking a slot from a specific better candidate.
+  The user's general clogging intuition is valid over time; the stronger claim
+  of direct same-run displacement is not supported for these two deliveries.
+
+Checkpoint 7 - implemented bounded fix and exact post-change replay
+- Added canonical `top flite` to the existing GOLF_BLOCKED_BRANDS set and
+  normalized the exact `Top-Flite` hyphen variant seen in production. This
+  reuses both existing enforcement points: title-certain pre-AI rejection and
+  the final AI-identified-brand backstop. Wilson was deliberately not blocked.
+- Added an iron-qualified title signal for explicit `blade iron(s)` and
+  `muscle-back iron(s)` language. It cannot match blade putters. This runs in
+  golf_wrong_item_title_reason() before any scarce vision call.
+- Preserved the historical `Top-flite Golf Bag With Assorted Wilson, Callaway,
+  and Lynx Golf Clubs` shape for vision: Top-Flite identifies only the bag and
+  named other manufacturers identify the clubs. The final confirmed-brand gate
+  remains authoritative after vision.
+- Tightened the existing golf valuation prompt for the separate Wilson pricing
+  defect: it now explicitly forbids transferring 2-PW/3-PW full-set comps to a
+  smaller vintage/blade partial group and forbids using a current 10-13-piece
+  boxed-set comp for an older sparse entry-level group. Without comparable
+  generation/count/condition completed-sale evidence it must return null/low.
+- Exact post-change replay of all 17 candidate rows yields 15 incremental pre-AI
+  rejections: 14 Top-Flite rows plus the Wilson blade row. One Top-Flite/LH row
+  was already rejected by the pre-existing left-handed rule and is not claimed
+  as a new saving; the explicit Top-Flite-bag/mixed-premium-clubs row is retained.
+  All three newly matched delivered rows are the two user-rejected alerts plus
+  the additional Top-Flite XL delivery. No other delivered golf item is removed.
+- Added direct helper regressions using both exact production titles/queries and
+  an end-to-end run regression using the exact ShopGoodwill IDs, closing prices,
+  shipping assumption, titles, and URLs. The run test proves both rows log
+  GOLF_WRONG_ITEM with ai_checked=false, make zero AI calls, and send zero alerts.
+  Controls prove Wilson Staff D9 irons, Ping J-BLADE putters, and the mixed-club
+  Top-Flite-bag title remain eligible.
+- Targeted golf validation: `56 passed, 471 deselected, 124 subtests passed in
+  1.21s`. Syntax/config parsing and git diff --check also exited 0; full-suite
+  validation remained to be run at that checkpoint.
+
+Checkpoint 8 - final validation and scope audit
+- Exact requested syntax check:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  exited 0 with no output.
+- Config parse check (config.json was not modified):
+  `python3 -c "import json; json.load(open('config.json'))"`
+  exited 0 with no output.
+- Exact full suite: `python3 -m pytest -q` ->
+  `737 passed, 2 warnings, 521 subtests passed in 20.35s`.
+  The warnings are the existing lxml `strip_cdata` deprecation in the
+  mid-run-429 auction test; there are zero failures/regressions.
+- Production changes are confined to ebay_deal_alert.py's golf blocked-brand,
+  title pretriage, and golf valuation-prompt paths. Matching tests are in
+  test_ebay_deal_alert.py. config.json and all saved_search fields are untouched;
+  no AI budget/call/batch constants or unrelated category paths were changed.
+- No commit or push was made.

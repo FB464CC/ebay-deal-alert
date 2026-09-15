@@ -1059,7 +1059,14 @@ class GolfEquipmentGate(unittest.TestCase):
         )
 
     def test_blocked_brands_are_rejected_even_when_every_other_check_passes(self):
-        for brand in ("Golden Bear boxed set", "GS.1", "GS-1", "Tour Edge base/non-Exotics line"):
+        for brand in (
+            "Golden Bear boxed set",
+            "GS.1",
+            "GS-1",
+            "Tour Edge base/non-Exotics line",
+            "Top Flite",
+            "Top-Flite",
+        ):
             with self.subTest(brand=brand):
                 reason = m.is_blocked_by_steal_quality_gate(
                     self._result(
@@ -1084,7 +1091,6 @@ class GolfEquipmentGate(unittest.TestCase):
             "Wilson Staff",
             "Wilson Staff Model",
             "Callaway/Strata",
-            "Top Flite",
             "Titleist (precise model illegible)",
         ):
             with self.subTest(brand=brand):
@@ -1249,6 +1255,44 @@ class GolfEquipmentGate(unittest.TestCase):
             "Tour Edge Exotics CBX Forged 4-PW Iron Set RH", "golf iron set"
         ))
 
+    def test_real_top_flite_and_wilson_blade_deliveries_fail_closed(self):
+        # Exact production titles/queries from delivered ShopGoodwill rows
+        # 276873033 and 277016153. Both facts are explicit before vision, so
+        # neither may consume an AI slot or depend on its resale guess.
+        cases = (
+            (
+                "golf club set -junior -youth -kids -ladies -womens "
+                "-\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
+                "Top-Flite Golf Club Set with Bag 3,5,7,9 Irons, Putter, "
+                "3 Wood, Driver",
+                "blocked golf brand 'top flite'",
+            ),
+            (
+                "golf clubs -junior -youth -kids -ladies -womens "
+                "-\"left hand\" -lefty -\"left handed\" -scarf",
+                "Vintage 5 Wilson X31 Muscle-Back Blade Iron Golf Clubs",
+                "beginner-unsuitable iron type",
+            ),
+        )
+        for query, title, expected in cases:
+            with self.subTest(title=title):
+                reason = m.golf_wrong_item_title_reason(title, query)
+                self.assertIsNotNone(reason)
+                self.assertIn(expected, reason)
+
+        # Backtest controls: Wilson remains a valid major brand, and the word
+        # Blade on a putter must not turn into an all-club exclusion.
+        self.assertIsNone(m.golf_wrong_item_title_reason(
+            "Wilson Staff D9 Forged 5-PW Iron Set RH", "golf iron set"
+        ))
+        self.assertIsNone(m.golf_wrong_item_title_reason(
+            'Vintage PING KARSTEN J-BLADE 35" PUTTER RH', "ping putter"
+        ))
+        self.assertIsNone(m.golf_wrong_item_title_reason(
+            "Top-flite Golf Bag With Assorted Wilson, Callaway, and Lynx Golf Clubs",
+            "golf clubs",
+        ))
+
     def test_requested_single_component_can_clear_without_being_a_set(self):
         reason = m.is_blocked_by_steal_quality_gate(
             self._result(
@@ -1336,6 +1380,8 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertIn("$74.39 shipped", prompt)
         self.assertIn("six-club Warrior iron group around $60 is plausible", prompt)
         self.assertIn("$40-$50", prompt)
+        self.assertIn("never transfer a 2-PW/3-PW full-set comp unchanged", prompt)
+        self.assertIn("older sparse entry-level boxed set", prompt)
 
 
 class GolfRampConfiguration(unittest.TestCase):
@@ -8538,6 +8584,64 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["disposition_code"], "GOLF_WRONG_ITEM")
         self.assertIn("non-club merchandise", records[0]["reason"])
+
+    def test_real_top_flite_and_wilson_blade_rows_spend_no_ai(self):
+        query = (
+            "golf clubs -junior -youth -kids -ladies -womens "
+            "-\"left hand\" -lefty -\"left handed\" -scarf"
+        )
+        saved_search = {
+            "id": "golf-golf-clubs",
+            "query": query,
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "size": None,
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+            "platforms": ["shopgoodwill"],
+        }
+        listings = [
+            p.make_listing(
+                "shopgoodwill",
+                "276873033",
+                "Top-Flite Golf Club Set with Bag 3,5,7,9 Irons, Putter, "
+                "3 Wood, Driver",
+                12.99,
+                "https://shopgoodwill.com/item/276873033",
+                image_url="https://example.test/276873033.jpg",
+                shipping=13.5,
+            ),
+            p.make_listing(
+                "shopgoodwill",
+                "277016153",
+                "Vintage 5 Wilson X31 Muscle-Back Blade Iron Golf Clubs",
+                9.99,
+                "https://shopgoodwill.com/item/277016153",
+                image_url="https://example.test/277016153.jpg",
+                shipping=13.5,
+            ),
+        ]
+        self._serve(saved_search, [])
+        self._patch(
+            "prefetch_marketplaces",
+            lambda now, conn, **kwargs: {query: listings},
+        )
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        records = {row["item_id"]: row for row in self._alert_log_records()}
+        self.assertEqual(set(records), {
+            "shopgoodwill:276873033",
+            "shopgoodwill:277016153",
+        })
+        self.assertTrue(all(
+            row["disposition_code"] == "GOLF_WRONG_ITEM"
+            and row["ai_checked"] is False
+            for row in records.values()
+        ))
 
     def test_scout_candidate_spends_own_budget_not_gemini_calls(self):
         # Corrected after review: a single healthy extension scan (one

@@ -2186,7 +2186,7 @@ POKER_SAMPLE_OR_EMPTY_STORAGE_SIGNALS = re.compile(
 GOLF_BLOCKED_BRANDS = {
     "big brother", "confidence", "ram", "founders club", "precise golf", "tour edge",
     "intech", "dunlop", "northwestern", "spalding", "knight", "pinseeker", "alien",
-    "macgregor", "golden bear",
+    "macgregor", "golden bear", "top flite",
 }
 
 # These eight saved searches intentionally hunt one useful building block for
@@ -2245,6 +2245,17 @@ GOLF_LEFT_HANDED_TITLE_SIGNAL = re.compile(
 GOLF_RIGHT_HANDED_TITLE_SIGNAL = re.compile(
     r"\b(?:right[\s-]?hand(?:ed)?|righty|rh)\b", re.IGNORECASE
 )
+# True blade/muscle-back IRONS are a narrow, title-certain mismatch for this
+# first-time golfer. Keep ``irons?`` mandatory so classic Ping A Blade/J-Blade
+# putters and modern blade-style putters remain eligible. Current market
+# evidence also shows why Wilson itself must not be blocked: the problem with
+# the production X31 alert was this advanced-player club type, not its major
+# manufacturer.
+GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL = re.compile(
+    r"\b(?:muscle[\s-]?back(?:\s+blade)?|blade)\s+(?:golf\s+)?irons?\b|"
+    r"\b(?:golf\s+)?irons?\b.{0,24}\bmuscle[\s-]?backs?\b",
+    re.IGNORECASE,
+)
 
 
 def golf_blocked_brand(identified_brand):
@@ -2252,13 +2263,18 @@ def golf_blocked_brand(identified_brand):
 
     The model emits free text, so raw substring checks confuse brand names with
     qualifiers (for example ``precise model illegible``) and cheap parent tiers
-    with wanted premium sub-lines. Wilson, Strata, and Top Flite are deliberately
-    acceptable first-set brands; the remaining list is matched at the start of a
-    reported brand segment rather than anywhere in the prose.
+    with wanted premium sub-lines. Wilson and Strata remain acceptable first-set
+    brands; Top Flite joins the user's explicitly rejected entry-level tier. The
+    list is matched at the start of a reported brand segment rather than anywhere
+    in the prose.
     """
     if not isinstance(identified_brand, str) or not identified_brand.strip():
         return None
     brand_text = identified_brand.casefold()
+    # The real rejected listing used ``Top-Flite`` while the model emitted
+    # ``Top Flite``. Canonicalize only that evidenced punctuation variant so
+    # the title-time and final AI-confirmed checks share one blocked-brand key.
+    brand_text = re.sub(r"\btop-flite\b", "top flite", brand_text)
 
     segments = re.split(r"[,/():]|\s+[\N{EN DASH}\N{EM DASH}-]\s+", brand_text)
     for segment in segments:
@@ -2315,11 +2331,34 @@ def golf_wrong_item_title_reason(title, query):
     ):
         return "explicitly left-handed-only title for a right-handed buyer"
 
+    unsuitable_iron = GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL.search(title)
+    if unsuitable_iron:
+        return f"beginner-unsuitable iron type {unsuitable_iron.group(0)!r}"
+
     # Reuse the settled final-gate parser rather than inventing a second
     # brand list. It only matches a brand at the start of a title segment and
     # preserves Tour Edge Exotics, so mixed sets with an incidental cheap
     # brand mention are left for vision.
     blocked_brand = golf_blocked_brand(title)
+    if blocked_brand:
+        # Historical backtest row: ``Top-flite Golf Bag With Assorted Wilson,
+        # Callaway, and Lynx Golf Clubs``. Here Top-Flite modifies only the bag;
+        # treating it as every club's maker would discard a potentially useful
+        # premium mixed set. Keep this very explicit shape for vision, whose
+        # identified_brand field still enforces the normal final brand gate.
+        top_flite_bag_with_other_clubs = bool(
+            blocked_brand == "top flite"
+            and re.search(r"\btop[\s-]?flite\b.{0,30}\bbag\b", title, re.IGNORECASE)
+            and re.search(r"\b(?:with|w/)\b.{0,20}\b(?:assorted|mixed)\b", title, re.IGNORECASE)
+            and re.search(
+                r"\b(?:wilson|callaway|ping|titleist|taylormade|cobra|mizuno|"
+                r"cleveland|adams|odyssey|lynx)\b",
+                title,
+                re.IGNORECASE,
+            )
+        )
+        if top_flite_bag_with_other_clubs:
+            blocked_brand = None
     if blocked_brand:
         return f"title-identifiable blocked golf brand {blocked_brand!r}"
 
@@ -4989,7 +5028,14 @@ def check_photos_with_gemini(
             "typical current secondhand value for this exact club group in the shown "
             "condition, using completed-sale value rather than new MSRP or optimistic "
             "active asking prices. Match club count, model/line, handedness, shaft/flex, "
-            "and condition. Do NOT reduce a genuine older/economy-tier matched set to "
+            "and condition. For vintage, blade, or muscle-back irons, never transfer a "
+            "2-PW/3-PW full-set comp unchanged onto a smaller partial group: the exact "
+            "generation, comparable club count, and condition must be supported by "
+            "completed sales. If that narrower evidence is not known, return null with "
+            "low confidence instead of inventing a collector premium. Likewise, do not "
+            "value an older sparse entry-level boxed set from a current/new 10-13-piece "
+            "package-set comp; match the actual included clubs and generation. "
+            "Do NOT reduce a genuine older/economy-tier matched set to "
             "near-zero merely because it lacks premium brand prestige: club count and "
             "actual sold demand still matter. Concrete 2026 calibration: a used Wilson "
             "Staff Patty Berg 3-PW 8-club set explicitly described as below-average sold "
