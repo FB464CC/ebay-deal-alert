@@ -167,22 +167,26 @@ EBAY_NONFUNCTIONAL_CONDITION_KEYWORDS = (
     "salvage",
     "restoration required",
 )
-# A seller can disclose a dead movement without using eBay's exact 7000
+# A seller can disclose a nonfunctional item without using eBay's exact 7000
 # label or the generic configured phrases above. Fresh production contained
-# multiple scrape-lane titles saying "Not Running"; those have no structured
-# condition until the late item-detail enrichment and previously consumed an
-# AI slot (or sat in NO_AI_BUDGET) even though a photo cannot prove a movement
-# runs. Deliberately watch-scoped and limited to unequivocal function claims.
-WATCH_NONFUNCTIONAL_TEXT_SIGNALS = re.compile(
+# multiple scrape-lane watch titles saying "Not Running"; those have no
+# structured condition until the late item-detail enrichment and previously
+# consumed an AI slot (or sat in NO_AI_BUDGET) even though a photo cannot prove
+# an item functions. Limited to unequivocal function claims.
+NONFUNCTIONAL_CONDITION_TEXT_SIGNALS = re.compile(
     r"\bnot\s+(?:currently\s+)?running\b|"
     r"\b(?:does\s+not|doesn['\N{RIGHT SINGLE QUOTATION MARK}]?t|"
     r"won['\N{RIGHT SINGLE QUOTATION MARK}]?t|will\s+not)\s+(?:run|wind|tick)\b|"
     r"\bnon[\s-]?functional\b|\bnot\s+functional\b|"
     r"\bstopped\s+(?:running|working)\b|"
     r"\bnot\s+keeping(?:\s+accurate)?\s+time\b|"
-    r"\bdead\s+(?:watch\s+)?movement\b",
+    r"\bdead\s+(?:watch\s+)?movement\b|"
+    r"\bparts\s+only\b|\bfor\s+parts\b|\buntested\b",
     re.IGNORECASE,
 )
+# Backward-compatible alias: every existing call site (watch_pre_ai_hard_fail_reason
+# and its tests) keeps working unchanged. New code should use the generalized name.
+WATCH_NONFUNCTIONAL_TEXT_SIGNALS = NONFUNCTIONAL_CONDITION_TEXT_SIGNALS
 CONDITION_FLAG_KEYWORDS = _CONFIG["CONDITION_FLAG_KEYWORDS"]
 FABRIC_GOOD_KEYWORDS = _CONFIG["FABRIC_GOOD_KEYWORDS"]
 GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
@@ -3604,6 +3608,21 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
             }
 
     if category == "watches":
+        # Preserve the established generic-keyword result for phrases such as
+        # "for parts" and "parts only". They now also belong to the shared
+        # nonfunctional pattern, but historically reached the generic condition
+        # gate below; checking that overlap first keeps existing watch behavior
+        # and reason text unchanged while the shared pattern covers other uses.
+        hard_fail_hit = matched_keyword(haystack, CONDITION_HARD_FAIL_KEYWORDS)
+        if hard_fail_hit is not None:
+            return {
+                "verdict": "PASS",
+                "reason": (
+                    "condition hard-fail keyword in title/description: "
+                    f"{hard_fail_hit!r}"
+                ),
+                "listing": listing,
+            }
         watch_pre_ai_fail = watch_pre_ai_hard_fail_reason(listing, price)
         if watch_pre_ai_fail:
             return {

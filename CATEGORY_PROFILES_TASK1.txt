@@ -1,0 +1,23 @@
+Task 1 progress
+
+- Confirmed checkout HEAD: 0a712ce1ed0d59a6dd66afee6bb667d2f1e830b8 Add implementation plan for category-profiles architecture
+- Confirmed the worktree was clean before starting.
+- Read docs/superpowers/plans/2026-09-14-category-profiles.md in full.
+- Read docs/superpowers/specs/2026-09-14-category-profiles-design.md in full.
+- Scope locked to Task 1: ebay_deal_alert.py, test_ebay_deal_alert.py, and this required progress log only.
+- Untouched full-suite baseline: 737 passed, 2 warnings, 521 subtests passed in 21.90s.
+- Located WATCH_NONFUNCTIONAL_TEXT_SIGNALS at ebay_deal_alert.py:176; its compiled pattern matches the plan's quoted current regex exactly (no material drift).
+- Added the three specified SharedNonfunctionalConditionSignal tests before changing production code.
+- Confirmed the new tests fail before implementation because NONFUNCTIONAL_CONDITION_TEXT_SIGNALS does not yet exist (9 failed/subfailed, 1 passed, 527 deselected).
+- Renamed/generalized the compiled pattern, added parts-only/for-parts/untested matching, and made WATCH_NONFUNCTIONAL_TEXT_SIGNALS an alias to the same compiled object.
+- Targeted acceptance run passed: 54 passed, 476 deselected, 60 subtests passed in 1.12s for SharedNonfunctionalConditionSignal or Watch; all pre-existing Watch-named tests remained unmodified.
+- AST validation passed after the initial implementation.
+- First post-change full suite found one compatibility regression: 1 failed, 739 passed, 2 warnings, 528 subtests passed in 19.64s. The current suite has a pre-existing Hamilton regression test requiring the generic condition-keyword reason for "For parts or not working"; the newly added "for parts" shared signal intercepted it earlier through the watch alias.
+- Added a narrow watch-path compatibility check so phrases already covered by CONDITION_HARD_FAIL_KEYWORDS retain their established generic result before the shared watch alias runs. No existing test was modified.
+- Re-ran the previously failing Hamilton regression test: 1 passed in 0.64s.
+- Final targeted acceptance run: 54 passed, 476 deselected, 60 subtests passed in 0.93s.
+- Final AST validation command exited 0 with no output.
+- Final full suite: 740 passed, 2 warnings, 528 subtests passed in 17.90s.
+- Before/after acceptance: 737 -> 740 passed (exactly the three new tests), zero regressions.
+- Final diff/status audit passed: only ebay_deal_alert.py, test_ebay_deal_alert.py, and this required progress log are changed; git diff --check exits 0 (Git reports only its normal LF-to-CRLF working-copy warnings).
+- No commit or push performed.

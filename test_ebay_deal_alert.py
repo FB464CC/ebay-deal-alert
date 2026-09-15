@@ -1901,6 +1901,39 @@ class WatchPackagingHardFailScoping(unittest.TestCase):
         self.assertTrue(m.EMPTY_PACKAGING_SIGNALS.search("Rolex watch box only"))
 
 
+class SharedNonfunctionalConditionSignal(unittest.TestCase):
+    def test_watch_alias_is_the_generalized_pattern(self):
+        self.assertIs(
+            m.WATCH_NONFUNCTIONAL_TEXT_SIGNALS,
+            m.NONFUNCTIONAL_CONDITION_TEXT_SIGNALS,
+        )
+
+    def test_matches_generic_nonfunctional_phrases_regardless_of_item(self):
+        for phrase in (
+            "not running",
+            "does not run",
+            "won't wind",
+            "nonfunctional",
+            "stopped working",
+            "not keeping time",
+            "dead movement",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(
+                    m.NONFUNCTIONAL_CONDITION_TEXT_SIGNALS.search(phrase)
+                )
+
+    def test_does_not_match_a_positive_repaired_claim(self):
+        # Real false-positive risk already documented for the watch version:
+        # "recently repaired and serviced" must NOT match, since it is the
+        # opposite of a nonfunctional disclosure.
+        self.assertIsNone(
+            m.NONFUNCTIONAL_CONDITION_TEXT_SIGNALS.search(
+                "recently repaired and serviced, runs great"
+            )
+        )
+
+
 class WatchPriceBand(unittest.TestCase):
     def test_known_brand_returns_band(self):
         band = m.watch_price_band("Movado Museum Quartz Black Dial 40mm")
