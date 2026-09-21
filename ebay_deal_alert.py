@@ -2177,6 +2177,19 @@ GAMECOCKS_GRAB_UNDER_PRICE = 50
 # and the final golf gate both use that ceiling. See the golf prompt and
 # is_blocked_by_steal_quality_gate() for the playable-partial-set semantics.
 GOLF_EQUIPMENT_MAX_PRICE = 300
+# Reversible delivery policy: the owner currently wants one thing only, a
+# recognizable-brand full golf set. Searches remain untouched so the switch can
+# be rolled back without rewriting config inventory; this is enforced after AI
+# so every suppression is logged with its own disposition instead of vanishing.
+GOLF_FULL_SET_ONLY = bool(_CONFIG.get("GOLF_FULL_SET_ONLY", True))
+# Eight-day hourly-snapshot replay found three safe, complete low-confidence
+# sets at $20.6594-$35.4994 and no additional qualifying row through $100.
+# Forty dollars is the smallest practical round ceiling above that observed
+# range; it bounds the downside without claiming resale precision the model did
+# not have.
+GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE = float(
+    _CONFIG.get("GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE", 40)
+)
 # Poker-chip vision is deliberately an authenticity/research triage, not a
 # valuation model. This is only the buyer's landed-price ceiling for an alert
 # worth researching by hand; it does not mean a listing below it is a steal.
@@ -2277,6 +2290,151 @@ GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL = re.compile(
     r"\b(?:golf\s+)?irons?\b.{0,24}\bmuscle[\s-]?backs?\b",
     re.IGNORECASE,
 )
+GOLF_FULL_SET_GROUP_TITLE_SIGNAL = re.compile(
+    r"\b(?:golf\s+)?clubs?\s+set\b|"
+    r"\bset\s+of\s+\d+\s+(?:golf\s+)?clubs?\b|"
+    r"\b\d+\s*(?:pc|pcs|piece|pieces|clubs?)\b|"
+    r"\b(?:full|complete)\s+(?:men'?s\s+)?(?:golf\s+)?(?:clubs?\s+)?set\b",
+    re.IGNORECASE,
+)
+GOLF_FULL_COMPLETE_SET_TITLE_SIGNAL = re.compile(
+    r"\b(?:full|complete)\s+(?:men'?s\s+)?(?:golf\s+)?(?:clubs?\s+)?set\b",
+    re.IGNORECASE,
+)
+GOLF_BAG_TITLE_SIGNAL = re.compile(
+    r"\b(?:stand\s+)?(?:golf\s+)?bag\b|\bw\s*/\s*bag\b",
+    re.IGNORECASE,
+)
+GOLF_FULL_SET_CLUB_FAMILY_SIGNALS = {
+    "irons": re.compile(
+        r"\birons?\b|\b[2-9](?:i)?\s*[-\N{EN DASH}]\s*(?:[4-9]|pw|aw|sw|gw|lw)\b",
+        re.IGNORECASE,
+    ),
+    "long-club": re.compile(r"\b(?:drivers?|woods?|hybrids?)\b", re.IGNORECASE),
+    "putter": re.compile(r"\bputters?\b", re.IGNORECASE),
+}
+
+
+def _golf_profile_regexes(field):
+    """Return valid regexes from one optional golf profile field."""
+    patterns = get_category_profile("golf-equipment").get(field, [])
+    if not isinstance(patterns, list):
+        return ()
+    compiled = []
+    for pattern in patterns:
+        if not isinstance(pattern, str):
+            continue
+        try:
+            compiled.append(re.compile(pattern, re.IGNORECASE))
+        except re.error:
+            # Profiles fail open by design; one malformed optional pattern must
+            # not crash a run or turn into reject-everything behavior.
+            continue
+    return tuple(compiled)
+
+
+def _golf_listing_title_and_description(result):
+    listing = result.get("listing") or {}
+    return " ".join(
+        str(listing.get(field) or "")
+        for field in ("title", "description", "shortDescription")
+    ).strip()
+
+
+def golf_has_explicit_right_handed_text(result):
+    """Trust explicit RH seller text only when neither text nor AI conflicts."""
+    listing_text = _golf_listing_title_and_description(result)
+    return bool(
+        GOLF_RIGHT_HANDED_TITLE_SIGNAL.search(listing_text)
+        and not GOLF_LEFT_HANDED_TITLE_SIGNAL.search(listing_text)
+        and not result.get("golf_is_left_handed")
+    )
+
+
+def _golf_has_mainstream_full_set_brand(result):
+    """Use AI's identified club brand, never an incidental bag brand."""
+    brands = get_category_profile("golf-equipment").get(
+        "full_set_mainstream_brands", []
+    )
+    if not isinstance(brands, list):
+        return False
+    identified = re.sub(
+        r"[^a-z0-9]+", " ", str(result.get("golf_identified_brand") or "").casefold()
+    ).strip()
+    for brand in brands:
+        normalized = re.sub(r"[^a-z0-9]+", " ", str(brand).casefold()).strip()
+        if normalized and re.search(rf"\b{re.escape(normalized)}\b", identified):
+            return True
+    return False
+
+
+def golf_full_set_only_reason(result):
+    """Return why a vetted golf result is not the owner's wanted full set.
+
+    `golf_is_playable_first_set` is intentionally not enough: its model prompt
+    says iron-only and partial groups may be true. Full-set mode additionally
+    requires title-level grouped/composition evidence, a mainstream identified
+    club brand, and no profile-listed junk wording.
+    """
+    listing = result.get("listing") or {}
+    title = str(listing.get("title") or "").strip()
+    evidence_text = " ".join(
+        part
+        for part in (
+            title,
+            str(listing.get("description") or ""),
+            str(result.get("golf_identified_brand") or ""),
+        )
+        if part
+    )
+    for pattern in _golf_profile_regexes("full_set_junk_patterns"):
+        match = pattern.search(evidence_text)
+        if match:
+            return f"golf full-set-only: junk wording {match.group(0)!r}"
+    if result.get("golf_is_playable_first_set") is not True:
+        return "golf full-set-only: AI did not confirm a playable first set"
+    if not _golf_has_mainstream_full_set_brand(result):
+        return "golf full-set-only: no recognizable mainstream club brand identified"
+
+    grouped = bool(GOLF_FULL_SET_GROUP_TITLE_SIGNAL.search(title))
+    component_kind = result.get("golf_component_kind") or golf_component_search_kind(
+        result.get("search_query")
+    )
+    if component_kind and result.get("golf_is_wanted_component") and not grouped:
+        return f"golf full-set-only: component-only {component_kind} listing"
+    if not grouped:
+        return "golf full-set-only: title has no multi-club set evidence"
+
+    club_families = {
+        family
+        for family, pattern in GOLF_FULL_SET_CLUB_FAMILY_SIGNALS.items()
+        if pattern.search(title)
+    }
+    explicit_complete = bool(GOLF_FULL_COMPLETE_SET_TITLE_SIGNAL.search(title))
+    composition_complete = {"irons", "long-club", "putter"} <= club_families
+    starter_set_with_bag = bool(
+        result.get("golf_is_starter_kit") and GOLF_BAG_TITLE_SIGNAL.search(title)
+    )
+    if not (explicit_complete or composition_complete or starter_set_with_bag):
+        return (
+            "golf full-set-only: grouped clubs lack full-set composition "
+            "(need full/complete, irons+long clubs+putter, or starter set with bag)"
+        )
+    return None
+
+
+def _golf_cheap_full_set_exception(result, landed):
+    """Bounded low-confidence/uncertain-metadata exception backed by replay."""
+    return bool(
+        isinstance(landed, (int, float))
+        and not isinstance(landed, bool)
+        and math.isfinite(landed)
+        and landed <= GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE
+        and golf_full_set_only_reason(result) is None
+        and not result.get("golf_is_left_handed")
+        and not result.get("golf_counterfeit_suspected")
+        and not result.get("damage_found")
+    )
 
 
 def golf_blocked_brand(identified_brand):
@@ -5820,7 +5978,8 @@ def is_blocked_by_steal_quality_gate(result, category=None):
                 f"golf-equipment bar: deal_rating '{golf_rating}' below "
                 "Great Deal - needs at least 50% under current resale value"
             )
-        if price_confidence == "low":
+        cheap_full_set_exception = _golf_cheap_full_set_exception(result, landed)
+        if price_confidence == "low" and not cheap_full_set_exception:
             return "golf-equipment bar: AI price estimate confidence too low to trust"
         is_wanted_component = bool(
             component_kind and result.get("golf_is_wanted_component")
@@ -5837,14 +5996,22 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         if component_kind != "stand-bag":
             if result.get("golf_is_left_handed"):
                 return "golf-equipment bar: AI identified left-handed clubs (buyer is right-handed)"
-            if not result.get("golf_handedness_confirmed"):
+            if (
+                not result.get("golf_handedness_confirmed")
+                and not golf_has_explicit_right_handed_text(result)
+                and not cheap_full_set_exception
+            ):
                 return "golf-equipment bar: AI could not visually confirm right-handed clubs"
         # No claim is not a mismatch. Preserve fail-closed behavior for legacy
         # results that predate the explicit claim-presence field.
         brand_claims_present = result.get("golf_brand_claims_present")
         if brand_claims_present is None:
             brand_claims_present = True
-        if brand_claims_present and not result.get("golf_brand_claims_confirmed"):
+        if (
+            brand_claims_present
+            and not result.get("golf_brand_claims_confirmed")
+            and not cheap_full_set_exception
+        ):
             return "golf-equipment bar: AI could not confirm the clubs match their claimed brand/model"
         if result.get("golf_counterfeit_suspected"):
             return "golf-equipment bar: AI suspected counterfeit/replica club heads"
@@ -6416,6 +6583,7 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
         (("stale fixed-price listing",), "STALE_LISTING"),
         (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
         (("golf wrong-item title",), "GOLF_WRONG_ITEM"),
+        (("golf full-set-only",), "GOLF_FULL_SET_ONLY_REJECT"),
         (("poker pre-ai reject",), "POKER_PRETRIAGE_REJECT"),
         (("counterfeit", "replica", "not authentic", "authenticity red flag"), "COUNTERFEIT"),
         (("gender", "women's", "womens", "ladies"), "GENDER_EXCLUDE"),
@@ -10587,6 +10755,13 @@ def run():
         # "Bowen & Wright v-neck sweater" at -28% discount. This blocks
         # that class of alert entirely rather than just flagging it.
         gate_reason = is_blocked_by_steal_quality_gate(result, category=category)
+        if (
+            not gate_reason
+            and category == "golf-equipment"
+            and GOLF_FULL_SET_ONLY
+            and result.get("golf_ai_checked")
+        ):
+            gate_reason = golf_full_set_only_reason(result)
         # EVERY alert must be AI-vetted first. Per explicit user
         # instruction: "it should always be ai checked right? every alert?
         # theres only a few a day that get through - those should really

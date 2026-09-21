@@ -1,0 +1,219 @@
+GOLF FULL-SET INVESTIGATION
+Started: 2026-09-20 (America/New_York)
+
+Checkpoint 1 - checkout, required reading, and constraints
+- Confirmed the supplied checkout without fetch/pull/clone. `git log -1
+  --format="%H %s"` returned
+  `96f9643a2ad3e88053c37fbbc29460f125b4f123 chore: update poll state [skip ci]`.
+  Initial `git status --short` was empty.
+- Read in full before analysis or edits: PRETRIAGE_FILTER_INVESTIGATION.txt,
+  GOLF_BLADE_TOPFLITE_INVESTIGATION.txt, and
+  docs/superpowers/specs/2026-09-14-category-profiles-design.md.
+- Reusing the established evidence method: reconstruct at least seven days from
+  hourly snapshots, deduplicate exact JSON lines, replay terminal AI-reviewed
+  golf rows, enumerate every newly delivered/suppressed historical row, and
+  reject a proposed rule if it admits junk or removes a wanted delivery.
+- Scope constraints retained: no fetch/pull/clone, no saved-search edits, no
+  AI_PAID_MONTHLY_BUDGET_USD/GEMINI_CALL_LIMIT/GEMINI_BATCH_SIZE edits, no
+  chrome-extension/* or web/* edits, and no commit/push.
+- The supplied fresh evidence file is
+  `../evidence_alerts_log_2026-09-21.jsonl`; the dispatch states it spans
+  2026-09-19T19:57Z through 2026-09-21T02:22Z and contains 684 rows. Those
+  facts will be independently format/count checked, but the three highlighted
+  candidates and their outcomes are accepted as already verified rather than
+  re-researched from the marketplaces.
+
+Checkpoint 2 - fresh evidence and pre-change baseline
+- Verified the supplied file directly: 684 valid JSONL lines, first timestamp
+  2026-09-19T19:57:48.061199+00:00, last timestamp
+  2026-09-21T02:22:44.598055+00:00. It contains 375 golf-equipment rows / 346
+  distinct item IDs. Golf dispositions are GOLF_REJECT 89, GOLF_WRONG_ITEM 77,
+  CONDITION_REJECT 61, BELOW_MARGIN 43, MONTHLY_BUDGET_EXHAUSTED 42,
+  OVER_MAX_PRICE 26, GENDER_EXCLUDE 15, AI_NO_PRICE 8, STALE_LISTING 7,
+  DELIVERED 6, and COUNTERFEIT 1.
+- The six delivered golf rows are exactly: an assorted/mixed Wilson Prostaff
+  lot; a TaylorMade Jetspeed driver; five vintage Ping Eye irons; a single
+  TaylorMade Titanium driver; a vintage Ping Anser putter; and a Wilson
+  Prestige irons/PW/hybrid/putters/SW group with Jones bag. This directly
+  reproduces the owner's complaint.
+- Confirmed current gate order: after the >=50%-under calculation, low
+  `price_confidence` rejects before playability, handedness, brand-claim,
+  counterfeit, and damage checks. Component-search intent can separately make
+  `golf_is_wanted_component` sufficient even when
+  `golf_is_playable_first_set=false`, which explains the single-club alerts.
+- Confirmed the three exact cited misses in the file. Callaway 277179272 is
+  $35.4994 landed / $120 / Steal / low confidence / playable starter set;
+  Adams 277097903 is $20.6594 / $75 / Steal / low confidence / playable
+  starter set, explicit Right Handed title, but brand claims unconfirmed; Nike
+  277314111 is $35.4994 / $85 / Great Deal / playable iron-only set and fails
+  only visual handedness confirmation. The Nike row is not a complete-set
+  target under the requested new mode, so a title-handedness improvement must
+  not accidentally make it deliver.
+- Pre-change full suite: `python3 -m pytest -q` ->
+  `756 passed, 2 warnings, 528 subtests passed in 25.26s`.
+
+Checkpoint 3 - hourly-snapshot reconstruction and proposed rule backtest
+- Queried GitHub commit metadata for alerts_log.jsonl without changing the
+  checkout, selected the newest snapshot in each UTC hour, downloaded 175
+  hourly snapshots spanning commit times 2026-09-13T00:58:07Z through
+  2026-09-21T02:38:10Z, and deduplicated exact JSON lines in memory. Restricting
+  row timestamps to 2026-09-13T00:00Z onward yields 6,578 rows through
+  2026-09-21T02:38Z, including 3,417 golf rows, 1,548 AI-checked golf rows, and
+  39 delivered golf rows. No fetch/pull/clone or repository write was used.
+- Among >=50%-under AI-checked golf rows with low price confidence, counts by
+  landed ceiling are 9 at $30 and 13 at each of $40/$50/$60/$75/$100. The
+  apparent plateau is not by itself safe: most are a single driver, vintage,
+  assorted/mixed, obscure-brand, or insufficiently complete group.
+- Backtested the narrow cheap-full-set definition: AI says
+  `golf_is_playable_first_set=true`; title has actual grouped-set evidence; and
+  title plus AI evidence establishes full-set shape via explicit full/complete,
+  irons+long-club+putter families, or an AI starter-kit assessment plus a grouped
+  set with a bag. The identified club brand must be a recognizable mainstream
+  brand from a documented profile list; title-only bag branding cannot qualify
+  an obscure club set. Component-attributed searches qualify only when the
+  listing title independently proves the item is a set. Profile-driven junk
+  wording (vintage/VTG, assorted, mixed, random, various/variety, garage sale,
+  misc/miscellaneous) rejects first. Left-handed, damage, counterfeit, and
+  existing blocked-brand verdicts remain absolute vetoes.
+- With that definition and a $40 landed ceiling, exactly three historical rows
+  become deliverable:
+  * shopgoodwill:276967345, `Wilson Sam Snead Golf Club Set 13 Clubs Irons
+    Woods Putter With Bag RH Steel`, $30.1994 landed vs $65, low confidence;
+  * shopgoodwill:277179272, `Lot Callaway Big Bertha Golf Club Set With Stand
+    Bag`, $35.4994 vs $120, low confidence;
+  * shopgoodwill:277097903, `Adams Golf Tight Lies Right Handed Golf Club Set
+    With Stand Bag Woods Irons`, $20.6594 vs $75, low confidence.
+  All three are AI-playable sets, mainstream identified brands, grouped/full-set
+  title shapes, non-left-handed, undamaged, non-counterfeit, and contain none of
+  the owner's junk wording. The Adams row's stand-bag search attribution does
+  not make it component-only because its title independently says club set,
+  woods, irons, and stand bag.
+- The exact break is supported by the data: $35.49 would miss Callaway while
+  $35.50/$36/$40 each recover the same three rows; $50/$60/$75/$100 recover no
+  additional row. $40 is therefore the conservative round ceiling with only
+  $4.5006 headroom over the highest observed qualifying landed price. The data
+  does not identify a unique magic threshold; it only supports that $40 has the
+  same observed benefit and less unobserved exposure than $50-$100.
+- Brand-claim handling is deliberately narrow. The cheap-full-set exception may
+  tolerate `golf_brand_claims_confirmed=false` only when the AI still identifies
+  a profile-listed mainstream club brand and reports no counterfeit signal.
+  This admits Adams at $20.6594: an illegible Adams marking can make the seller's
+  model claim unconfirmed without making a playable set fake or unusable, and
+  the maximum loss is bounded by $40. It does not admit Acculine, Palm Springs,
+  True Maxima/Lethal Weapon, unknown-brand, blocked-brand, vintage, or assorted
+  low-confidence rows.
+- Handedness evidence: 748 AI-checked rows had an explicit RH/right-hand title
+  with no LH title token; 285 lacked visual right-handed confirmation. Six of
+  those 748 were nevertheless AI-identified as left-handed, proving title text
+  cannot override an affirmative vision contradiction. One additional title
+  contained both RH and LH and is ambiguous. After preserving both vetoes,
+  exactly three explicit-RH/unconfirmed rows also met the >=50%-under price bar:
+  the Adams and Wilson full sets above plus a Lynx/Cleveland irons+driver+bag
+  group that does not meet the full-set definition. Thus the title rule frees
+  three candidates for later gates, two of which can deliver in full-set mode,
+  with zero observed left-handed conflicts among the freed rows.
+
+Checkpoint 4 - marketplace deadline coverage (report only)
+- `prefetch_marketplaces()` takes all 94 enabled searches, rotates the global
+  list by one position per 20-minute bucket, then enqueues each platform's
+  applicable searches FIFO. ShopGoodwill is applicable to all 94 current
+  searches: 43 golf-equipment, 29 watches, 18 poker-chips, two school-gear,
+  one golf-apparel, and one knitwear. It has two workers (the configured value
+  is absent, so the code default is two) sharing a 90-second fetch budget.
+- There is no golf-first ordering. In the base order 19 watch searches precede
+  the first broad golf-set query; poker is clustered after golf, but rotation
+  can wrap either watches or poker ahead on later runs. Rotation prevents a
+  permanent tail but does not guarantee any category coverage in one run.
+- Treating 11 existing broad/brand full-set queries as the relevant targets,
+  their count in the first 31 rotated positions ranges from zero to eight. In
+  19 of 94 possible rotation offsets, no full-set target is in that first-31
+  prefix; the earliest target can be position 43. Because two workers can
+  finish requests out of exact order this is a queue-pressure measure, not a
+  claim that the same literal first 31 always finish, but it proves full-set
+  golf is sometimes beyond the observed completion capacity and can be
+  starved in a 31/94 deadline run.
+- Shrinking the enabled-search count separately will reduce the queue directly.
+  If ShopGoodwill's scheduled count falls to its reliably completed capacity
+  (about 31 under the reported run conditions), coverage becomes complete; a
+  modest reduction that leaves the queue above capacity improves odds but does
+  not guarantee full-set coverage.
+- No ordering change was made. A permanent golf-first partition would merely
+  move the same deadline starvation onto watches/poker and undo the existing
+  cross-run rotation fairness; that is not a trivial report-only fix. The
+  separately planned search-count reduction addresses the actual 94-request
+  queue pressure without changing saved-search semantics here.
+
+Checkpoint 5 - implementation and actual-helper replay
+- Added top-level `GOLF_FULL_SET_ONLY=true` and
+  `GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE=40` constants only; no saved-search
+  entry changed. The switch is loaded with a code default of true and can be
+  reversed without deleting searches or changing their intent.
+- Added profile-driven `full_set_junk_patterns` and
+  `full_set_mainstream_brands` under golf-equipment. The existing fail-open
+  category-profile loader is reused; invalid optional regexes are skipped
+  instead of crashing or rejecting everything.
+- Added a separate post-AI `golf_full_set_only_reason()` delivery gate. This
+  preserves every existing direct quality-gate contract while making actual
+  golf deliveries require playable-first-set, mainstream identified club brand,
+  grouped/full-set title evidence, acceptable composition, and no junk wording.
+  Rejections are written normally and map to the distinct
+  `GOLF_FULL_SET_ONLY_REJECT` disposition.
+- Added the bounded cheap-full-set exception inside the existing golf quality
+  gate. It applies only after the normal >=50%-under calculation and only when
+  the full-set helper passes at <=$40, with no LH/damage/counterfeit signal.
+  In this narrow case low price confidence, unknown visual handedness, and an
+  unconfirmed brand claim do not veto the alert. Existing blocked-brand logic
+  runs first and remains absolute.
+- Added explicit title/description RH evidence as a substitute for visual RH
+  confirmation only when no LH text exists and AI did not identify LH. An
+  affirmative AI-left signal and RH+LH text ambiguity remain hard failures.
+- Replayed all reconstructed AI rows through the actual implemented functions.
+  The newly deliverable low-confidence set list is exactly the same three rows
+  recorded in Checkpoint 3, with no additional item.
+- Replayed 39 distinct historical delivered golf rows through the actual
+  full-set helper: three are retained and 36 suppressed. Retained:
+  * v1|318877528122|0 `Golf Clubs Set With Bag` (AI identified Tommy
+    Armour/Titleist and starter-set evidence);
+  * shopgoodwill:277296216 `Lot Of 14 Pieces TaylorMade Right Handed Golf
+    Clubs And Black Bag Set`;
+  * shopgoodwill:277513478 `Wilson Prestige Irons PW Hybrid Putters & SW Golf
+    Club Set w/ Jones Sports Bag`.
+- The Wilson Prestige row honestly survives. Its title explicitly supplies a
+  grouped club set, irons, hybrid (the long-club family), putters, wedge, and
+  bag; AI marked it playable and starter-kit quality and identified Wilson. It
+  is borderline versus a conventional driver/woods package, but suppressing it
+  would contradict the available full-set evidence rather than remove obvious
+  junk.
+- In the fresh six delivered rows named by the dispatch, the assorted/mixed
+  Wilson lot, Jetspeed driver, vintage Ping irons, TaylorMade Titanium driver,
+  and VTG Ping putter all become `GOLF_FULL_SET_ONLY_REJECT`; only Wilson
+  Prestige remains deliverable.
+
+Checkpoint 6 - regression coverage, final validation, and scope audit
+- Added exact-row unit and run-level regressions using ShopGoodwill IDs,
+  production titles, item/shipping prices, resale estimates, and confidence
+  values. The run test proves 277179272 logs/delivers at $35.4994 and 277097903
+  at $20.6594 despite low confidence; the separate run test proves the five
+  cited junk/component rows log `GOLF_FULL_SET_ONLY_REJECT` and only Wilson
+  Prestige delivers. Controls cover LH, damage, counterfeit, obscure brand,
+  RH+LH text conflict, and AI-left contradiction.
+- Exact syntax command:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  exited 0 with no output.
+- Exact JSON command:
+  `python3 -c "import json; json.load(open('config.json')); json.load(open('category_profiles.json'))"`
+  exited 0 with no output.
+- Final full suite: `python3 -m pytest -q` ->
+  `761 passed, 2 warnings, 538 subtests passed in 19.12s`. Pre-change was
+  `756 passed, 2 warnings, 528 subtests passed in 25.26s`: five new tests and
+  ten new subtests, with every pre-existing test still passing unmodified.
+  The two warnings are the existing lxml `strip_cdata` deprecation in the
+  mid-run-429 auction test.
+- `git diff --check` exited 0; its only output was the repository's existing
+  Windows LF-to-CRLF advisory. Modified tracked files are exactly
+  ebay_deal_alert.py, category_profiles.json, config.json, and
+  test_ebay_deal_alert.py; this investigation report is new. Config changes are
+  only the two new top-level constants. No saved-search entry, spend/call/batch
+  constant, chrome-extension/*, or web/* file changed. No commit or push was
+  made.
+

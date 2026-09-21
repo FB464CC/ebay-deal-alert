@@ -1435,6 +1435,223 @@ class GolfEquipmentGate(unittest.TestCase):
         )
         self.assertIsNone(reason)
 
+    def test_real_low_confidence_callaway_and_adams_full_sets_now_clear(self):
+        # Exact production rows 277179272 and 277097903. Both already cleared
+        # the established >=50%-under bar; the bounded <=$40 full-set exception
+        # must remove only the low-confidence/uncertain-metadata leaks.
+        rows = (
+            self._result(
+                price=35.4994,
+                search_query=(
+                    'golf club set -junior -youth -kids -ladies -womens '
+                    '-"only" -"left hand" -lefty -"left handed" -scarf'
+                ),
+                listing={
+                    "itemId": "shopgoodwill:277179272",
+                    "title": "Lot Callaway Big Bertha Golf Club Set With Stand Bag",
+                },
+                estimated_resale_value=120.0,
+                price_confidence="low",
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_is_wanted_component=False,
+                golf_is_starter_kit=True,
+                golf_is_left_handed=False,
+                golf_handedness_confirmed=False,
+                golf_brand_claims_present=True,
+                golf_brand_claims_confirmed=True,
+                golf_identified_brand="Callaway",
+                golf_counterfeit_suspected=False,
+                damage_found=False,
+            ),
+            self._result(
+                price=20.6594,
+                search_query=(
+                    'golf stand bag -junior -youth -kids -ladies -womens '
+                    '-"left hand" -lefty -"left handed" -senior'
+                ),
+                listing={
+                    "itemId": "shopgoodwill:277097903",
+                    "title": (
+                        "Adams Golf Tight Lies Right Handed Golf Club Set With "
+                        "Stand Bag Woods Irons"
+                    ),
+                },
+                estimated_resale_value=75.0,
+                price_confidence="low",
+                golf_ai_checked=True,
+                golf_component_kind="stand-bag",
+                golf_is_playable_first_set=True,
+                golf_is_wanted_component=True,
+                golf_is_starter_kit=True,
+                golf_is_left_handed=False,
+                golf_handedness_confirmed=False,
+                golf_brand_claims_present=True,
+                golf_brand_claims_confirmed=False,
+                golf_identified_brand="Adams",
+                golf_counterfeit_suspected=False,
+                damage_found=False,
+            ),
+        )
+        for result in rows:
+            with self.subTest(item_id=result["listing"]["itemId"]):
+                self.assertIsNone(m.golf_full_set_only_reason(result))
+                self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+                    result, category="golf-equipment"
+                ))
+
+    def test_full_set_only_exact_junk_rows_and_controls(self):
+        suppressed = (
+            self._result(
+                price=23.8394,
+                listing={
+                    "itemId": "shopgoodwill:277487924",
+                    "title": (
+                        "Lot Of Assorted Wilson Prostaff Ultra Mixed Variety "
+                        "Golf Clubs In Case"
+                    ),
+                },
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_is_starter_kit=True,
+                golf_identified_brand="Wilson",
+                damage_found=False,
+            ),
+            self._result(
+                price=33.92,
+                search_query="TaylorMade driver -lefty",
+                listing={
+                    "itemId": "v1|318895920289|0",
+                    "title": "Taylormade Jetspeed RH Driver 10.5 Matrix 49 Grams Shaft",
+                },
+                golf_ai_checked=True,
+                golf_component_kind="driver",
+                golf_is_playable_first_set=False,
+                golf_is_wanted_component=True,
+                golf_identified_brand="TaylorMade",
+                damage_found=False,
+            ),
+            self._result(
+                price=36.57,
+                listing={
+                    "itemId": "shopgoodwill:277348678",
+                    "title": (
+                        "Vintage PING Eye Golf Irons Set Chrome Steel Shafts "
+                        "Black Grips Right Handed"
+                    ),
+                },
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_is_starter_kit=False,
+                golf_identified_brand="Ping",
+                damage_found=False,
+            ),
+            self._result(
+                price=19.5994,
+                search_query="TaylorMade driver -lefty",
+                listing={
+                    "itemId": "shopgoodwill:277745023",
+                    "title": (
+                        "TaylorMade Titanium Driver 9.5 Degree Loft S-90 Plus "
+                        "Shaft Right Hand"
+                    ),
+                },
+                golf_ai_checked=True,
+                golf_component_kind="driver",
+                golf_is_playable_first_set=False,
+                golf_is_wanted_component=True,
+                golf_identified_brand="TaylorMade",
+                damage_found=False,
+            ),
+            self._result(
+                price=24.38,
+                search_query="ping karsten putter -lefty",
+                listing={
+                    "itemId": "v1|366660632022|0",
+                    "title": (
+                        "Original VTG Ping Anser Karsten RH Slotted Putter, "
+                        "Box 9990 Phoenix AZ 85068"
+                    ),
+                },
+                golf_ai_checked=True,
+                golf_component_kind="putter",
+                golf_is_playable_first_set=False,
+                golf_is_wanted_component=True,
+                golf_identified_brand="Ping",
+                damage_found=False,
+            ),
+        )
+        for result in suppressed:
+            with self.subTest(item_id=result["listing"]["itemId"]):
+                reason = m.golf_full_set_only_reason(result)
+                self.assertIsNotNone(reason)
+                self.assertEqual(
+                    m.disposition_code_for({"reason": reason}),
+                    "GOLF_FULL_SET_ONLY_REJECT",
+                )
+
+        wilson_prestige = self._result(
+            price=35.4782,
+            search_query="golf irons set -lefty",
+            listing={
+                "itemId": "shopgoodwill:277513478",
+                "title": (
+                    "Wilson Prestige Irons PW Hybrid Putters & SW Golf Club Set "
+                    "w/ Jones Sports Bag"
+                ),
+            },
+            estimated_resale_value=75.0,
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=True,
+            golf_identified_brand="Wilson",
+            damage_found=False,
+        )
+        self.assertIsNone(m.golf_full_set_only_reason(wilson_prestige))
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            wilson_prestige, category="golf-equipment"
+        ))
+
+        # Must-not-alert controls: cheap is never enough to override an
+        # affirmative LH/damage/counterfeit veto or an obscure/incomplete set.
+        callaway = self._result(
+            price=35.4994,
+            listing={"title": "Callaway Complete Golf Set With Bag"},
+            estimated_resale_value=120.0,
+            price_confidence="low",
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=True,
+            golf_identified_brand="Callaway",
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=False,
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+        for field in ("golf_is_left_handed", "golf_counterfeit_suspected", "damage_found"):
+            candidate = dict(callaway, **{field: True})
+            with self.subTest(veto=field):
+                self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(
+                    candidate, category="golf-equipment"
+                ))
+        obscure = dict(callaway, golf_identified_brand="Acculine")
+        self.assertIsNotNone(m.golf_full_set_only_reason(obscure))
+
+    def test_explicit_right_hand_text_never_overrides_a_conflict(self):
+        clean = self._result(
+            listing={"title": "Wilson Full Golf Set RH With Bag"},
+            golf_is_left_handed=False,
+        )
+        self.assertTrue(m.golf_has_explicit_right_handed_text(clean))
+        self.assertFalse(m.golf_has_explicit_right_handed_text(dict(
+            clean, golf_is_left_handed=True
+        )))
+        conflicting_text = dict(
+            clean,
+            listing={"title": "Wilson Golf Set RH and LH Clubs With Bag"},
+        )
+        self.assertFalse(m.golf_has_explicit_right_handed_text(conflicting_text))
+
     def test_component_prompt_uses_saved_search_intent(self):
         response = {"is_wanted_component": True, "summary": "whole putter"}
         listing = {
@@ -8787,6 +9004,237 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["disposition_code"], "GOLF_WRONG_ITEM")
         self.assertIn("non-club merchandise", records[0]["reason"])
+
+    def test_real_low_confidence_shopgoodwill_full_sets_deliver_end_to_end(self):
+        callaway_query = (
+            'golf club set -junior -youth -kids -ladies -womens -"only" '
+            '-"left hand" -lefty -"left handed" -scarf'
+        )
+        adams_query = (
+            'golf stand bag -junior -youth -kids -ladies -womens '
+            '-"left hand" -lefty -"left handed" -senior'
+        )
+        searches = [
+            {
+                "id": "golf-golf-club-set", "query": callaway_query,
+                "category": "golf-equipment", "category_id": "115280",
+                "max_price": 300, "enabled": True, "profile": "fast",
+                "platforms": ["shopgoodwill"],
+            },
+            {
+                "id": "golf-stand-bag", "query": adams_query,
+                "category": "golf-equipment", "category_id": "30109",
+                "max_price": 300, "enabled": True, "profile": "fast",
+                "platforms": ["shopgoodwill"],
+            },
+        ]
+        listings = {
+            callaway_query: [p.make_listing(
+                "shopgoodwill", "277179272",
+                "Lot Callaway Big Bertha Golf Club Set With Stand Bag",
+                19.99, "https://shopgoodwill.com/item/277179272",
+                image_url="https://example.test/277179272.jpg", shipping=13.5,
+            )],
+            adams_query: [p.make_listing(
+                "shopgoodwill", "277097903",
+                "Adams Golf Tight Lies Right Handed Golf Club Set With Stand Bag Woods Irons",
+                5.99, "https://shopgoodwill.com/item/277097903",
+                image_url="https://example.test/277097903.jpg", shipping=13.5,
+            )],
+        }
+        ai_by_id = {
+            "shopgoodwill:277179272": {
+                "identified_brand": "Callaway",
+                "brand_claims_present": True,
+                "brand_claims_confirmed": True,
+                "is_playable_first_set": True,
+                "is_wanted_component": False,
+                "is_starter_kit_quality": True,
+                "is_left_handed": False,
+                "handedness_confirmed": False,
+                "damage_found": False,
+                "looks_good": True,
+                "counterfeit_suspected": False,
+                "estimated_resale_value": 120.0,
+                "price_confidence": "low",
+                "summary": "playable Callaway set with stand bag",
+            },
+            "shopgoodwill:277097903": {
+                "identified_brand": "Adams",
+                "brand_claims_present": True,
+                "brand_claims_confirmed": False,
+                "is_playable_first_set": True,
+                "is_wanted_component": True,
+                "is_starter_kit_quality": True,
+                "is_left_handed": False,
+                "handedness_confirmed": False,
+                "damage_found": False,
+                "looks_good": True,
+                "counterfeit_suspected": False,
+                "estimated_resale_value": 75.0,
+                "price_confidence": "low",
+                "summary": "playable Adams woods and irons set with stand bag",
+            },
+        }
+        self._patch("SAVED_SEARCHES", searches)
+        self._patch("search_ebay", lambda token, search: ([], 0))
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        self._patch(
+            "prefetch_marketplaces",
+            lambda now, conn, **kwargs: listings,
+        )
+
+        def golf_ai(listing, **_kwargs):
+            self.ai_calls.append(listing["itemId"])
+            return ai_by_id[listing["itemId"]]
+
+        self._patch("check_photos_with_gemini", golf_ai)
+        m.run()
+
+        self.assertEqual(set(self.ai_calls), set(ai_by_id))
+        self.assertEqual(
+            {alert["listing"]["itemId"] for alert in self.alerts},
+            set(ai_by_id),
+        )
+        records = {row["item_id"]: row for row in self._alert_log_records()}
+        self.assertEqual(set(records), set(ai_by_id))
+        self.assertTrue(all(row["disposition_code"] == "DELIVERED" for row in records.values()))
+        self.assertAlmostEqual(records["shopgoodwill:277179272"]["price"], 35.4994)
+        self.assertAlmostEqual(records["shopgoodwill:277097903"]["price"], 20.6594)
+        self.assertTrue(all(row["price_confidence"] == "low" for row in records.values()))
+
+    def test_real_junk_golf_deliveries_are_full_set_only_rejects(self):
+        searches_and_listings = (
+            (
+                "golf clubs -junior -youth -kids -ladies -womens -lefty",
+                p.make_listing(
+                    "shopgoodwill", "277487924",
+                    "Lot Of Assorted Wilson Prostaff Ultra Mixed Variety Golf Clubs In Case",
+                    8.99, "https://shopgoodwill.com/item/277487924",
+                    image_url="https://example.test/277487924.jpg", shipping=13.5,
+                ),
+            ),
+            (
+                "TaylorMade driver -junior -youth -kids -ladies -womens -lefty",
+                self._ebay_item(
+                    "v1|318895920289|0",
+                    "Taylormade Jetspeed RH Driver 10.5 Matrix 49 Grams Shaft",
+                    32.0,
+                ),
+            ),
+            (
+                "golf set -junior -youth -kids -ladies -womens -lefty",
+                p.make_listing(
+                    "shopgoodwill", "277348678",
+                    "Vintage PING Eye Golf Irons Set Chrome Steel Shafts Black Grips Right Handed",
+                    21.0, "https://shopgoodwill.com/item/277348678",
+                    image_url="https://example.test/277348678.jpg", shipping=13.5,
+                ),
+            ),
+            (
+                "TaylorMade driver -junior -youth -kids -ladies -womens -lefty -senior",
+                p.make_listing(
+                    "shopgoodwill", "277745023",
+                    "TaylorMade Titanium Driver 9.5 Degree Loft S-90 Plus Shaft Right Hand",
+                    4.99, "https://shopgoodwill.com/item/277745023",
+                    image_url="https://example.test/277745023.jpg", shipping=13.5,
+                ),
+            ),
+            (
+                "ping karsten putter -junior -youth -kids -ladies -womens -lefty",
+                self._ebay_item(
+                    "v1|366660632022|0",
+                    "Original VTG Ping Anser Karsten RH Slotted Putter, Box 9990 Phoenix AZ 85068",
+                    23.0,
+                ),
+            ),
+            (
+                "golf irons set -junior -youth -kids -ladies -womens -lefty",
+                p.make_listing(
+                    "shopgoodwill", "277513478",
+                    "Wilson Prestige Irons PW Hybrid Putters & SW Golf Club Set w/ Jones Sports Bag",
+                    19.97, "https://shopgoodwill.com/item/277513478",
+                    image_url="https://example.test/277513478.jpg", shipping=13.5,
+                ),
+            ),
+        )
+        searches = []
+        listings_by_query = {}
+        for index, (query, listing) in enumerate(searches_and_listings):
+            searches.append({
+                "id": f"golf-full-set-regression-{index}",
+                "query": query,
+                "category": "golf-equipment",
+                "category_id": "115280",
+                "max_price": 300,
+                "enabled": True,
+                "profile": "fast",
+                "platforms": [listing.get("platform") or "ebay"],
+            })
+            listings_by_query[query] = [listing]
+
+        ai_by_id = {
+            "shopgoodwill:277487924": ("Wilson", True, True, False, 75.0),
+            "v1|318895920289|0": ("TaylorMade", False, False, True, 75.0),
+            "shopgoodwill:277348678": ("Ping", True, False, False, 75.0),
+            "shopgoodwill:277745023": ("TaylorMade", False, False, True, 40.0),
+            "v1|366660632022|0": ("Ping", False, False, True, 55.0),
+            "shopgoodwill:277513478": ("Wilson", True, True, False, 75.0),
+        }
+        self._patch("SAVED_SEARCHES", searches)
+        self._patch("GEMINI_CALL_LIMIT", 6)
+        self._patch("GOLF_EQUIPMENT_SHARED_AI_SOFT_CAP", 6)
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        self._patch(
+            "search_ebay",
+            lambda token, search: (
+                list(listings_by_query.get(search["query"], [])), 1
+            ) if (listings_by_query.get(search["query"], [{}])[0].get("platform") or "ebay") == "ebay" else ([], 0),
+        )
+        self._patch(
+            "prefetch_marketplaces",
+            lambda now, conn, **kwargs: {
+                query: items for query, items in listings_by_query.items()
+                if (items[0].get("platform") or "ebay") != "ebay"
+            },
+        )
+
+        def golf_ai(listing, **_kwargs):
+            self.ai_calls.append(listing["itemId"])
+            brand, playable, starter, wanted_component, resale = ai_by_id[listing["itemId"]]
+            return {
+                "identified_brand": brand,
+                "brand_claims_present": True,
+                "brand_claims_confirmed": True,
+                "is_playable_first_set": playable,
+                "is_wanted_component": wanted_component,
+                "is_starter_kit_quality": starter,
+                "is_left_handed": False,
+                "handedness_confirmed": True,
+                "damage_found": False,
+                "looks_good": True,
+                "counterfeit_suspected": False,
+                "estimated_resale_value": resale,
+                "price_confidence": "medium",
+                "summary": "exact production regression fixture",
+            }
+
+        self._patch("check_photos_with_gemini", golf_ai)
+        m.run()
+
+        self.assertEqual(len(self.ai_calls), 6)
+        self.assertEqual(
+            [alert["listing"]["itemId"] for alert in self.alerts],
+            ["shopgoodwill:277513478"],
+        )
+        records = {row["item_id"]: row for row in self._alert_log_records()}
+        self.assertEqual(records["shopgoodwill:277513478"]["disposition_code"], "DELIVERED")
+        for item_id in set(ai_by_id) - {"shopgoodwill:277513478"}:
+            self.assertEqual(
+                records[item_id]["disposition_code"],
+                "GOLF_FULL_SET_ONLY_REJECT",
+                item_id,
+            )
 
     def test_real_top_flite_and_wilson_blade_rows_spend_no_ai(self):
         query = (

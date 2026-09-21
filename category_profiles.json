@@ -19,6 +19,33 @@
       "tour edge"
     ],
     "blocked_subtypes": [],
+    "full_set_junk_patterns": [
+      "\\bvintage\\b",
+      "\\bvtg\\b",
+      "\\bassorted\\b",
+      "\\bmixed\\b",
+      "\\brandom\\b",
+      "\\bvarious\\b",
+      "\\bvariety\\b",
+      "\\bgarage(?:\\s+sale)?\\b",
+      "\\bmisc(?:ellaneous)?\\b"
+    ],
+    "full_set_mainstream_brands": [
+      "adams",
+      "ben hogan",
+      "bridgestone",
+      "callaway",
+      "cleveland",
+      "cobra",
+      "mizuno",
+      "nike",
+      "odyssey",
+      "ping",
+      "srixon",
+      "taylormade",
+      "titleist",
+      "wilson"
+    ],
     "price_floor_brands": {},
     "promise_score_signals": {"positive": [], "negative": []}
   },
