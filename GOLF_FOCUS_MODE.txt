@@ -1,0 +1,86 @@
+GOLF FOCUS MODE IMPLEMENTATION
+Started: 2026-09-20 (America/New_York)
+
+Checkpoint 1 - checkout and required reading
+- Confirmed the supplied clean checkout without fetch/pull/clone.
+- `git log -1 --format="%H %s"` returned
+  `d38001a864155f8a8d82bd26d631d1eb1fd1e7aa Golf: stop dropping cheap complete sets; full-golf-set-only delivery mode`.
+- Read GOLF_FULL_SET_INVESTIGATION.txt in full before inspecting or editing the
+  implementation. Checkpoint 4 documents 94 enabled ShopGoodwill searches,
+  about 31 completed requests per 90-second run, no golf-first ordering, and
+  19/94 rotation offsets whose finishing prefix contains no full-set search.
+- Scope retained: runtime filtering only; no saved-search edits, no budget/call/
+  batch constant edits, no category profile, extension, or web changes, and no
+  commit or push.
+
+Checkpoint 2 - pre-change baseline
+- Unmodified full suite: `python3 -m pytest -q` ->
+  `761 passed, 2 warnings, 544 subtests passed in 20.49s`.
+- The warnings are the existing lxml `strip_cdata` deprecations in the
+  mid-run-429 auction-lane integration test.
+
+Checkpoint 3 - runtime focus design and implementation
+- The shipped config contains 212 saved searches, of which exactly 97 are
+  enabled. All 97 are applicable to ShopGoodwill under the platform-default
+  rules. Each of the requested 15 focus ids exists exactly once, is enabled,
+  and is ShopGoodwill-applicable.
+- Added top-level `FOCUS_SEARCH_IDS` with exactly the requested 15 ids. No
+  saved-search entry or other config constant was changed.
+- Added one `_focus_filter()` helper. Empty/absent focus returns the input
+  unchanged. A malformed focus or a non-empty focus with zero matches logs a
+  warning and returns the input unchanged, preventing a typo or synthetic
+  test list from silently disabling all work.
+- Extended that fail-open rail to partial/synthetic saved-search catalogs: all
+  configured focus ids must resolve before filtering activates. This preserves
+  existing integration fixtures that intentionally replace production config
+  with a small mixed list, while the shipped production catalog resolves all
+  15 ids and filters normally.
+- Applied the helper to marketplace prefetch (before rotation/queue building),
+  the run-level enabled list, eBay's stable fast/slow batch source, the
+  official/scrape lanes, the always-on auction lane, and digest starvation
+  enumeration. The existing normalized per-completed-request marketplace
+  health baseline consequently receives focused scheduled/completed counts.
+- Scout rows are loaded but matched only against the focused search list.
+  Rows explicitly targeting a non-focus search are deferred and left
+  unacknowledged, so turning focus off restores them; legacy untagged Facebook
+  rows may still route through the focused broad full-set fallback. Facebook's
+  batch adapter receives only the focused searches.
+
+Checkpoint 4 - focused regression tests
+- Added five tests: shipped config selects exactly 15 of 97 enabled searches;
+  empty focus restores all 97; unknown-only focus fails open with a warning;
+  real ShopGoodwill prefetch telemetry reports 97 scheduled requests with
+  focus off and 15 with focus on; and a mocked full-config run executes only
+  the 15 focused official/scrape searches while suppressing non-focus and
+  always-on auction work.
+- Targeted syntax/JSON validation exited 0. The five new focus tests passed.
+- First full-suite attempt found one existing partial-config integration test
+  that mixed a focused search with a non-focus golf component search. The
+  strengthened partial-catalog fail-open rail preserves that unmodified test;
+  the failed run was `1 failed, 765 passed, 2 warnings, 544 subtests`.
+- Targeted rerun after that correction: `6 passed in 0.94s`, including the
+  previously failing existing regression.
+
+Checkpoint 5 - final validation and scope audit
+- Exact AST command:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  exited 0 with no command output.
+- Exact JSON command:
+  `python3 -c "import json; json.load(open('config.json'))"` exited 0 with
+  no command output.
+- Final full suite: `python3 -m pytest -q` ->
+  `766 passed, 2 warnings, 544 subtests passed in 23.19s`. Pre-change was
+  `761 passed, 2 warnings, 544 subtests passed in 20.49s`: five tests added,
+  all pre-existing tests pass unmodified, and the two warnings remain the
+  existing lxml `strip_cdata` deprecations.
+- Direct config comparison to HEAD confirmed the only config change is the new
+  top-level `FOCUS_SEARCH_IDS`; `SAVED_SEARCHES` is byte-equivalent as parsed,
+  and every pre-existing top-level value is unchanged.
+- Direct count audit: `enabled=97 focused=15 shopgoodwill_before=97
+  shopgoodwill_after=15`. Against the observed capacity of about 31 completed
+  ShopGoodwill requests per deadline, 97 does not fit and 15 does, leaving
+  about 16 requests of headroom; expected focused coverage is complete.
+- `git diff --check` exited 0 (only the repository's existing Windows
+  LF-to-CRLF advisories). Tracked modifications are exactly config.json,
+  ebay_deal_alert.py, and test_ebay_deal_alert.py; this progress report is the
+  sole new file. No category profile, extension, web, commit, or push change.

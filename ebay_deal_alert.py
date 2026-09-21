@@ -88,6 +88,7 @@ CONFIG_HASH = hashlib.sha256(
     json.dumps(_CONFIG, sort_keys=True, separators=(",", ":")).encode("utf-8")
 ).hexdigest()[:12]
 SAVED_SEARCHES = _CONFIG["SAVED_SEARCHES"]
+FOCUS_SEARCH_IDS = _CONFIG.get("FOCUS_SEARCH_IDS") or []
 GRAB_ON_SIGHT_BRANDS = _CONFIG["GRAB_ON_SIGHT_BRANDS"]
 STANDARD_BRANDS = _CONFIG["STANDARD_BRANDS"]
 WATCH_PRICE_BANDS = {
@@ -693,6 +694,62 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+
+def _focus_filter(searches):
+    """Apply the reversible per-run search focus without mutating config.
+
+    A configured focus that does not fully resolve against the current saved
+    search catalog, or that matches nothing in the list being filtered, is
+    treated as invalid and fails open. This is both an operational safety rail
+    for typos and what keeps callers/tests that supply synthetic search lists
+    from being silently reduced to zero work.
+    """
+    searches = list(searches)
+    if not FOCUS_SEARCH_IDS:
+        return searches
+    if isinstance(FOCUS_SEARCH_IDS, (str, bytes)) or not isinstance(
+        FOCUS_SEARCH_IDS, (list, tuple, set, frozenset)
+    ):
+        logger.warning(
+            "FOCUS_SEARCH_IDS is non-empty but is not a list-like collection; "
+            "leaving this search list unchanged"
+        )
+        return searches
+    focus_ids = {
+        str(search_id).strip()
+        for search_id in FOCUS_SEARCH_IDS
+        if str(search_id).strip()
+    }
+    configured_ids = {
+        str(search.get("id") or "").strip()
+        for search in SAVED_SEARCHES
+        if isinstance(search, dict) and str(search.get("id") or "").strip()
+    }
+    missing_ids = focus_ids - configured_ids
+    if missing_ids:
+        if focus_ids.isdisjoint(configured_ids):
+            detail = "matched none of SAVED_SEARCHES"
+        else:
+            detail = "did not fully resolve against SAVED_SEARCHES"
+        logger.warning(
+            "FOCUS_SEARCH_IDS %s (missing: %s); leaving this search list unchanged",
+            detail,
+            ", ".join(sorted(missing_ids)),
+        )
+        return searches
+    focused = [
+        search
+        for search in searches
+        if isinstance(search, dict) and str(search.get("id") or "").strip() in focus_ids
+    ]
+    if not focused:
+        logger.warning(
+            "FOCUS_SEARCH_IDS matched none of the searches being filtered; "
+            "leaving this search list unchanged"
+        )
+        return searches
+    return focused
 
 VALID_SEARCH_PROFILES = {"fast", "slow"}
 SUPPORTED_SEARCH_PLATFORMS = {
@@ -7451,6 +7508,7 @@ STARVATION_HOURS_BY_CATEGORY = {
 def starved_searches(now, searches=None, activity=None):
     activity = load_search_activity() if activity is None else activity
     searches = SAVED_SEARCHES if searches is None else searches
+    searches = _focus_filter(searches)
     starved = []
     for search in searches:
         if not search.get("enabled", True) or not search.get("id"):
@@ -7953,7 +8011,9 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     anomaly rows to SQLite - well past the global run deadline. Clamping
     against it here, and threading the SAME clamped deadline down into the
     batch adapters below, makes every layer agree on one absolute stop."""
-    searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
+    searches = _focus_filter(
+        s for s in SAVED_SEARCHES if s.get("enabled", True)
+    )
     if not searches:
         return {}
     scout_listings = scout_queue.load_scout_queue()
@@ -8906,23 +8966,12 @@ def run():
 
     marketplace_listings = prefetch_marketplaces(current_utc, conn, run_hard_stop=hard_stop)
 
-    # Same rotation trick as prefetch_marketplaces(): without it, the AI
-    # budget and any future collect-time truncation would always bias
-    # toward whichever search sits first in config.json, every run, forever.
-    enabled_searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
-    if enabled_searches:
-        offset = ((current_utc.hour * 60 + current_utc.minute) // 5) % len(enabled_searches)
-        enabled_searches = enabled_searches[offset:] + enabled_searches[:offset]
-
-    # Auction-snipe searches (EBAY_AUCTION_SEARCHES) appended to the LOCAL
-    # enabled_searches only, deliberately AFTER the rotation-shuffle above
-    # and NOT into module-level SAVED_SEARCHES - the fast/slow batching
-    # below (stable_searches/fast_searches/slow_searches) re-derives from
-    # SAVED_SEARCHES directly, so these never enter that rotation and are
-    # fetched unconditionally every run instead (see the dispatch check
-    # in PASS 1 below and search_ebay_ending_soon_auctions()'s docstring
-    # for why rotation is wrong for a 15-minute closing window).
-    enabled_searches = enabled_searches + [
+    # Build the saved-search and always-on auction lanes together before
+    # applying focus. Auction rows intentionally have no saved-search id, so
+    # an active, valid focus removes them along with every other non-focused
+    # lane. If the configured ids are invalid for this run's search catalog,
+    # the helper fails open and preserves both lanes.
+    auction_searches = [
         {
             "query": s.get("query", ""),
             "category_id": s.get("category_id", WATCH_CATEGORY_ID),
@@ -8932,6 +8981,32 @@ def run():
         }
         for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)
     ]
+    run_searches = _focus_filter(
+        [s for s in SAVED_SEARCHES if s.get("enabled", True)] + auction_searches
+    )
+    stable_searches = [
+        search for search in run_searches if not search.get("is_auction_search")
+    ]
+    focused_auction_searches = [
+        search for search in run_searches if search.get("is_auction_search")
+    ]
+
+    # Same rotation trick as prefetch_marketplaces(): without it, the AI
+    # budget and any future collect-time truncation would always bias
+    # toward whichever search sits first in config.json, every run, forever.
+    enabled_searches = list(stable_searches)
+    if enabled_searches:
+        offset = ((current_utc.hour * 60 + current_utc.minute) // 5) % len(enabled_searches)
+        enabled_searches = enabled_searches[offset:] + enabled_searches[:offset]
+
+    # Auction-snipe searches (EBAY_AUCTION_SEARCHES) appended to the LOCAL
+    # enabled_searches only, deliberately AFTER the rotation-shuffle above
+    # and NOT into the stable saved-search slice used by the fast/slow eBay
+    # batching below, so these never enter that rotation and are fetched
+    # unconditionally every run instead (see the dispatch check in PASS 1
+    # below and search_ebay_ending_soon_auctions()'s docstring for why
+    # rotation is wrong for a 15-minute closing window).
+    enabled_searches = enabled_searches + focused_auction_searches
 
     # Only this run's rotating BATCH actually calls eBay's API - see
     # EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN. Deliberately a distinct non-overlapping
@@ -8977,7 +9052,7 @@ def run():
         needed_this_run = (
             EBAY_FAST_SEARCHES_PER_RUN
             + EBAY_SLOW_SEARCHES_PER_RUN
-            + len([s for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)])
+            + len(focused_auction_searches)
             + GEMINI_CALL_LIMIT  # fetch_ebay_item_details(), one per AI check
             + EBAY_SCRAPE_AI_CHECK_LIMIT  # scrape-lane item details/condition
             + AUCTION_AI_RESERVED_CALLS  # the reserved auction slot may fetch a description too
@@ -9002,7 +9077,6 @@ def run():
         # EBAY_SLOW_SEARCHES_PER_RUN == EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN) - this
         # is a priority reallocation of the existing safe budget, not an
         # increase to it.
-        stable_searches = [s for s in SAVED_SEARCHES if s.get("enabled", True)]
         fast_searches = [s for s in stable_searches if s.get("profile") == "fast"]
         slow_searches = [s for s in stable_searches if s.get("profile") != "fast"]
         ebay_this_run = (

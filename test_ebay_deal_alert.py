@@ -177,6 +177,92 @@ class CategoryClassification(unittest.TestCase):
                 self.assertEqual(m.classify_search_category(query), "poker-chips")
 
 
+class RuntimeSearchFocus(unittest.TestCase):
+    EXPECTED_IDS = [
+        "golf-golf-club-set",
+        "golf-golf-clubs",
+        "golf-golf-set",
+        "golf-mens",
+        "golf-complete",
+        "golf-adams",
+        "golf-cobra",
+        "golf-callaway",
+        "golf-mizuno",
+        "golf-titleist",
+        "golf-ping",
+        "golf-taylormade",
+        "golf-and-bag",
+        "golf-mens-used",
+        "golf-full",
+    ]
+
+    @staticmethod
+    def _shipped_enabled_searches():
+        config = m.load_config()
+        return config, [
+            search
+            for search in config["SAVED_SEARCHES"]
+            if search.get("enabled", True)
+        ]
+
+    def test_shipped_focus_selects_exactly_15_of_97_enabled_searches(self):
+        config, enabled = self._shipped_enabled_searches()
+        self.assertEqual(len(enabled), 97)
+        self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
+        with mock.patch.object(m, "FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"]):
+            focused = m._focus_filter(enabled)
+        self.assertEqual(len(focused), 15)
+        self.assertEqual([search["id"] for search in focused], self.EXPECTED_IDS)
+
+    def test_empty_focus_restores_all_97_enabled_searches(self):
+        _config, enabled = self._shipped_enabled_searches()
+        with mock.patch.object(m, "FOCUS_SEARCH_IDS", []):
+            self.assertEqual(m._focus_filter(enabled), enabled)
+
+    def test_only_unknown_focus_ids_fail_open_with_warning(self):
+        searches = [
+            {"id": "synthetic-one", "query": "one", "enabled": True},
+            {"id": "synthetic-two", "query": "two", "enabled": True},
+        ]
+        with mock.patch.object(m, "FOCUS_SEARCH_IDS", ["typo-does-not-exist"]), \
+             self.assertLogs("ebay_deal_alert", level="WARNING") as captured:
+            filtered = m._focus_filter(searches)
+        self.assertEqual(filtered, searches)
+        self.assertIn("matched none", "\n".join(captured.output))
+
+    def test_shopgoodwill_prefetch_queue_drops_from_97_to_15(self):
+        config, _enabled = self._shipped_enabled_searches()
+
+        def scheduled_count(focus_ids):
+            health_snapshots = []
+
+            def fake_shopgoodwill(_search):
+                return [], 0
+
+            def capture_health(_conn, _now, _active, _counts, health=None):
+                health_snapshots.append(health)
+
+            conn = sqlite3.connect(":memory:")
+            try:
+                with mock.patch.object(m, "SAVED_SEARCHES", config["SAVED_SEARCHES"]), \
+                     mock.patch.object(m, "FOCUS_SEARCH_IDS", focus_ids), \
+                     mock.patch.object(m, "MARKETPLACES_ENABLED", ["shopgoodwill"]), \
+                     mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[]), \
+                     mock.patch.object(p, "adapter_circuit_breaker_allows_calls", return_value=True), \
+                     mock.patch.object(m, "_check_marketplace_anomalies", side_effect=capture_health), \
+                     mock.patch.dict(p.ADAPTERS, {"shopgoodwill": fake_shopgoodwill}):
+                    m.prefetch_marketplaces(
+                        datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc), conn
+                    )
+            finally:
+                conn.close()
+            self.assertEqual(len(health_snapshots), 1)
+            return health_snapshots[0]["shopgoodwill"]["scheduled_requests"]
+
+        self.assertEqual(scheduled_count([]), 97)
+        self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 15)
+
+
 class FunnelAuditConfiguration(unittest.TestCase):
     @staticmethod
     def _search(search_id):
@@ -7534,6 +7620,60 @@ class RunIntegration(unittest.TestCase):
         conn = sqlite3.connect(m.DB_PATH)
         self.addCleanup(conn.close)
         return conn
+
+    def test_runtime_focus_executes_only_focus_searches_across_ebay_lanes(self):
+        config = m.load_config()
+        focus_search = dict(next(
+            search for search in config["SAVED_SEARCHES"]
+            if search["id"] == "golf-golf-club-set"
+        ))
+        non_focus_search = dict(next(
+            search for search in config["SAVED_SEARCHES"]
+            if search["id"] == "watch-rolex"
+        ))
+        official_calls = []
+        scrape_calls = []
+        auction_calls = []
+
+        self._patch("SAVED_SEARCHES", [
+            dict(search) for search in config["SAVED_SEARCHES"]
+        ])
+        self._patch("FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"])
+        self._patch("EBAY_FAST_SEARCHES_PER_RUN", 100)
+        self._patch("EBAY_SCRAPE_ENABLED", True)
+        self._patch("EBAY_AUCTION_SEARCHES", [{
+            "query": "watch -pocket",
+            "category_id": "31387",
+            "max_price": 6000,
+            "enabled": True,
+        }])
+        self._patch(
+            "search_ebay",
+            lambda _token, search: (official_calls.append(search["id"]) or [], 0),
+        )
+        self._patch(
+            "search_ebay_ending_soon_auctions",
+            lambda _token, search: (auction_calls.append(search["query"]) or [], 0),
+        )
+        self._patch(
+            "ebay_scrape",
+            mock.Mock(search_ebay_scraped=lambda query, **_kwargs: (
+                scrape_calls.append(query) or []
+            )),
+        )
+
+        m.run()
+
+        self.assertEqual(set(official_calls), set(config["FOCUS_SEARCH_IDS"]))
+        self.assertIn(focus_search["id"], official_calls)
+        self.assertNotIn(non_focus_search["id"], official_calls)
+        focused_queries = {
+            search["query"] for search in config["SAVED_SEARCHES"]
+            if search.get("id") in config["FOCUS_SEARCH_IDS"]
+        }
+        self.assertEqual(set(scrape_calls), focused_queries)
+        self.assertNotIn(non_focus_search["query"], scrape_calls)
+        self.assertEqual(auction_calls, [])
 
     def test_run_completes_without_error_on_realistic_input(self):
         # The smoke test that would have caught bug (b): run() is called

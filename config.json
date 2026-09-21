@@ -1,5 +1,22 @@
 {
   "OWNER_TIMEZONE": "America/New_York",
+  "FOCUS_SEARCH_IDS": [
+    "golf-golf-club-set",
+    "golf-golf-clubs",
+    "golf-golf-set",
+    "golf-mens",
+    "golf-complete",
+    "golf-adams",
+    "golf-cobra",
+    "golf-callaway",
+    "golf-mizuno",
+    "golf-titleist",
+    "golf-ping",
+    "golf-taylormade",
+    "golf-and-bag",
+    "golf-mens-used",
+    "golf-full"
+  ],
   "QUIET_HOURS_START": "23:00",
   "QUIET_HOURS_END": "07:00",
   "SAVED_SEARCHES": [
