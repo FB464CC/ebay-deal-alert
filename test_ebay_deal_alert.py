@@ -180,19 +180,35 @@ class CategoryClassification(unittest.TestCase):
 class RuntimeSearchFocus(unittest.TestCase):
     EXPECTED_IDS = [
         "golf-golf-club-set",
+        "golf-complete-iron",
         "golf-golf-clubs",
         "golf-golf-set",
-        "golf-mens",
+        "golf-irons",
         "golf-complete",
-        "golf-adams",
         "golf-cobra",
         "golf-callaway",
-        "golf-mizuno",
-        "golf-titleist",
         "golf-ping",
         "golf-taylormade",
+        "golf-taylormade-m2-irons",
+        "golf-taylormade-m4-irons",
+        "golf-callaway-xr-irons",
+        "golf-callaway-rogue-irons",
+        "golf-callaway-mavrik-irons",
+        "golf-ping-g30-irons",
+        "golf-ping-g400-irons",
+        "golf-cobra-f8-irons",
+        "golf-game-improvement-irons-regular-flex",
+        "golf-taylormade-burner-2-0-irons",
+        "golf-taylormade-rocketballz-irons",
+        "golf-taylormade-rbz-irons",
+        "golf-callaway-x-20-irons",
+        "golf-callaway-x-22-irons",
+        "golf-callaway-x-24-irons",
+        "golf-callaway-diablo-edge-irons",
+        "golf-ping-g10-irons",
+        "golf-ping-g15-irons",
+        "golf-ping-g20-irons",
         "golf-and-bag",
-        "golf-mens-used",
         "golf-full",
     ]
 
@@ -205,13 +221,18 @@ class RuntimeSearchFocus(unittest.TestCase):
             if search.get("enabled", True)
         ]
 
-    def test_shipped_focus_selects_exactly_15_of_97_enabled_searches(self):
+    def test_shipped_focus_selects_31_real_enabled_searches(self):
         config, enabled = self._shipped_enabled_searches()
         self.assertEqual(len(enabled), 97)
         self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
+        enabled_by_id = {search["id"]: search for search in enabled}
+        self.assertEqual(
+            set(config["FOCUS_SEARCH_IDS"]),
+            set(config["FOCUS_SEARCH_IDS"]) & set(enabled_by_id),
+        )
         with mock.patch.object(m, "FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"]):
             focused = m._focus_filter(enabled)
-        self.assertEqual(len(focused), 15)
+        self.assertEqual(len(focused), 31)
         self.assertEqual([search["id"] for search in focused], self.EXPECTED_IDS)
 
     def test_empty_focus_restores_all_97_enabled_searches(self):
@@ -230,7 +251,7 @@ class RuntimeSearchFocus(unittest.TestCase):
         self.assertEqual(filtered, searches)
         self.assertIn("matched none", "\n".join(captured.output))
 
-    def test_shopgoodwill_prefetch_queue_drops_from_97_to_15(self):
+    def test_shopgoodwill_prefetch_queue_drops_from_97_to_capacity_31(self):
         config, _enabled = self._shipped_enabled_searches()
 
         def scheduled_count(focus_ids):
@@ -260,7 +281,7 @@ class RuntimeSearchFocus(unittest.TestCase):
             return health_snapshots[0]["shopgoodwill"]["scheduled_requests"]
 
         self.assertEqual(scheduled_count([]), 97)
-        self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 15)
+        self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 31)
 
 
 class FunnelAuditConfiguration(unittest.TestCase):
@@ -1742,6 +1763,174 @@ class GolfEquipmentGate(unittest.TestCase):
             listing={"title": "Wilson Golf Set RH and LH Clubs With Bag"},
         )
         self.assertFalse(m.golf_has_explicit_right_handed_text(conflicting_text))
+
+    def test_real_nike_iron_set_qualifies_but_unknown_handedness_stays_blocked(self):
+        # Exact eight-day row shopgoodwill:277314111. It is the only otherwise
+        # clean, mainstream, >=50%-under iron-set candidate in the replay. The
+        # new set-shape gate accepts it, but no rule invents RH evidence.
+        nike = self._result(
+            price=35.4994,
+            search_query="golf set -lefty",
+            listing={
+                "itemId": "shopgoodwill:277314111",
+                "title": (
+                    "Nike Golf Slingshot 4D SS 4D Steel Shaft Irons Chrome "
+                    "Black Yellow Set"
+                ),
+            },
+            estimated_resale_value=85.0,
+            price_confidence="medium",
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=False,
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=False,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_identified_brand="Nike",
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+        self.assertIsNone(m.golf_full_set_only_reason(nike))
+        reason = m.is_blocked_by_steal_quality_gate(nike, category="golf-equipment")
+        self.assertEqual(
+            reason,
+            "golf-equipment bar: AI could not visually confirm right-handed clubs",
+        )
+
+        # The same exact real listing/economics proves a qualifying iron set
+        # reaches delivery once RH is actually established.
+        confirmed_right_handed = dict(nike, golf_handedness_confirmed=True)
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            confirmed_right_handed, category="golf-equipment"
+        ))
+        self.assertIsNone(m.golf_full_set_only_reason(confirmed_right_handed))
+
+        # Reversible switch restores the deployed full-set-only behavior.
+        with mock.patch.object(m, "GOLF_ALLOW_IRON_SETS", False):
+            self.assertIsNotNone(m.golf_full_set_only_reason(confirmed_right_handed))
+
+    def test_iron_sets_do_not_inherit_the_cheap_full_set_confidence_exception(self):
+        nike = self._result(
+            price=35.4994,
+            listing={
+                "itemId": "shopgoodwill:277314111",
+                "title": (
+                    "Nike Golf Slingshot 4D SS 4D Steel Shaft Irons Chrome "
+                    "Black Yellow Set"
+                ),
+            },
+            estimated_resale_value=85.0,
+            price_confidence="low",
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=True,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_identified_brand="Nike",
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+        self.assertIsNone(m.golf_full_set_only_reason(nike))
+        self.assertEqual(
+            m.is_blocked_by_steal_quality_gate(nike, category="golf-equipment"),
+            "golf-equipment bar: AI price estimate confidence too low to trust",
+        )
+
+    def test_real_partial_single_blade_vintage_and_lh_rows_stay_rejected(self):
+        # Exact production IDs/titles/landed prices. These cover each shape and
+        # profile veto independently of the final >=50%-under calculation.
+        rejected_shapes = (
+            (
+                "v1|157099596944|0", 63.5894,
+                "Adams Golf Tight Lies Iron Set 3,4,5,7,8,PW Original Grips Steel Shafts Mid Flex",
+                "Adams", "gapped/non-contiguous",
+            ),
+            (
+                "shopgoodwill:277321569", 68.37,
+                "TaylorMade 5 Iron 58 Degree Wedge Odyssey White Hot Putter Golf Clubs Set",
+                "TaylorMade", "single/replacement iron",
+            ),
+            (
+                "v1|205910704203|0", 264.9894,
+                "Used Ping Black Dot i3 Blade Irons 3-PW Cushin Stiff Flex Steel Golf Club Set",
+                "Ping", "muscle-back/blade",
+            ),
+            (
+                "shopgoodwill:277348678", 36.57,
+                "Vintage PING Eye Golf Irons Set Chrome Steel Shafts Black Grips Right Handed",
+                "Ping", "junk wording",
+            ),
+        )
+        for item_id, price, title, brand, expected in rejected_shapes:
+            result = self._result(
+                price=price,
+                listing={"itemId": item_id, "title": title},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_is_left_handed=False,
+                golf_handedness_confirmed=True,
+                golf_brand_claims_present=True,
+                golf_brand_claims_confirmed=True,
+                golf_identified_brand=brand,
+                golf_counterfeit_suspected=False,
+                damage_found=False,
+            )
+            with self.subTest(item_id=item_id):
+                reason = m.golf_full_set_only_reason(result)
+                self.assertIsNotNone(reason)
+                self.assertIn(expected, reason)
+
+        lh_title = (
+            "Spalding Molitor Oversize Golf Club Set 1 3 5 Woods 3-PW "
+            "Irons Steel 11 Clubs LH"
+        )
+        self.assertEqual(
+            m.golf_wrong_item_title_reason(lh_title, "golf club set"),
+            "explicitly left-handed-only title for a right-handed buyer",
+        )
+
+    def test_iron_set_minimum_is_five_and_full_sets_are_unchanged_when_disabled(self):
+        qualifying = (
+            "Callaway X-20 4-PW",
+            "Cobra F8 irons 6-PW",
+            "Ping G10 set of 7 irons",
+            "Nike Ignite Golf Irons Set",
+            "Ping G10 5,6,7,8,9 Irons",
+        )
+        rejected = (
+            "Ping G10 3-4 irons",
+            "TaylorMade Iron Creek 4, 6, & 7 Irons",
+            "King Cobra SS 7 Iron & SS-I 5 Iron",
+            "Callaway Rogue 7 Iron Set",
+            "Cleveland RTX PW-SW Wedges",
+        )
+        for title in qualifying:
+            with self.subTest(title=title):
+                self.assertIsNone(m.golf_iron_set_title_reason(title))
+        for title in rejected:
+            with self.subTest(title=title):
+                self.assertIsNotNone(m.golf_iron_set_title_reason(title))
+
+        callaway_full_set = self._result(
+            price=35.4994,
+            listing={
+                "itemId": "shopgoodwill:277179272",
+                "title": "Lot Callaway Big Bertha Golf Club Set With Stand Bag",
+            },
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=True,
+            golf_identified_brand="Callaway",
+        )
+        with mock.patch.object(m, "GOLF_ALLOW_IRON_SETS", False):
+            self.assertIsNone(m.golf_full_set_only_reason(callaway_full_set))
+
+        self.assertTrue(m.load_config()["GOLF_ALLOW_IRON_SETS"])
+        self.assertEqual(
+            m.get_category_profile("golf-equipment")["iron_set_min_clubs"], 5
+        )
 
     def test_component_prompt_uses_saved_search_intent(self):
         response = {"is_wanted_component": True, "summary": "whole putter"}
@@ -6195,6 +6384,35 @@ class ScoutPrefetchIntegration(unittest.TestCase):
             m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
         self.assertEqual(result, {})
 
+    def test_focus_defers_explicit_non_focus_scout_row_without_acknowledging_it(self):
+        listing = p.make_listing(
+            "facebook", "non-focus-driver", "TaylorMade RBZ Driver RH", 50,
+            "https://www.facebook.com/marketplace/item/non-focus-driver/",
+        )
+        listing["_scout_search_query"] = "TaylorMade driver"
+        focused = {
+            "id": "golf-irons", "query": "golf irons set",
+            "enabled": True, "platforms": ["facebook"],
+        }
+        non_focus = {
+            "id": "golf-taylormade-driver", "query": "TaylorMade driver",
+            "enabled": True, "platforms": ["facebook"],
+        }
+        conn = sqlite3.connect(":memory:")
+        old_searches, old_enabled = m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED
+        try:
+            m.SAVED_SEARCHES = [focused, non_focus]
+            m.MARKETPLACES_ENABLED = []
+            with mock.patch.object(m, "FOCUS_SEARCH_IDS", [focused["id"]]), \
+                 mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[listing]), \
+                 mock.patch.object(m.scout_queue, "remove_processed_scout_queue") as remove:
+                result = m.prefetch_marketplaces(datetime.now(timezone.utc), conn)
+        finally:
+            conn.close()
+            m.SAVED_SEARCHES, m.MARKETPLACES_ENABLED = old_searches, old_enabled
+        self.assertEqual(result, {})
+        remove.assert_not_called()
+
     def test_untagged_golf_club_range_uses_broad_set_not_weak_component_overlap(self):
         listing = p.make_listing(
             "facebook", "golf-range-1", "Cleaveland CG RED 3-PW + CG10 56", 250,
@@ -9247,6 +9465,63 @@ class RunIntegration(unittest.TestCase):
         self.assertAlmostEqual(records["shopgoodwill:277179272"]["price"], 35.4994)
         self.assertAlmostEqual(records["shopgoodwill:277097903"]["price"], 20.6594)
         self.assertTrue(all(row["price_confidence"] == "low" for row in records.values()))
+
+    def test_real_nike_iron_set_delivers_end_to_end_once_rh_is_confirmed(self):
+        # Exact item/title/item-price/shipping/resale evidence from 277314111.
+        # Production had handedness_confirmed=False and remains blocked; this
+        # control changes only that required fact to prove the iron-set mode's
+        # complete run path can deliver a genuine qualifying iron set.
+        query = (
+            'golf set -junior -youth -kids -ladies -womens '
+            '-"left hand" -lefty -"left handed" -scarf'
+        )
+        search = {
+            "id": "golf-golf-set", "query": query,
+            "category": "golf-equipment", "category_id": "115280",
+            "max_price": 300, "enabled": True, "profile": "fast",
+            "platforms": ["shopgoodwill"],
+        }
+        listing = p.make_listing(
+            "shopgoodwill", "277314111",
+            "Nike Golf Slingshot 4D SS 4D Steel Shaft Irons Chrome Black Yellow Set",
+            19.99, "https://shopgoodwill.com/item/277314111",
+            image_url="https://example.test/277314111.jpg", shipping=13.5,
+        )
+        self._patch("SAVED_SEARCHES", [search])
+        self._patch("search_ebay", lambda token, saved_search: ([], 0))
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        self._patch(
+            "prefetch_marketplaces", lambda now, conn, **kwargs: {query: [listing]}
+        )
+        self.ai_result = {
+            "identified_brand": "Nike",
+            "brand_claims_present": True,
+            "brand_claims_confirmed": True,
+            "is_playable_first_set": True,
+            "is_wanted_component": False,
+            "is_starter_kit_quality": False,
+            "is_left_handed": False,
+            "handedness_confirmed": True,
+            "damage_found": False,
+            "looks_good": True,
+            "counterfeit_suspected": False,
+            "estimated_resale_value": 85.0,
+            "price_confidence": "medium",
+            "summary": "matched playable Nike Slingshot iron set, right-handed",
+        }
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, ["shopgoodwill:277314111"])
+        self.assertEqual(
+            [alert["listing"]["itemId"] for alert in self.alerts],
+            ["shopgoodwill:277314111"],
+        )
+        record = self._alert_log_records()[0]
+        self.assertEqual(record["disposition_code"], "DELIVERED")
+        self.assertAlmostEqual(record["price"], 35.4994)
+        self.assertEqual(record["estimated_resale_value"], 85.0)
+        self.assertEqual(record["discount_pct"], 58)
 
     def test_wilson_staff_is_mainstream_but_plain_wilson_budget_lines_are_not(self):
         brands = m.get_category_profile("golf-equipment")["full_set_mainstream_brands"]

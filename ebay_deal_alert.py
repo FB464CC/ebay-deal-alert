@@ -2239,6 +2239,11 @@ GOLF_EQUIPMENT_MAX_PRICE = 300
 # be rolled back without rewriting config inventory; this is enforced after AI
 # so every suppression is logged with its own disposition instead of vanishing.
 GOLF_FULL_SET_ONLY = bool(_CONFIG.get("GOLF_FULL_SET_ONLY", True))
+# Iron sets are the owner's first priority while building a bag piece by piece.
+# Keep this independent from the full-set-only switch so the new acceptance can
+# be reversed without altering any saved search or the established full-set
+# behavior.
+GOLF_ALLOW_IRON_SETS = bool(_CONFIG.get("GOLF_ALLOW_IRON_SETS", True))
 # Eight-day hourly-snapshot replay found three safe, complete low-confidence
 # sets at $20.6594-$35.4994 and no additional qualifying row through $100.
 # Forty dollars is the smallest practical round ceiling above that observed
@@ -2370,6 +2375,32 @@ GOLF_FULL_SET_CLUB_FAMILY_SIGNALS = {
     "long-club": re.compile(r"\b(?:drivers?|woods?|hybrids?)\b", re.IGNORECASE),
     "putter": re.compile(r"\bputters?\b", re.IGNORECASE),
 }
+GOLF_IRON_SET_TITLE_SIGNAL = re.compile(
+    r"\birons?\b.{0,48}\bsets?\b|\bsets?\b.{0,48}\birons?\b",
+    re.IGNORECASE,
+)
+GOLF_IRON_RANGE_TITLE_SIGNAL = re.compile(
+    r"\b([2-9])(?:i)?\s*(?:[-\N{EN DASH}\N{EM DASH}]|to|thru|through)\s*"
+    r"([3-9]|p|pw|aw|gw|sw|lw)\b",
+    re.IGNORECASE,
+)
+GOLF_IRON_EXPLICIT_COUNT_SIGNALS = (
+    re.compile(r"\bset\s+of\s+(\d{1,2})\s+(?:golf\s+)?irons\b", re.IGNORECASE),
+    re.compile(
+        r"\b(\d{1,2})\s*[- ]?(?:pc|pcs|piece|pieces|club|clubs)\s+"
+        r"(?:golf\s+)?irons?\b",
+        re.IGNORECASE,
+    ),
+    # Plural is intentional: ``7 iron`` names one club; ``7 irons`` states a
+    # count. This prevents a single numbered replacement iron from qualifying.
+    re.compile(r"(?<![/,\-\N{EN DASH}\N{EM DASH}])\b(\d{1,2})\s+(?:golf\s+)?irons\b", re.IGNORECASE),
+)
+GOLF_IRON_ENUMERATION_SIGNAL = re.compile(
+    r"\b(?:[2-9]|p(?:w)?|aw|gw|sw|lw)"
+    r"(?:\s*(?:,\s*&|,|/|&|[-\N{EN DASH}\N{EM DASH}]|\band\b)\s*"
+    r"(?:[2-9]|p(?:w)?|aw|gw|sw|lw))+\b",
+    re.IGNORECASE,
+)
 
 
 def _golf_profile_regexes(field):
@@ -2425,14 +2456,97 @@ def _golf_has_mainstream_full_set_brand(result):
     return False
 
 
-def golf_full_set_only_reason(result):
-    """Return why a vetted golf result is not the owner's wanted full set.
+def _golf_iron_range_count(start, end):
+    """Count a conventional contiguous numbered-iron-through-wedge range."""
+    endpoints = {"p": 10, "pw": 10, "aw": 11, "gw": 11, "sw": 12, "lw": 13}
+    start_number = int(start)
+    end_number = int(end) if str(end).isdigit() else endpoints[str(end).casefold()]
+    return end_number - start_number + 1
+
+
+def _golf_iron_enumerations(title):
+    """Return count/gap/span evidence for explicit iron-number lists."""
+    values = {"p": 10, "pw": 10, "aw": 11, "gw": 11, "sw": 12, "lw": 13}
+    enumerations = []
+    for match in GOLF_IRON_ENUMERATION_SIGNAL.finditer(title):
+        tokens = re.findall(r"[2-9]|p(?:w)?|aw|gw|sw|lw", match.group(0), re.I)
+        numbers = [int(token) if token.isdigit() else values[token.casefold()] for token in tokens]
+        # A numbered gap before/through PW proves a loose partial group. Sets
+        # commonly append SW without GW, so optional wedges after PW do not by
+        # themselves make an otherwise contiguous numbered run incoherent.
+        has_numbered_gap = len(numbers) >= 3 and any(
+            previous <= 9 and current <= 10 and current != previous + 1
+            for previous, current in zip(numbers, numbers[1:])
+        )
+        enumerations.append(
+            (len(numbers), has_numbered_gap, match.start(), match.end())
+        )
+    return enumerations
+
+
+def golf_iron_set_title_reason(title):
+    """Return why a title does not prove a coherent, usable multi-iron set.
+
+    Five is the observed floor: 6-PW is the smallest useful contiguous shape
+    requested by the owner and contains five irons. An uncounted explicit
+    ``iron set`` claim remains title-level set evidence, but an explicit count
+    or range below five contradicts that claim. Gapped enumerations are not a
+    coherent iron set regardless of their surrounding wording.
+    """
+    title = str(title or "").strip()
+    minimum = get_category_profile("golf-equipment").get("iron_set_min_clubs", 5)
+    if not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 2:
+        minimum = 5
+
+    if GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL.search(title):
+        return "beginner-unsuitable muscle-back/blade irons"
+    enumerations = _golf_iron_enumerations(title)
+    if any(has_gap for _count, has_gap, _start, _end in enumerations):
+        return "gapped/non-contiguous loose irons are not an iron set"
+
+    counts = []
+    for pattern in GOLF_IRON_EXPLICIT_COUNT_SIGNALS:
+        for match in pattern.finditer(title):
+            if any(
+                start <= match.start(1) < end
+                for _count, _gap, start, end in enumerations
+            ):
+                continue
+            counts.append(int(match.group(1)))
+    range_counts = [
+        _golf_iron_range_count(match.group(1), match.group(2))
+        for match in GOLF_IRON_RANGE_TITLE_SIGNAL.finditer(title)
+    ]
+    explicit_counts = counts + range_counts + [
+        count for count, _has_gap, _start, _end in enumerations
+    ]
+    if explicit_counts and max(explicit_counts) < minimum:
+        return (
+            f"title proves only {max(explicit_counts)} irons; "
+            f"need at least {minimum}"
+        )
+
+    has_set_claim = bool(GOLF_IRON_SET_TITLE_SIGNAL.search(title))
+    has_sufficient_count = any(count >= minimum for count in explicit_counts)
+    # ``7 iron set`` is one numbered club, not seven irons. A genuine range or
+    # explicit plural/count form above takes precedence when both are present.
+    if GOLF_SINGLE_CLUB_TITLE_SIGNAL.search(title) and not has_sufficient_count:
+        return "single/replacement iron is not an iron set"
+    if not (has_set_claim or has_sufficient_count):
+        return "title has no coherent multi-iron set evidence"
+    return None
+
+
+def golf_full_set_only_reason(result, *, allow_iron_sets=None):
+    """Return why a vetted golf result is not the owner's wanted golf set.
 
     `golf_is_playable_first_set` is intentionally not enough: its model prompt
-    says iron-only and partial groups may be true. Full-set mode additionally
-    requires title-level grouped/composition evidence, a mainstream identified
+    says partial groups may be true. Delivery additionally requires title-level
+    full-set composition or a genuine iron-set shape, a mainstream identified
     club brand, and no profile-listed junk wording.
     """
+    if allow_iron_sets is None:
+        allow_iron_sets = GOLF_ALLOW_IRON_SETS
     listing = result.get("listing") or {}
     title = str(listing.get("title") or "").strip()
     evidence_text = " ".join(
@@ -2448,6 +2562,8 @@ def golf_full_set_only_reason(result):
         match = pattern.search(evidence_text)
         if match:
             return f"golf full-set-only: junk wording {match.group(0)!r}"
+    if GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL.search(title):
+        return "golf full-set-only: beginner-unsuitable muscle-back/blade irons"
     if result.get("golf_is_playable_first_set") is not True:
         return "golf full-set-only: AI did not confirm a playable first set"
     if not _golf_has_mainstream_full_set_brand(result):
@@ -2457,27 +2573,46 @@ def golf_full_set_only_reason(result):
     component_kind = result.get("golf_component_kind") or golf_component_search_kind(
         result.get("search_query")
     )
+    if grouped:
+        club_families = {
+            family
+            for family, pattern in GOLF_FULL_SET_CLUB_FAMILY_SIGNALS.items()
+            if pattern.search(title)
+        }
+        explicit_complete = bool(GOLF_FULL_COMPLETE_SET_TITLE_SIGNAL.search(title))
+        composition_complete = {"irons", "long-club", "putter"} <= club_families
+        starter_set_with_bag = bool(
+            result.get("golf_is_starter_kit") and GOLF_BAG_TITLE_SIGNAL.search(title)
+        )
+        if explicit_complete or composition_complete or starter_set_with_bag:
+            return None
+
+    if allow_iron_sets:
+        iron_reason = golf_iron_set_title_reason(title)
+        if iron_reason is None:
+            return None
+    else:
+        iron_reason = None
+
     if component_kind and result.get("golf_is_wanted_component") and not grouped:
         return f"golf full-set-only: component-only {component_kind} listing"
     if not grouped:
+        if allow_iron_sets and iron_reason and (
+            GOLF_IRON_SET_TITLE_SIGNAL.search(title)
+            or GOLF_IRON_RANGE_TITLE_SIGNAL.search(title)
+            or GOLF_IRON_ENUMERATION_SIGNAL.search(title)
+        ):
+            return "golf full-set-only: non-qualifying iron set: " + iron_reason
         return "golf full-set-only: title has no multi-club set evidence"
-
-    club_families = {
-        family
-        for family, pattern in GOLF_FULL_SET_CLUB_FAMILY_SIGNALS.items()
-        if pattern.search(title)
-    }
-    explicit_complete = bool(GOLF_FULL_COMPLETE_SET_TITLE_SIGNAL.search(title))
-    composition_complete = {"irons", "long-club", "putter"} <= club_families
-    starter_set_with_bag = bool(
-        result.get("golf_is_starter_kit") and GOLF_BAG_TITLE_SIGNAL.search(title)
-    )
-    if not (explicit_complete or composition_complete or starter_set_with_bag):
+    if iron_reason:
         return (
             "golf full-set-only: grouped clubs lack full-set composition "
-            "(need full/complete, irons+long clubs+putter, or starter set with bag)"
+            "or qualifying iron-set evidence: " + iron_reason
         )
-    return None
+    return (
+        "golf full-set-only: grouped clubs lack full-set composition "
+        "(need full/complete, irons+long clubs+putter, or starter set with bag)"
+    )
 
 
 def _golf_cheap_full_set_exception(result, landed):
@@ -2487,7 +2622,9 @@ def _golf_cheap_full_set_exception(result, landed):
         and not isinstance(landed, bool)
         and math.isfinite(landed)
         and landed <= GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE
-        and golf_full_set_only_reason(result) is None
+        # Preserve the deployed exception exactly: cheap *full* sets may bypass
+        # low-confidence/unknown metadata, newly accepted iron-only sets may not.
+        and golf_full_set_only_reason(result, allow_iron_sets=False) is None
         and not result.get("golf_is_left_handed")
         and not result.get("golf_counterfeit_suspected")
         and not result.get("damage_found")

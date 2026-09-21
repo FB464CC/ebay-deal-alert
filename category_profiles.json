@@ -46,6 +46,7 @@
       "titleist",
       "wilson staff"
     ],
+    "iron_set_min_clubs": 5,
     "price_floor_brands": {},
     "promise_score_signals": {"positive": [], "negative": []}
   },

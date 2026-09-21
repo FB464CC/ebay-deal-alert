@@ -1,0 +1,145 @@
+GOLF IRON-SET MODE INVESTIGATION
+Started: 2026-09-20 (America/New_York)
+
+Checkpoint 1 - required reading and clean baseline
+- Read GOLF_FULL_SET_INVESTIGATION.txt, GOLF_FOCUS_MODE.txt, and
+  PRETRIAGE_FILTER_INVESTIGATION.txt in full before inspecting or editing the
+  implementation.
+- Confirmed this supplied checkout without fetch/pull/clone.
+  `git log -1 --format="%H %s"` returned
+  `ebf45705c186835f645cf79b8fe1e7846d393f61 chore: update poll state [skip ci]`.
+- Initial `git status --short` was empty.
+- Retained scope: only ebay_deal_alert.py, category_profiles.json, config.json
+  top-level GOLF_ALLOW_IRON_SETS/FOCUS_SEARCH_IDS, and
+  test_ebay_deal_alert.py may change. No saved-search entry, budget/call/batch
+  constant, extension/web file, commit, or push.
+- Baseline full suite: `python3 -m pytest -q` ->
+  `767 passed, 2 warnings, 544 subtests passed in 21.77s`. The warnings are the
+  existing lxml `strip_cdata` deprecations in the mid-run-429 auction test.
+
+Checkpoint 2 - eight-day reconstruction and first evidence cut
+- Queried GitHub commit metadata and raw alerts_log.jsonl snapshots without
+  changing the checkout and selected the newest snapshot in each UTC hour.
+  The exact window 2026-09-13T00:00Z through 2026-09-21T03:00Z contains 1,472
+  commits and 175 hourly snapshots; all 175 downloaded successfully.
+- Deduplicating exact JSON lines in memory and restricting row timestamps to
+  that window yields 6,595 rows through 2026-09-21T02:57Z: 3,432 golf rows,
+  1,551 AI-checked golf rows, and 60 AI-checked rows at least 50% under the AI
+  resale estimate. The slightly later end than the prior report accounts for
+  the increase from its 6,578/3,417/1,548 counts.
+- Verified the supplied fresh evidence file separately: 684 JSONL rows, first
+  timestamp 2026-09-19T19:57:48.061199+00:00 and last timestamp
+  2026-09-21T02:22:44.598055+00:00.
+- Eighteen of the 60 under-resale rows contain title-level iron evidence. The
+  only otherwise clean profile-mainstream iron set is
+  shopgoodwill:277314111, `Nike Golf Slingshot 4D SS 4D Steel Shaft Irons
+  Chrome Black Yellow Set`, $35.4994 landed vs $85 (58% under), medium price
+  confidence. AI found it playable, matched the Nike claim, found no damage or
+  counterfeit/LH signal, but could not visually establish right-handedness;
+  the title contains no RH evidence. The existing handedness gate is therefore
+  its sole rejection.
+- Other apparent iron rows prove the required vetoes are material: vintage
+  Ping/Spalding/Wilson rows, a Wilson X31 muscle-back blade row, blocked
+  Top-Flite/Spalding sets, low-confidence obscure/mixed sets, and plain-Wilson
+  budget lines. None may become an alert under the owner's profile.
+
+Checkpoint 3 - focused queue selection from observed yield
+- The requested iron inventory is 21 searches: three broad iron searches and
+  all 18 named model searches. A 31-request ShopGoodwill queue therefore has
+  room for ten full-set searches.
+- Retain the three proven broad lanes (`golf-golf-club-set`,
+  `golf-golf-clubs`, `golf-golf-set`), which respectively produced 10/8/7
+  under-resale AI rows and 3/4/4 historical deliveries; retain the exact
+  full-set shapes `golf-complete`, `golf-and-bag`, and `golf-full`; retain
+  Cobra/Callaway/Ping/TaylorMade full-set brand coverage. Cobra produced one
+  under-resale row; the other retained brand lanes complement their requested
+  model-specific iron lanes with woods/putter/bag full-set inventory.
+- Drop `golf-mens` (39 AI rows, zero under-resale, zero delivered) because all
+  retained broad searches already exclude women/junior inventory; drop
+  `golf-mens-used` (one AI row, zero under-resale/delivered) for the same
+  redundancy. Drop `golf-adams` (16 AI), `golf-mizuno` (3 AI), and
+  `golf-titleist` (0 AI): all produced zero under-resale rows and zero
+  deliveries in eight days, so they are the least evidenced brand lanes under
+  the hard deadline. No saved search will be disabled or edited.
+- Resulting focus size will be exactly 31. All focused searches are
+  ShopGoodwill-applicable, so expected ShopGoodwill requests per run are
+  31 versus the observed approximately-31 completion capacity.
+
+Checkpoint 4 - iron-set definition and implementation
+- Added top-level `GOLF_ALLOW_IRON_SETS=true`, loaded with a code default of
+  true. Setting it false restores the deployed full-set-only shape gate; no
+  search definition needs to change.
+- Added profile `iron_set_min_clubs=5`. Five is not invented from a price
+  distribution: it is the club-count implication of the owner's smallest
+  named acceptable sequence, 6-PW. The parser accepts an explicit title-level
+  iron-set claim, a contiguous range such as 4-PW/6-PW, an explicit count of
+  at least five, or a contiguous enumeration of at least five irons. An
+  explicit count/range below five, a numbered single iron, and gapped lists
+  such as 3,5,7 or 3,4,5,7,8,PW fail closed.
+- Common profile junk wording and the existing muscle-back/blade expression
+  run before either full-set or iron-set acceptance. AI playability and the
+  profile-listed mainstream identified brand remain mandatory. The profile
+  still contains `wilson staff` and not plain `wilson`.
+- Preserved the deployed cheap-full-set exception exactly by evaluating it
+  with iron acceptance disabled. Thus a newly recognized iron set does not
+  gain the <=$40 bypass for low price confidence, unknown handedness, or an
+  unconfirmed brand claim. Full sets still qualify under the exact prior
+  composition paths even when `GOLF_ALLOW_IRON_SETS=false`.
+- Updated only top-level `FOCUS_SEARCH_IDS` and `GOLF_ALLOW_IRON_SETS` in
+  config.json. The new 31-id list contains every requested broad/model iron
+  id plus the ten selected full-set ids; every id resolves to a real enabled
+  saved search.
+- Facebook/Scout uses the same focused search slice as marketplace prefetch.
+  Added a regression where a Scout row explicitly targets the now-non-focus
+  TaylorMade-driver search: it is not routed and no queue acknowledgement is
+  issued, so it remains deferred for a later focus change.
+
+Checkpoint 5 - actual-helper eight-day replay
+- Replayed all 60 AI-checked, >=50%-under rows through the implemented quality
+  gate and both the old (`allow_iron_sets=false`) and new set-shape helper.
+  Four current-profile full-set rows qualify under the old helper and all four
+  still qualify under the new helper: no full-set regression.
+- Newly deliverable iron sets: exactly zero. This is thin inventory, not a
+  reason to weaken the rules. No junk is newly admitted.
+- Exactly one otherwise-great iron set is dropped solely by the fail-closed
+  handedness rule: shopgoodwill:277314111, the Nike Slingshot 4D set,
+  $35.4994 landed vs $85, 58% under, medium confidence. Its title has no RH
+  statement and AI could not determine handedness. There is no safe positive
+  RH fact to substitute. The existing policy already trusts explicit RH text
+  only when neither title nor AI supplies an LH conflict; extending that to
+  silence/unknown would be inference, not evidence. No handedness relaxation
+  was implemented, and an affirmative LH signal remains absolute.
+- Targeted set/focus/Scout regressions currently pass:
+  `45 passed, 62 subtests passed`.
+
+Checkpoint 6 - final regression coverage, validation, and scope audit
+- Added an end-to-end run regression using the exact 277314111 item id, title,
+  $19.99 item price + $13.50 shipping ($35.4994 landed), and $85 resale. The
+  historical unknown-hand row remains blocked; the control changes only
+  `handedness_confirmed` to true and proves it logs/delivers at 58% under.
+- Exact required AST command:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  exited 0 with no command output.
+- Exact required JSON command:
+  `python3 -c "import json; json.load(open('config.json')); json.load(open('category_profiles.json'))"`
+  exited 0 with no command output.
+- Final full suite: `python3 -m pytest -q` ->
+  `773 passed, 2 warnings, 558 subtests passed in 21.39s`. Baseline was
+  `767 passed, 2 warnings, 544 subtests passed in 21.77s`: six tests and 14
+  subtests added. The warnings remain the existing lxml `strip_cdata`
+  deprecations in the mid-run-429 auction test.
+- No existing iron-only rejection expectation required changing. The only
+  existing-test edits were the unavoidable RuntimeSearchFocus expected-id
+  list, names, and 15->31 count assertions mandated by the new focus config;
+  all other prior tests pass unchanged.
+- Parsed comparison to HEAD confirms config changes only
+  `GOLF_ALLOW_IRON_SETS` and `FOCUS_SEARCH_IDS`; parsed `SAVED_SEARCHES` is
+  identical. Direct audit output is
+  `enabled=97 focused=31 shopgoodwill_focused=31 missing=0`.
+- `git diff --check` exited 0; its only output was the repository's existing
+  Windows LF-to-CRLF advisory. Modified tracked files are exactly
+  ebay_deal_alert.py, category_profiles.json, config.json, and
+  test_ebay_deal_alert.py; this report is the sole untracked file. No saved
+  search, AI budget/call/batch constant, chrome-extension/*, or web/* file was
+  changed. No commit or push was made.
+
