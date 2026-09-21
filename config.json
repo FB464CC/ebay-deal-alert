@@ -1248,6 +1248,48 @@
       "category": "golf-equipment"
     },
     {
+      "query": "callaway golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
+      "size": null,
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ],
+      "category_id": "115280",
+      "id": "golf-callaway",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "mizuno golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
+      "size": null,
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ],
+      "category_id": "115280",
+      "id": "golf-mizuno",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "titleist golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
+      "size": null,
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "shopgoodwill",
+        "facebook"
+      ],
+      "category_id": "115280",
+      "id": "golf-titleist",
+      "category": "golf-equipment"
+    },
+    {
       "query": "ping golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
       "max_price": 300,

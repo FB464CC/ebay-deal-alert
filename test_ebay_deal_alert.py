@@ -1493,7 +1493,10 @@ class GolfRampConfiguration(unittest.TestCase):
             search for search in m.SAVED_SEARCHES
             if search.get("category") == "golf-equipment"
         ]
-        self.assertEqual(len(searches), 43)
+        # 43 original + golf-callaway/golf-mizuno/golf-titleist full-set brand
+        # searches added 2026-09-21 (owner wants a full golf set; Callaway,
+        # the most common set brand, had no brand-set search).
+        self.assertEqual(len(searches), 46)
         bag_search_ids = {
             "golf-stand-bag",
             "golf-sun-mountain-or-ogio-stand-bag",
