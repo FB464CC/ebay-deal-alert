@@ -1693,7 +1693,12 @@ class GolfEquipmentGate(unittest.TestCase):
             golf_identified_brand="Wilson",
             damage_found=False,
         )
-        self.assertIsNone(m.golf_full_set_only_reason(wilson_prestige))
+        # Owner decision 2026-09-21: Wilson Prestige is too low-tier. Plain
+        # "Wilson" is not a mainstream full-set brand; only "Wilson Staff" is.
+        self.assertEqual(
+            m.golf_full_set_only_reason(wilson_prestige),
+            "golf full-set-only: no recognizable mainstream club brand identified",
+        )
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(
             wilson_prestige, category="golf-equipment"
         ))
@@ -9243,6 +9248,11 @@ class RunIntegration(unittest.TestCase):
         self.assertAlmostEqual(records["shopgoodwill:277097903"]["price"], 20.6594)
         self.assertTrue(all(row["price_confidence"] == "low" for row in records.values()))
 
+    def test_wilson_staff_is_mainstream_but_plain_wilson_budget_lines_are_not(self):
+        brands = m.get_category_profile("golf-equipment")["full_set_mainstream_brands"]
+        self.assertIn("wilson staff", brands)
+        self.assertNotIn("wilson", brands)
+
     def test_real_junk_golf_deliveries_are_full_set_only_rejects(self):
         searches_and_listings = (
             (
@@ -9363,13 +9373,11 @@ class RunIntegration(unittest.TestCase):
         m.run()
 
         self.assertEqual(len(self.ai_calls), 6)
-        self.assertEqual(
-            [alert["listing"]["itemId"] for alert in self.alerts],
-            ["shopgoodwill:277513478"],
-        )
+        # Owner decision 2026-09-21: Wilson Prestige is too low-tier, so all six
+        # real rows (incl. Wilson Prestige) are full-set-only rejects.
+        self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [])
         records = {row["item_id"]: row for row in self._alert_log_records()}
-        self.assertEqual(records["shopgoodwill:277513478"]["disposition_code"], "DELIVERED")
-        for item_id in set(ai_by_id) - {"shopgoodwill:277513478"}:
+        for item_id in set(ai_by_id):
             self.assertEqual(
                 records[item_id]["disposition_code"],
                 "GOLF_FULL_SET_ONLY_REJECT",
