@@ -2543,12 +2543,14 @@ def golf_full_set_only_reason(result, *, allow_iron_sets=None):
     `golf_is_playable_first_set` is intentionally not enough: its model prompt
     says partial groups may be true. Delivery additionally requires title-level
     full-set composition or a genuine iron-set shape, a mainstream identified
-    club brand, and no profile-listed junk wording.
+    club brand, no profile-listed junk wording, and no specifically identified
+    pre-2012 model. Missing model text is not evidence of age and fails open.
     """
     if allow_iron_sets is None:
         allow_iron_sets = GOLF_ALLOW_IRON_SETS
     listing = result.get("listing") or {}
     title = str(listing.get("title") or "").strip()
+    listing_text = _golf_listing_title_and_description(result)
     evidence_text = " ".join(
         part
         for part in (
@@ -2562,6 +2564,13 @@ def golf_full_set_only_reason(result, *, allow_iron_sets=None):
         match = pattern.search(evidence_text)
         if match:
             return f"golf full-set-only: junk wording {match.group(0)!r}"
+    for pattern in _golf_profile_regexes("full_set_vintage_model_patterns"):
+        match = pattern.search(listing_text)
+        if match:
+            return (
+                "golf full-set-only: pre-2012 vintage model "
+                f"{match.group(0)!r}"
+            )
     if GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL.search(title):
         return "golf full-set-only: beginner-unsuitable muscle-back/blade irons"
     if result.get("golf_is_playable_first_set") is not True:

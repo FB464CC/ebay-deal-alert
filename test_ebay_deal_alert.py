@@ -198,16 +198,8 @@ class RuntimeSearchFocus(unittest.TestCase):
         "golf-ping-g400-irons",
         "golf-cobra-f8-irons",
         "golf-game-improvement-irons-regular-flex",
-        "golf-taylormade-burner-2-0-irons",
         "golf-taylormade-rocketballz-irons",
         "golf-taylormade-rbz-irons",
-        "golf-callaway-x-20-irons",
-        "golf-callaway-x-22-irons",
-        "golf-callaway-x-24-irons",
-        "golf-callaway-diablo-edge-irons",
-        "golf-ping-g10-irons",
-        "golf-ping-g15-irons",
-        "golf-ping-g20-irons",
         "golf-and-bag",
         "golf-full",
     ]
@@ -221,7 +213,7 @@ class RuntimeSearchFocus(unittest.TestCase):
             if search.get("enabled", True)
         ]
 
-    def test_shipped_focus_selects_31_real_enabled_searches(self):
+    def test_shipped_focus_selects_23_real_enabled_searches(self):
         config, enabled = self._shipped_enabled_searches()
         self.assertEqual(len(enabled), 97)
         self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
@@ -232,7 +224,7 @@ class RuntimeSearchFocus(unittest.TestCase):
         )
         with mock.patch.object(m, "FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"]):
             focused = m._focus_filter(enabled)
-        self.assertEqual(len(focused), 31)
+        self.assertEqual(len(focused), 23)
         self.assertEqual([search["id"] for search in focused], self.EXPECTED_IDS)
 
     def test_empty_focus_restores_all_97_enabled_searches(self):
@@ -251,7 +243,7 @@ class RuntimeSearchFocus(unittest.TestCase):
         self.assertEqual(filtered, searches)
         self.assertIn("matched none", "\n".join(captured.output))
 
-    def test_shopgoodwill_prefetch_queue_drops_from_97_to_capacity_31(self):
+    def test_shopgoodwill_prefetch_queue_drops_from_97_to_focused_23(self):
         config, _enabled = self._shipped_enabled_searches()
 
         def scheduled_count(focus_ids):
@@ -281,7 +273,7 @@ class RuntimeSearchFocus(unittest.TestCase):
             return health_snapshots[0]["shopgoodwill"]["scheduled_requests"]
 
         self.assertEqual(scheduled_count([]), 97)
-        self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 31)
+        self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 23)
 
 
 class FunnelAuditConfiguration(unittest.TestCase):
@@ -1748,6 +1740,84 @@ class GolfEquipmentGate(unittest.TestCase):
                 ))
         obscure = dict(callaway, golf_identified_brand="Acculine")
         self.assertIsNotNone(m.golf_full_set_only_reason(obscure))
+
+    def test_pre_2012_named_models_are_vintage_gate_rejects(self):
+        old_models = (
+            ("TaylorMade Burner 2.0", "TaylorMade"),
+            ("Callaway X-20", "Callaway"),
+            ("Callaway X-22", "Callaway"),
+            ("Callaway X-24", "Callaway"),
+            ("Callaway Diablo Edge", "Callaway"),
+            ("Ping G10", "Ping"),
+            ("Ping G15", "Ping"),
+            ("Ping G20", "Ping"),
+        )
+        for model, brand in old_models:
+            result = self._result(
+                listing={"title": f"{model} 5-PW Iron Set RH"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand=brand,
+            )
+            with self.subTest(model=model):
+                reason = m.golf_full_set_only_reason(result)
+                self.assertIn("pre-2012 vintage model", reason)
+                self.assertEqual(
+                    m.disposition_code_for({"reason": reason}),
+                    "GOLF_FULL_SET_ONLY_REJECT",
+                )
+
+        description_only = self._result(
+            listing={
+                "title": "Callaway 5-PW Iron Set RH",
+                "description": "Matching Callaway X-22 irons.",
+            },
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_identified_brand="Callaway",
+        )
+        self.assertIn(
+            "pre-2012 vintage model",
+            m.golf_full_set_only_reason(description_only),
+        )
+
+    def test_confirmed_modern_models_are_not_vintage_gate_rejects(self):
+        modern_models = (
+            ("TaylorMade M2", "TaylorMade"),
+            ("TaylorMade M4", "TaylorMade"),
+            ("Callaway Rogue", "Callaway"),
+            ("Callaway Mavrik", "Callaway"),
+            ("Ping G30", "Ping"),
+            ("Ping G400", "Ping"),
+            ("Cobra F8", "Cobra"),
+            ("TaylorMade RBZ", "TaylorMade"),
+        )
+        for model, brand in modern_models:
+            result = self._result(
+                listing={"title": f"{model} 5-PW Iron Set RH"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand=brand,
+            )
+            with self.subTest(model=model):
+                self.assertIsNone(m.golf_full_set_only_reason(result))
+
+    def test_missing_model_name_is_not_age_evidence(self):
+        generic = self._result(
+            listing={"title": "Callaway 5-PW Iron Set RH"},
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_identified_brand="Callaway",
+        )
+        self.assertIsNone(m.golf_full_set_only_reason(generic))
+
+        vintage_word = dict(
+            generic,
+            listing={"title": "Vintage Callaway 5-PW Iron Set RH"},
+        )
+        reason = m.golf_full_set_only_reason(vintage_word)
+        self.assertIn("junk wording", reason)
+        self.assertNotIn("pre-2012 vintage model", reason)
 
     def test_explicit_right_hand_text_never_overrides_a_conflict(self):
         clean = self._result(

@@ -30,6 +30,16 @@
       "\\bgarage(?:\\s+sale)?\\b",
       "\\bmisc(?:ellaneous)?\\b"
     ],
+    "full_set_vintage_model_patterns": [
+      "\\btaylor\\s*made\\s+burner\\s+2[.]0\\b",
+      "\\bcallaway\\s+x[\\s-]?20\\b",
+      "\\bcallaway\\s+x[\\s-]?22\\b",
+      "\\bcallaway\\s+x[\\s-]?24\\b",
+      "\\bcallaway\\s+diablo[\\s-]+edge\\b",
+      "\\bping\\s+g10\\b",
+      "\\bping\\s+g15\\b",
+      "\\bping\\s+g20\\b"
+    ],
     "full_set_mainstream_brands": [
       "adams",
       "ben hogan",

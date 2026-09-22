@@ -1,0 +1,61 @@
+MODERN GOLF IRON / FULL-SET BUYING CRITERIA
+===========================================
+
+Purpose
+-------
+This is a short evidence reference for future search and rule work. It records
+what to seek; it does not turn missing seller detail into a rejection. The
+research basis is real web research plus the release-year findings supplied in
+the 2026-09-22 owner dispatch.
+
+What to seek
+------------
+- Prefer game-improvement irons: a cavity-back head with weight around the
+  perimeter, a visibly wider sole, and a low/deep center of gravity. Those
+  features resist twisting on off-center contact and help launch the ball. They
+  are a better first-set target than compact muscle-back/blade irons.
+- Use 2012 as the minimum named-model line. It is a technology boundary, not an
+  arbitrary age guess: TaylorMade's 2012 RocketBallz generation is documented
+  with multi-material construction and face-flex/slot technology such as the
+  Speed Pocket. That design direction--a thinner, more flexible face plus
+  redistributed mass--became characteristic of modern distance/forgiveness
+  irons. A listing with no model name remains unknown, not automatically old.
+- Specifically exclude only the evidenced pre-line models for now: TaylorMade
+  Burner 2.0 (2010); Callaway X-20 (about 2004-2006), X-22 (2008), X-24
+  (about 2010-2011), and Diablo Edge (January 2010); Ping G10 (2007), G15
+  (2009), and G20 (2011). Do not infer a release year for an unresearched model.
+- A normal useful modern iron run is commonly 4-iron or 5-iron through pitching
+  wedge, sometimes with a gap/approach wedge and sand wedge. Hybrids commonly
+  replace the harder-to-hit 3- and 4-irons. Therefore, a coherent 5-PW run with
+  a matching hybrid can be complete for its intended job; do not reject it
+  merely because there is no traditional 3- or 4-iron.
+
+Used-club photo/text checks
+---------------------------
+- Faces/grooves: ask for clear face photos, especially of the short irons and
+  wedges. Groove edges should remain distinct rather than polished flat; reject
+  severe face wear, gouging, or rust in the hitting area.
+- Shafts: sight down each shaft for straightness. Reject bent, dented, split,
+  badly corroded, or heavily rusted shafts and obvious hosel/ferrule separation.
+- Set consistency: confirm the club sequence and that shaft model/material and
+  flex markings match across the set. A disclosed replacement can be evaluated,
+  but an unexplained odd shaft/flex is not a truly matched set.
+- Heads/condition: confirm every head is present and securely attached, with no
+  cracks or structural rust. Worn grips are a replaceable cost; bent shafts,
+  damaged heads, and worn-out grooves are the material deal breakers.
+
+Web research references (accessed 2026-09-22)
+------------------------------------------------
+- TaylorMade, "Irons Legacy" (2012 RocketBallz and the documented technology):
+  https://www.taylormadegolf.com/ironslegacy.html?lang=en_US
+- Ulster University research copy, discussion of cavity-back wide soles and
+  perimeter weighting as game-improvement construction:
+  https://pure.ulster.ac.uk/files/89268770/JSET_19_0097R6_SEP_rev_with_grammatical_corrections_002_.pdf
+- ReGolf, used-club inspection checklist (grooves, shafts, shaft labels/flex,
+  rust, and consistency checks):
+  https://regolfco.com/blogs/news/how-to-inspect-used-golf-clubs-before-buying-the-12-point-checklist
+- Golf Monthly, representative modern full-set composition (4-hybrid, 5-PW,
+  gap wedge, sand wedge) and why hybrids replace long irons:
+  https://www.golfmonthly.com/buying-advice/callaway-xr-package-set-vs-callaway-mavrik-set-package-set-read-our-head-to-head-verdict
+  https://www.golfmonthly.com/best-golf-deals/best-golf-hybrid-clubs-76420
+

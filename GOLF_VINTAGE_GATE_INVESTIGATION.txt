@@ -1,0 +1,96 @@
+Golf vintage-model gate investigation
+=====================================
+
+Checkpoint 1 - checkout and baseline
+- Confirmed the supplied checkout without fetch/pull/clone. `git log -1
+  --format="%H %s"` returned
+  `3e70e4280fc5722398d02f6bea33204c41bf3433 chore: update poll state [skip ci]`.
+- Initial `git status --short` showed only the pre-existing untracked files
+  `run.stdout.log` and `task.txt`; they are outside scope and will remain untouched.
+- Pre-change full suite: `python3 -m pytest -q` ->
+  `773 passed, 2 warnings, 558 subtests passed in 21.94s`.
+- Scope retained: no fetch/pull/clone, no saved-search-entry edits, no budget or
+  Gemini-limit edits, and no commit/push.
+
+Checkpoint 2 - eight-day hourly-snapshot reconstruction
+- The local checkout is shallow, so its `alerts_log.jsonl` history covers only
+  a few hours. Reused the established read-only GitHub API/raw-file method--no
+  fetch/pull/clone and no checkout write--for 2026-09-13T00:00Z through
+  2026-09-22T06:00Z.
+- Queried 1,583 commits in 16 metadata pages and selected the newest snapshot
+  in each UTC hour. The resulting 201 hourly snapshots span commit times
+  2026-09-13T00:58:07Z through 2026-09-22T05:02:22Z.
+- Deduplicating exact JSON lines in memory and restricting row timestamps to
+  that window yielded 7,232 rows: 4,068 golf rows, 1,744 AI-checked golf rows,
+  and 40 delivered golf rows.
+- The exact shipped brand/model regexes match 30 historical rows representing
+  27 distinct items. Four AI-reviewed rows that the pre-change set-shape helper
+  otherwise accepted will now receive the distinct vintage-model reason:
+  * `v1|125947405669|0`, `Callaway X-20 X20 Iron set 6pcs 5-Pw Flex R Regular
+    Graphite Shaft Golf Clubs`;
+  * `v1|158275573369|0`, `Callaway X-20 Iron Set 3 4 6 7 PW 5pc Right Hand
+    Steel Golf Clubs X20`;
+  * `v1|198655936425|0`, `Ping G10 Green Dot 5,6,7,8,9 Irons-Accending Tech
+    (R) Stl Shafts--NICE!`;
+  * `v1|127694859171|0`, `Callaway X-22 X22 Iron Set 7pcs 4-Pw Flex S Stiff
+    Graphite Shaft Golf Clubs`.
+- Honest loss check: none of those four is a lost wanted delivery. All four
+  were already rejected by the existing quality gate because landed price
+  exceeded the AI resale estimate. The other model-matching rows were already
+  suppressed for price, stale listing, wrong item, condition, gender, budget,
+  or insufficient set/playability evidence. Thus the new gate changes zero
+  historical delivery outcomes in this replay while covering future good-price
+  examples surfaced through the remaining broad searches.
+- Explicit protected-row check: Callaway Big Bertha `shopgoodwill:277179272`,
+  Adams Tight Lies `shopgoodwill:277097903`, and Nike Slingshot 4D
+  `shopgoodwill:277314111` each appear once, name none of the eight old models,
+  and still return no full-set/iron-set rejection. The Nike row remains subject
+  to its separate handedness outcome; this change does not alter it.
+- The useless-delivery control `shopgoodwill:277348678`, `Vintage PING Eye
+  Golf Irons Set...`, names none of the new eight patterns. It continues to be
+  rejected first by existing junk wording `Vintage`; the new gate does not
+  change or double-count that outcome.
+
+Checkpoint 3 - implementation and focused regressions
+- Removed exactly the eight supplied pre-2012 search IDs from top-level
+  `FOCUS_SEARCH_IDS`, reducing it from 31 to 23. The saved-search objects and
+  every `enabled` field remain unchanged. No replacement search was added:
+  the replay supplied no evidence that another specific post-2012 model lane
+  should displace the cleaner/faster 23-search rotation.
+- Added optional profile field `full_set_vintage_model_patterns` with exactly
+  the eight evidenced names. Patterns are word-bounded, case-insensitive via
+  the existing loader, and brand-qualified where short codes such as G10 could
+  otherwise create a false positive. Matching uses the same title/description
+  evidence assembled for the existing junk-pattern gate.
+- `golf_full_set_only_reason()` now returns `golf full-set-only: pre-2012
+  vintage model ...` before set acceptance. This is distinct in logs while
+  intentionally retaining the established `GOLF_FULL_SET_ONLY_REJECT`
+  disposition family. Absence of a model remains non-rejecting.
+- Added regressions for all eight old models, all eight supplied modern controls
+  (M2, M4, Rogue, Mavrik, G30, G400, F8, RBZ), description-only old-model
+  evidence, an unnamed generic iron set, and the existing plain `vintage` gate.
+- Focused test command covering search focus, old/modern/unnamed models, and the
+  three protected production rows passed: `11 passed, 555 deselected, 22
+  subtests passed in 0.97s`.
+
+Checkpoint 4 - final validation and scope audit
+- Exact required AST command:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  exited 0 with no command output.
+- Exact required JSON command:
+  `python3 -c "import json; json.load(open('config.json')); json.load(open('category_profiles.json'))"`
+  exited 0 with no command output.
+- Final full suite: `python3 -m pytest -q` -> `776 passed, 2 warnings,
+  574 subtests passed in 21.75s`. Baseline was `773 passed, 2 warnings,
+  558 subtests passed in 21.94s`: three tests and sixteen subtests added, with
+  all prior behavior regressions green. The warnings remain the existing lxml
+  `strip_cdata` deprecations in the mid-run-429 auction test.
+- Parsed config audit output: `focus=23`, `saved_searches_identical=True`,
+  `AI_PAID_MONTHLY_BUDGET_USD_unchanged=True`,
+  `GEMINI_CALL_LIMIT_unchanged=True`, and `GEMINI_BATCH_SIZE_unchanged=True`.
+- `git diff --check` exited 0; its only output was the repository's existing
+  Windows LF-to-CRLF advisory. Modified tracked files are exactly
+  `ebay_deal_alert.py`, `category_profiles.json`, `config.json`, and
+  `test_ebay_deal_alert.py`; `GOLF_MODERN_IRON_CRITERIA.txt` and this report
+  are new. Pre-existing untracked `run.stdout.log` and `task.txt` remain
+  untouched. No commit or push was made.
