@@ -2335,16 +2335,28 @@ GOLF_SINGLE_CLUB_TITLE_SIGNAL = re.compile(
     r"(?:iron|wedge|hybrid|wood)\b",
     re.IGNORECASE,
 )
+# Marketplace titles sometimes express a group only as a compact inventory
+# count followed by a singular noun: ``(5ct) Iron`` / ``5pc Golf Club``.  The
+# count is still explicit multi-item evidence; requiring eBay's noun to be
+# grammatically plural discarded the real Callaway five-club set documented in
+# GOLF_BUDGET_EXHAUSTED_INVESTIGATION.txt.  Three is the existing title-gate
+# floor (the later iron-set gate still requires five usable, contiguous irons).
+GOLF_COUNTED_SINGULAR_GROUP_PATTERN = (
+    r"(?<!\d)(?:[3-9]|[1-9]\d)\s*[- ]?\s*(?:ct|pc|pcs|piece|pieces)\)?"
+    r"(?:\s*[-:]\s*|\s+)(?:golf\s+)?(?:iron|club)\b"
+)
 GOLF_EXPLICIT_GROUP_TITLE_SIGNAL = re.compile(
     r"\b(?:set|lot|bundle|collection|complete|full)\b|"
     r"\b[3-9]\s*(?:pc|pcs|piece|pieces)\b|"
-    r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:[4-9]|pw|aw|sw|gw|lw)\b",
+    r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:[4-9]|pw|aw|sw|gw|lw)\b|"
+    + GOLF_COUNTED_SINGULAR_GROUP_PATTERN,
     re.IGNORECASE,
 )
 GOLF_GROUP_TITLE_SIGNAL = re.compile(
     r"\b(?:clubs|irons|drivers|putters|wedges|hybrids|woods)\b|"
     r"\b(?:golf\s+)?(?:club|iron)\s+set\b|\bgolf\s+set\b|"
-    r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:pw|aw|sw|gw|lw)\b",
+    r"\b[3-9](?:i)?\s*[-\N{EN DASH}]\s*(?:pw|aw|sw|gw|lw)\b|"
+    + GOLF_COUNTED_SINGULAR_GROUP_PATTERN,
     re.IGNORECASE,
 )
 GOLF_SCOUT_IDENTITY_SIGNAL = re.compile(
@@ -11113,7 +11125,15 @@ def run():
             # Override only an absent or retryable no-AI reason; a permanent
             # condition/authenticity/wrong-item rejection keeps its real cause.
             exhaustion_applies = bool(
-                _PAID_AI_BUDGET_EXHAUSTION
+                # A candidate that never received this run's shared free-lane
+                # slot was not blocked by the monthly paid ledger.  The old
+                # global check mislabeled every such ordinary pacing deferral
+                # MONTHLY_BUDGET_EXHAUSTED whenever an earlier candidate had
+                # observed the paid cap, even though this candidate was queued
+                # in ai_pending for the next run.  Preserve the monthly label
+                # for a granted attempt whose providers returned no result.
+                budget_granted
+                and _PAID_AI_BUDGET_EXHAUSTION
                 and (
                     not gate_reason
                     or _ai_gate_is_retry_eligible(gate_reason, result)

@@ -1415,6 +1415,37 @@ class GolfEquipmentGate(unittest.TestCase):
             with self.subTest(query=query, title=title):
                 self.assertIsNone(m.golf_wrong_item_title_reason(title, query))
 
+    def test_counted_singular_group_does_not_bypass_the_iron_set_shape_gate(self):
+        title = (
+            "Callaway RAZR EDGE Set (5ct) Iron 5, 7-9, S Uni-flex Steel RH "
+            "Golf Club"
+        )
+        self.assertIsNone(
+            m.golf_wrong_item_title_reason(title, "callaway golf set")
+        )
+        for variant in (
+            "Callaway Rogue 5pc Iron RH",
+            "Ping G400 5 piece Iron RH",
+            "Cobra Fly-XL 13-Piece Golf Club RH",
+        ):
+            with self.subTest(variant=variant):
+                self.assertIsNone(
+                    m.golf_wrong_item_title_reason(variant, "golf club set")
+                )
+        result = self._result(
+            listing={"title": title},
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=True,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_identified_brand="Callaway",
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+        self.assertIn("gapped/non-contiguous", m.golf_full_set_only_reason(result))
+
     def test_title_prefilter_moves_deterministic_final_golf_rejects_before_ai(self):
         rejected = (
             ("golf club set", "RAM Golf Right Hand Club Set With Bag"),
@@ -10946,6 +10977,63 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(record["ai_paid_budget_reset_at"], "2026-10-01T00:00:00+00:00")
         self.assertTrue(m.is_new(self._db(), item_id), "budget deferral must remain retryable")
         self.assertGreaterEqual(budget_notify.call_count, 1)
+
+    def test_paid_cap_does_not_relabel_a_free_lane_slot_deferral(self):
+        snapshot = {
+            "month": "2026-09",
+            "reserved_usd": 10.0,
+            "calls": 1000,
+            "cap_usd": 10.0,
+            "required_usd": 0.01,
+            "exhausted": True,
+            "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+            "event_key": "2026-09:10.000000",
+        }
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: {
+                **snapshot,
+                "required_usd": required_usd,
+            },
+        )
+        self._patch(
+            "_notify_paid_ai_budget_exhausted_once",
+            mock.Mock(return_value=False),
+        )
+        listings = [
+            self._ebay_item(
+                "v1|free-slot-deferred|0",
+                "Ermenegildo Zegna Cashmere Sweater Grey",
+                21,
+            ),
+        ]
+        self._serve(
+            {
+                "query": "zegna sweater",
+                "category": "knitwear",
+                "category_id": "260012",
+                "max_price": 400,
+                "enabled": True,
+                "profile": "fast",
+            },
+            listings,
+        )
+
+        m.run()
+
+        records = {
+            record["item_id"]: record for record in self._alert_log_records()
+        }
+        deferred = records["v1|free-slot-deferred|0"]
+        self.assertEqual(deferred["disposition_code"], "NO_AI_BUDGET")
+        self.assertNotIn("monthly_ai_budget_exhausted", deferred)
+        self.assertEqual(self.ai_calls, [])
+        self.assertIn(
+            "v1|free-slot-deferred|0",
+            m.get_ai_pending_minutes(self._db(), ["v1|free-slot-deferred|0"]),
+        )
 
     def test_ending_soon_auction_gets_a_reserved_ai_slot(self):
         # Every alert needs a real AI check, and GEMINI_CALL_LIMIT paces

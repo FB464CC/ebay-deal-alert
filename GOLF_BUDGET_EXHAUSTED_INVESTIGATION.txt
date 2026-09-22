@@ -1,0 +1,282 @@
+GOLF BUDGET-EXHAUSTED ROUTING INVESTIGATION
+Started: 2026-09-22 (America/New_York)
+
+Checkpoint 1 - scope, required reading, and initial checkout state
+- Read in full: ../BUDGET_AGENT_REPORT.txt, ../SOURCES_AGENT_REPORT.txt,
+  GOLF_IRON_MODE.txt, GOLF_VINTAGE_GATE_INVESTIGATION.txt,
+  PRETRIAGE_FILTER_INVESTIGATION.txt, and
+  SPEND_BREAKDOWN_AND_BATCHING_INVESTIGATION.txt.
+- This is the supplied checkout; no fetch, pull, or clone operation was run.
+- Initial `git status --short` showed only the pre-existing untracked files
+  `run.stdout.log` and `task.txt`. They are outside scope and remain untouched.
+- Fixed constraints retained: do not alter AI_PAID_MONTHLY_BUDGET_USD,
+  GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE, any SAVED_SEARCHS entry,
+  chrome-extension/*, or web/*; do not commit or push.
+- The investigation will distinguish actual free-lane capacity from routing
+  defects using per-run counts, backtest explicit-count singular golf titles
+  over at least seven days using hourly snapshots, and report OfferUp enablement
+  without changing it.
+
+Checkpoint 2 - exact Task 1 routing split and live-run proof
+- Baseline suite before edits: `python3 -m pytest -q` -> `788 passed, 2
+  warnings, 574 subtests passed in 24.31s`. The warnings are the existing lxml
+  `strip_cdata` deprecations. Baseline commit is
+  `a40213da8bd052ab6f1d2de26c7bfb77e750b000`.
+- The 125 golf MONTHLY_BUDGET_EXHAUSTED rows span 42 workflow runs and 67
+  distinct item IDs from 2026-09-21T03:04:04Z through
+  2026-09-22T17:02:50Z. GitHub Actions logs were read for all 42 runs (no
+  checkout history operation was used).
+- Exactly 15/125 were ordinary per-run shared-lane capacity deferrals: six in
+  run 35556004124, seven in 35556596592, and two in 35572081778. Each run's
+  log first records `Gemini call budget exhausted for this run`; all 15 rows
+  follow that line. Those runs produced 12, 11, and 12 successful AI outcomes,
+  respectively. The middle run consumed its twelfth shared slot on a candidate
+  that did not become an `ai_checked=true` result (the counter is deliberately
+  charged before late detail/condition and vision-result handling), so raw
+  successful-result count alone is not proof of an unused slot.
+- The other 110/125 were admitted to the free Gemini fallback and then failed
+  closed: Actions logs tie every one to a Gemini batch/single request warning.
+  The retained failures are HTTP read timeouts (89 candidates) or HTTP 503
+  Service Unavailable (21 candidates), not 429 quota responses. Thus the main
+  loss was real provider/latency availability, not golf losing category
+  priority and not the paid-budget check short-circuiting Gemini.
+- All 125 were staged, not discarded. The gate's retryable path calls
+  `mark_ai_pending()`, commits the row, does not call `mark_seen()`, and uses
+  pending age on later runs. Repeated item IDs in the 125-row list directly
+  demonstrate retries; 125 rows represent 67 distinct listings.
+- Genuine bug: after any granted candidate observes the paid cap, the global
+  `_PAID_AI_BUDGET_EXHAUSTION` snapshot caused later candidates that never got
+  a free-lane slot to be labeled MONTHLY_BUDGET_EXHAUSTED. The routing/staging
+  was correct, but the disposition claimed the wrong limiting resource. The
+  bounded fix requires `budget_granted` before applying the monthly override;
+  free-lane slot deferrals remain retryable `NO_AI_BUDGET` rows in ai_pending.
+  Provider failures after a granted attempt retain the monthly-outage label,
+  preserving the existing meaning that paid service could not rescue the
+  failed free request.
+
+Checkpoint 3 - Task 2 eight-day count/singular backtest
+- Used the established read-only hourly-snapshot method from
+  2026-09-15T00:00Z through 2026-09-22T18:00Z: 1,295 alerts-log commits, 177
+  newest-per-UTC-hour snapshots (2026-09-15T00:58:03Z through
+  2026-09-22T17:13:21Z), and 5,036 deduplicated exact JSON rows, including
+  3,140 golf rows.
+- Prospective replay added only an explicit count of at least three followed
+  immediately by singular `iron`/`club`, accepting `ct`, `pc(s)`, and
+  `piece(s)` with parenthesized/hyphenated forms. Exactly one row newly clears
+  `golf_wrong_item_title_reason()`: item `v1|336701874015|0`, Callaway RAZR
+  EDGE Set (5ct) Iron 5, 7-9, S Uni-flex Steel RH Golf Club, landed $158.99.
+  It is a real five-club Callaway group, not junk.
+- As required, that exact production title still fails the later iron-set
+  shape gate because 5,7,8,9,SW is gapped (missing 6). The title fix only lets
+  vision inspect it; it does not make it deliverable.
+- Implemented the narrow title evidence and regressions for `(5ct) Iron`,
+  `5pc Iron`, `5 piece Iron`, `13-Piece Golf Club`, and the exact production
+  row's expected gapped final-gate rejection.
+
+Task 1 per-run evidence (UTC)
+Columns: start, workflow run, golf MONTHLY rows, successful AI rows in the run,
+cause of the golf rows. `cap` means the log explicitly emitted the per-run
+Gemini candidate-cap message before those rows; `timeout`/`503` are the exact
+Gemini request failures in the Actions log.
+
+  09-21 03:02  35556004124   6  12  cap(6)
+  09-21 03:11  35556596592   7  11  cap(7)
+  09-21 03:41  35558295095   8   0  timeout(8)
+  09-21 04:31  35561227669   2   3  timeout(2)
+  09-21 05:02  35562921652   3   3  timeout(3)
+  09-21 07:16  35572081778   2  12  cap(2)
+  09-21 12:02  35597043455   2   0  timeout(2)
+  09-21 14:01  35609219508   1   0  timeout(1)
+  09-21 14:17  35610893013   1   0  timeout(1)
+  09-21 14:31  35612584025   1   0  timeout(1)
+  09-21 14:46  35614258903   2   0  timeout(2)
+  09-21 15:01  35615954328   1   0  503(1)
+  09-21 15:16  35617659857   2   0  timeout(2)
+  09-21 15:31  35619365864   3   0  timeout(3)
+  09-21 16:31  35626004787   1   0  timeout(1)
+  09-21 17:01  35629190964   1   0  timeout(1)
+  09-21 18:01  35635565473   2   0  timeout(2)
+  09-21 18:32  35638786364   3   0  timeout(3)
+  09-21 19:17  35643631522   1   0  timeout(1)
+  09-21 20:17  35649897998   3   0  timeout(3)
+  09-21 21:32  35657534534   1   0  timeout(1)
+  09-21 23:16  35666691249   3   1  timeout(3)
+  09-22 00:31  35672217808   1   0  timeout(1)
+  09-22 04:31  35687122408   1   0  timeout(1)
+  09-22 05:42  35691606025   2   0  timeout(2)
+  09-22 13:17  35732250804   1   0  timeout(1)
+  09-22 13:51  35736130081   1   0  timeout(1)
+  09-22 14:42  35741911741   2   0  timeout(2)
+  09-22 14:52  35743080422   2   0  timeout(2)
+  09-22 15:02  35744261182   3   0  503(3)
+  09-22 15:11  35745423786   3   0  timeout(3)
+  09-22 15:21  35746599215   4   0  503(4)
+  09-22 15:32  35747803684   5   0  timeout(5)
+  09-22 15:42  35748967596   5   0  timeout(5)
+  09-22 15:52  35749952419   6   0  timeout(3), 503(3)
+  09-22 16:02  35751153940   5   0  503(5)
+  09-22 16:11  35752297589   5   0  timeout(3), 503(2)
+  09-22 16:22  35753421008   5   0  timeout(5)
+  09-22 16:32  35754527797   4   0  timeout(4)
+  09-22 16:42  35755633580   5   0  timeout(5)
+  09-22 16:52  35756725277   5   0  timeout(5)
+  09-22 17:01  35757813023   4   0  503(3), timeout(1)
+
+Totals: 125 rows = 15 per-run capacity deferrals + 89 read-timeout failures
++ 21 HTTP-503 failures. Zero of these Actions logs attributed an affected golf
+row to a Gemini 429. The three cap-affected runs prove golf was not losing its
+soft share to another category: 12 shared slots were consumed in each; golf was
+already the dominant/only successful category in those runs.
+
+Task 1 titles and landed prices
+The 125 rows contain 67 distinct title/price pairs. `xN` is the exact retained
+row count for a repeated pair, so the counts below sum to 125. `[P]` marks a
+plausible 2012+ owner-goal lead from title/price alone; it is not a claim that
+AI confirmed handedness, condition, completeness, or a steal valuation.
+
+  01. $190.80 x1 - Callaway S2H2 Iron Golf Set 4, 5, 6, 7, 8, 9, PW RH RCH60 Regular Flex Clubs
+  02. [P] $185.08 x1 - Mizuno JPX 825 Forged Iron Set 5pcs 6-PW Stiff Modus3 Steel Shaft Golf Clubs
+  03. $179.56 x1 - Mizuno MP-60 Iron Set 7pcs 4-PW Flex S Stiff NSPro 950GH Steel Shaft Golf Clubs
+  04. $170.51 x1 - Mizuno MP-57 Iron Set 4-9 6 Pieces Stiff NSPro 950GH Steel Shaft Golf Clubs
+  05. $158.99 x1 - Callaway S2H2 Golf Club Iron Set 2-PW Graphite Shaft Right Handed Needs Grips
+  06. $144.16 x1 - MIZUNO SURE DD Iron Set 3pc 8-9-PW Golf Pride Grip R Flex
+  07. $211.99 x2 - Mizuno MP-57 Forged 4-5-6-7-8-9-PW 7pcs RH Stiff DG S200 Golf Club Iron Set JDM
+  08. $190.69 x2 - Mizuno MP-52 Forged 7pcs 4-5-6-7-8-9-PW RH Golf Club Iron Set NSPRO 950GH Stiff
+  09. $128.78 x2 - Callaway X Forged 2007 iron Golf set 5 6 8 9 PW Rifle 6.0 Stiff Right Missing 7
+  10. $117.65 x2 - Mizuno MP-27 Iron Set 3-PW (Not #7) Carbon Shaft Regular RH Japan Golf Club Good
+  11. $84.79 x1 - Kroydon Cruiser Model 770 Iron Set 2-9 Right Handed Steel Stiff Golf Clubs
+  12. $53.00 x1 - Right-Handed Golf Clubs Iron Set Vintage
+  13. $23.84 x1 - Wooden Shadow Box Wall-mounted Display Case W/ 3pcs Vintage Golf Clubs (pick Up)
+  14. $264.89 x1 - 7pcs Mizuno MP-62 Forged 4-5-6-7-8-9-PW Iron Set DG S300 Flex Stiff RH Golf
+  15. $221.96 x1 - Nike SQ Sumo Iron Set 8pcs 4-PW,AW Flex R Regular Steel Shaft Golf Clubs
+  16. $211.99 x1 - Mizuno JPX E500 5-6-7-8-9-PW-FW 7pcs RH Regular HT Golf Iron Wedge Set JDM
+  17. $190.79 x1 - Mizuno MP-69 Forged 4-5-6-7-8 5pcs RH Stiff DG S200 Golf Men Club Iron Set JDM
+  18. $169.60 x1 - Callaway Big Bertha Irons Steel Memphis 9 - 1,2,3,4,5,6,7,9,S Golf Set
+  19. $159.03 x2 - Golf Clubs Oversize Head Bucket
+  20. $59.28 x1 - MAZEL Men Golf Iron Set (9PCS) or 1,2,3,4,5,6,7,8,9,Pitching Wedge,Sand Wedge wi
+  21. [P] $263.94 x1 - Adams Golf Idea Tech V4 Hybrid Iron Set 8 Pcs 3-9-P Graphite Shafts Right Handed
+  22. $104.94 x1 - golf irons set SNAKE EYES VIPER MS right hand 8 clubs. Men's Set Steel Shaft
+  23. $104.94 x1 - Golf Irons Set CALLAWAY BIG BERTHA 4 Clubs RIGHT H Steel Shaft UNIFLEX
+  24. $57.13 x1 - Vintage MacGregor Tourney CF 4000. 3-8 Iron Set 6 Golf Clubs
+  25. $63.59 x1 - Callaway Golf Big Bertha Firm Flex RCH96 A & 8 Clubs 2 Set Preowned
+  26. $69.55 x3 - Golf Clubs Iron Lot 3 4 6 8 P Nike Tour Dynamic Gold Pro Select Calloway Pal Joe
+  27. $198.75 x1 - Callaway Mack Daddy CB Wedges 52, 56, 60 Set Cavity Back w/Golf Pride Grips
+  28. $211.99 x1 - Titleist 690.CB Forged Iron Set 3-9 Dynamic Gold S300 Stiff Steel RH Golf Clubs
+  29. $95.40 x3 - TZ GOLF - VINTAGE RARE Titleist by Acushnet 4-W Iron Set, R Flex Steel Shaft RH
+  30. $161.12 x1 - Adams Idea Golf Club Set 8-Piece Iron/Hybrid Combo 3H 4H 5-PW Regular Flex Graph
+  31. [P] $286.20 x1 - Wilson Staff Launch Pad Hybrid Golf Clubs Irons set 4-PW w UST Recoil R Graphite
+  32. $210.94 x2 - Golf Men's Set JAZZ RYDER 11 Clubs RH Regular Flex Irons Hybrids Wood Driver Put
+  33. $117.66 x1 - Cobra CXI Golf Clubs Oversize Irons set 4 thru PW w Dynalite Stiff Steel Shafts
+  34. $74.20 x1 - Callaway S2H2 Men's Golf Iron Set 7-PW Right Handed
+  35. $90.10 x1 - Set of 7 RAM INVESTOR Stainless Steel Golf Club Irons, Sizes 3, 4, 5, 6, 7, 8, 9
+  36. $158.98 x1 - Golf Clubs Ping Karsten 1 - Iron Set 3-9 & SW Black Dot Chamois Grips RH NICE
+  37. $233.20 x1 - TourEdge 370 Bazooka 11pce Golf Set W/ Bag Right Hand
+  38. $127.17 x1 - Adams Golf GT2 Undercut Iron Set 3-PW Steel Shaft R Flex Right Handed
+  39. $157.94 x1 - Ping Zing Karsten Iron Set S W Stiff Flex Steel Shafts Golf Clubs 1-lob wedge
+  40. $310.72 x1 - Men's Cobra Fly-XL Cart Bag Complete Golf Set. Right Hand.
+  41. $158.99 x1 - Callaway Golf ROGUE PRO Iron Set 7-PW Stiff Flex Project X 6.0 Steel Shafts
+  42. $265.00 x1 - Big Bertha War Bird 10 Driver Mixed Brands Golf Club Set Hybrid Irons Wedges
+  43. $31.80 x1 - Vintage Tour Line W201 1,3,5 Woods Right-Handed Golf Clubs
+  44. $209.88 x1 - Ping Royal Scot Odyssey Stiff Flex Complete Mens Golf Club Set Right Handed
+  45. [P] $163.77 x1 - Callaway Apex Golf Iron Set Steel Shafts
+  46. $127.20 x1 - Cougar Golf Set
+  47. $190.79 x1 - Cleveland CG Gold MCT Golf Iron Set 4-PW Steel Shaft 7pcs
+  48. $116.60 x1 - Callaway RH S2H2 8 Iron Set - 3-6, 8, 9, P & S Golf Clubs
+  49. $153.70 x1 - Callaway Golf Steelhead X-14 Iron Set (SW,PW,9,8,5,4) (6 CLUBS TOTAL)
+  50. $52.95 x1 - Rusty Cleveland 588 900 Wedges Steel Shaft Rusty 53, 60 Golf Clubs Set
+  51. $117.99 x1 - ALVO GOLF - Premium Full Face Golf Wedges, 3 Wedges (52, 56, 60 Set), Lob,Gap
+  52. $148.40 x1 - Titleist DCI 962 RH Golf Clubs Irons set 3-PW w R Flex Steel & New Midsize Grips
+  53. $127.19 x1 - Titleist DCI 962 Iron Set 9 Golf Club Set 3-9 +W LW. Steel Shaft Right Hand 6.5F
+  54. $318.00 x9 - golf club set with bag used
+  55. $37.09 x1 - Golf Irons Set Spalding CANNON 4-PW Medium Power-Shaft Steel Great Grips Nice
+  56. $148.40 x1 - Callaway X-12 Golf Clubs Oversize Irons set 3 thru PW w Memphis 10 Steel Shafts
+  57. $142.04 x13 - Naipo Golf Club Set for Men 13-Piece Complete for Right Handed with Stand Bag &
+  58. $28.29 x12 - Callawa Great Big Bertha Warbird 10 Titanium Driver Firm Flex Golf Club Clubs
+  59. $30.74 x11 - H & B Power Bilt Fuzzy Zoeller Golf Clubs - Right Handed (4, 5, 6, 8) - Good Use
+  60. $296.78 x1 - Mens Complete Golf Club Set & Nike Bag, Titleist & Ben Hogan, Good Condition
+  61. $158.99 x1 - BOMBTECH Golf 3.0 Iron Set 4-PW Right-Handed Regular Flex Steel Shafts
+  62. $79.50 x1 - Set of Adams Golf TIGHT LIES Irons 3-PW. Right-Handed. Steel Shaft. Very nice
+  63. $127.15 x8 - Adams Golf IDEA a3 Iron Set 6,7,8,9 & PW R-Flex Steel Shaft Right-handed
+  64. $105.97 x1 - Adams Golf GT2 Undercut Iron Set 3-PW RH True Temper Steel 8 Clubs
+  65. $158.97 x1 - Mizuno MP-60 Iron Set 7pcs 4-PW Flex S Stiff NSPro 950GH Steel Shaft Golf Clubs
+  66. $238.50 x1 - PING GOLF PING EYE KARSTEN RED DOT VINTAGE IRONS SET RH 1 IRON-PW
+  67. [P] $259.70 x1 - Callaway Steelhead XR Iron Set Graphite 6,7,8,9,PW, AW, SW. New Golf Pride grips
+
+Flag rationale/caveats: JPX 825 is a 2012-era five-club 6-PW set but the title
+does not prove RH; Idea Tech V4 was current in 2012/2013 and explicitly states
+eight pieces/RH; Wilson Launch Pad is a 2020-era game-improvement 4-PW set but
+does not state RH and is above the preferred $275 (still below the $300 hard
+ceiling); the Callaway Apex price is compelling but the title omits generation,
+count, and hand; Steelhead XR is a 2016-era seven-club set at $259.70 but omits
+hand. These five deserved AI/detail review. None can honestly be called a
+confirmed steal from title and ask alone. The modern Cobra Fly-XL complete set
+was not flagged because $310.72 exceeds the owner's $300 landed ceiling; Rogue
+Pro 7-PW was not flagged because four irons fail the five-club minimum.
+
+Checkpoint 4 - Task 3 OfferUp enablement report (no change made)
+- Required config field: append `"offerup"` to each target saved search's
+  existing `platforms` array. OfferUp is already in top-level
+  MARKETPLACES_ENABLED and registered as a batch adapter. The current focus is
+  23 golf searches, all with `platforms=["shopgoodwill","facebook"]`; enabling
+  every focus search would therefore be 23 saved-search field edits. None was
+  made.
+- Runtime cost: OfferUp's batch-shaped adapter actually performs one sequential
+  public HTML request per query. Enabling all 23 focus searches schedules up to
+  23 OfferUp search requests/run, paced at a minimum 0.50 seconds and bounded
+  by the shared 90-second marketplace deadline (15-second maximum per started
+  request, partial coverage returned at deadline). Twenty-three starts imply at
+  least about 11 seconds of pacing gaps plus network time. Each genuinely new
+  result whose search card lacks description can also cause one OfferUp detail
+  page request during PASS 1 before price/relevance gates.
+- ShopGoodwill/eBay discovery capacity: no direct reduction. OfferUp runs in
+  its own daemon batch thread; ShopGoodwill keeps its own two-worker queue and
+  its same 23 focused requests, while official eBay keeps its independent
+  13-fast + 3-slow per-run rotation and the scrape lane is unchanged. The only
+  shared boundaries are wall-clock/run time and downstream review: any OfferUp
+  golf candidates join the same 12-candidate shared AI window and can displace
+  lower-priority eBay/ShopGoodwill golf candidates there.
+- Local-pickup radius: none is configured or enforced. The adapter requests
+  `https://offerup.com/search?q=<query>` with no ZIP, coordinates, location, or
+  radius; it parses but discards OfferUp's `locationName`. Consequently the
+  effective radius is undefined (whatever default/IP-personalized feed OfferUp
+  returns), not an owner-local mileage radius. It also carries no distance or
+  shipping cost into landed-price math. Enabling as-is would add OfferUp
+  discovery, but it would not guarantee that a local-pickup-only club set is
+  within driving distance.
+
+Checkpoint 5 - exact implemented replay, validation, and scope audit
+- Re-ran the hourly replay after implementation so the tested expression was
+  byte-for-byte the shipped regex (including the added count-to-unit hyphen).
+  The live final sample still had 177 hourly snapshots and had grown to 5,046
+  deduplicated rows / 3,150 golf rows as the last UTC-hour snapshot advanced.
+  Exactly the same one Callaway RAZR EDGE row newly passed; no additional row
+  or junk title passed.
+- Required AST check passed:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`.
+- Required JSON check passed:
+  `python3 -c "import json; json.load(open('config.json')); json.load(open('category_profiles.json'))"`.
+- Full suite passed: `python3 -m pytest -q` -> `790 passed, 2 warnings,
+  577 subtests passed in 19.96s`. Baseline was 788 passed / 574 subtests; two
+  new tests and three subtests were added. All pre-existing tests and
+  expectations remain unmodified. The warnings are the same two existing lxml
+  `strip_cdata` deprecations.
+- `git diff --check` passed; its only output was the checkout's LF/CRLF
+  advisory. Modified tracked files are exactly `ebay_deal_alert.py` and
+  `test_ebay_deal_alert.py`; this report is new. Parsed config/profile files
+  have no diff. Therefore AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT,
+  GEMINI_BATCH_SIZE, every SAVED_SEARCHES entry, chrome-extension/*, and web/*
+  are unchanged. Pre-existing untracked `run.stdout.log` and `task.txt` remain
+  untouched. No commit or push was made.
+
+Bottom line
+- This was mostly real free-provider availability failure (110 routed attempts:
+  89 timeouts, 21 HTTP 503s), plus 15 real per-run capacity deferrals. Golf did
+  not lose the slots to another category, and every row was persisted in
+  ai_pending for retry.
+- The only Task 1 code bug was the global paid-cap snapshot mislabeling those 15
+  free-lane capacity deferrals as monthly exhaustion. That analytics bug is
+  fixed without changing any capacity limit.
+- The explicit-count/singular-noun gate had one clean historical false negative;
+  it is fixed, while the gapped Callaway example still cannot deliver.
+- OfferUp remains unchanged and is not safely local-radius-aware as currently
+  integrated.
