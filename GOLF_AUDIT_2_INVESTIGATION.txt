@@ -1,0 +1,141 @@
+GOLF AUDIT 2 INVESTIGATION
+Started: 2026-09-22 (America/New_York)
+
+WORKSTREAM A - ebay_deal_alert.py correctness audit
+===================================================
+
+Checkpoint A1 - required context and clean baseline
+- Confirmed the supplied checkout without fetch/pull/clone. `git log -1
+  --format="%H %s"` returned `a403ee255627e808a71e83be05efa5c0fbaa1d4c
+  chore: update poll state [skip ci]`.
+- Read GOLF_VINTAGE_GATE_INVESTIGATION.txt,
+  GOLF_MODERN_IRON_CRITERIA.txt, GOLF_IRON_MODE.txt, and
+  GOLF_FULL_SET_INVESTIGATION.txt in full before auditing or editing.
+- Initial `git status --short` showed only the pre-existing untracked files
+  `run.stdout.log` and `task.txt`; they are outside scope and will remain
+  untouched.
+- Exact requested pre-change AST and JSON validation commands both exited 0
+  with no command output.
+- Pre-change full suite: `python3 -m pytest -q` -> `776 passed, 2 warnings,
+  574 subtests passed in 23.28s`. The two warnings are the existing lxml
+  `strip_cdata` deprecations in the mid-run-429 auction test.
+- Scope retained: no chrome-extension/* or web/* work; no fetch/pull/clone;
+  no budget/Gemini-limit or existing saved-search-field edits; no commit/push.
+
+Checkpoint A2 - full function-by-function audit and fixes
+- Read all 11,276 lines of ebay_deal_alert.py in function order, including the
+  complete run() collection/prioritization/AI/delivery pipeline. Searched the
+  full file for TODO/FIXME/XXX markers; none are present.
+- Fixed a real 429-recovery crash in `_trip_ebay_circuit_breaker()`. Its state
+  reader correctly allowed any JSON object, but the trip path blindly did
+  `state.get("consecutive_429_streak", 0) + 1`. A JSON-valid persisted value
+  such as `"bad"` raised TypeError while handling an actual 429, interrupting
+  the very recovery path meant to protect eBay. Invalid/non-finite/negative
+  values now reset to zero before incrementing. The regression supplies the
+  formerly crashing state and proves a fresh, valid backoff is persisted.
+- Fixed four JSON-valid wrong-shape state crashes. `_read_cached_ebay_token()`
+  called `.get()` on a list/scalar; `load_quiet_alert_queue()` did the same
+  before its advertised legacy-list fallback could execute;
+  `load_search_activity()` called `.get()` on non-object JSON; and
+  `_weekly_ai_spend()` called `.get()` on a non-object digest snapshot. Each
+  now validates the decoded container and fails open as its surrounding state
+  handling intends. Regressions cover a non-object token cache, a real legacy
+  quiet-queue list plus a scalar, non-object search activity, and non-object
+  weekly digest state.
+- The weekly-spend regression exposed a separate resource bug on Windows:
+  `with sqlite3.connect(...)` commits/rolls back but does not close a SQLite
+  connection, leaving the digest's spend DB locked after return. Replaced it
+  with the file's established `closing(sqlite3.connect(...))` pattern; the test
+  proves its temporary DB can be deleted immediately after the read.
+- Fixed two global-deadline violations. `_deepseek_alert_sanity_check()` and
+  `_deepseek_second_opinion()` checked whether time remained, discarded the
+  computed bound, then made a default 15-second call. Both now pass the actual
+  remaining time (capped at 15 seconds) into the text provider. Regressions
+  prove 4.5-second and 1.75-second remaining windows reach the request helper.
+- Focused regression command covering all new tests plus the existing golf
+  sanity and second-opinion behavior: `13 passed, 560 deselected in 1.06s`.
+- No deliberate fail-open AI/provider behavior was changed, no category rule
+  was broadened, and no speculative/style-only finding was included.
+- The remainder of the audit found no additional proven off-by-one/inverted
+  condition, unreachable current-caller branch, mutable default, shadowing bug,
+  swallowed non-deliberate exception, or stale module cache that justified a
+  behavior change. Deliberate fail-open paths documented in code were retained.
+
+WORKSTREAM B - historical golf search-coverage evidence
+========================================================
+
+Checkpoint B1 - evidence standard and starting state
+- Starting focus count is 23, matching the shipped vintage-gate report. The
+  evidence bar remains repeated real listings plus at least one genuinely
+  favorable economic outcome; no model search will be added from general golf
+  knowledge or thin title evidence.
+- Historical reconstruction will use only read-only GitHub API/raw-file
+  requests for hourly alerts_log.jsonl snapshots, with no repository history
+  mutation.
+
+Checkpoint B2 - fourteen-day hourly reconstruction and model evidence
+- Queried the public repository's commit metadata and raw alerts_log.jsonl at
+  the newest commit in each UTC hour from 2026-09-08T00:00Z through the live
+  2026-09-22T16:02:46Z snapshot. The final pass covered 2,557 log-changing
+  commits and 329 hourly snapshots with zero download failures. Exact-line
+  deduplication in memory yielded 23,404 unique log rows; timestamp/category
+  restriction yielded 9,951 golf-equipment rows representing 6,154 distinct
+  item IDs. No fetch/pull/clone or repository-history write was used.
+- Used distinct item IDs for repetition, so repeated AI retries of one listing
+  cannot manufacture model frequency. An item counted as favorable only when
+  at least one retained row was `Steal`/`Great Deal` or independently computed
+  at least 50% under its positive AI resale estimate. Eighty-one distinct golf
+  items met that economics bar.
+- The one clearly modern additional iron model with favorable economics did
+  not repeat: `shopgoodwill:276238791`, `Wilson Staff D7 RH Iron Golf Clubs
+  6-9, PW, GW + Spalding Utility Wedge Set`, $47.17 landed versus $150 resale,
+  Great Deal. The reconstruction contains exactly one Wilson Staff D7 item.
+- Two other specific iron rows with favorable economics were likewise only
+  singletons: `shopgoodwill:276141527`, `Adams Golf Idea Forged CB3 Iron Set
+  4-PW KBS Tour Steel Shafts Golf Clubs`, $52.47 versus $120, Great Deal; and
+  the already-investigated `shopgoodwill:277314111`, `Nike Golf Slingshot 4D
+  SS 4D Steel Shaft Irons Chrome Black Yellow Set`, $35.4994 versus $85, Great
+  Deal. Slingshot 4D repeated only once more, but that second distinct listing
+  (`v1|127647689514|0`, `Nike SLINGSHOT 4D Iron Set 6pcs 6-P,A...`) was
+  $158.364 versus $110 and Marginal. Thus it has repeated inventory but only
+  one favorable item, and it is not evidence for the owner's 2012+ target.
+- Repeated plausible modern lanes had no favorable row at all: Callaway Apex
+  5 distinct items; TaylorMade SpeedBlade 3; Cobra Bio Cell 2; Titleist AP1 7;
+  Mizuno JPX 10; Ping i20/i25 8; Cobra AMP 5; and Cleveland Launcher 8. Their
+  retained outcomes were over-price, stale/no-AI, wrong-item, condition, or
+  landed above the AI estimate; none clears the required economics bar.
+- High-frequency patterns that did have cheap rows are not a valid new modern
+  iron search: Callaway Big Bertha is a 121-item multi-generation umbrella and
+  its four favorable rows were mixed/full club-and-bag lots already covered by
+  broad/Callaway focus; TaylorMade Burner (359 items) favorable rows were old
+  drivers/woods; Ping Eye (104) and Wilson 1200 LT/GE (12) are vintage; and
+  Callaway Steelhead X-14's only favorable row is an old X-14 set. Wilson
+  Prestige repeated twice with only one favorable copy of the exact same
+  full-set title, not a modern model opportunity.
+- Honest result: historical evidence supports zero additional dedicated model
+  searches. No SAVED_SEARCHES entry and no FOCUS_SEARCH_IDS value was changed;
+  focus remains 23, comfortably below capacity but not padded with an
+  unsupported lane.
+
+FINAL VALIDATION AND SCOPE AUDIT
+================================
+- Exact required AST command:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`
+  exited 0 with no output.
+- Exact required JSON command:
+  `python3 -c "import json; json.load(open('config.json')); json.load(open('category_profiles.json'))"`
+  exited 0 with no output.
+- Final full suite: `python3 -m pytest -q` -> `783 passed, 2 warnings,
+  574 subtests passed in 21.42s`. Baseline was `776 passed, 2 warnings,
+  574 subtests passed in 23.28s`: seven regression tests added, every prior
+  test passed unmodified, and subtest count stayed unchanged. The warnings are
+  the existing lxml `strip_cdata` deprecations in the mid-run-429 auction test.
+- `git diff --check` exited 0; its only output was the repository's existing
+  Windows LF-to-CRLF advisory. Modified tracked files are exactly
+  ebay_deal_alert.py and test_ebay_deal_alert.py; this investigation report is
+  new. Pre-existing untracked run.stdout.log and task.txt remain untouched.
+- Parsed config audit reports `focus_count=23` and `saved_search_count=212`.
+  config.json and category_profiles.json are unchanged; therefore every saved
+  search field/enabled flag, FOCUS_SEARCH_IDS, AI_PAID_MONTHLY_BUDGET_USD,
+  GEMINI_CALL_LIMIT, and GEMINI_BATCH_SIZE is unchanged. No chrome-extension/*
+  or web/* file changed. No commit or push was made.

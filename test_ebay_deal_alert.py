@@ -7749,6 +7749,87 @@ class CircuitBreakerResilience(unittest.TestCase):
         )
         self.assertTrue(m.ebay_circuit_breaker_allows_calls("tok"))
 
+    def test_invalid_json_valid_streak_does_not_crash_429_handler(self):
+        # Before the fix, a valid state object containing a string streak
+        # reached `"bad" + 1` and raised TypeError while handling the 429.
+        self.path.write_text(
+            json.dumps({"blocked_until_ts": 0, "consecutive_429_streak": "bad"}),
+            encoding="utf-8",
+        )
+        m._trip_ebay_circuit_breaker()
+        state = m._read_ebay_rate_limit_state()
+        self.assertEqual(state["consecutive_429_streak"], 1)
+        self.assertGreater(state["blocked_until_ts"], time.time())
+
+
+class PersistedJsonShapeResilience(unittest.TestCase):
+    """JSON-valid scalars/lists must not crash readers that expect objects."""
+
+    def test_token_cache_non_object_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "token.json"
+            path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(m, "TOKEN_CACHE_PATH", path):
+                self.assertIsNone(m._read_cached_ebay_token())
+
+    def test_quiet_queue_legacy_list_loads_and_scalar_fails_open(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "quiet.json"
+            with mock.patch.object(m, "QUIET_ALERT_QUEUE_PATH", path):
+                path.write_text('[{"result":{"listing":{"itemId":"q1"}}}]', encoding="utf-8")
+                self.assertEqual(m.quiet_queue_item_id(m.load_quiet_alert_queue()[0]), "q1")
+                path.write_text('"bad-shape"', encoding="utf-8")
+                self.assertEqual(m.load_quiet_alert_queue(), [])
+
+    def test_search_activity_non_object_fails_open(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "activity.json"
+            path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(m, "SEARCH_ACTIVITY_STATE_PATH", path):
+                self.assertEqual(m.load_search_activity(), {})
+
+    def test_weekly_digest_state_non_object_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            digest_path = pathlib.Path(tmpdir) / "digest.json"
+            spend_path = pathlib.Path(tmpdir) / "spend.db"
+            digest_path.write_text("[]", encoding="utf-8")
+            with mock.patch.object(m, "WEEKLY_DIGEST_STATE_PATH", digest_path), \
+                 mock.patch.object(m, "AI_SPEND_DB_PATH", spend_path):
+                weekly, total = m._weekly_ai_spend(
+                    datetime(2026, 9, 22, tzinfo=timezone.utc)
+                )
+            self.assertEqual((weekly, total), (0.0, 0.0))
+
+
+class TextAiDeadlineClamping(unittest.TestCase):
+    def test_final_sanity_text_call_is_clamped_to_run_deadline(self):
+        response = {
+            "is_complete_item": True,
+            "is_part_or_accessory": False,
+            "reason": "ok",
+        }
+        with mock.patch.object(m.time, "monotonic", return_value=95.5), \
+             mock.patch.object(
+                 m, "_call_deepseek_text_json", return_value=response
+             ) as text_call:
+            result = m._deepseek_alert_sanity_check(
+                {"title": "Complete item"}, {}, "other", hard_stop=100
+            )
+        self.assertEqual(result, response)
+        self.assertEqual(text_call.call_args.kwargs["timeout"], 4.5)
+
+    def test_second_opinion_text_call_is_clamped_to_run_deadline(self):
+        response = {"estimated_resale_value": 100, "reasoning": "comps"}
+        with mock.patch.object(m.time, "monotonic", return_value=48.25), \
+             mock.patch.object(
+                 m, "_call_deepseek_text_json", return_value=response
+             ) as text_call:
+            result = m._deepseek_second_opinion(
+                {"title": "Item"}, {}, "other", hard_stop=50
+            )
+        self.assertEqual(result["estimated_resale_value"], 100.0)
+        self.assertEqual(text_call.call_args.kwargs["timeout"], 1.75)
+
 
 class RunIntegration(unittest.TestCase):
     """run() is the orchestrator every other function in this file feeds

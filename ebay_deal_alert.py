@@ -16,6 +16,7 @@ import os
 import base64
 import hashlib
 import html
+import inspect
 import json
 import logging
 import math
@@ -875,6 +876,10 @@ def _read_cached_ebay_token():
     try:
         with TOKEN_CACHE_PATH.open("r", encoding="utf-8") as cache_file:
             cached = json.load(cache_file)
+        if not isinstance(cached, dict):
+            raise ValueError(
+                f"token cache is {type(cached).__name__}, not an object"
+            )
         if cached.get("access_token") and float(cached.get("expires_at", 0)) > time.time():
             logger.info("Using cached eBay OAuth token")
             return cached["access_token"]
@@ -1464,7 +1469,19 @@ def _trip_ebay_circuit_breaker():
     """Record a real 429 hit by an actual search call and back off.
     Exponential, capped - same math the old probe used."""
     state = _read_ebay_rate_limit_state()
-    streak = state.get("consecutive_429_streak", 0) + 1
+    prior_streak = state.get("consecutive_429_streak", 0)
+    if (
+        isinstance(prior_streak, bool)
+        or not isinstance(prior_streak, (int, float))
+        or not math.isfinite(prior_streak)
+        or prior_streak < 0
+    ):
+        logger.warning(
+            "Ignoring invalid eBay circuit-breaker 429 streak: %r",
+            prior_streak,
+        )
+        prior_streak = 0
+    streak = int(prior_streak) + 1
     backoff_minutes = min(EBAY_BACKOFF_INITIAL_MINUTES * (2 ** (streak - 1)), EBAY_BACKOFF_MAX_MINUTES)
     _write_ebay_rate_limit_state({
         "blocked_until_ts": time.time() + backoff_minutes * 60,
@@ -4997,13 +5014,22 @@ def _deepseek_alert_sanity_check(
         f"Vision AI damage_found: {ai_damage_found}"
     )
     try:
-        if _deadline_timeout(hard_stop, 1) is None:
+        call_timeout = _deadline_timeout(hard_stop, 15)
+        if call_timeout is None:
             return {
                 "is_complete_item": True,
                 "is_part_or_accessory": False,
                 "reason": "run deadline reached before sanity check",
             }
-        data = _call_deepseek_text_json(prompt)
+        text_call = _call_deepseek_text_json
+        try:
+            inspect.signature(text_call).bind(prompt, timeout=call_timeout)
+        except (TypeError, ValueError):
+            # Preserve compatibility with simple injected one-argument test/
+            # extension callables while the production helper remains bounded.
+            data = text_call(prompt)
+        else:
+            data = text_call(prompt, timeout=call_timeout)
     except Exception as exc:
         logger.warning("DeepSeek sanity check failed (%s); failing open", exc)
         return {"is_complete_item": True, "is_part_or_accessory": False,
@@ -5060,12 +5086,19 @@ def _deepseek_second_opinion(listing, ai_result, category, hard_stop=None):
         f"Vision AI brand evidence: {ai_brand_evidence}"
     )
     try:
-        if _deadline_timeout(hard_stop, 1) is None:
+        call_timeout = _deadline_timeout(hard_stop, 15)
+        if call_timeout is None:
             return {
                 "estimated_resale_value": None,
                 "reasoning": "run deadline reached before second opinion",
             }
-        data = _call_deepseek_text_json(prompt)
+        text_call = _call_deepseek_text_json
+        try:
+            inspect.signature(text_call).bind(prompt, timeout=call_timeout)
+        except (TypeError, ValueError):
+            data = text_call(prompt)
+        else:
+            data = text_call(prompt, timeout=call_timeout)
     except Exception as exc:
         logger.warning("DeepSeek second opinion failed (%s); keeping original estimate", exc)
         return {"estimated_resale_value": None, "reasoning": f"second opinion failed: {exc}"}
@@ -7172,7 +7205,12 @@ def should_queue_quiet_alert(result, now=None):
 def load_quiet_alert_queue():
     try:
         payload = json.loads(QUIET_ALERT_QUEUE_PATH.read_text(encoding="utf-8"))
-        alerts = payload.get("alerts", payload if isinstance(payload, list) else [])
+        if isinstance(payload, list):
+            alerts = payload
+        elif isinstance(payload, dict):
+            alerts = payload.get("alerts", [])
+        else:
+            alerts = []
         return alerts if isinstance(alerts, list) else []
     except (OSError, json.JSONDecodeError, TypeError):
         return []
@@ -7560,7 +7598,10 @@ def _weekly_ai_spend(now):
     month = now.strftime("%Y-%m")
     current_total = 0.0
     try:
-        with sqlite3.connect(AI_SPEND_DB_PATH) as ledger:
+        # sqlite3.Connection's context manager commits/rolls back but does not
+        # close the handle. Use closing() like every other ledger path here so
+        # weekly digest reads do not leak a Windows file handle.
+        with closing(sqlite3.connect(AI_SPEND_DB_PATH)) as ledger:
             row = ledger.execute(
                 "SELECT reserved_usd FROM ai_paid_spend WHERE month = ?", (month,)
             ).fetchone()
@@ -7572,7 +7613,7 @@ def _weekly_ai_spend(now):
     previous_total = 0.0
     try:
         state = json.loads(WEEKLY_DIGEST_STATE_PATH.read_text(encoding="utf-8"))
-        if state.get("month") == month:
+        if isinstance(state, dict) and state.get("month") == month:
             previous_total = float(state.get("paid_ai_reserved_usd") or 0)
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         pass
@@ -7601,7 +7642,7 @@ def _persist_weekly_ai_spend_snapshot(now, current_total):
 def load_search_activity():
     try:
         payload = json.loads(SEARCH_ACTIVITY_STATE_PATH.read_text(encoding="utf-8"))
-        searches = payload.get("searches", payload)
+        searches = payload.get("searches", payload) if isinstance(payload, dict) else {}
         return searches if isinstance(searches, dict) else {}
     except (OSError, json.JSONDecodeError, TypeError):
         return {}
