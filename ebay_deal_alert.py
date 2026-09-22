@@ -2554,6 +2554,28 @@ def golf_iron_set_title_reason(title):
     return None
 
 
+def _golf_club_run_text(title):
+    """Return a short human club-run string from a title's iron range or
+    enumeration (e.g. "5-PW (6 clubs)"), or None if the title states no
+    explicit run. Reuses the same signals golf_iron_set_title_reason()
+    already parses, so this never disagrees with delivery gating - it's
+    display-only and never changes which items get delivered."""
+    title = str(title or "")
+    range_match = GOLF_IRON_RANGE_TITLE_SIGNAL.search(title)
+    if range_match:
+        run = range_match.group(0).strip()
+        try:
+            count = _golf_iron_range_count(range_match.group(1), range_match.group(2))
+            return f"{run} ({count} clubs)"
+        except (KeyError, ValueError):
+            return run
+    enum_match = GOLF_IRON_ENUMERATION_SIGNAL.search(title)
+    if enum_match:
+        tokens = re.findall(r"[2-9]|p(?:w)?|aw|gw|sw|lw", enum_match.group(0), re.I)
+        return f"{enum_match.group(0).strip()} ({len(tokens)} clubs)"
+    return None
+
+
 def golf_full_set_only_reason(result, *, allow_iron_sets=None):
     """Return why a vetted golf result is not the owner's wanted golf set.
 
@@ -5425,7 +5447,10 @@ def check_photos_with_gemini(
             "\"summary\": string, \"estimated_resale_value\": number|null, "
             "\"price_confidence\": string}. "
             "clubs_identified should list what's visible (e.g. \"driver, 3 fairway "
-            "woods, 6 irons (5-PW), 2 wedges, putter\"). identified_brand is the "
+            "woods, 6 irons (5-PW), 2 wedges, putter\"). Count irons by reading the "
+            "loft number stamped on each club's sole or hosel (e.g. 5, 6, 7, 8, 9, PW, "
+            "SW) where legible, rather than estimating the count from a glance, and "
+            "note any gap in the sequence. identified_brand is the "
             "manufacturer marked on the clubs themselves (e.g. Callaway/Strata, "
             "Wilson, Top Flite, Adams, Cobra, Ping, TaylorMade, Titleist, Mizuno, or "
             "Cleveland); mixed or unknown brands are acceptable in this reporting field "
@@ -5459,13 +5484,20 @@ def check_photos_with_gemini(
             "only: mark it true for an entry-level boxed set, but never make "
             "is_playable_first_set false for that reason alone. "
             "is_left_handed is true only if the clubs are clearly built for a "
-            "left-handed golfer (clubhead/face mirrored the opposite way from a normal "
-            "right-handed club - compare face angle relative to the shaft/hosel across "
-            "photos) - the buyer is right-handed, so left-handed clubs are unusable to "
-            "him regardless of anything else. handedness_confirmed is true ONLY when "
-            "the photos clearly show right-handed clubs; use false for left-handed "
-            "clubs AND when handedness genuinely cannot be told from the photos. Never "
-            "treat unknown handedness as right-handed; explain uncertainty in summary. "
+            "left-handed golfer - the buyer is right-handed, so left-handed clubs are "
+            "unusable to him regardless of anything else. Use concrete visual evidence, "
+            "in this priority order: (1) an \"L\"/\"LH\"/\"Left\" stamp or label on the "
+            "sole, hosel, or shaft near the grip is the single most reliable tell - look "
+            "closely for it before relying on shape; (2) compare face angle relative "
+            "to the shaft/hosel across photos; (3) across a row "
+            "of irons or a full bag, the hosel/shaft offset should be consistent for "
+            "every club - one club offset the opposite way from the rest is worth "
+            "flagging in the summary rather than silently averaged in. "
+            "handedness_confirmed is true ONLY when the photos clearly show "
+            "right-handed clubs; use false for "
+            "left-handed clubs AND when handedness genuinely cannot be told from the "
+            "photos. Never treat unknown handedness as right-handed; explain "
+            "uncertainty in summary. "
             "damage_found means visible rust, cracked/bent shafts, missing/torn "
             "grips, or heavily worn club faces beyond normal light use. looks_good "
             "should be true only when no damage is found. estimated_resale_value is the "
@@ -7352,7 +7384,12 @@ def send_alert(result):
     url = listing.get("itemWebUrl", "")
     image_url = (listing.get("image") or {}).get("imageUrl")
     profile = result.get("profile", "slow")
-    profile_note = " [fast-flip]" if profile == "fast" else " [slow-flip]"
+    is_golf = result.get("category") == "golf-equipment"
+    # "[fast-flip]"/"[slow-flip]" is stale resale-tool naming (see repo
+    # description). The golf goal is a personal steal, not a flip, so the
+    # label is just noise on golf alerts - drop it there only; every other
+    # category's label is unchanged.
+    profile_note = "" if is_golf else (" [fast-flip]" if profile == "fast" else " [slow-flip]")
 
     # Kept short deliberately - ntfy truncates long messages on the lock
     # screen. Tap-through already works via headers["Click"] = url, so
@@ -7381,6 +7418,29 @@ def send_alert(result):
             where = location_note[len("Location:"):].strip()
             if where:
                 message += f"\n📍 {where}"
+    if is_golf:
+        # Per task: the owner needs to decide bid/buy in seconds. One
+        # compact line surfacing the fields that actually drive that call -
+        # club run, right-handed evidence, and identified brand - plus a
+        # blunt "verify:" line for whatever the bot could not confirm.
+        # Display-only: never changes which items get delivered.
+        club_run = _golf_club_run_text(title)
+        if club_run:
+            message += f"\n⛳ {club_run}"
+        unverified = []
+        if golf_has_explicit_right_handed_text(result):
+            message += "\nRH: title confirms"
+        elif result.get("golf_handedness_confirmed"):
+            message += "\nRH: AI photo confirmed"
+        else:
+            unverified.append("handedness")
+        brand = result.get("golf_identified_brand")
+        if brand:
+            message += f"\nAI ID: {brand}"
+        else:
+            unverified.append("brand/model")
+        if unverified:
+            message += f"\nverify: {', '.join(unverified)}"
     if result.get("is_ending_soon_auction"):
         # Per explicit user instruction: "alerted like 15 min before it
         # ends, do some research quick, and then immediately scoop it up

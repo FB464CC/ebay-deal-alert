@@ -6095,6 +6095,96 @@ class SendAlertRetailResaleLine(unittest.TestCase):
         )
 
 
+class SendAlertGolfDecisionLines(unittest.TestCase):
+    """Golf alerts need club run / handedness evidence / brand / a verify
+    line so the owner can decide bid-or-skip in seconds. These lines are
+    formatting only and must never change delivery (which items alert)."""
+
+    def _send_and_capture(self, result):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured["message"] = data.decode("utf-8")
+            return fake_resp
+
+        with mock.patch("requests.post", side_effect=fake_post):
+            m.send_alert(result)
+        return captured["message"]
+
+    def test_club_run_title_handedness_and_brand_all_confirmed(self):
+        result = {
+            "listing": {
+                "title": "Titleist AP2 5-PW Steel Shaft Irons RH",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 120.0,
+            "golf_identified_brand": "Titleist AP2",
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("5-PW (6 clubs)", message)
+        self.assertIn("RH: title confirms", message)
+        self.assertIn("AI ID: Titleist AP2", message)
+        self.assertNotIn("verify:", message)
+
+    def test_unconfirmed_handedness_and_brand_produce_verify_line(self):
+        result = {
+            "listing": {
+                "title": "Golf Iron Set 6-PW",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 80.0,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("verify: handedness, brand/model", message)
+        self.assertNotIn("RH: title confirms", message)
+        self.assertNotIn("AI ID:", message)
+
+    def test_ai_photo_confirmed_handedness_shown(self):
+        result = {
+            "listing": {
+                "title": "Golf Iron Set 6-PW",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 80.0,
+            "golf_handedness_confirmed": True,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("RH: AI photo confirmed", message)
+        self.assertIn("verify: brand/model", message)
+
+    def test_golf_alert_drops_stale_flip_label(self):
+        result = {
+            "listing": {
+                "title": "Golf Iron Set 6-PW",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "profile": "fast",
+            "price": 80.0,
+        }
+        message = self._send_and_capture(result)
+        self.assertNotIn("fast-flip", message)
+        self.assertNotIn("slow-flip", message)
+
+    def test_non_golf_alert_keeps_flip_label(self):
+        result = {
+            "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
+            "profile": "fast",
+            "price": 100.0,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("[fast-flip]", message)
+
+
 class AlertUrgencyTests(unittest.TestCase):
     def test_ending_soon_auction_is_max_priority_regardless_of_brand(self):
         priority, tags = m.alert_urgency({
