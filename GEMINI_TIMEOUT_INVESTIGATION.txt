@@ -1,0 +1,141 @@
+GEMINI VISION TIMEOUT INVESTIGATION
+Started: 2026-09-22 (America/New_York)
+
+Checkpoint 1 - scope, required reading, and checkout state
+- Read GOLF_BUDGET_EXHAUSTED_INVESTIGATION.txt and
+  SPEND_BREAKDOWN_AND_BATCHING_INVESTIGATION.txt in full before inspecting
+  implementation or Actions logs.
+- This is the supplied checkout; no fetch, pull, or clone operation was run.
+- Baseline commit is b8b29124846e94b027a830aa747d71106ae363f4
+  (Golf: correct MONTHLY_BUDGET_EXHAUSTED mislabel + counted-singular set
+  titles).
+- Initial `git status --short` showed only the pre-existing untracked files
+  `run.stdout.log` and `task.txt`; both are outside scope and remain untouched.
+- Fixed constraints retained: do not change AI_PAID_MONTHLY_BUDGET_USD,
+  GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE, any saved-search entry,
+  chrome-extension/*, or web/*; do not commit or push.
+- The predecessor established 42 affected runs containing 110 golf candidates
+  admitted to Gemini and failed closed: 89 timeout rows and 21 HTTP-503 rows.
+  This investigation will independently measure successful HTTP-call wall time
+  over at least about 40 workflow runs, separating HTTP request batch size from
+  candidate outcomes and image count wherever the log makes that derivable.
+
+Checkpoint 2 - Actions-log sample and measurement method
+- Read 136 unique workflow runs with `gh run view <id> --log`: all 100 runs in
+  the retained rolling telemetry that contain a successful Gemini outcome,
+  plus all 42 affected runs from the predecessor (six overlap). This is well
+  above the requested approximately 40-run floor. All 136 logs were available.
+- Cross-checked 99/100 successful runs against their committed
+  alerts_log.jsonl snapshot so pruning in the current rolling file could not
+  silently drop an earlier sibling. One post-run short SHA (`8851b53`) no
+  longer resolved through the contents API; all four of that run's rows remain
+  in the current rolling file and match its log. This recovered 226 successful
+  candidate outcomes. Their timestamp cadence identifies 128 successful HTTP
+  requests: 67 singles, 24 two-listing batches, and 37 three-listing batches.
+  Every candidate row was matched to its exact Actions log result line.
+- Important telemetry limit: production does not log immediately before and
+  after `requests.post`. A successful request is silent until its first result
+  is handled. Therefore an exact wire-time distribution cannot honestly be
+  reconstructed. The measured value below is a conservative request-window
+  upper bound: the time from the latest definitely pre-request log (or the
+  preceding candidate's result plus the configured two-second sleep) to the
+  first result from that request. It includes image downloads/preparation and
+  any short post-response parsing/gates, so actual Gemini HTTP time is less
+  than or equal to the reported value. Cached sibling results appear 2.00s
+  apart, making submitted listing batch size directly derivable.
+- Successful image count is not retained in either Actions output or alert
+  telemetry. The implementation accepts up to eight images/listing, so the
+  only honest derivable bounds are 1-8 images for a single, 2-16 for a
+  two-listing batch, and 3-24 for a three-listing batch. No distribution by
+  exact image count is possible from the retained evidence; failed-download
+  warnings reveal individual failures, not how many other images succeeded.
+
+Checkpoint 3 - successful-request distributions and timeout conclusion
+Conservative successful request-window upper bounds, in seconds:
+
+  listings/request   n     min   median     p90     p95     max
+  1                  67   0.242    2.581  10.001  14.976  16.909
+  2                  24   2.763    4.683  13.684  18.318  22.823
+  3                  37   4.236    6.156  14.607  15.912  19.292
+  all               128
+
+- Only 3/128 conservative windows were at least 18s, 2/128 at least 19s,
+  and 1/128 at least 20s. These are upper bounds, not HTTP durations. The
+  22.823s two-listing outlier necessarily contains at least 2.823s outside
+  the HTTP request because a request with a 20s Requests timeout succeeded;
+  its boundary begins at the last discovery log and includes two listings'
+  detail/image preparation. The 18.821s two-listing and 19.292s three-listing
+  outliers likewise include preparation. By contrast, the tightest directly
+  anchored singles start at the log emitted immediately before Gemini fallback
+  and top out at 16.909s (next 16.765s and 16.310s), still including response
+  parsing and final gating.
+- There is no success pile-up at 18-20s. Even the conservative p95 is 14.976s
+  for singles and 15.912s for three-listing batches. The two-listing p95 of
+  18.318s is driven by preparation-inclusive first-request windows and cannot
+  be treated as HTTP latency; its median is only 4.683s. The evidence therefore
+  does not show calls being cut off just before success and does not support a
+  larger timeout or a p95-plus-margin value.
+- Request failures by submitted listing count, derived from the exact warning
+  cadence and the predecessor's candidate totals: 43 timeout responses = 13
+  singles, 14 two-listing batches, and 16 three-listing batches (89 affected
+  candidates). Against the successful sample, observed timeout shares were
+  13/80 = 16.25% for singles, 14/38 = 36.84% for pairs, and 16/53 = 30.19%
+  for triples. Batches were less reliable than singles, but failures were not
+  concentrated only on three-listing requests (pairs were numerically worse),
+  and no retained evidence shows that retrying the same payload smaller would
+  recover it.
+
+Checkpoint 4 - HTTP-503 clustering
+- The 21 affected candidates came from exactly nine HTTP-503 responses: two
+  singles, two two-listing batches, and five three-listing batches.
+- They were strongly time-clustered, not evenly/systemically distributed:
+  8/9 HTTP responses and 20/21 candidates occurred from
+  2026-09-22T15:02:15Z through 17:02:22Z. The only outlier was one single
+  response/candidate at 2026-09-21T15:01:36Z.
+- Inside the cluster, a three-listing 503 at 15:21:49Z was followed by a
+  single-listing 503 at 15:22:09Z, and two more 503s occurred only 22 seconds
+  apart at 16:02:18Z/16:02:41Z. That is direct evidence against an immediate
+  same-run 503 retry: the provider was still returning 503 on the next request.
+
+Checkpoint 5 - bounded-change decision
+- No production/config change is supported. Raising the timeout would spend
+  more of the urgent-auction run on the long tail even though successes do not
+  cluster at the ceiling. An immediate 503 retry is contradicted by the
+  incident cluster. A timeout retry with a smaller payload is only a hypothesis:
+  pairs timed out at least as often as triples, and there are no retry outcomes
+  proving recovery. Spending extra free-tier requests and run slots on that
+  hypothesis is not evidence-bounded.
+- Deadline audit: every normal and batched Gemini request obtains its timeout
+  through `_deadline_timeout(hard_stop, GEMINI_VISION_TIMEOUT_SECONDS)`, where
+  `hard_stop = run_started + RUN_BUDGET_SECONDS`. Thus even a larger configured
+  timeout could not overrun the 390s internal deadline, but it could consume
+  more of the remaining window and delay later auction candidates. Since the
+  measured success record does not justify a higher value, the configured 20s
+  remains unchanged.
+
+Checkpoint 6 - validation and scope audit
+- Required AST validation passed:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`.
+- Required JSON validation passed for both config.json and
+  category_profiles.json.
+- Full unchanged suite passed: `python3 -m pytest -q` -> `790 passed, 2
+  warnings, 577 subtests passed in 20.23s`. The warnings are the existing lxml
+  `strip_cdata` deprecations.
+- `git diff --check` passed. The only task-created file is this investigation
+  report. No tracked file differs from HEAD: config.json (including its CRLF
+  form), category_profiles.json, ebay_deal_alert.py, tests, every saved-search
+  entry, chrome-extension/*, and web/* are all untouched. The pre-existing
+  untracked `run.stdout.log` and `task.txt` remain untouched.
+- No fetch, pull, clone, commit, or push was performed.
+
+Bottom line
+- The 20s cutoff is not the evidenced bottleneck. Successful request-window
+  upper bounds have medians of 2.58s/4.68s/6.16s and p95s of
+  14.98s/18.32s/15.91s for one/two/three listings, with the high pair windows
+  demonstrably containing non-HTTP preparation. Tight single-request anchors
+  max at 16.91s, and there is no 18-20s success cluster.
+- Timeouts are real and more frequent on batched payloads, but not uniquely on
+  triples; the data does not demonstrate that a smaller immediate retry would
+  recover them. HTTP 503s are overwhelmingly one two-hour provider incident,
+  during which immediate following requests also returned 503.
+- Per the evidence threshold, changing nothing is the bounded outcome.
