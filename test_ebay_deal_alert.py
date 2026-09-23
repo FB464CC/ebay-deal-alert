@@ -276,6 +276,44 @@ class RuntimeSearchFocus(unittest.TestCase):
         self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 23)
 
 
+class EbayRotationCapacity(unittest.TestCase):
+    def test_rotation_run_number_is_continuous_across_utc_midnight(self):
+        before_midnight = datetime(2026, 9, 23, 23, 55, tzinfo=timezone.utc)
+        after_midnight = datetime(2026, 9, 24, 0, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            m._ebay_rotation_run_number(after_midnight),
+            m._ebay_rotation_run_number(before_midnight) + 1,
+        )
+
+    def test_circular_batch_fills_short_tail_without_losing_two_run_coverage(self):
+        searches = [{"query": f"golf query {index}"} for index in range(23)]
+
+        first = m._rotating_ebay_batch(searches, 14, 0)
+        second = m._rotating_ebay_batch(searches, 14, 1)
+
+        self.assertEqual(len(first), 14)
+        self.assertEqual(len(second), 14, "the old tail contained only 9 searches")
+        self.assertEqual(first | second, {search["query"] for search in searches})
+
+        cycle = [
+            m._rotating_ebay_batch(searches, 14, run)
+            for run in range(23)
+        ]
+        for search in searches:
+            appearances = [
+                run
+                for run, batch in enumerate(cycle)
+                if search["query"] in batch
+            ]
+            self.assertEqual(len(appearances), 14)
+            cyclic_gaps = [
+                (appearances[(index + 1) % len(appearances)] - run) % len(cycle)
+                for index, run in enumerate(appearances)
+            ]
+            self.assertLessEqual(max(cyclic_gaps), 2)
+
+
 class FunnelAuditConfiguration(unittest.TestCase):
     @staticmethod
     def _search(search_id):

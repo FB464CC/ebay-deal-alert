@@ -367,19 +367,15 @@ MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", [])
 # because it holds the highest-value searches (suits, watches), not because
 # it moves more listings.
 #
-# eBay's Browse API default limit is a hard 5,000 calls/day (developer.ebay
-# .com). At ~300 runs/day (confirmed from real GH Actions run history):
-#   fast(11) + slow(4) = 15/run -> 4,500/day (90%), ~15 min fast-lane cycle
-# Raised from 8/4 (12/run, 72%, 25 min cycle) once real numbers showed the
-# room: removing count_similar_listings() (an unbounded per-candidate call,
-# gone) and the circuit breaker's dedicated probe call (also gone, see
-# ebay_circuit_breaker_allows_calls()) freed enough budget to fund this
-# without sitting at the edge of the quota the way a straight 2-3x increase
-# would have (literally tripling fast alone would hit 174% of quota and
-# guarantee repeated 429s - worse than not doing it, since a tripped
-# breaker blocks ALL eBay calls for 30-120 min, the exact Aug 9 outage).
-# 90% still leaves real margin for a high-volume day, same philosophy as
-# the original 12/run choice.
+# eBay's Browse API default limit is a hard 5,000 calls/day. The focused
+# catalog currently contains 23 fast searches and zero slow searches. A
+# measured provider day used 3,579 calls and ended with 1,420 unused; filling
+# the circular rotation at 14 fast calls/run projects to 4,299/day including
+# the observed detail-call load (86%), leaving about 701 calls of real margin.
+# The configured two-call slow slice is dormant while focus contains no slow
+# searches, but remains available if the focus is broadened later. Sitting at
+# the edge of quota is deliberately avoided: a tripped breaker blocks ALL
+# eBay calls for 30-120 minutes, the exact shape of the prior Aug 9 outage.
 #
 # A free, legitimate path to a much higher limit exists (eBay's
 # "Application Growth Check" - filed, pending as of this writing) if this
@@ -751,6 +747,31 @@ def _focus_filter(searches):
         )
         return searches
     return focused
+
+
+def _rotating_ebay_batch(searches, per_run_limit, run_number):
+    """Return a full circular slice of the stable eBay search rotation.
+
+    The old ceil-divided batches left the final batch short. With the current
+    23 all-fast golf searches and a 13-search limit, production alternated 13
+    and 10 calls even though eBay ended the measured provider day with 1,420
+    of 5,000 calls unused. Advancing by one full slice and wrapping at the end
+    preserves the two-run full-coverage guarantee while using the configured
+    per-run capacity on every run.
+    """
+    searches = list(searches)
+    if not searches or per_run_limit <= 0:
+        return set()
+    batch_size = min(len(searches), per_run_limit)
+    batch_start = (run_number * batch_size) % len(searches)
+    ordered = searches[batch_start:] + searches[:batch_start]
+    return {search["query"] for search in ordered[:batch_size]}
+
+
+def _ebay_rotation_run_number(now):
+    """Return a five-minute epoch slot that stays continuous across UTC days."""
+    return int(now.timestamp() // (5 * 60))
+
 
 VALID_SEARCH_PROFILES = {"fast", "slow"}
 SUPPORTED_SEARCH_PLATFORMS = {
@@ -9267,24 +9288,18 @@ def run():
     # rotation is wrong for a 15-minute closing window).
     enabled_searches = enabled_searches + focused_auction_searches
 
-    # Only this run's rotating BATCH actually calls eBay's API - see
-    # EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN. Deliberately a distinct non-overlapping
-    # slice per run, not a 1-position sliding window over the (already
-    # rotated-by-1) enabled_searches list above - tested that version
-    # before shipping and caught it live: a by-1 rotation means consecutive
-    # 5-min runs share 14 of 15 searches, so 6 runs (30 min) only covered
-    # 20 of 74 searches instead of the intended full pass roughly every
-    # ~25 min. Batches use the STABLE (non-rotated) search order so the
-    # batch boundaries themselves don't drift.
+    # Only this run's rotating batch actually calls eBay's API. Advance by a
+    # complete slice over the STABLE search order and wrap a short tail into
+    # the next cycle. This is not the old one-position sliding window (which
+    # overlapped almost the whole batch and covered the catalog too slowly):
+    # a complete-slice stride still covers every current golf query within
+    # two runs, while avoiding the measured 13/10-call alternation that left
+    # proven daily quota unused.
     def _ebay_batch(searches, per_run_limit):
-        """Pick this run's non-overlapping batch from a stable-ordered list,
-        cycling through all of them over multiple runs."""
-        if not searches:
-            return set()
-        num_batches = max(1, -(-len(searches) // per_run_limit))  # ceil div
-        batch_index = ((current_utc.hour * 60 + current_utc.minute) // 5) % num_batches
-        batch_start = batch_index * per_run_limit
-        return {s["query"] for s in searches[batch_start:batch_start + per_run_limit]}
+        # Epoch-based so the 23-run circular cycle does not restart at UTC
+        # midnight and accidentally repeat a slice across the day boundary.
+        run_number = _ebay_rotation_run_number(current_utc)
+        return _rotating_ebay_batch(searches, per_run_limit, run_number)
 
     ebay_circuit_closed = (
         token is not None
@@ -9328,14 +9343,11 @@ def run():
                 )
                 ebay_circuit_closed = False
     if ebay_circuit_closed:
-        # Two independent rotation lanes, not one pool - "fast" profile
-        # searches (the ones that actually matter more) get a bigger slice
-        # of the budget and cycle back to eBay roughly every 25 min; "slow"
-        # ones get the rest, cycling roughly every 55 min. Same total daily
-        # call budget as a single pool (EBAY_FAST_SEARCHES_PER_RUN +
-        # EBAY_SLOW_SEARCHES_PER_RUN == EBAY_FAST_SEARCHES_PER_RUN + EBAY_SLOW_SEARCHES_PER_RUN) - this
-        # is a priority reallocation of the existing safe budget, not an
-        # increase to it.
+        # Two independent rotation lanes, not one pool. With the current
+        # all-fast 23-search golf focus, the 14-call circular slice revisits a
+        # query every 8.21 minutes on average and never leaves one uncovered
+        # for more than two five-minute runs. Slow searches retain their own
+        # two-call slice whenever a future focus contains any.
         fast_searches = [s for s in stable_searches if s.get("profile") == "fast"]
         slow_searches = [s for s in stable_searches if s.get("profile") != "fast"]
         ebay_this_run = (

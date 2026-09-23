@@ -1,0 +1,169 @@
+CAPACITY OPTIMIZATION AUDIT
+Started: 2026-09-23 (America/New_York)
+
+Checkpoint 1 - scope, required reading, and baseline state
+- Read in full before investigation: GEMINI_TIMEOUT_INVESTIGATION.txt,
+  GOLF_BUDGET_EXHAUSTED_INVESTIGATION.txt, GOLF_IRON_MODE.txt,
+  GOLF_FOCUS_MODE.txt, GOLF_VINTAGE_GATE_INVESTIGATION.txt, and
+  SPEND_BREAKDOWN_AND_BATCHING_INVESTIGATION.txt.
+- This is the supplied checkout; no fetch, pull, or clone operation was run.
+- Baseline commit is 885a6a214bcd300001d898d95df0c343f38c126e
+  (`chore: update poll state [skip ci]`).
+- Initial `git status --short` showed only the pre-existing untracked files
+  `run.stdout.log` and `task.txt`; both are outside scope and remain untouched.
+- Protected constraints retained: no changes to AI_PAID_MONTHLY_BUDGET_USD,
+  GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE, GEMINI_VISION_TIMEOUT_SECONDS, any
+  saved-search entry or enabled flag, chrome-extension/*, or web/*; no commit
+  or push.
+- Historical premises are not being substituted for current measurement. The
+  current audit will read at least 30 recent Actions logs, report per-run
+  min/median/p95 utilization, and make changes only where those runs prove
+  capacity is unused or work is wasteful relative to the golf-set goal.
+
+Checkpoint 2 - current production utilization (60 consecutive successful runs)
+- Read the complete Actions logs for 60 consecutive successful poll runs from
+  2026-09-23T02:30:37Z through 07:25:24Z. This covers 4h55m / 60 dispatches,
+  exceeds the requested 30-run floor, and includes the eBay daily-quota reset.
+  Percentiles below use linear interpolation over per-run observations.
+- Application wall time (`Starting` to `Finished`) was 42.590s minimum,
+  60.355s median, 92.836s p95, and 181.091s maximum: respectively 10.9%,
+  15.5%, 23.8%, and 46.4% of RUN_BUDGET_SECONDS=390. No sampled run reached
+  the global deadline. Even the maximum left 208.909s unused.
+- Phase boundaries recoverable from existing logs:
+    startup through the Wardrobe gap-report boundary: 1.786 / 2.875 / 12.322s
+    (min/median/p95; max 20.800s);
+    marketplace prefetch after that boundary: 19.214 / 23.948 / 43.168s
+    (max 100.043s, including the configured in-flight collection margin);
+    eBay official+scrape discovery: 15.349 / 27.832 / 50.250s
+    (max 78.413s);
+    post-discovery AI/gating/delivery: 0.007 / 0.013 / 12.021s
+    (max 22.377s).
+  Official eBay and supplementary scrape calls are interleaved once per query.
+  The retained telemetry logs before the pair and after the scrape, but has no
+  marker between the official response and scrape request. Their combined
+  production time above is exact; separate official-vs-scrape durations cannot
+  honestly be reconstructed (each is bounded by 0..combined and they sum to
+  combined). One alert was delivered; the log interval from the preceding AI
+  sanity result through `Sent alert` was only 0.232s, an upper bound on the
+  delivery call. The other 59 runs performed no delivery.
+- Gemini shared candidate slots consumed were 0 / 0 / 3 (min/median/p95), max
+  3. Distribution: 39 runs used 0, 13 used 1, four used 2, four used 3. Across
+  720 available slots, only 33 were consumed and 687 (95.42%) were unused.
+  The 12-slot cap was hit in 0/60 runs. All 32 completed shared checks were
+  golf-equipment; one additional golf slot reached the free fallback but the
+  provider failed, producing one retryable MONTHLY_BUDGET_EXHAUSTED row.
+  There were zero NO_AI_BUDGET cap deferrals and zero AI_NO_PRICE golf rows.
+  The one failed item retried and completed ten minutes later as a damage
+  rejection. Thus the spare slots coexist with a lack of eligible candidates,
+  not golf candidates stranded behind pre-AI capacity; loosening a delivery
+  gate would be required to manufacture more calls and is out of scope.
+- ShopGoodwill completed 1,360/1,380 scheduled focused requests (98.55%); 59/60
+  runs completed all 23. One transient outlier hit the fetch deadline after
+  3/23, while all other runs had full coverage. Against the 90s fetch budget,
+  median measured prefetch headroom was 66.052s and p95 headroom was 46.832s;
+  the one outlier had none. The established request-count headroom remains
+  eight (31 proven capacity minus 23 current queries), but adding work cannot
+  repair the isolated provider stall.
+- ShopGoodwill page/sort audit: page=1, pageSize=40, remaining-time ascending
+  (`sortColumn=1`, `sortDescending=false`). Across 870 nonempty response pages,
+  232 were full 40-item pages. Zero of those 232 had all 40 auctions inside
+  the closing-soon window; every full page already crossed into too-early
+  inventory. Since page 2 is later-closing still, it contained no eligible
+  closing-soon auction in this sample. Increasing page size or fetching page 2
+  would spend proven request/time slack on items the unchanged closing gate
+  must reject.
+- eBay official quota: the first post-reset reading was 4,999/5,000 at
+  2026-09-22 07:12Z; the last pre-reset reading was 1,420/5,000 at
+  2026-09-23 07:06Z. Actual daily use was 3,579 calls (71.58%), leaving 1,420
+  calls (28.4%) unused. The 23 focused searches are all profile=`fast`; there
+  are zero slow searches, so EBAY_SLOW_SEARCHES_PER_RUN=3 is currently idle.
+  The non-wrapping 13-call fast batching alternates 13 and 10 calls: observed
+  official searches/run were 10 / 11.5 / 13 (min/median/p95). Each query is
+  covered once per two runs (10 minutes), but the short tail wastes three
+  calls every other run.
+- eBay result depth: the official call already uses the API maximum limit=200
+  with server-side price/category/condition filters and newest-first sorting.
+  Nine existing golf queries saturated that window on every one of their 30
+  sampled rotations (270 saturated query-runs). This is not evidence of a
+  between-poll miss: the same queries recur every 10 minutes, so every newly
+  listed item enters page 1 before aging into page 2, while the deployed stale
+  gate rejects fixed-price inventory at one day. The logs recorded only 23
+  newly scored eBay item IDs across all 60 runs, with 0 median and 3 maximum
+  in one run, versus the 200-result page window. A second page would chiefly
+  replay older backlog. The measured quota is better spent reducing discovery
+  latency on page 1 than fetching inventory the stale gate must suppress.
+- The supplementary eBay scrape remained productive: 548 query calls returned
+  19,770 extra cards; 69 calls ended in HTTP 403 after the bounded retry. The
+  official and scrape lanes deduplicate on the same eBay item ID, so this is
+  additional coverage rather than duplicated AI/detail work.
+- State/I/O: production seen_items.db cache snapshots ranged 35,123,200 to
+  37,322,752 bytes. Ordinary nonnegative per-run deltas were 0 / 0 / 8,192
+  bytes (min/median/p95; max 16,384); one daily retention pass shrank the file
+  by 2,195,456 bytes, for a net 2,093,056-byte reduction over the sample.
+  Cache restore/save are outside RUN_BUDGET_SECONDS and measured
+  0.455/1.355/2.040s and 0.731/1.312/1.822s respectively. alerts_log.jsonl
+  grew 51,674 bytes (890,123 -> 941,797) across the 59 intervals: median
+  per-run delta 0, p95 3,728.5 bytes, max 6,736. It is bounded by the existing
+  0.95MB-to-0.7MB rolling prune. Local read-only benchmarks at the current
+  size measured 7.3-9.2ms to parse the whole alert log, 21.4us for its ordinary
+  stat-only prune check, 1.71ms for seen-row COUNT, and ~44us for an indexed
+  seen-item lookup. No scaling I/O cost is material inside a 390s run.
+
+Checkpoint 3 - bounded optimization decision
+- Supported change: fill the under-length tail of the existing fast eBay
+  rotation by wrapping into the next cycle, and reallocate one of the three
+  empty slow-lane slots to fast (14 fast / 2 slow, same configured maximum of
+  16). This raises actual official search coverage from 11.5 to 14 calls/run.
+  Projected from the measured provider day: 3,579 + (14-11.5)*288 = 4,299
+  calls/day (85.98%), leaving about 701 calls (14.02%) for item-detail calls
+  and variation. It lowers mean per-query revisit time from 10.0 to about
+  8.21 minutes while retaining a 10-minute worst-case gap and adds no search
+  term or delivery relaxation.
+- Rejected by measurement: ShopGoodwill/eBay second pages, ShopGoodwill larger
+  pages, looser golf pre-AI gates, Gemini limit/batch/timeout changes, and I/O
+  micro-optimizations. The rejecting numbers are recorded above.
+
+Checkpoint 4 - implementation, before/after evidence, and validation
+- Added `_rotating_ebay_batch()`: it advances by one complete batch and wraps
+  the short tail into the next cycle. Added an epoch-based five-minute run
+  number so the 23-run circular sequence remains continuous across UTC
+  midnight rather than repeating a slice at the day boundary.
+- Surgically changed only the two top-level eBay lane allocations in
+  config.json: fast 13 -> 14 and slow 3 -> 2. Their sum remains 16. The file
+  remains entirely CRLF (3,337 CRLFs, zero bare LFs); it was not serialized
+  through json.dumps. Parsed SAVED_SEARCHES is identical to HEAD, including
+  every field and enabled flag.
+- Before: the 23 all-fast searches produced alternating 13/10 official calls,
+  11.5/run average, 3,312 scheduled search calls/day, and one visit/query per
+  10 minutes. After: every run selects exactly 14, 4,032 search calls/day,
+  8.21-minute mean revisit, and <=10-minute maximum gap. Adding the measured
+  267 daily non-search Browse calls gives the 4,299/5,000 projection above.
+- Added two regressions without modifying an existing expectation: one proves
+  both adjacent batches contain 14 searches, their union covers all 23, each
+  query appears exactly 14 times in a 23-run cycle, and no cyclic gap exceeds
+  two runs; the other proves the epoch slot increments across UTC midnight.
+- Exact required AST validation passed.
+- Exact required JSON validation for config.json and category_profiles.json
+  passed.
+- Full suite passed: `python3 -m pytest -q` -> `792 passed, 2 warnings, 577
+  subtests passed in 22.28s`. Baseline was 790 passed / 577 subtests; the two
+  added tests account for the increase and every existing test passes
+  unmodified. Warnings are the existing lxml `strip_cdata` deprecations.
+- `git diff --check` passed (only Git's informational LF-to-CRLF working-copy
+  advisories for the Python files). Modified tracked files are exactly
+  config.json, ebay_deal_alert.py, and test_ebay_deal_alert.py; this audit is
+  the sole task-created file. AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT,
+  GEMINI_BATCH_SIZE, GEMINI_VISION_TIMEOUT_SECONDS, category_profiles.json,
+  every saved-search entry, chrome-extension/*, and web/* are unchanged.
+  Pre-existing untracked run.stdout.log and task.txt remain untouched. No
+  fetch, pull, clone, commit, or push was performed.
+
+Bottom line
+- Wall time, ShopGoodwill request capacity, and Gemini slots are mostly idle,
+  but the current eligibility/sort evidence gives them no additional safe
+  golf work: no Gemini cap deferral occurred, and every full ShopGoodwill page
+  already crossed beyond the closing-soon window. The one proven coverage
+  waste was eBay's short rotation tail against 28.4% unused daily quota. The
+  bounded fix spends part of that quota on fresher coverage of the same 23
+  evidenced golf queries while preserving every delivery gate and a projected
+  14% provider-quota reserve.
