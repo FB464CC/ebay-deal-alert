@@ -1,0 +1,99 @@
+VISION PROVIDER SWITCH
+Started: 2026-09-23 (America/New_York)
+
+Checkpoint 1 - required reading and scope
+- Read SPEND_BREAKDOWN_AND_BATCHING_INVESTIGATION.txt and
+  GEMINI_TIMEOUT_INVESTIGATION.txt in full before inspecting or changing the
+  implementation.
+- The established batching design is synchronous multi-candidate Gemini
+  generateContent, with exact-ID/fail-closed result mapping. Candidate limits
+  count outcomes; GEMINI_CALL_LIMIT counts HTTP requests.
+- Fixed scope: make Gemini primary without losing batches of 3; preserve the
+  existing DeepSeek-primary paid-exhaustion gate and Gemini-to-DeepSeek
+  fallback; do not change any other config value, saved search, delivery gate,
+  chrome-extension/*, or web/*; do not fetch, pull, clone, commit, or push.
+
+Checkpoint 2 - end-to-end batching and router audit
+- _paid_ai_budget_snapshot() reconciles the durable paid ledger and reports
+  whether the next DeepSeek reservation would exceed the monthly cap.
+  _record_paid_ai_budget_exhaustion() copies that structured snapshot into
+  process state so the run can notify and classify a no-result consistently.
+- Before this change, run() enabled free_fallback_batching only when DeepSeek
+  was configured primary, GEMINI_BATCH_SIZE was greater than one, and a
+  pre-attempt paid snapshot was already exhausted. This intentionally avoided
+  changing exceptional one-candidate fallbacks while paid DeepSeek remained
+  available.
+- Once enabled, each current candidate completes the ordinary lane-budget,
+  detail, and late hard-fail gates. It is prepared as the batch anchor, then
+  eligible adjacent candidates from the same counter lane are prepared up to
+  GEMINI_BATCH_SIZE. Future eBay candidates receive the same detail fetch and
+  late hard-fail gate before inclusion. Exact-ID results are stored in
+  prefetched_gemini_results and consumed on those candidates' normal loop
+  turns; malformed/missing results remain None and fail closed.
+- _call_photo_check() routes to the configured provider first. In Gemini mode
+  it calls Gemini first and, on an exception or no result, calls DeepSeek with
+  its own deadline-clamped timeout. Successful Gemini results never spend a
+  paid fallback. Batched request failures fail closed for all affected
+  candidates; they cannot alert without an AI verdict.
+- Important correction to the task's throughput premise: GEMINI_CALL_LIMIT is
+  currently charged once per candidate outcome, including a later candidate
+  consuming a prefetched result. The predecessor report explicitly preserved
+  that behavior. Therefore at GEMINI_CALL_LIMIT=12 and GEMINI_BATCH_SIZE=3,
+  twelve fully eligible candidates use four Gemini HTTP requests when batched
+  versus twelve HTTP requests when unbatched; both modes vet at most twelve
+  shared-lane candidates per run. A 36-candidate run would require changing
+  the counter and the protected 12-slot golf/poker fairness semantics, which
+  is outside this surgical provider switch and would violate the requirement
+  to preserve today's DeepSeek behavior.
+
+Checkpoint 3 - implementation
+- Generalized the run gate: GEMINI_BATCH_SIZE > 1 enables batching immediately
+  when AI_PHOTO_PROVIDER is gemini, with no paid-budget precondition. The
+  DeepSeek-primary branch is unchanged: it enables batching only when the paid
+  snapshot is already exhausted before the first vision attempt.
+- Renamed the local gate from free_fallback_batching to gemini_lane_batching so
+  its name matches both supported cases. The batching consumers and exact-ID
+  prefetch path are otherwise unchanged.
+- Added integration coverage for Gemini-primary batching with a non-exhausted
+  paid snapshot and for batch size one retaining the single-candidate path.
+  Existing DeepSeek exhausted/non-exhausted integration tests remain unchanged.
+  Added router coverage proving a Gemini no-result calls Gemini first and then
+  DeepSeek; existing coverage already proves the same fallback on error.
+- Focused regression run passed: 5 tests passed. The Gemini-primary integration
+  test supplies 14 eligible candidates at GEMINI_CALL_LIMIT=12 and proves that
+  exactly 12 are prepared in four batches of three. Its batch-size-one sibling
+  proves exactly 12 candidates take the one-candidate path and the batch helper
+  is never called. These are end-to-end run() counts, not a quota assertion.
+
+Checkpoint 4 - final validation and scope audit
+- Required AST parse passed for ebay_deal_alert.py.
+- Required JSON parse passed for config.json and category_profiles.json.
+- Full suite passed: 795 passed, 2 existing lxml strip_cdata warnings, and 577
+  subtests passed in 24.55s. The checkout baseline supplied by the owner was
+  792 tests, so the three added regressions account for the new total. No
+  existing test was modified to change a provider expectation.
+- git diff --check passed; Git printed only informational working-copy newline
+  warnings for Python files.
+- Parsed config comparison against HEAD found exactly one changed top-level
+  key: AI_PHOTO_PROVIDER. AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT,
+  GEMINI_BATCH_SIZE, both provider timeouts, and every other config value are
+  unchanged.
+- config.json contains 3,337 CRLF line endings and zero bare LF line endings.
+  Parsed SAVED_SEARCHES is equal to HEAD and its compact UTF-8 representation
+  has the identical SHA-256 on both sides:
+  44cf4114d71078d9b03eacc9c26fa1c6703a351bc59be46b3388532ad2ea6f1d.
+- No chrome-extension/*, web/*, category profile, saved-search entry, golf
+  delivery gate, or protected budget/limit/timeout value changed. No fetch,
+  pull, clone, commit, or push was performed.
+
+Bottom line
+- Gemini is now the configured primary. Its normal shared-lane work enters the
+  existing synchronous batches of three without consulting paid exhaustion.
+  DeepSeek-primary behavior remains paid-exhaustion-gated, and single-candidate
+  _call_photo_check() still tries Gemini first then DeepSeek on Gemini error or
+  no result.
+- The real per-run capacity is 12 vetted shared-lane candidates in both modes:
+  batching reduces those 12 from 12 Gemini requests to 4. It preserves the
+  request-quota multiplier without silently expanding the protected 12-outcome
+  fairness window to 36.
+

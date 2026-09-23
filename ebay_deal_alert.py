@@ -415,11 +415,11 @@ EBAY_SCRAPE_ENABLED = bool(_CONFIG.get("EBAY_SCRAPE_ENABLED", True))
 # Dollar ceiling, per explicit user instruction ("ideally $0 or less a
 # month, IF this works as perfectly intended"): non-shared scrape categories
 # can spend at most 1 check/run, at ~300 runs/day (measured real GH Actions
-# cadence) that's ~9,000 checks/month worst case. DeepSeek is now primary
-# because Gemini's free tier proved persistently unhealthy, so this lane
-# normally makes a paid request. Its reservation still shares the hard
-# AI_PAID_MONTHLY_BUDGET_USD ledger with every other paid call; this counter
-# isolates throughput, not spend, and cannot bypass the monthly dollar ceiling.
+# cadence) that's ~9,000 checks/month worst case. Gemini is the primary vision
+# lane; DeepSeek remains the automatic paid fallback when Gemini fails. Any
+# fallback reservation still shares the hard AI_PAID_MONTHLY_BUDGET_USD ledger
+# with every other paid call; this counter isolates throughput, not spend, and
+# cannot bypass the monthly dollar ceiling.
 EBAY_SCRAPE_AI_CHECK_LIMIT = int(_CONFIG.get("EBAY_SCRAPE_AI_CHECK_LIMIT", 1))
 # Same reasoning, same fix pattern, applied to the Scout browser-extension
 # queue: load_scout_queue() returns the WHOLE queue unbounded (it's only
@@ -541,7 +541,8 @@ EBAY_BACKOFF_MAX_MINUTES = 120
 # plausible per-run budget), "raise the limit to match demand" no longer
 # applies the way it did on Aug 9; the only lever left is pacing.
 GEMINI_CALL_LIMIT = int(_CONFIG.get("GEMINI_CALL_LIMIT", 3))
-# Only the already-free Gemini fallback is eligible for request coalescing.
+# Only the free Gemini lane is eligible for request coalescing, whether Gemini
+# is configured as primary or is active because paid DeepSeek is known exhausted.
 # Three real historical candidates (nine images total) returned three complete,
 # explicitly ID-mapped verdicts in one live Gemini 3.5 Flash-Lite request. Keep
 # this deliberately small: correctness and run latency matter more than the
@@ -583,9 +584,9 @@ GEMINI_INTER_CALL_SLEEP_SECONDS = float(_CONFIG.get("GEMINI_INTER_CALL_SLEEP_SEC
 # 2026-08-21) finally gives the photo check a path off Gemini's free-tier
 # 429 ceiling. The AI check was Gemini-only until then because DeepSeek had
 # NO vision API; now it does, at ~$0.0002/photo (384-token image cap, no
-# free-tier rate limit). Primary provider with Gemini as automatic fallback,
-# so a DeepSeek outage/name-change can never silently degrade the "every
-# alert must be AI-vetted" rule into a blind trust.
+# free-tier rate limit). It remains the automatic fallback when Gemini is
+# primary, so a Gemini outage can never silently degrade the "every alert must
+# be AI-vetted" rule into a blind trust.
 AI_PHOTO_PROVIDER = _CONFIG.get("AI_PHOTO_PROVIDER", "deepseek")  # "deepseek" | "gemini"
 GEMINI_VISION_TIMEOUT_SECONDS = float(
     _CONFIG.get("GEMINI_VISION_TIMEOUT_SECONDS", 20)
@@ -5168,9 +5169,9 @@ def _deepseek_second_opinion(listing, ai_result, category, hard_stop=None):
 
 def _call_photo_check(prompt, images, timeout=None, hard_stop=None):
     # Provider router for the vision check. The provider named by
-    # AI_PHOTO_PROVIDER is primary (DeepSeek is cheap, no free-tier 429
-    # ceiling); the other provider is the automatic fallback whenever the
-    # primary is unconfigured, errors, or returns no result. This is what
+    # AI_PHOTO_PROVIDER is primary; the other provider is the automatic
+    # fallback whenever the primary is unconfigured, errors, or returns no
+    # result. This is what
     # keeps the "every alert must be AI-vetted" rule intact through a
     # provider outage - the check degrades to the backup, never to a blind
     # trust.
@@ -10287,7 +10288,11 @@ def run():
     ebay_scrape_budget_logged = False
     scout_budget_logged = False
     prefetched_gemini_results = {}
-    free_fallback_batching = False
+    # Gemini-primary means the free lane is known active before the first
+    # attempt, so no paid-budget state is relevant to enabling coalescing.
+    gemini_lane_batching = (
+        AI_PHOTO_PROVIDER == "gemini" and GEMINI_BATCH_SIZE > 1
+    )
     if AI_PHOTO_PROVIDER == "deepseek" and GEMINI_BATCH_SIZE > 1:
         paid_snapshot = _paid_ai_budget_snapshot(
             required_usd=AI_PAID_VISION_RESERVATION_USD
@@ -10298,7 +10303,7 @@ def run():
             # capacity exists, every DeepSeek request and any exceptional
             # fallback retain their established one-candidate shape.
             _record_paid_ai_budget_exhaustion(paid_snapshot)
-            free_fallback_batching = True
+            gemini_lane_batching = True
     delivery_failures = []
     for candidate_index, candidate in enumerate(review_candidates):
         # PASS 3 has its own PASS/delivery append paths. Keep the same
@@ -10458,7 +10463,7 @@ def run():
                 # intentionally fail-closed malformed/missing batch verdict.
                 ai_result = prefetched_gemini_results.pop(item_id)
             elif (
-                free_fallback_batching
+                gemini_lane_batching
                 and not use_reserved_auction_slot
             ):
                 # The current candidate has already completed every late

@@ -442,6 +442,25 @@ class CallPhotoCheckRouting(unittest.TestCase):
         self.assertEqual(result, {"gemini": True})
         ds.assert_not_called()
 
+    def test_gemini_none_falls_back_to_deepseek_in_provider_order(self):
+        calls = []
+
+        def gemini(*_args, **_kwargs):
+            calls.append("gemini")
+            return None
+
+        def deepseek(*_args, **_kwargs):
+            calls.append("deepseek")
+            return {"deep": True}
+
+        with mock.patch.object(m, "AI_PHOTO_PROVIDER", "gemini"), \
+             mock.patch.object(m, "_call_gemini_json", side_effect=gemini), \
+             mock.patch.object(m, "_call_deepseek_json", side_effect=deepseek):
+            result = m._call_photo_check("p", self._images())
+
+        self.assertEqual(result, {"deep": True})
+        self.assertEqual(calls, ["gemini", "deepseek"])
+
 
 class DownloadListingImage(unittest.TestCase):
     def test_upscale_first_then_fallback(self):
