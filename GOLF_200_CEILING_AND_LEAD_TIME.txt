@@ -1,0 +1,235 @@
+GOLF $200 CEILING AND AUCTION LEAD-TIME IMPLEMENTATION
+======================================================
+Started: 2026-10-01 (America/New_York)
+
+Checkpoint 1 - required reading and baseline scope
+--------------------------------------------------
+- Read in full before changing production code: GOLF_DEEP_DIVE_2026_10_01.txt,
+  GOLF_IRON_MODE.txt, GOLF_FULL_SET_INVESTIGATION.txt,
+  GOLF_VINTAGE_GATE_INVESTIGATION.txt, and GOLF_MODERN_IRON_CRITERIA.txt.
+- Confirmed the supplied checkout without fetch/pull/clone. HEAD is
+  1527f4247cb415ee92c9d3dd6c10ea9ce78bd4cc (`chore: update poll state
+  [skip ci]`). At this continuation point, the working tree already contained
+  a partial uncommitted implementation in config.json, ebay_deal_alert.py,
+  test_ebay_deal_alert.py, and this report, plus the required evidence and
+  pre-existing `run.stdout.log`/`task.txt`. Those changes were inspected against
+  HEAD and corrected in place rather than overwritten or attributed blindly.
+- No AGENTS.md exists in the repository. Scope remains limited to the golf
+  ceiling, its honest alert text, the evidence-led auction lead-time fix,
+  regressions, and this report. Saved-search objects, protected AI budget/
+  batch/provider/timeout settings, chrome-extension/*, and web/* remain out of
+  scope. No commit or push will be made.
+- The deep-dive evidence defines the new path as additive: it may bypass only
+  the relative price-vs-AI-estimate steal comparison. AI vetting, set shape,
+  mainstream brand, 2012+ vintage exclusion, junk/blade exclusion,
+  handedness, playability, damage, and counterfeit gates remain mandatory.
+- Shipping provenance is a correctness requirement, not a display detail.
+  The retained Rogue CF18 row v1|366678701129|0 had `shipping_cost=0` while
+  the live page quoted $38.05, enough to move the actual pre-tax cost beyond
+  the owner's $200 ceiling. The implementation will not invent a shipping
+  estimate or treat an unverified eBay zero as known-free shipping.
+
+Checkpoint 2 - baseline, reconstructed history, and auction root cause
+---------------------------------------------------------------------
+- Pre-change full suite: `python3 -m pytest -q` -> `795 passed, 2 warnings,
+  577 subtests passed in 22.18s`. The warnings are the existing lxml
+  `strip_cdata` deprecations in the mid-run-429 auction test.
+- Repeated the established read-only GitHub method for row timestamps from
+  2026-09-08T00:00:00Z through 2026-10-02T00:00:00Z. At the latest replay
+  checkpoint the API returned 3,688 commits touching alerts_log.jsonl; the 543
+  newest-in-UTC-hour snapshots produced 25,781 exact-line-deduplicated
+  in-window rows, including 13,159 golf rows and the same 57 distinct golf
+  deliveries. No fetch/pull/clone or checkout write was used.
+- The six Option-C rows reproduce at the same logged landed prices. All five
+  eBay rows logged `shipping_cost=0.0`; the ShopGoodwill RBZ row logged the
+  adapter's $13.50 shipping assumption but has `price_confidence=low`. A replay
+  of the new rule must therefore distinguish the earlier economic thought
+  experiment from what the strict instructions now permit: unknown eBay
+  shipping and every non-relative existing veto remain blocking facts.
+- The Rogue row v1|237080223566|0 appears exactly once in the reconstruction,
+  at `2026-09-25T15:46:19.053751Z`, delivered via `ebay_scraped`. The historical
+  log writer did not serialize `is_ending_soon_auction`,
+  `auction_minutes_remaining`, or `bid_count` for any row, so their absence
+  cannot establish that this row was treated as fixed-price. Reading the exact
+  Sep-25 production code and eBay page corrects that initial inference: the
+  scraper parsed an auction countdown, `classify_stray_auction_listing()`
+  applied the 15/6-minute windows, and eBay records 17 bids and an end at
+  `2026-09-25T15:47:40Z`. The row was therefore a contested ending-soon auction
+  and the alert arrived 80.946 seconds (1.349 minutes) before close.
+- GitHub Actions logs supply the missing routing timeline. The exact Rogue
+  saved search ran at 15:21:01Z, 15:26:29Z, and 15:36:28Z, each time returning
+  24 combined official/scraped rows; the item was silently outside the
+  contested six-minute window. The 15:30 and 15:40 runs did not poll eBay for
+  that rotating search. At 15:45:58Z the query ran again, the Rogue was scored
+  as REVIEW at 15:46:00Z, AI-vetted, and sent at 15:46:19Z. There is no earlier
+  Rogue log row: a budget/pretriage deferral would have appended a retryable
+  NO_AI_BUDGET row, which the append-only log would still contain. The
+  historical `seen_items.db`/`ai_pending` database stopped being committed on
+  Sep 4, so no stronger direct database claim is possible; the retained log
+  and Actions evidence show late admission, not pending-queue aging.
+- The routing bug is concrete in current code: `run()` combines synthetic
+  EBAY_AUCTION_SEARCHES rows (which intentionally have no saved-search id) with
+  SAVED_SEARCHES and then passes both through `_focus_filter()`. With the valid
+  23-id golf focus active, `_focus_filter()` retains only rows whose id is in
+  that focus, deleting every always-on auction row before dispatch. Separately,
+  no configured auction query targets golf. Thus widening a global window
+  alone would not have reached this item.
+- The completed 15:20 poll's last retained processing timestamp was
+  `2026-09-25T15:21:25.893630Z`, 26.235 minutes before the Rogue ended. A
+  30-minute contested window would have admitted it in that run; the old
+  six-minute threshold kept excluding it until the observed 1.349-minute
+  alert. The bounded fix adds one official Browse-API golf-irons lane that
+  survives the active golf focus and gives only that lane a 30-minute window
+  for both contested and uncontested auctions. This is routing plus a
+  cadence-supported per-lane window, not a global relaxation. Its authoritative
+  eBay end date, auction flag, and bid count feed the existing max-priority and
+  reserved-AI-slot path; every alert remains AI-vetted. Exact-timeline
+  regression: before 1.349 minutes, after 26.235 minutes, a 24.886-minute gain.
+
+Checkpoint 3 - complete auction lead-time distribution
+------------------------------------------------------
+- Historical alert rows omitted auction timing, so the distribution was
+  reconstructed rather than guessed. All 27 delivered ShopGoodwill golf rows
+  are auctions; their retained item-detail API records expose the final end
+  time and bid count. ShopGoodwill timestamps are Pacific time (verified by its
+  `serverTime`), then converted to UTC and subtracted from the alert timestamp.
+  The 30 delivered eBay golf pages were checked for eBay's structured
+  `auctionPossible`, bid-count, and end-date data; seven were auctions.
+- All 34 delivered golf auctions: minimum -1.579 minutes (one ShopGoodwill
+  alert arrived about 95 seconds after the recorded close), median 12.624,
+  maximum 29.257. ShopGoodwill alone: n=27, min -1.579, median 15.104, max
+  29.257. eBay alone: n=7, min 1.349, median 6.587, max 13.702.
+- The seven eBay rows, in minutes remaining at delivery, were: 237080223566
+  1.349; 366660632022 1.851; 168671052271 2.672; 237059680303 6.587;
+  318848922756 6.882; 800623138980 7.341; and 307172602206 13.702. This is the
+  real signature of the old 6-minute contested / 15-minute uncontested policy,
+  not an AI-staging delay.
+- The log writer now persists `is_ending_soon_auction`,
+  `auction_minutes_remaining`, and `bid_count`, with a regression test, so
+  future lead-time audits will not depend on still-live marketplace pages.
+
+Checkpoint 4 - strict $200 replay and buyer-quality audit
+---------------------------------------------------------
+- Replaying the implemented shape, brand, era, junk/blade, handedness,
+  playability, damage, counterfeit, confidence, and shipping rules finds the
+  same six economic Option-C rows and no seventh row. It also corrects what
+  "would deliver" means under the owner's strict instructions: zero rows are
+  newly deliverable from the retained evidence. This is not a price-rule
+  failure; it is the required fail-closed treatment of facts the old log did
+  not retain.
+- shopgoodwill:277446531, TaylorMade RH RBZ RocketBallz, $121.37 landed: a
+  genuinely desirable modern RH game-improvement iron set on the available AI
+  facts, and its $13.50 assumed ShopGoodwill shipping is present. It remains
+  blocked because `price_confidence=low`, an existing non-relative veto the new
+  path may not waive.
+- v1|237080223566|0, Callaway Rogue 5-PW/AW, $140.45 logged: desirable seven-
+  club RH set, but stiff shafts may not fit the buyer. Its eBay shipping is
+  unknown in the retained row; the ended page currently displays an $83.64
+  buyer-location-dependent quote, which is not proof of the historical quote
+  but proves zero was unsafe. It was already delivered by the unchanged
+  relative-steal route, so it is not a new $200-path delivery.
+- v1|366678701129|0, Callaway Rogue CF18 4-9, $180.20 logged: desirable modern
+  six-iron group if the missing wedges and shaft fit are acceptable. The row's
+  eBay shipping is ambiguous zero; the live page's $38.05 quote would make the
+  pre-tax item-plus-shipping $208.05 and the bot's tax-inclusive landed cost
+  about $220.53, above the ceiling. It is correctly blocked from the absolute
+  path.
+- v1|398358273954|0, Callaway XR Pro 4-PW, $181.21 logged: borderline rather
+  than an uncomplicated yes. It is a coherent modern RH set, but XR Pro is a
+  less-forgiving players shape, the shaft is stiff, and the seller put `*read*`
+  in the title. AI recorded playable/no disqualifying damage, but the title is
+  a manual-inspection warning. Unknown eBay shipping blocks the absolute path;
+  the page currently displays $23 shipping, which would put the tax-inclusive
+  landed cost near $205.39.
+- v1|127620241825|0, Mizuno JPX 825 Forged 6-PW, $185.08 logged: a desirable
+  coherent five-club modern RH set for a buyer comfortable with forged heads,
+  a 6-PW-only run, and stiff Modus3 shafts. Unknown eBay shipping blocks it;
+  the page currently displays $20 shipping, or about $206.28 landed with tax.
+- v1|198627666788|0, Callaway Rogue CF18 4-9, $190.80 logged: the same desirable-
+  with-composition/shaft caveats as the other Rogue CF18 template. Unknown eBay
+  shipping blocks it; the page currently displays $38.05 shipping, or about
+  $231.13 landed with tax.
+- Shipping policy is source-grounded: old eBay parsing collapsed both an
+  absent shipping quote and explicit free shipping to numeric zero. The new
+  path accepts zero only when an actual `shippingOptions[].shippingCost.value`
+  says zero; absent/unparseable eBay shipping fails closed. The already-budgeted
+  item-detail call now carries the same buyer ZIP context as search and refreshes
+  shipping before the final gate. No synthetic shipping estimate is invented.
+- Era evidence is affirmative. Historical rows use brand-paired known-modern
+  model signals; new AI checks return an exact model plus release year, and a
+  year without a model is not accepted. JPX 800 and undated AP1/AP2 titles are
+  explicitly not treated as modern; the evidenced JPX 825/850/900/919/921/923
+  and AP1/AP2 714/716/718 generations remain eligible, while future exact
+  models can qualify through a supported AI year.
+
+Checkpoint 5 - implementation and single-bypass proof
+-----------------------------------------------------
+- Added only top-level config key `GOLF_MODERN_SET_MAX_LANDED_PRICE: 200`, read
+  through the same `_CONFIG.get(..., 200)` fail-safe pattern as the surrounding
+  golf settings. No saved-search object or existing config value changed.
+- `golf_modern_set_absolute_price_path_applies()` is intentionally narrower
+  than the final golf gate. It requires a real golf AI check, finite landed
+  price <=$200, known shipping, a usable AI appraisal, affirmative modern-model
+  evidence, and the existing full/iron-set helper. It then repeats the existing
+  low-confidence, handedness, brand-claim, counterfeit, and damage decisions.
+- In `is_blocked_by_steal_quality_gate()`, blocked-brand and $300 hard-cap checks
+  run before the relative decision. A missing AI price still blocks. The new
+  helper is consulted only after computing the old `landed > resale` / less-
+  than-50%-under failure; only that failure may be excused. The existing
+  low-confidence, playability, RH, brand-claim, counterfeit, and damage checks
+  then run again, and `golf_full_set_only_reason()` runs again at the delivery
+  call site. The path marker is assigned only after all those checks pass.
+  Therefore the one bypass is exactly the relative price-vs-AI-estimate bar;
+  no shape, brand, era, junk/blade, AI-vetting, handedness, confidence,
+  authenticity, condition, or hard-price gate is bypassed.
+- eBay detail shipping refresh is scoped to golf-equipment so apparel, watch,
+  poker, and other relative-price paths cannot change as a side effect. The
+  existing golf relative threshold itself is unchanged; it simply receives an
+  honest landed number when eBay provides one.
+- Absolute-path alerts carry `GOOD PRICE: modern set under $200 landed
+  (absolute ceiling, not the steal test)`. The existing club-run, RH evidence,
+  AI ID, verify, and ending-soon lines remain intact; old relative-path alerts
+  retain their existing rating/steal presentation.
+- Added a code-owned official Browse-API `golf irons` auction lane in category
+  115280. It reuses focused id `golf-irons` without changing that saved-search
+  entry, runs every poll rather than in rotation, and alone uses 30/30-minute
+  contested/uncontested windows. Official-lane rows qualify for the existing
+  reserved auction AI call. The old scraped Rogue was auction-prioritized but,
+  by design, scrape rows could not use that reservation; it happened to obtain
+  a normal shared AI slot. No rule allowing a non-AI-vetted alert changed.
+
+Checkpoint 6 - final validation and scope audit
+-----------------------------------------------
+- Final fixed-cutoff replay (`2026-09-08T00:00:00Z` through
+  `2026-10-01T19:00:00Z`) reproduces 3,688 commits, 543 hourly snapshots,
+  25,781 rows, 13,159 golf rows, the same six clean-modern <=$200 economic
+  candidates, zero strict absolute-path passes from incomplete historical
+  shipping/confidence evidence, and therefore zero newly delivered junk,
+  vintage, LH, damaged, or counterfeit rows.
+- Exact required AST command exited 0 with no output:
+  `python3 -c "import ast; ast.parse(open('ebay_deal_alert.py', encoding='utf-8').read())"`.
+- Exact required JSON command exited 0 with no output:
+  `python3 -c "import json; json.load(open('config.json')); json.load(open('category_profiles.json'))"`.
+- Final full suite: `python3 -m pytest -q` -> `807 passed, 3 warnings,
+  591 subtests passed in 25.46s`. Baseline was 795 tests / 577 subtests, so 12
+  tests and 14 subtests were added. The only warnings are the established lxml
+  `strip_cdata` deprecation exercised by the mid-run-429 tests and the new
+  Rogue end-to-end auction regression. `git diff --numstat` reports 328 test
+  insertions and zero deletions: every pre-existing test remains unmodified.
+  No existing test specifically represented a clean modern set with known
+  shipping under $200; the two general old relative-bar tests remain unchanged
+  and continue to pass for fixtures outside the new path.
+- Byte audit: config.json contains 3,338 LF bytes and exactly 3,338 CRLF pairs,
+  zero lone LF bytes, and ends in CRLF. Parsed/canonical SAVED_SEARCHES bytes
+  are identical to HEAD. Top-level config diff is exactly one added key,
+  `GOLF_MODERN_SET_MAX_LANDED_PRICE`; there are no removed or changed existing
+  keys. AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE,
+  GEMINI_VISION_TIMEOUT_SECONDS, DEEPSEEK_VISION_TIMEOUT_SECONDS, and
+  AI_PHOTO_PROVIDER are all unchanged.
+- `git diff --check` exits 0 (Git prints only its normal LF-to-CRLF working-copy
+  advisories). Modified tracked files are exactly config.json,
+  ebay_deal_alert.py, and test_ebay_deal_alert.py. category_profiles.json,
+  every saved-search entry, chrome-extension/*, and web/* are unchanged. This
+  report and the supplied deep-dive evidence remain untracked alongside the
+  pre-existing run.stdout.log/task.txt. No fetch, pull, clone, commit, or push
+  was performed.

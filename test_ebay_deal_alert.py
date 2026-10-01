@@ -1165,6 +1165,180 @@ class GolfEquipmentGate(unittest.TestCase):
         )
         self.assertIn("needs at least 50%", reason)
 
+    def test_clean_modern_set_under_200_bypasses_only_relative_price_test(self):
+        result = self._result(
+            price=190.0,
+            listing={
+                "title": "Callaway Rogue CF18 4-9 Irons Right Handed",
+                "shippingOptions": [{"shippingCost": {"value": "9.99"}}],
+            },
+            shipping_cost_known=True,
+            estimated_resale_value=150.0,
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=False,
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=True,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_identified_brand="Callaway",
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+
+        self.assertIsNone(m.golf_full_set_only_reason(result))
+        self.assertIsNone(
+            m.is_blocked_by_steal_quality_gate(result, category="golf-equipment")
+        )
+        self.assertEqual(result["golf_delivery_path"], "modern-set-under-200")
+
+    def test_modern_absolute_path_preserves_every_non_relative_veto(self):
+        base = self._result(
+            price=190.0,
+            listing={"title": "Callaway Rogue CF18 4-9 Irons Right Handed"},
+            shipping_cost_known=True,
+            estimated_resale_value=150.0,
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=False,
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=True,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_identified_brand="Callaway",
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+        controls = {
+            "unknown shipping": {"shipping_cost_known": False},
+            "over ceiling": {"price": 200.01},
+            "low price confidence": {"price_confidence": "low"},
+            "left handed": {"golf_is_left_handed": True},
+            "handedness unknown": {
+                "listing": {"title": "Callaway Rogue CF18 4-9 Irons"},
+                "golf_handedness_confirmed": False,
+            },
+            "brand claim unconfirmed": {"golf_brand_claims_confirmed": False},
+            "counterfeit": {"golf_counterfeit_suspected": True},
+            "damage": {"damage_found": True},
+            "not playable": {"golf_is_playable_first_set": False},
+            "vintage": {
+                "listing": {"title": "Callaway X-20 4-9 Irons Right Handed"}
+            },
+            "junk": {
+                "listing": {"title": "Assorted Callaway Rogue 4-9 Irons Right Handed"}
+            },
+            "blade": {
+                "listing": {"title": "Callaway Rogue Muscle Back Blade Irons 4-9 RH"}
+            },
+            "too few irons": {
+                "listing": {"title": "Callaway Rogue Iron Set 7-PW Right Handed"}
+            },
+            "obscure brand": {"golf_identified_brand": "Unknown House Brand"},
+        }
+        for label, changes in controls.items():
+            with self.subTest(label=label):
+                result = dict(base)
+                result.update(changes)
+                reason = m.is_blocked_by_steal_quality_gate(
+                    result, category="golf-equipment"
+                )
+                if reason is None:
+                    reason = m.golf_full_set_only_reason(result)
+                self.assertIsNotNone(reason)
+                self.assertNotEqual(
+                    result.get("golf_delivery_path"), "modern-set-under-200"
+                )
+
+    def test_relative_steal_path_is_unchanged_when_shipping_is_unknown(self):
+        result = self._result(
+            price=140.45,
+            listing={"title": "Callaway Rogue Irons 5-PW AW Right Handed"},
+            shipping_cost_known=False,
+            estimated_resale_value=450.0,
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=True,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_identified_brand="Callaway",
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+        self.assertIsNone(
+            m.is_blocked_by_steal_quality_gate(result, category="golf-equipment")
+        )
+        self.assertNotIn("golf_delivery_path", result)
+
+    def test_ebay_zero_shipping_is_known_only_when_explicit(self):
+        self.assertFalse(m.is_shipping_cost_known({"platform": "ebay_scraped"}))
+        self.assertFalse(m.is_shipping_cost_known({"platform": "ebay"}))
+        self.assertTrue(m.is_shipping_cost_known({
+            "platform": "ebay",
+            "shippingOptions": [{"shippingCost": {"value": "0.00"}}],
+        }))
+        self.assertTrue(m.is_shipping_cost_known({
+            "platform": "ebay_scraped",
+            "shippingOptions": [{"shippingCost": {"value": "38.05"}}],
+        }))
+        self.assertTrue(m.is_shipping_cost_known({"platform": "shopgoodwill"}))
+
+    def test_ebay_detail_shipping_refreshes_tax_inclusive_landed_price(self):
+        listing = {
+            "platform": "ebay",
+            "shippingOptions": [{"shippingCost": {"value": "38.05"}}],
+        }
+        result = {}
+        item_plus_shipping = m._refresh_result_shipping(result, listing, 170.0)
+        self.assertAlmostEqual(item_plus_shipping, 208.05)
+        self.assertAlmostEqual(result["price"], 220.533)
+        self.assertEqual(result["shipping_cost"], 38.05)
+        self.assertIs(result["shipping_cost_known"], True)
+
+    def test_modern_model_evidence_is_brand_paired_or_ai_year_confirmed(self):
+        base = {
+            "listing": {"title": "Callaway Rogue CF18 4-9 Irons"},
+            "golf_identified_brand": "Callaway",
+        }
+        self.assertTrue(m.golf_has_modern_model_evidence(base))
+        self.assertTrue(m.golf_has_modern_model_evidence({
+            "listing": {"title": "Cobra Aerojet 5-PW Irons"},
+            "golf_identified_brand": "Cobra",
+            "golf_identified_model": "Aerojet",
+            "golf_model_release_year": 2023,
+        }))
+        self.assertFalse(m.golf_has_modern_model_evidence({
+            "listing": {"title": "Ben Hogan Apex 3-PW Irons"},
+            "golf_identified_brand": "Ben Hogan",
+        }))
+        self.assertFalse(m.golf_has_modern_model_evidence({
+            "listing": {"title": "AcuLine Stealth III Iron Set"},
+            "golf_identified_brand": "AcuLine",
+        }))
+        self.assertFalse(m.golf_has_modern_model_evidence({
+            "listing": {"title": "Callaway X-14 Iron Set"},
+            "golf_identified_brand": "Callaway",
+            "golf_model_release_year": 2000,
+        }))
+        self.assertFalse(m.golf_has_modern_model_evidence({
+            "listing": {"title": "Generic cavity-back iron set"},
+            "golf_identified_brand": "Callaway",
+            "golf_model_release_year": 2020,
+        }))
+        self.assertFalse(m.golf_has_modern_model_evidence({
+            "listing": {"title": "Mizuno JPX 800 4-PW Iron Set"},
+            "golf_identified_brand": "Mizuno",
+        }))
+        self.assertFalse(m.golf_has_modern_model_evidence({
+            "listing": {"title": "Titleist AP2 Iron Set"},
+            "golf_identified_brand": "Titleist",
+        }))
+        self.assertTrue(m.golf_has_modern_model_evidence({
+            "listing": {"title": "Titleist AP1 714 5-PW Iron Set"},
+            "golf_identified_brand": "Titleist",
+        }))
+
     def test_no_resale_estimate_is_retry_eligible_instead_of_alerting_unpriced(self):
         # Real production fixture: the $265 complete set was sent even though
         # its completed AI check returned no usable value. That cannot support
@@ -2100,6 +2274,21 @@ class GolfEquipmentGate(unittest.TestCase):
 
 
 class GolfRampConfiguration(unittest.TestCase):
+    def test_modern_set_ceiling_and_golf_auction_lane_are_active(self):
+        self.assertEqual(m.load_config()["GOLF_MODERN_SET_MAX_LANDED_PRICE"], 200)
+        self.assertEqual(m.GOLF_MODERN_SET_MAX_LANDED_PRICE, 200)
+        self.assertIn(m.GOLF_EBAY_AUCTION_SEARCH, m.EBAY_AUCTION_SEARCHES)
+        self.assertEqual(m.GOLF_EBAY_AUCTION_SEARCH["id"], "golf-irons")
+        self.assertIn("golf-irons", m.FOCUS_SEARCH_IDS)
+        self.assertEqual(m.GOLF_EBAY_AUCTION_SEARCH["closing_soon_minutes"], 30)
+        self.assertEqual(
+            m.GOLF_EBAY_AUCTION_SEARCH["contested_closing_soon_minutes"], 30
+        )
+
+        auction_row = dict(m.GOLF_EBAY_AUCTION_SEARCH, is_auction_search=True)
+        focused = m._focus_filter([*m.SAVED_SEARCHES, auction_row])
+        self.assertIn(auction_row, focused)
+
     def test_no_box_set_brand_golf_searches_remain(self):
         # The buyer rejects box-set brands outright, so hunting them wastes the
         # capped AI budget on candidates that are disqualified by definition.
@@ -5499,6 +5688,25 @@ class EbayItemDescription(unittest.TestCase):
         self.assertEqual(details["ebay_condition"], "For parts or not working")
         self.assertEqual(details["ebay_condition_id"], "7000")
 
+    def test_item_details_request_buyer_location_and_preserve_shipping(self):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.json = lambda: {
+            "shippingOptions": [{"shippingCost": {"value": "38.05"}}],
+        }
+        with mock.patch("requests.get", return_value=fake_resp) as get:
+            details = m.fetch_ebay_item_details(
+                "fake-token", "v1|366678701129|0"
+            )
+        self.assertEqual(
+            details["shippingOptions"],
+            [{"shippingCost": {"value": "38.05"}}],
+        )
+        self.assertEqual(
+            get.call_args.kwargs["headers"]["X-EBAY-C-ENDUSERCTX"],
+            "contextualLocation=country=US,zip=29201",
+        )
+
 
 class EbayEndingSoonAuctions(unittest.TestCase):
     """Per explicit user instruction: "auctions that are underwatched and
@@ -5547,6 +5755,34 @@ class EbayEndingSoonAuctions(unittest.TestCase):
         self.assertEqual(listings, [])
         listings, _ = self._search([self._item(4, bid_count=3)])
         self.assertEqual(len(listings), 1)
+
+    def test_golf_lane_accepts_exact_rogue_timeline_with_26_minutes_left(self):
+        rogue = self._item(
+            26.235,
+            bid_count=7,
+            item_id="v1|237080223566|0",
+        )
+        rogue["title"] = (
+            "Callaway Rogue Irons 5-P A Stiff Flex Steel Right Handed "
+            "Excellent Condition"
+        )
+        fake_resp = mock.Mock()
+        fake_resp.status_code = 200
+        fake_resp.raise_for_status = lambda: None
+        fake_resp.json = lambda: {"itemSummaries": [rogue], "total": 1}
+        with mock.patch("requests.get", return_value=fake_resp) as get:
+            listings, _ = m.search_ebay_ending_soon_auctions(
+                "fake-token", m.GOLF_EBAY_AUCTION_SEARCH
+            )
+
+        self.assertEqual(len(listings), 1)
+        self.assertTrue(listings[0]["is_ending_soon_auction"])
+        self.assertAlmostEqual(
+            listings[0]["auction_minutes_remaining"], 26.235, delta=0.1
+        )
+        sent_filter = get.call_args.kwargs["params"]["filter"]
+        self.assertIn("buyingOptions:{AUCTION}", sent_filter)
+        self.assertIn("itemEndDate:[", sent_filter)
 
     def test_already_ended_excluded(self):
         listings, _ = self._search([self._item(-5)])
@@ -6243,6 +6479,27 @@ class SendAlertGolfDecisionLines(unittest.TestCase):
         message = self._send_and_capture(result)
         self.assertNotIn("fast-flip", message)
         self.assertNotIn("slow-flip", message)
+
+    def test_absolute_ceiling_alert_is_good_price_not_steal_framing(self):
+        result = {
+            "listing": {
+                "title": "Callaway Rogue CF18 4-9 Irons Right Handed",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 190.0,
+            "item_price": 170.0,
+            "shipping_cost": 9.25,
+            "deal_rating": "Marginal",
+            "discount_pct": -27,
+            "golf_identified_brand": "Callaway",
+            "golf_delivery_path": "modern-set-under-200",
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("GOOD PRICE: modern set under $200 landed", message)
+        self.assertIn("absolute ceiling, not the steal test", message)
+        self.assertIn("Marginal (-27% under resale)", message)
 
     def test_non_golf_alert_keeps_flip_label(self):
         result = {
@@ -11200,6 +11457,57 @@ class RunIntegration(unittest.TestCase):
             m.get_ai_pending_minutes(self._db(), ["v1|free-slot-deferred|0"]),
         )
 
+    def test_rogue_timeline_golf_auction_is_ai_vetted_with_26_minutes_left(self):
+        self._patch("GEMINI_CALL_LIMIT", 0)
+        self._patch("FOCUS_SEARCH_IDS", ["golf-irons"])
+        self._patch("SAVED_SEARCHES", [{
+            "id": "golf-irons",
+            "query": "golf irons set",
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+        }])
+        self._patch("EBAY_AUCTION_SEARCHES", [dict(m.GOLF_EBAY_AUCTION_SEARCH)])
+        self._patch("search_ebay", lambda _token, _search: ([], 0))
+        rogue = self._auction_item(
+            "v1|237080223566|0",
+            "Callaway Rogue Irons 5-P A Stiff Flex Steel Right Handed Excellent Condition",
+            132.5,
+            26.235,
+            bid_count=7,
+        )
+        self._patch(
+            "search_ebay_ending_soon_auctions",
+            lambda _token, _search: ([rogue], 1),
+        )
+        self.ai_result = {
+            "identified_brand": "Callaway",
+            "brand_claims_present": True,
+            "brand_claims_confirmed": True,
+            "is_playable_first_set": True,
+            "is_wanted_component": False,
+            "is_starter_kit_quality": False,
+            "is_left_handed": False,
+            "handedness_confirmed": True,
+            "damage_found": False,
+            "looks_good": True,
+            "counterfeit_suspected": False,
+            "estimated_resale_value": 450.0,
+            "price_confidence": "medium",
+            "summary": "clean Callaway Rogue 5-P/A set",
+        }
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, ["v1|237080223566|0"])
+        self.assertEqual(len(self.alerts), 1)
+        self.assertAlmostEqual(
+            self.alerts[0]["auction_minutes_remaining"], 26.235, places=3
+        )
+        self.assertTrue(self.alerts[0]["golf_ai_checked"])
+
     def test_ending_soon_auction_gets_a_reserved_ai_slot(self):
         # Every alert needs a real AI check, and GEMINI_CALL_LIMIT paces
         # that to a handful per run. An auction closing in minutes that
@@ -11538,6 +11846,26 @@ class AlertLogPriceSemantics(unittest.TestCase):
         record = self._write_and_read(result)
         self.assertEqual(record["price"], 100.0)
         self.assertEqual(record["item_price"], 80.0)
+
+    def test_auction_log_preserves_real_lead_time_fields(self):
+        result = {
+            "listing": {
+                "itemId": "v1|auction-telemetry|0",
+                "title": "Callaway Rogue Iron Set",
+                "price": {"value": 132.5, "currency": "USD"},
+            },
+            "category": "golf-equipment",
+            "verdict": "REVIEW",
+            "price": 140.45,
+            "item_price": 132.5,
+            "is_ending_soon_auction": True,
+            "auction_minutes_remaining": 26.235,
+            "bid_count": 17,
+        }
+        record = self._write_and_read(result, delivered=True)
+        self.assertIs(record["is_ending_soon_auction"], True)
+        self.assertEqual(record["auction_minutes_remaining"], 26.235)
+        self.assertEqual(record["bid_count"], 17)
 
     def test_ai_checked_watch_log_preserves_unknown_and_explicit_false_counterfeit_verdicts(self):
         # Old production rows omitted these keys entirely, making a real AI

@@ -1267,8 +1267,16 @@ def search_ebay_ending_soon_auctions(token, auction_search):
     # comes back is already inside the window, no sort needed. Uses the
     # WIDER uncontested window; the client-side pass below still applies
     # the tighter contested threshold per-item.
+    closing_soon_minutes = int(
+        auction_search.get("closing_soon_minutes")
+        or EBAY_AUCTION_CLOSING_SOON_MINUTES
+    )
+    contested_closing_soon_minutes = int(
+        auction_search.get("contested_closing_soon_minutes")
+        or EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES
+    )
     now_utc_for_filter = datetime.now(timezone.utc)
-    window_end = now_utc_for_filter + timedelta(minutes=EBAY_AUCTION_CLOSING_SOON_MINUTES)
+    window_end = now_utc_for_filter + timedelta(minutes=closing_soon_minutes)
     end_date_filter = (
         f"itemEndDate:[{now_utc_for_filter.strftime('%Y-%m-%dT%H:%M:%SZ')}"
         f"..{window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}]"
@@ -1324,8 +1332,8 @@ def search_ebay_ending_soon_auctions(token, auction_search):
             continue  # already ended, listing search just hasn't caught up yet
         bid_count = item.get("bidCount") or 0
         threshold = (
-            EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES if bid_count > 0
-            else EBAY_AUCTION_CLOSING_SOON_MINUTES
+            contested_closing_soon_minutes if bid_count > 0
+            else closing_soon_minutes
         )
         if minutes_remaining > threshold:
             skipped_too_early += 1
@@ -1342,7 +1350,7 @@ def search_ebay_ending_soon_auctions(token, auction_search):
             "eBay auction search %r: skipped %s too far from closing (>%s min "
             "uncontested, >%s min contested), %s with no parseable end date",
             query or auction_search.get("category_id"), skipped_too_early,
-            EBAY_AUCTION_CLOSING_SOON_MINUTES, EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES,
+            closing_soon_minutes, contested_closing_soon_minutes,
             skipped_unparseable,
         )
     return listings, body.get("total")
@@ -1620,7 +1628,15 @@ def fetch_ebay_item_details(token, item_id):
     try:
         resp = requests.get(
             f"https://api.ebay.com/buy/browse/v1/item/{item_id}",
-            headers={"Authorization": f"Bearer {token}", "X-EBAY-C-MARKETPLACE-ID": "EBAY_US"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+                # Shipping is buyer-location dependent. The search endpoints
+                # already use this exact context; without it the detail call
+                # can omit calculated shipping and recreate the false $0 that
+                # made the historical Rogue CF18 look sub-$200.
+                "X-EBAY-C-ENDUSERCTX": "contextualLocation=country=US,zip=29201",
+            },
             timeout=10,
         )
         resp.raise_for_status()
@@ -1647,6 +1663,11 @@ def fetch_ebay_item_details(token, item_id):
         value = body.get(key)
         if value:
             details[key] = value
+    # Preserve the whole supported shape so the same parser used for search
+    # summaries can distinguish explicit free shipping from absent/unknown
+    # shipping. This request is already bounded by the AI-call budget.
+    if isinstance(body.get("shippingOptions"), list):
+        details["shippingOptions"] = body["shippingOptions"]
     return details or None
 
 
@@ -2291,6 +2312,32 @@ GOLF_ALLOW_IRON_SETS = bool(_CONFIG.get("GOLF_ALLOW_IRON_SETS", True))
 GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE = float(
     _CONFIG.get("GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE", 40)
 )
+# Absolute good-price path chosen after the 23.7-day replay. This is additive:
+# it can excuse only a failed relative price-vs-AI-estimate comparison. The
+# modern/set/brand/handedness/playability/condition/authenticity gates below
+# remain identical, and unknown eBay shipping cannot qualify.
+GOLF_MODERN_SET_MAX_LANDED_PRICE = float(
+    _CONFIG.get("GOLF_MODERN_SET_MAX_LANDED_PRICE", 200)
+)
+# The historical Rogue auction arrived through the rotating HTML scrape 80.95
+# seconds before close. All configured Browse-API auction searches were also
+# being stripped by focus, and none targeted golf. One broad official lane is
+# enough to cover the iron-set goal without multiplying the 23 focused queries.
+# Thirty minutes is evidence-led: the preceding real run ended 26.235 minutes
+# before that exact auction, while the global 15/6-minute windows excluded it.
+GOLF_EBAY_AUCTION_SEARCH = {
+    # Reuse the existing focused broad-iron id. Synthetic auction searches
+    # without a focused id are intentionally removed by _focus_filter().
+    "id": "golf-irons",
+    "query": "golf irons",
+    "category_id": "115280",
+    "category": "golf-equipment",
+    "max_price": GOLF_EQUIPMENT_MAX_PRICE,
+    "closing_soon_minutes": 30,
+    "contested_closing_soon_minutes": 30,
+    "enabled": True,
+}
+EBAY_AUCTION_SEARCHES = [*EBAY_AUCTION_SEARCHES, GOLF_EBAY_AUCTION_SEARCH]
 # Poker-chip vision is deliberately an authenticity/research triage, not a
 # valuation model. This is only the buyer's landed-price ceiling for an alert
 # worth researching by hand; it does not mean a listing below it is a steal.
@@ -2403,6 +2450,37 @@ GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL = re.compile(
     r"\b(?:golf\s+)?irons?\b.{0,24}\bmuscle[\s-]?backs?\b",
     re.IGNORECASE,
 )
+# Positive modern-era evidence for historical rows that predate the explicit AI
+# model-year fields below. Brand pairing is mandatory: it prevents old Ben Hogan
+# Apex and AcuLine Stealth titles from impersonating Callaway/TaylorMade models.
+GOLF_EVIDENCED_MODERN_MODEL_SIGNALS = {
+    "taylormade": re.compile(
+        r"(?<![A-Za-z0-9])(?:M[1-6]|SIM(?:2)?|Stealth(?:\s*2)?|RBZ|RocketBallz)(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    "callaway": re.compile(
+        r"(?<![A-Za-z0-9])(?:Rogue(?:\s+(?:ST|Star|Pro))?|Mavrik|Apex|(?:Steelhead\s+)?XR)(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    "ping": re.compile(
+        r"(?<![A-Za-z0-9])(?:G30|G400|i210)(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    "cobra": re.compile(r"(?<![A-Za-z0-9])F[7-9](?![A-Za-z0-9])", re.IGNORECASE),
+    # JPX 800 predates the 2012 boundary, so a generic three-digit JPX match
+    # is not affirmative modern-era evidence. Future/unlisted JPX generations
+    # can still qualify through the AI's exact model + release-year fields.
+    "mizuno": re.compile(
+        r"(?<![A-Za-z0-9])JPX[-\s]?(?:825|850|900|919|921|923)(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+    # AP1/AP2 began before 2012. Require an evidenced 714-or-later generation
+    # rather than letting an undated AP1/AP2 title claim a modern set.
+    "titleist": re.compile(
+        r"(?<![A-Za-z0-9])(?:AP[12][\s-]?(?:714|716|718)|T200)(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    ),
+}
 GOLF_FULL_SET_GROUP_TITLE_SIGNAL = re.compile(
     r"\b(?:golf\s+)?clubs?\s+set\b|"
     r"\bset\s+of\s+\d+\s+(?:golf\s+)?clubs?\b|"
@@ -2713,6 +2791,77 @@ def _golf_cheap_full_set_exception(result, landed):
     )
 
 
+def golf_has_modern_model_evidence(result):
+    """Whether a mainstream set is affirmatively evidenced as 2012 or newer."""
+    release_year = result.get("golf_model_release_year")
+    model_text = str(result.get("golf_identified_model") or "").strip()
+    if isinstance(release_year, (int, float)) and not isinstance(release_year, bool):
+        if math.isfinite(release_year) and int(release_year) == release_year:
+            # A bare year is not a model identification. Requiring both fields
+            # prevents a guessed style/condition year from making an otherwise
+            # unnamed set "modern"; the golf prompt explicitly requires null
+            # for both when the exact model/year is uncertain.
+            return bool(model_text) and int(release_year) >= 2012
+
+    listing_text = _golf_listing_title_and_description(result)
+    evidence_text = f"{listing_text} {model_text}"
+    identified_brand = str(result.get("golf_identified_brand") or "").casefold()
+    return any(
+        brand in identified_brand and pattern.search(evidence_text)
+        for brand, pattern in GOLF_EVIDENCED_MODERN_MODEL_SIGNALS.items()
+    )
+
+
+def golf_modern_set_absolute_price_path_applies(result, landed):
+    """True only when the absolute ceiling may replace the relative price bar.
+
+    This deliberately repeats the non-price requirements that the surrounding
+    golf gate will enforce again. A True result excuses exactly one decision:
+    whether ``landed`` beats the AI estimate by at least 50%. It cannot excuse
+    a missing appraisal, low confidence, unknown eBay shipping, wrong shape or
+    era, junk/blades, uncertain handedness/claims, damage, or counterfeit risk.
+    """
+    if (
+        not result.get("golf_ai_checked")
+        or not isinstance(landed, (int, float))
+        or isinstance(landed, bool)
+        or not math.isfinite(landed)
+        or landed > GOLF_MODERN_SET_MAX_LANDED_PRICE
+        or result.get("shipping_cost_known") is not True
+        or result.get("estimated_resale_value") is None
+    ):
+        return False
+    if not golf_has_modern_model_evidence(result):
+        return False
+    if golf_full_set_only_reason(result) is not None:
+        return False
+
+    cheap_full_set_exception = _golf_cheap_full_set_exception(result, landed)
+    price_confidence = (result.get("price_confidence") or "").lower() or None
+    if price_confidence == "low" and not cheap_full_set_exception:
+        return False
+    if result.get("golf_is_left_handed"):
+        return False
+    if (
+        not result.get("golf_handedness_confirmed")
+        and not golf_has_explicit_right_handed_text(result)
+        and not cheap_full_set_exception
+    ):
+        return False
+    brand_claims_present = result.get("golf_brand_claims_present")
+    if brand_claims_present is None:
+        brand_claims_present = True
+    if (
+        brand_claims_present
+        and not result.get("golf_brand_claims_confirmed")
+        and not cheap_full_set_exception
+    ):
+        return False
+    return not result.get("golf_counterfeit_suspected") and not result.get(
+        "damage_found"
+    )
+
+
 def golf_blocked_brand(identified_brand):
     """Return the blocked golf brand tier named by the vision model, if any.
 
@@ -2943,6 +3092,45 @@ def get_shipping_cost(listing):
         return float(cost_value) if cost_value is not None else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def is_shipping_cost_known(listing):
+    """Whether the landed-price calculation has authoritative shipping.
+
+    Existing adapters deliberately use either returned shipping or a documented
+    platform assumption, so their numeric result remains known for this policy.
+    eBay is different: Browse omits ``shippingOptions`` when calculated shipping
+    cannot be resolved, and the legacy parser collapses that absence to 0.0.
+    Only an actual non-negative ``shippingCost.value`` -- including explicit
+    zero/free shipping -- is safe for the owner's absolute $200 ceiling.
+    """
+    platform = listing.get("platform")
+    if platform not in (None, "ebay", "ebay_scraped"):
+        return True
+    shipping_options = listing.get("shippingOptions")
+    if not isinstance(shipping_options, list) or not shipping_options:
+        return False
+    first = shipping_options[0]
+    if not isinstance(first, dict):
+        return False
+    raw_value = (first.get("shippingCost") or {}).get("value")
+    if isinstance(raw_value, bool) or raw_value is None:
+        return False
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(value) and value >= 0
+
+
+def _refresh_result_shipping(result, listing, item_price):
+    """Refresh one already-scored eBay result after item-detail enrichment."""
+    shipping_cost = get_shipping_cost(listing)
+    result["shipping_cost"] = shipping_cost
+    result["shipping_cost_known"] = is_shipping_cost_known(listing)
+    total_price = item_price + shipping_cost
+    result["price"] = total_price * (1 + SALES_TAX_RATE)
+    return total_price
 
 
 def get_listing_quantity_available(listing):
@@ -5472,6 +5660,7 @@ def check_photos_with_gemini(
             f"{COUNTERFEIT_DISCLOSURE_PROMPT}\n\n"
             "Report strict JSON only, with no markdown fences, using this exact shape: "
             "{\"clubs_identified\": string, \"identified_brand\": string, "
+            "\"identified_model\": string|null, \"model_release_year\": number|null, "
             "\"brand_claims_present\": bool, \"brand_claims_confirmed\": bool, "
             "\"is_playable_first_set\": bool, \"is_wanted_component\": bool, "
             "\"is_starter_kit_quality\": bool, "
@@ -5488,7 +5677,12 @@ def check_photos_with_gemini(
             "manufacturer marked on the clubs themselves (e.g. Callaway/Strata, "
             "Wilson, Top Flite, Adams, Cobra, Ping, TaylorMade, Titleist, Mizuno, or "
             "Cleveland); mixed or unknown brands are acceptable in this reporting field "
-            "and should be reported honestly. brand_claims_present is true only when "
+            "and should be reported honestly. "
+            "identified_model is the exact visibly supported model family, or null when "
+            "markings are insufficient. model_release_year is the known first release "
+            "year for that exact model, or null when the model/year is uncertain; never "
+            "guess a year from condition or styling. "
+            "brand_claims_present is true only when "
             "the title or description actually claims a manufacturer or model; a generic "
             "title such as 'Golf clubs' has no brand claim and must use false. "
             "brand_claims_confirmed is true only when visible markings on the clubs or "
@@ -6269,17 +6463,26 @@ def is_blocked_by_steal_quality_gate(result, category=None):
                 "golf-equipment bar: no AI price estimate - AI check returned "
                 "no usable resale value"
             )
+        modern_absolute_path = golf_modern_set_absolute_price_path_applies(
+            result, landed
+        )
+        uses_modern_absolute_path = False
+        relative_price_failure = None
         if landed is not None and resale is not None and landed > resale:
-            return (
+            relative_price_failure = (
                 f"golf-equipment bar: price ${landed} exceeds the AI's own "
                 f"${resale} resale estimate - playable, but not a deal"
             )
         golf_rating, _golf_discount_pct = compute_deal_rating(landed, resale)
-        if golf_rating not in ("Steal", "Great Deal"):
-            return (
+        if relative_price_failure is None and golf_rating not in ("Steal", "Great Deal"):
+            relative_price_failure = (
                 f"golf-equipment bar: deal_rating '{golf_rating}' below "
                 "Great Deal - needs at least 50% under current resale value"
             )
+        if relative_price_failure:
+            if not modern_absolute_path:
+                return relative_price_failure
+            uses_modern_absolute_path = True
         cheap_full_set_exception = _golf_cheap_full_set_exception(result, landed)
         if price_confidence == "low" and not cheap_full_set_exception:
             return "golf-equipment bar: AI price estimate confidence too low to trust"
@@ -6319,6 +6522,10 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "golf-equipment bar: AI suspected counterfeit/replica club heads"
         if result.get("damage_found"):
             return "golf-equipment bar: AI found disqualifying damage"
+        if uses_modern_absolute_path:
+            # Display/log marker only. Every non-price veto above ran, and the
+            # full-set helper is run again at the call site.
+            result["golf_delivery_path"] = "modern-set-under-200"
         return None
 
     # SCHOOL-GEAR SEARCH RELEVANCE - the live school funnel contained 29
@@ -7001,6 +7208,7 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         record["query"] = result["search_query"]
     for key in (
         "shipping_cost",
+        "shipping_cost_known",
         "estimated_retail_price",
         "estimated_resale_value",
         "deal_rating",
@@ -7032,7 +7240,17 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_brand_claims_confirmed",
         "golf_counterfeit_suspected",
         "golf_identified_brand",
+        "golf_identified_model",
+        "golf_model_release_year",
+        "golf_delivery_path",
         "damage_found",
+        # The historical auction audit had to recover end times from live
+        # marketplace pages because these already-computed fields were dropped
+        # at the log boundary. Keep them so future lead-time distributions are
+        # exact even after a listing page disappears or is relisted.
+        "is_ending_soon_auction",
+        "auction_minutes_remaining",
+        "bid_count",
         "monthly_ai_budget_exhausted",
         "ai_paid_reserved_usd",
         "ai_paid_budget_cap_usd",
@@ -7485,6 +7703,13 @@ def send_alert(result):
         minutes_str = f"{minutes_left:.0f}m" if minutes_left is not None else "?"
         bid_word = "bid" if bid_count == 1 else "bids"
         message += f"\n⏰ ENDS IN {minutes_str} ({bid_count} {bid_word}) - bid now, don't wait"
+
+    if result.get("golf_delivery_path") == "modern-set-under-200":
+        message += (
+            f"\nGOOD PRICE: modern set under "
+            f"${GOLF_MODERN_SET_MAX_LANDED_PRICE:g} landed "
+            "(absolute ceiling, not the steal test)"
+        )
 
     deal_rating = result.get("deal_rating")
     if deal_rating:
@@ -9248,16 +9473,23 @@ def run():
     marketplace_listings = prefetch_marketplaces(current_utc, conn, run_hard_stop=hard_stop)
 
     # Build the saved-search and always-on auction lanes together before
-    # applying focus. Auction rows intentionally have no saved-search id, so
-    # an active, valid focus removes them along with every other non-focused
-    # lane. If the configured ids are invalid for this run's search catalog,
-    # the helper fails open and preserves both lanes.
+    # applying focus. Existing generic auction rows intentionally have no
+    # saved-search id and remain outside a valid focus. The code-owned golf row
+    # reuses the existing focused broad-irons id, so it survives without any
+    # SAVED_SEARCHES mutation. Config therefore gains only the owner's requested
+    # ceiling key.
     auction_searches = [
         {
             "query": s.get("query", ""),
+            "id": s.get("id"),
             "category_id": s.get("category_id", WATCH_CATEGORY_ID),
             "max_price": s["max_price"],
             "size": s.get("size"),
+            "category": s.get("category"),
+            "closing_soon_minutes": s.get("closing_soon_minutes"),
+            "contested_closing_soon_minutes": s.get(
+                "contested_closing_soon_minutes"
+            ),
             "is_auction_search": True,
         }
         for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)
@@ -9890,6 +10122,7 @@ def run():
             )
             result["item_price"] = item_price
             result["shipping_cost"] = shipping_cost
+            result["shipping_cost_known"] = is_shipping_cost_known(listing)
             result["profile"] = saved_search.get("profile", "slow")
             result["search_query"] = saved_search["query"]
             result["search_id"] = saved_search.get("id")
@@ -10437,6 +10670,15 @@ def run():
                 details = fetch_ebay_item_details(token, item_id)
                 if details:
                     listing.update(details)
+            # The detail-response shipping refresh is required for the new
+            # golf absolute ceiling. Keep it category-scoped so no apparel,
+            # watch, or poker relative-price path changes as a side effect of
+            # this golf policy.
+            if is_ebay_source and category == "golf-equipment":
+                total_price = _refresh_result_shipping(
+                    result, listing, result.get("item_price", item_price)
+                )
+                candidate["total_price"] = total_price
 
             # Critical for eBay/scrape candidates: title-only PASS 1 could not
             # see structured condition or description-only safety facts. The
@@ -10576,6 +10818,16 @@ def run():
                         future_listing["_gemini_batch_ebay_details_attempted"] = True
                         if details:
                             future_listing.update(details)
+                    if (
+                        future_is_ebay
+                        and future.get("category", "other") == "golf-equipment"
+                    ):
+                        future_total_price = _refresh_result_shipping(
+                            future_result,
+                            future_listing,
+                            future_result.get("item_price", future["total_price"]),
+                        )
+                        future["total_price"] = future_total_price
                     future_late_fail = _late_pre_ai_hard_fail_reason(
                         future_listing,
                         future_result,
@@ -10840,6 +11092,17 @@ def run():
             result["golf_brand_claims_confirmed"] = bool(ai_result.get("brand_claims_confirmed"))
             result["golf_counterfeit_suspected"] = bool(ai_result.get("counterfeit_suspected"))
             result["golf_identified_brand"] = ai_result.get("identified_brand")
+            result["golf_identified_model"] = ai_result.get("identified_model")
+            model_release_year = ai_result.get("model_release_year")
+            if (
+                isinstance(model_release_year, (int, float))
+                and not isinstance(model_release_year, bool)
+                and math.isfinite(model_release_year)
+                and int(model_release_year) == model_release_year
+            ):
+                result["golf_model_release_year"] = int(model_release_year)
+            else:
+                result["golf_model_release_year"] = None
             result["damage_found"] = bool(ai_result.get("damage_found"))
         if ai_result is not None and category == "watches":
             # Real live miss: a genuine Oris watch listed with its own

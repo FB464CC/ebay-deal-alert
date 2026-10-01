@@ -1,0 +1,476 @@
+GOLF DEEP DIVE - 2026-10-01
+================================
+
+Scope and safeguards
+--------------------
+- This is analysis/reporting only. No production code, configuration, tests,
+  extension files, web files, commits, pushes, fetches, pulls, or clones will
+  be made.
+- Required reading completed in full before analysis: GOLF_IRON_MODE.txt,
+  GOLF_FULL_SET_INVESTIGATION.txt, GOLF_VINTAGE_GATE_INVESTIGATION.txt,
+  GOLF_MODERN_IRON_CRITERIA.txt, GOLF_BUDGET_EXHAUSTED_INVESTIGATION.txt, and
+  PRETRIAGE_FILTER_INVESTIGATION.txt.
+- Baseline HEAD is 5e839cf51fede80f959596e0b5d42c75d5ea9e18 (2026-10-01
+  16:42:01Z, `chore: update poll state [skip ci]`). Initial `git status
+  --short` contained only the pre-existing untracked `run.stdout.log` and
+  `task.txt`; both remain outside scope and untouched.
+- The reconstruction uses the reports' established read-only method: query the
+  GitHub commits API for commits touching alerts_log.jsonl, select the newest
+  commit in each UTC hour, download that commit's raw alerts_log.jsonl, dedupe
+  exact JSON lines, and restrict rows by their own timestamps. This is a
+  conservative reconstruction because a rolling row that appears and vanishes
+  between hourly samples cannot be recovered.
+
+Executive conclusion
+--------------------
+The preliminary inventory hypothesis is mostly right, but incomplete.
+
+- Over 23.7 days the bot saw 13,145 golf rows and AI-checked 3,998. Only TWO
+  rows were simultaneously a genuine 2012+ named model, a coherent playable
+  set, non-left-handed, undamaged, non-counterfeit, and at least 25% under the
+  AI estimate. One was only 28% under and was correctly rejected by the
+  configured 50% steal bar. The other was 69% under and was delivered.
+- The one delivered modern target was eBay item 237080223566, `Callaway Rogue
+  Irons 5-P A Stiff Flex Steel Right Handed Excellent Condition`, $140.45
+  logged landed versus a $450 estimate. It was logged delivered at
+  2026-09-25T15:46:19.053751Z. eBay's own page records an auction end at
+  2026-09-25T15:47:40Z. The alert therefore arrived only 80.95 seconds before
+  the auction ended. Algorithmically that is a hit; for a personal buyer it is
+  reasonably described as unusable.
+  https://www.ebay.com/itm/237080223566
+- So the important number is not literally zero: it is 2 qualifying >=25%
+  candidates in 23.7 days, only 1 at the configured >=50% bar, and 0 with a
+  practically useful buying window. This is "near zero" inventory in the only
+  sense that matters to the owner.
+- The referee is biased: 13 of 15 audited AI resale estimates are below the
+  midpoint of real eBay sold comparables, with a median signed error (AI minus
+  sold-range midpoint) of -$59.99. That bias can suppress genuinely good
+  15%-40%-under-market sets. It does not explain away most rejections as hidden
+  steals: most asks were still around market once shipping and actual comps are
+  considered.
+- Sources are not equivalent. Official eBay produced one valid >=25% modern
+  set but no >=50% set; eBay-scraped produced the sole >=50% hit; ShopGoodwill
+  produced zero clean modern sets even 1% under its estimate; Facebook/Scout
+  produced one clean modern set, only 5.4% under; OfferUp produced no rows.
+- The bot's gates are not the primary reason for weeks of silence. The
+  combination of scarce inventory, a 50%-under requirement, estimate bias, and
+  one catastrophically late auction alert is. Another narrow junk/handedness
+  gate tweak will not manufacture supply.
+
+TASK 1 - full-history reconstruction
+------------------------------------
+Window and method result:
+
+- Row-time window: 2026-09-08T00:00:00Z through 2026-10-01T16:46:48Z.
+- Commit query window: [2026-09-08T00:00:00Z, 2026-10-02T00:00:00Z).
+- 3,678 commits touching alerts_log.jsonl returned by 37 GitHub API pages.
+- 541 newest-in-UTC-hour snapshots, from commit times
+  2026-09-08T00:52:06Z through 2026-10-01T16:46:51Z.
+- All 541 raw files downloaded successfully. Exact-line dedupe plus row-time
+  restriction produced 25,767 rows; zero malformed lines were skipped.
+- Because the source log rolls, hourly sampling is conservative. Short-lived
+  rows that appeared and disappeared inside an unsampled hour cannot be
+  recovered.
+
+All golf rows: 13,145 rows, 8,706 distinct item IDs, 57 delivered.
+
+  NO_AI_BUDGET                 3,857
+  STALE_LISTING                1,855
+  GOLF_REJECT                  1,755
+  GOLF_WRONG_ITEM              1,724
+  CONDITION_REJECT             1,118
+  MONTHLY_BUDGET_EXHAUSTED     1,008
+  BELOW_MARGIN                   602
+  AI_NO_PRICE                    428
+  GENDER_EXCLUDE                 333
+  OVER_MAX_PRICE                 329
+  DELIVERED                       57
+  AI_NO_PRICE_CAPPED              36
+  COUNTERFEIT                     21
+  GOLF_FULL_SET_ONLY_REJECT       18
+  GATE_REJECTED                    4
+
+AI-checked golf rows: 3,998 rows, 3,640 distinct item IDs, 57 delivered.
+
+  GOLF_REJECT                  1,755
+  CONDITION_REJECT               944
+  BELOW_MARGIN                   602
+  AI_NO_PRICE                    428
+  OVER_MAX_PRICE                 116
+  DELIVERED                       57
+  AI_NO_PRICE_CAPPED              36
+  GENDER_EXCLUDE                  30
+  GOLF_FULL_SET_ONLY_REJECT       18
+  COUNTERFEIT                     12
+
+Of the 3,998 AI-checked rows, 2,538 contain both a positive AI resale estimate
+and a price. A literal floating-point comparison puts 1,771/2,538 (69.8%) at
+or above the estimate. The stored whole-percent `discount_pct` puts 1,800
+(70.9%) at a non-positive discount because 29 rows less than 0.5% under round
+to zero. This refines the two-day preliminary figure: its 160/221 used the
+stored rounded percentage; a literal comparison is 157/221.
+
+Regex definitions and full-window split
+---------------------------------------
+These are deliberately title tags, not assertions that the item is a valid
+set. The budget expression below reproduces the preliminary two-day sample's
+48 priced matches, 23 with any discount, and 7 at >=50%; the raw modern
+expression reproduces its 9 priced matches, zero with any discount, best
+-3.31%, and median -67.48%. Discounts below are recomputed continuously as
+100 * (estimate - logged landed price) / estimate, not read from the rounded
+integer field.
+
+Raw modern-model title regex (case-insensitive):
+
+  (?<![A-Za-z0-9])(?:M[1-6]|SIM(?:2)?|Stealth(?:\s*2)?|
+  Rogue(?:\s+(?:ST|Star|Pro))?|Mavrik|Apex|G400|G30|i210|F[7-9]|
+  JPX(?:[-\s]?\d{3})?|AP[12]|T200|(?:Steelhead\s+)?XR|RBZ)
+  (?![A-Za-z0-9])
+
+Budget/junk title regex (case-insensitive):
+
+  \b(?:Acuity|Nitro|Ti\s*Tech|Tour\s*Edge|Bazooka|Top[-\s]*Flite|
+  Spalding|Strata|Confidence|Palm\s*Springs|Starter|Pro\s*Staff)\b|
+  \b(?:lot\s+of|mixed(?:\s+brands?)?|variety|assorted)\b
+
+Full-window result:
+
+  Group          all AI title matches  priced  any discount  >=25%  >=50%
+  Modern raw                    154       102            22       9      4
+  Budget/junk raw               524       322           153     101     42
+
+  Modern raw best discount: 68.79%; median: -45.16%.
+  Budget/junk best discount: 85.16%; median: -6.32%.
+
+The raw modern regex has necessary false positives. `Apex` catches old Ben
+Hogan Apex clubs; `Stealth` catches AcuLine Stealth III; and a mostly Ping G10/
+i5 lot catches `G30` because one utility wedge is G30. Applying brand/model
+pairing, the established 2012 boundary, current coherent-set shape, and the AI
+quality facts leaves 30 clean named-modern sets total. Only five were priced
+even one cent under the AI estimate. Only TWO were >=25% under:
+
+1. v1|366678701129|0, `(MA3) Callaway Rogue CF18 4-9 Irons XP95 Steel
+   Shaft`, official eBay, $180.20 logged landed vs $250, 27.92% under,
+   playable/RH/undamaged/non-counterfeit, not delivered because the configured
+   bar is 50%. The live page now shows $170 plus $38.05 shipping; the historical
+   row recorded shipping_cost=0, so even the logged landed amount was
+   optimistic. https://www.ebay.com/itm/366678701129
+2. v1|237080223566|0, `Callaway Rogue Irons 5-P A Stiff Flex Steel Right
+   Handed Excellent Condition`, eBay-scraped, $140.45 vs $450, 68.79% under,
+   playable/RH/undamaged/non-counterfeit, DELIVERED with 80.95 seconds left.
+   https://www.ebay.com/itm/237080223566
+
+At >=50%, the exact valid-modern intersection is ONE, and it was delivered.
+At >=25%, it is TWO. Across almost 24 days, that is functionally near zero.
+The other three rows in the purely mechanical five-row intersection are not
+modern targets: ShopGoodwill 276236705 is a Ping G10/i5 group mentioning one
+G30 wedge; ShopGoodwill 276901011 and 277635846 are AcuLine `Stealth III`
+budget sets.
+
+The 57 historical golf deliveries also need context. Only two carry a valid
+brand-paired modern-model tag: the Ping G10/i5/G30 mixed-generation lot and the
+Callaway Rogue auction. The current vintage/model/set rules correctly exclude
+the former. The Rogue is the sole delivered item matching today's actual goal,
+but its 81-second lead time explains why it did not function as a usable alert.
+
+TASK 3 - source/platform breakdown
+----------------------------------
+`Modern priced` below uses the same raw regex and requires an AI price. The
+clean-set columns add brand/model pairing, 2012+, coherent iron/full-set shape,
+playability, non-left-handedness, no damage, and no counterfeit flag.
+
+  Source          golf rows  delivered  AI checked  modern all/priced  best raw  clean sets
+  ebay official       6,985         11       1,559             67/43     37.85%          10
+  ebay_scraped        3,479         19       1,270             50/37     68.79%          14
+  shopgoodwill        2,156         27       1,021             30/20     56.45%           5
+  facebook/scout        525          0         148               7/2      5.36%           1
+  offerup                 0          0           0               0/0        n/a           0
+
+Per-source best result:
+
+- eBay official: raw best 37.85%, but it is an RBZ driver. Among clean modern
+  sets: 3/10 had any discount, 1/10 reached 25%, 0 reached 50%. Best is Rogue
+  CF18 4-9, item 366678701129, 27.92% under.
+- eBay-scraped: 9/37 raw modern rows had any discount. Among clean modern sets:
+  1/14 had any discount, and that same row was the sole >=25% and >=50% result:
+  Rogue item 237080223566, 68.79% under, delivered 81 seconds before close.
+- ShopGoodwill: the raw best 56.45% is AcuLine `Stealth III`, not TaylorMade.
+  A second raw >=50 result is the old Ping G10/i5 group with one G30 wedge.
+  Among five actual clean modern sets, ZERO had any discount. Best was
+  ShopGoodwill 277446531, `TaylorMade RH RBZ Rocketballz Iron Golf Club Set`,
+  $121.37 vs $120, i.e. 1.14% OVER estimate.
+  https://shopgoodwill.com/item/277446531
+- Facebook/Scout: one clean modern set in the whole window, Facebook item
+  975559318900343, `Cobra F9 Speedback Iron Set`, $265 vs $280, only 5.36%
+  under. It was not delivered. There were zero >=25% modern rows and zero
+  deliveries from the lane.
+- OfferUp: zero golf rows. It is enabled in code but not in the target searches,
+  consistent with the earlier routing report.
+
+Facebook/Scout resumption detail:
+
+- Across the full window the lane contributed 525 golf log rows / 136 distinct
+  items / 148 AI-checked / 0 delivered.
+- Its latest resumed burst was 2026-09-21T02:42Z-02:52Z: 14 rows. Eleven were
+  GOLF_WRONG_ITEM, one was STALE_LISTING, and the same `Mizuno jpx919 wedges
+  50, 55` item was retried three times (two AI_NO_PRICE, then one
+  AI_NO_PRICE_CAPPED). It produced 0 full/iron-set candidates and 0 deliveries.
+- The current scout_queue.jsonl is non-empty but is not fresh supply: 104
+  distinct queued rows discovered from 2026-09-04 through 2026-09-17. Only 18
+  are even loosely golf-like; they are women/junior/LH clubs, bags, hybrids,
+  golf shoes/cart tires, or curling-iron noise. None is a modern adult RH iron
+  set, and none of those 104 IDs appears in the reconstructed Facebook alert
+  rows. A non-empty queue therefore does not mean useful Scout inventory is
+  flowing now.
+
+Concrete source answer: the sources do not all show exactly the same pattern,
+but none is reliably supplying cheap modern sets. ShopGoodwill's apparent
+modern steals are regex false positives; Facebook supplied no >=25% example;
+official eBay supplied one 28%-under example; and eBay-scraped supplied one
+real steal, too late to act on.
+
+TASK 2 - is the referee biased?
+--------------------------------
+Yes. On this audited sample the estimates are systematically low.
+
+Method: I selected 15 AI-checked rows with an identifiable model and club run,
+then read eBay's Sold + Completed results on 2026-10-01. Ranges below use the
+closest like-for-like used sold listings I could verify. Prices are displayed
+sold item prices before shipping so they are comparable to a resale value,
+not to the bot's landed acquisition cost. I avoided an accepted-Best-Offer
+display price as an endpoint where an auction or Buy-It-Now observation was
+available. `Error` is AI estimate minus the midpoint of the observed range:
+negative means the AI estimate was low; positive means it was high.
+
+1. v1|127676025511|0, TaylorMade M2 5-PW, six clubs, stiff Reax steel.
+   Bot: $306.76 landed, estimate $220. Sold range: $259.40-$290.00.
+   Error: -$54.70. Exact/source examples:
+   https://www.ebay.com/itm/127676025511
+   https://www.ebay.com/sch/i.html?_nkw=Taylormade+M2+iron+set+5-PW&LH_Sold=1&LH_Complete=1
+
+2. v1|128068388639|0, Callaway Rogue Star 7-PW, four clubs, stiff Zelos 7.
+   Bot: $171.53, estimate $150. One exact sold observation: $194.00.
+   Error: -$44.00. This remains only four irons and fails the owner's five-club
+   minimum even though the valuation is low.
+   https://www.ebay.com/itm/127867341917
+
+3. v1|235193021511|0, Ping i15 6-PW, five clubs, stiff TFC 149 graphite.
+   Bot: $249.10, estimate $120. Closest i15 6-PW/5-PW sold range:
+   $161.49-$174.00. Error: -$47.75. i15 is pre-2012, included because it was
+   one of the dispatch's concrete referee examples, not as a valid target.
+   https://www.ebay.com/itm/388783667777
+   https://www.ebay.com/itm/128041339997
+
+4. v1|127808877957|0, TaylorMade M4 5-PW, six clubs, stiff Atmos graphite.
+   Bot: $309.94, estimate $300. Sold range: $292.40-$329.99.
+   Error: -$11.20. This estimate is roughly calibrated.
+   https://www.ebay.com/itm/127808877957
+   https://www.ebay.com/itm/336745862292
+
+5. v1|366678701129|0, Callaway Rogue CF18 4-9, six clubs, XP95 steel.
+   Bot: $180.20 logged landed, estimate $250. Closest 5-PW through 4-PW/AW
+   sold range: $299.00-$379.99. Error: -$89.50.
+   https://www.ebay.com/itm/147570493562
+   https://www.ebay.com/itm/336793058733
+
+6. v1|307080245523|0, TaylorMade M3 5-PW, six clubs, KBS 90.
+   Bot: $307.39, estimate $250. Sold range: $289.99-$329.99.
+   Error: -$59.99.
+   https://www.ebay.com/itm/307080245523
+   https://www.ebay.com/itm/147477156613
+
+7. v1|377413252889|0, Cobra King F7 6-GW, regular graphite.
+   Bot: $265.00, estimate $180. Sold range: $230.00-$276.24.
+   Error: -$73.12.
+   https://www.ebay.com/itm/377413252889
+   https://www.ebay.com/itm/377526992329
+
+8. v1|127620241825|0, Mizuno JPX 825 Forged 6-PW, five clubs, stiff
+   Modus3. Bot: $185.08, estimate $130. Sold range: $164.90-$228.60.
+   Error: -$66.75.
+   https://www.ebay.com/itm/127620241825
+   https://www.ebay.com/itm/375380487335
+
+9. v1|137718937859|0, Callaway Apex '19 6-PW, five clubs, regular
+   Elevate 95 steel. Bot: $211.99, estimate $150. Closest exact sold range:
+   $199.99-$219.99. Error: -$59.99.
+   https://www.ebay.com/itm/137718937859
+   https://www.ebay.com/itm/358791806942
+
+10. v1|137737313678|0, Callaway Mavrik 5-PW, six clubs, extra-stiff
+    Project X LZ. Bot: $286.19, estimate $275. Sold range: $269.99-$295.00.
+    Error: -$7.50. This estimate is roughly calibrated.
+    https://www.ebay.com/itm/137737313678
+    https://www.ebay.com/itm/147491796461
+
+11. v1|127930609970|0, TaylorMade SIM Max 6-PW, five clubs, stiff KBS 85.
+    Bot: $311.57, estimate $250. Sold range: $325.00-$355.00.
+    Error: -$90.00.
+    https://www.ebay.com/itm/158223293301
+    https://www.ebay.com/itm/147418814825
+
+12. v1|318910112965|0, Titleist AP1 714 5-PW, six clubs, regular
+    graphite. Bot: $291.50, estimate $150. Exact sold observations cluster at
+    $275.00. Error: -$125.00.
+    https://www.ebay.com/itm/318910112965
+    https://www.ebay.com/itm/147472222015
+
+13. v1|147589514642|0, Callaway Steelhead XR 7-PW/SW, five clubs,
+    regular Matrix graphite. Bot: $116.59, estimate $150. Two exact auction
+    sales: $109.99-$115.50. Error: +$37.26. Here the AI was high.
+    https://www.ebay.com/itm/147589514642
+    https://www.ebay.com/itm/147573158438
+
+14. v1|237080223566|0, Callaway Rogue 5-PW/AW, seven clubs, stiff steel.
+    Bot: $140.45, estimate $450. Original-generation Rogue 5-PW/AW comps:
+    $299.00-$349.99. Error: +$125.51. The photo AI called it Rogue ST Max,
+    which likely explains the high estimate; the seller title only says Rogue.
+    This overestimate created the sole delivered modern steal, but eBay confirms
+    the auction ended 81 seconds later at a displayed $132.50 bid/ask.
+    https://www.ebay.com/itm/237080223566
+    https://www.ebay.com/itm/147570493562
+    https://www.ebay.com/itm/257401071138
+
+15. v1|158203768444|0, Callaway Steelhead XR 6-PW/AW/SW, seven clubs,
+    regular graphite. Bot: $263.94, estimate $150. Closest 5-SW/full-run sold
+    range: $254.99-$299.99. Error: -$127.49.
+    https://www.ebay.com/itm/820069169584
+    https://www.ebay.com/itm/267758086064
+
+Calibration result:
+
+- 13/15 estimates are low versus the sold-range midpoint; 2/15 are high.
+- Median signed error: -$59.99. Mean signed error is -$48.81 after using the
+  refined comparable ranges above; the median is the more robust statistic.
+- The bias is large enough to matter. For example, Rogue CF18 4-9 at a logged
+  $180.20 was compared with $250 rather than roughly $300-$380 and therefore
+  appeared only 28% under. The live page also exposes a separate telemetry
+  caveat: it now quotes $38.05 shipping to the buyer while the retained row has
+  shipping_cost=0. Even at roughly $218 before tax it is a genuinely good
+  market price, but not an unambiguous 50%-under steal against the low end of
+  sold comps.
+- Low estimates do NOT prove that every rejected modern row was a hidden deal.
+  M2 at $306.76, M3 at $307.39, M4 at $309.94, Mavrik at $286.19, AP1 at
+  $291.50, and JPX 825 at $185.08 are at or near real sold market after
+  shipping. The estimate was wrong, but the no-alert decision was often still
+  economically reasonable under a "steal" mandate.
+- The referee therefore is biased low and does suppress some good-not-great
+  deals. The weeks of silence still cannot be blamed solely on that bias: only
+  one observed row was an obvious modern steal, and it was delivered too late.
+
+TASK 4 - realistic owner choices (report only)
+------------------------------------------------
+No choice below has been implemented.
+
+Option A - keep the current >=50%-under steal definition.
+
+- Historical valid-modern hit count: 1 distinct item in 23.7 days.
+- Historical actionable hit count: 0; that one alert had 80.95 seconds left.
+- Expected user experience: multi-week silence is normal on these sources.
+  Under the current definition, the honest conclusion is that the bot is
+  mostly working and the target is functionally unreachable at useful cadence.
+
+Option B - keep a relative deal test but lower it to >=25% under the AI
+estimate.
+
+- Historical hit count: 2 distinct valid modern sets, only one net-new alert.
+- Net-new row: Rogue CF18 4-9, item 366678701129, $180.20 logged landed vs
+  $250, 27.92% under. Its current eBay shipping quote means the retained landed
+  number is understated, so this is good rather than obviously spectacular.
+- This does very little for cadence: two candidates in almost 24 days.
+
+Option C - replace relative appraisal with a $200 absolute logged-landed ceiling
+for a clean, mainstream, named-modern iron/full set.
+
+There is no statistically magic threshold. The historical count curve is:
+
+  Ceiling     <=$150  <=$175  <=$200  <=$225  <=$250  <=$275  <=$300
+  Clean sets       2       2       6      11      15      21      25
+
+$200 is the first practical round ceiling that provides more than two choices
+without admitting the much larger $225-$300 fair-market cluster. It would have
+produced six distinct candidates (five additional to the one actual delivery):
+
+1. shopgoodwill:277446531, TaylorMade RH RBZ RocketBallz iron set, $121.37,
+   AI estimate $120, RH/playable/undamaged.
+   https://shopgoodwill.com/item/277446531
+2. v1|237080223566|0, Callaway Rogue 5-PW/AW, $140.45, estimate $450,
+   already delivered with 81 seconds left.
+   https://www.ebay.com/itm/237080223566
+3. v1|366678701129|0, Callaway Rogue CF18 4-9, $180.20 logged, estimate
+   $250; current page quotes shipping missing from the row.
+   https://www.ebay.com/itm/366678701129
+4. v1|398358273954|0, Callaway XR Pro 4-PW, $181.21, estimate $150; title
+   says `*read*`, although the AI recorded playable and no disqualifying damage.
+   https://www.ebay.com/itm/398358273954
+5. v1|127620241825|0, Mizuno JPX 825 Forged 6-PW, $185.08, estimate $130,
+   AI-confirmed RH/playable/undamaged.
+   https://www.ebay.com/itm/127620241825
+6. v1|198627666788|0, Callaway Rogue CF18 4-9, $190.80 logged, estimate
+   $220, a separate item ID/listing with the same seller-title template.
+   https://www.ebay.com/itm/198627666788
+
+The owner should judge that list, not the count. If those six look like things
+he would actually buy, $200 is data-supported. If the two Rogue 4-9 groups, the
+`*read*` XR Pro, or stiff shafts are not acceptable, the apparent gain shrinks
+immediately. Also, eBay rows with shipping_cost=0 need special skepticism when
+using an absolute logged-landed ceiling.
+
+Option D - prioritize private-seller/local sources.
+
+- Historical Facebook/Scout >=25% valid-modern hit count: 0.
+- Historical clean modern count under the existing $300 cap: 1, the Cobra F9
+  Speedback set at $265 vs $280 (5.36% under), not delivered.
+- Latest resumed burst: 14 rows, 0 sets, 0 deliveries. Current queued supply:
+  104 stale/unrouted rows, 0 modern adult RH iron sets. OfferUp: 0 rows.
+- Private sellers are where underpricing can plausibly occur, but this bot's
+  actual local lanes have not demonstrated it. This option means fixing source
+  coverage/freshness and geographic targeting, not merely assigning more AI
+  budget to the existing queue. Its observed historical hit count is zero.
+
+Option E - widen the acceptable era while retaining the 50% steal bar.
+
+- Re-admitting the specifically blocked named pre-2012 models yields exactly 1
+  additional quality/shape/price hit: ShopGoodwill 276236705, the Ping G10/i5
+  group with a G30 utility wedge, $48.11 vs $110 (56.3% under). It was already
+  delivered under the earlier rules. It is not a coherent modern-generation
+  set, which is why the current vintage gate excludes it.
+  https://shopgoodwill.com/item/276236705
+- Historical hit count: 1. Widening era alone does not solve cadence.
+
+Option F - widen the brand/junk tier while retaining >=50% and the objective AI
+quality facts.
+
+- The raw budget/junk pool contains 42 >=50% rows. Requiring playable,
+  non-left-handed, undamaged, non-counterfeit, and a title-level iron/full-set
+  shape leaves 16.
+- Those 16 are exactly the kind of inventory the owner rejected: Top-Flite,
+  mixed/assorted lots, vintage Spalding, Pro Select, Warrior, Tour Edge
+  Bazooka, Acuity, TiTech, and loosely inventoried club bags. Representative
+  IDs include ShopGoodwill 276873033, 276666292, 277296225, 277850859,
+  278463492, 278432750, and eBay 168688100292/336809092928.
+- Historical hit count: 16, but the evidence says this changes the target into
+  cheap junk rather than finding the requested modern set. It would create
+  alerts, not satisfaction.
+
+Recommendation to the owner
+---------------------------
+Do not spend another week tweaking the handedness, vintage, or set-shape gates.
+Choose explicitly between:
+
+- rare true steals (1 algorithmic hit / 0 timely hits in 23.7 days), or
+- a $200 absolute ceiling (6 historical candidates, shown above), or
+- materially better local/private-seller acquisition with freshness, radius,
+  and auction lead-time treated as first-class requirements.
+
+The estimate system should also be recalibrated against sold comps before it is
+trusted as the sole price referee: median error -$59.99 is not roughly
+calibrated. But correcting that alone will mostly surface good/fair $180-$300
+sets, not manufacture frequent 50%-under steals.
+
+Final safeguard audit
+---------------------
+- No production behavior was changed.
+- ebay_deal_alert.py, config.json, category_profiles.json, tests,
+  chrome-extension/*, and web/* were not edited.
+- No fetch, pull, clone, commit, or push was performed.
