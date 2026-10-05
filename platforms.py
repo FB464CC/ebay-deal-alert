@@ -1144,6 +1144,23 @@ SHOPGOODWILL_CONTESTED_CLOSING_SOON_MINUTES = 15
 # own shippingPrice/handlingPrice fields don't reflect real cost. Midpoint
 # of the $12-15 range given.
 SHOPGOODWILL_ASSUMED_SHIPPING = 13.50
+# Golf sets are heavy and ShopGoodwill computes real freight at checkout from
+# weight and ZIP, so the flat $13.50 above understated golf landed cost. Measured
+# 2026-10-05 against ShopGoodwill's own CalculateShipping endpoint for 14 real
+# brand iron/club sets shipped to ZIP 29201: shipping+handling ran $12.87-$30.77,
+# median ~$19.3 (mean ~$20.8). That figure is only the FALLBACK for golf when a
+# live per-item quote cannot be obtained; other categories keep the flat value.
+SHOPGOODWILL_GOLF_ASSUMED_SHIPPING = 20.00
+SHOPGOODWILL_SHIPPING_CALC_URL = "https://buyerapi.shopgoodwill.com/api/ItemDetail/CalculateShipping"
+SHOPGOODWILL_SHIP_TO_ZIP = os.environ.get("SHOPGOODWILL_SHIP_TO_ZIP", "29201")
+# Only closing-soon auctions are admitted, so a handful of quotes per search is
+# plenty; the cap keeps a surprise burst from hammering the endpoint.
+SHOPGOODWILL_SHIPPING_LOOKUPS_PER_SEARCH = 6
+_SHOPGOODWILL_SHIPPING_CACHE = {}
+_SHOPGOODWILL_SHIPPING_TOTAL_RE = re.compile(
+    r"Total\s+Shipping\s+and\s+Handling:\s*[^0-9<\-]{0,3}([0-9]+(?:\.[0-9]{1,2})?)",
+    re.IGNORECASE,
+)
 SHOPGOODWILL_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("shopgoodwill_rate_limit_state.json")
 SHOPGOODWILL_BACKOFF_INITIAL_MINUTES = 30
 SHOPGOODWILL_BACKOFF_MAX_MINUTES = 120
@@ -1269,6 +1286,68 @@ def _parse_shopgoodwill_remaining(remaining_str):
 
 
 @adapter("shopgoodwill")
+def _is_golf_search(saved_search):
+    """True for the golf-equipment saved searches (id prefix or eBay category)."""
+    sid = str((saved_search or {}).get("id") or "")
+    return sid.startswith("golf") or str((saved_search or {}).get("category_id") or "") == "115280"
+
+
+def _parse_shopgoodwill_shipping_total(payload):
+    """Extract "Total Shipping and Handling" dollars from a calculator reply.
+
+    The endpoint returns a JSON *string* of HTML, e.g.
+    ``<b>Total Shipping and Handling: \u00a419.43</b>`` (the currency sign is
+    rendered as a generic \u00a4). Anything unparseable or implausible is None so
+    the caller falls back to the measured assumption rather than trusting junk.
+    """
+    if not isinstance(payload, str):
+        return None
+    match = _SHOPGOODWILL_SHIPPING_TOTAL_RE.search(payload)
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value < 0 or value > 500:
+        return None
+    return round(value, 2)
+
+
+def _shopgoodwill_calculated_shipping(item_id, proxy_url):
+    """Real shipping+handling ShopGoodwill quotes to the owner's ZIP, or None.
+
+    Fails open to None on any problem (no scrapling, breaker open, HTTP error,
+    unparseable body); the caller then uses the measured golf assumption.
+    Negative results are cached too so one bad item is not retried per query.
+    """
+    key = str(item_id)
+    if key in _SHOPGOODWILL_SHIPPING_CACHE:
+        return _SHOPGOODWILL_SHIPPING_CACHE[key]
+    value = None
+    try:
+        from scrapling.fetchers import Fetcher
+        if shopgoodwill_circuit_breaker_allows_calls():
+            _pace("shopgoodwill")
+            resp = Fetcher.post(
+                SHOPGOODWILL_SHIPPING_CALC_URL,
+                json={
+                    "itemId": int(item_id), "country": "US",
+                    "zipCode": SHOPGOODWILL_SHIP_TO_ZIP, "province": "",
+                    "quantity": 1, "clientIP": "",
+                },
+                headers=SHOPGOODWILL_HEADERS,
+                timeout=HTTP_TIMEOUT,
+                proxy=os.environ.get("SHOPGOODWILL_PROXY_URL") or proxy_url,
+            )
+            if resp.status == 200:
+                value = _parse_shopgoodwill_shipping_total(resp.json())
+    except Exception as exc:
+        logger.info("shopgoodwill shipping quote unavailable for %s: %s", item_id, exc)
+    _SHOPGOODWILL_SHIPPING_CACHE[key] = value
+    return value
+
+
 def search_shopgoodwill(saved_search):
     payload = {
         "isSize": False, "isWeddingCatagory": "false", "isMultipleCategoryIds": False,
@@ -1383,6 +1462,8 @@ def search_shopgoodwill(saved_search):
     results = _dget(_dget(body, "searchResults"), "items") or []
     listings = []
     skipped_too_early = 0
+    golf_search = _is_golf_search(saved_search)
+    ship_lookups_left = SHOPGOODWILL_SHIPPING_LOOKUPS_PER_SEARCH if golf_search else 0
     for item in results:
         item_id = item.get("itemId")
         # currentPrice is a LIVE AUCTION BID, not a buyable price - it climbs
@@ -1406,6 +1487,14 @@ def search_shopgoodwill(saved_search):
         if remaining_minutes is None or remaining_minutes > threshold:
             skipped_too_early += 1
             continue
+        shipping_cost = SHOPGOODWILL_ASSUMED_SHIPPING
+        if golf_search:
+            shipping_cost = SHOPGOODWILL_GOLF_ASSUMED_SHIPPING
+            if ship_lookups_left > 0:
+                ship_lookups_left -= 1
+                quoted = _shopgoodwill_calculated_shipping(item_id, proxy_url)
+                if quoted is not None:
+                    shipping_cost = quoted
         listings.append(
             make_listing(
                 "shopgoodwill",
@@ -1419,11 +1508,16 @@ def search_shopgoodwill(saved_search):
                 # real cost - confirmed unreliable by direct user
                 # instruction. Always assume a flat real-world estimate
                 # instead of trusting what the API reports.
-                shipping=SHOPGOODWILL_ASSUMED_SHIPPING,
+                shipping=shipping_cost,
                 seller=item.get("sellerName") or item.get("sellerId"),
                 description=item.get("description"),
             )
         )
+        # Record the live bid count so alerts (and later analysis) can see how
+        # contested the auction is. Display/logging only: deliberately NOT
+        # auction_minutes_remaining, which doubles as an AI-priority sort key.
+        if listings and listings[-1]:
+            listings[-1]["bid_count"] = int(num_bids)
     if skipped_too_early:
         logger.info(
             "shopgoodwill: skipped %s auction(s) too far from closing "

@@ -1636,5 +1636,122 @@ class DepopAdapter(unittest.TestCase):
         self.assertEqual(set(result), {"rolex watch"})
 
 
+# Real reply captured 2026-10-05 from ShopGoodwill's CalculateShipping endpoint
+# (item 276987333 shipped to ZIP 29201). It is a JSON *string* of HTML.
+_REAL_SGW_SHIPPING_REPLY = (
+    "<p>Estimated Shipping and Handling:</p><p>Shipped From: Richmond, VA "
+    "23224-1027</p><p>Shipping Carrier: FedEx<p>Address:   29201 US</p>"
+    "<p>Shipping: <span id='shipping-span'>\u00a417.18 (GROUND_HOME_DELIVERY)"
+    "</span></p><p>Handling: \u00a42.25</p><p><b>Total Shipping and Handling: "
+    "\u00a419.43</b></p>"
+)
+
+
+def _sgw_item(item_id, title="Callaway Rogue Iron Set 5-PW", price=42.5, remaining="12m", bids=3):
+    return {"itemId": item_id, "title": title, "currentPrice": price,
+            "remainingTime": remaining, "numBids": bids, "imageURL": "https://img.test/x.jpg"}
+
+
+class ShopGoodwillGolfShippingQuote(unittest.TestCase):
+    """The flat $13.50 placeholder understated golf landed cost: ShopGoodwill
+    bills real FedEx freight by weight/ZIP at checkout. Measured on 14 real
+    sets to ZIP 29201: $12.87-$30.77, median ~$19.3."""
+
+    def setUp(self):
+        p._SHOPGOODWILL_SHIPPING_CACHE.clear()
+
+    def test_parses_the_real_calculator_reply(self):
+        self.assertEqual(p._parse_shopgoodwill_shipping_total(_REAL_SGW_SHIPPING_REPLY), 19.43)
+
+    def test_unparseable_or_implausible_replies_are_none(self):
+        for bad in (None, 123, "", "<p>no total here</p>",
+                    "Total Shipping and Handling: \u00a4-5.00",
+                    "Total Shipping and Handling: \u00a49999.00"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(p._parse_shopgoodwill_shipping_total(bad))
+
+    def test_quote_is_fetched_once_and_cached(self):
+        fake = mock.MagicMock()
+        fake.post.return_value = _FakeScraplingResp(200, _REAL_SGW_SHIPPING_REPLY)
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake)}), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True):
+            first = p._shopgoodwill_calculated_shipping(276987333, None)
+            second = p._shopgoodwill_calculated_shipping(276987333, None)
+        self.assertEqual((first, second), (19.43, 19.43))
+        self.assertEqual(fake.post.call_count, 1)
+        self.assertEqual(fake.post.call_args.kwargs["json"]["zipCode"], "29201")
+
+    def test_http_error_fails_open_to_none(self):
+        fake = mock.MagicMock()
+        fake.post.return_value = _FakeScraplingResp(403, None)
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake)}), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True):
+            self.assertIsNone(p._shopgoodwill_calculated_shipping(1, None))
+
+    def _run_search(self, saved_search, quote_reply):
+        fake = mock.MagicMock()
+        search_resp = _FakeScraplingResp(200, {"searchResults": {"itemCount": 1, "items": [_sgw_item(276987333)]}})
+        quote_resp = (_FakeScraplingResp(200, quote_reply) if quote_reply is not None
+                      else _FakeScraplingResp(503, None))
+        fake.post.side_effect = [search_resp, quote_resp]
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake)}), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True):
+            listings, _count = p.search_shopgoodwill(saved_search)
+        return listings, fake
+
+    @staticmethod
+    def _shipping(listing):
+        return listing["shippingOptions"][0]["shippingCost"]["value"]
+
+    def test_golf_search_uses_the_live_quote(self):
+        listings, fake = self._run_search({"id": "golf-irons", "query": "golf irons set"}, _REAL_SGW_SHIPPING_REPLY)
+        self.assertEqual(len(listings), 1)
+        self.assertEqual(self._shipping(listings[0]), 19.43)
+        self.assertEqual(fake.post.call_count, 2)
+
+    def test_golf_search_falls_back_to_measured_assumption_not_13_50(self):
+        listings, _fake = self._run_search({"id": "golf-irons", "query": "golf irons set"}, None)
+        self.assertEqual(self._shipping(listings[0]), p.SHOPGOODWILL_GOLF_ASSUMED_SHIPPING)
+        self.assertEqual(p.SHOPGOODWILL_GOLF_ASSUMED_SHIPPING, 20.00)
+
+    def test_non_golf_search_is_unchanged_and_makes_no_quote_call(self):
+        fake = mock.MagicMock()
+        fake.post.return_value = _FakeScraplingResp(
+            200, {"searchResults": {"itemCount": 1, "items": [_sgw_item(5, title="Omega Seamaster Watch")]}})
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake)}), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True):
+            listings, _count = p.search_shopgoodwill({"id": "watches-omega", "query": "omega watch"})
+        self.assertEqual(self._shipping(listings[0]), p.SHOPGOODWILL_ASSUMED_SHIPPING)
+        self.assertEqual(fake.post.call_count, 1)
+
+    def test_live_bid_count_is_recorded_as_an_int(self):
+        listings, _fake = self._run_search({"id": "golf-irons", "query": "golf irons set"}, _REAL_SGW_SHIPPING_REPLY)
+        self.assertEqual(listings[0]["bid_count"], 3)
+        self.assertIsInstance(listings[0]["bid_count"], int)
+        # It must never masquerade as an ending-soon auction (which would
+        # change AI-priority ordering), nor carry a minutes-remaining field.
+        self.assertNotIn("is_ending_soon_auction", listings[0])
+        self.assertNotIn("auction_minutes_remaining", listings[0])
+
+    def test_lookups_per_search_are_capped(self):
+        items = [_sgw_item(1000 + i) for i in range(p.SHOPGOODWILL_SHIPPING_LOOKUPS_PER_SEARCH + 4)]
+        fake = mock.MagicMock()
+        fake.post.side_effect = [_FakeScraplingResp(200, {"searchResults": {"itemCount": len(items), "items": items}})] + [
+            _FakeScraplingResp(200, _REAL_SGW_SHIPPING_REPLY) for _ in items]
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake)}), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True):
+            listings, _count = p.search_shopgoodwill({"id": "golf-irons", "query": "golf irons set"})
+        self.assertEqual(len(listings), len(items))
+        self.assertEqual(fake.post.call_count, 1 + p.SHOPGOODWILL_SHIPPING_LOOKUPS_PER_SEARCH)
+        capped = [self._shipping(x) for x in listings]
+        self.assertEqual(capped.count(19.43), p.SHOPGOODWILL_SHIPPING_LOOKUPS_PER_SEARCH)
+        self.assertEqual(capped.count(p.SHOPGOODWILL_GOLF_ASSUMED_SHIPPING), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

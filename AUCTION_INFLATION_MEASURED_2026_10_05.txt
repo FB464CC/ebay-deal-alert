@@ -1,0 +1,72 @@
+SHOPGOODWILL GOLF AUCTIONS: PRICE-AT-ALERT vs FINAL PRICE, AND REAL SHIPPING
+=============================================================================
+Measured 2026-10-05 from ShopGoodwill's own item-detail API: 1,785 closed golf
+auctions the bot had observed 2026-09-08..2026-10-05, each with its full bid
+history (bidComplete: bidTime + displayed itemPrice). All times Pacific (PDT).
+Method: for every auction, rebuild the displayed price at N minutes before close
+from the bid history and divide the FINAL price by it. >=1.5x / >=2x columns are
+the share of auctions that rose by at least that much.
+
+FINDING 1 - 'prices doubled after the final bid' is NOT the typical pattern on
+ShopGoodwill. Uncontested auctions (0 bids) never moved at all (p90 x1.00). Contested
+ones have a real upper tail but a median near x1.0-1.06; ~1-6% reach double.
+The doubling cases are real but are the tail: e.g. Ping G10/i5 set seen $31.89 with
+11 min left closed $87.00 (x2.73, 11 bids); TaylorMade M2 lot seen $142 closed $237
+(x1.67, 34 bids). eBay close behaviour is NOT measured here (eBay returns 403 to
+scripts); 3 verified eBay closings from the earlier audit were x1.0, x1.40 (21 bids,
+3 min left) and x2.14 (5 bids, 1 min left), too few to generalise.
+
+
+##### ALL golf auctions: 1738 auctions #####
+
+--- price shown 15 min before close -> final ---
+bids so far     n  median    p75    p90  >=1.5x   >=2x
+0 bids       904    1.00   1.00   1.00      0%     0%
+1-2 bids     332    1.00   1.01   1.46      9%     5%
+3-5 bids     161    1.00   1.23   1.60     16%     6%
+6+ bids      341    1.06   1.22   1.47      9%     1%
+
+--- price shown 5 min before close -> final ---
+bids so far     n  median    p75    p90  >=1.5x   >=2x
+0 bids       896    1.00   1.00   1.00      0%     0%
+1-2 bids     331    1.00   1.00   1.31      8%     4%
+3-5 bids     161    1.00   1.17   1.57     13%     4%
+6+ bids      350    1.03   1.19   1.39      7%     1%
+
+##### mainstream-brand SETS only: 614 auctions #####
+
+--- price shown 15 min before close -> final ---
+bids so far     n  median    p75    p90  >=1.5x   >=2x
+0 bids       193    1.00   1.00   1.00      0%     0%
+1-2 bids     108    1.00   1.13   1.70     13%     6%
+3-5 bids      74    1.06   1.31   1.58     14%     3%
+6+ bids      239    1.06   1.20   1.44      9%     1%
+
+--- price shown 5 min before close -> final ---
+bids so far     n  median    p75    p90  >=1.5x   >=2x
+0 bids       193    1.00   1.00   1.00      0%     0%
+1-2 bids     105    1.00   1.10   1.70     10%     5%
+3-5 bids      71    1.00   1.23   1.52     11%     1%
+6+ bids      245    1.03   1.17   1.38      7%     1%
+
+--- price shown 1 min before close -> final ---
+bids so far     n  median    p75    p90  >=1.5x   >=2x
+0 bids       191    1.00   1.00   1.00      0%     0%
+1-2 bids     101    1.00   1.00   1.26      7%     4%
+3-5 bids      72    1.00   1.17   1.37      8%     1%
+6+ bids      250    1.02   1.14   1.32      4%     0%
+
+
+FINDING 2 - the flat $13.50 shipping assumption understated golf landed cost.
+ShopGoodwill's CalculateShipping endpoint, queried for 14 real brand iron/club sets
+spanning 1-50 lb shipped to ZIP 29201 (Columbia, SC), total shipping+handling:
+  $16.69 $19.17 $23.22 $23.56 $15.06 $12.87 $14.11 $30.77 $19.43 $18.71 $29.01 $17.19 $22.82 $26.89
+  range $12.87-$30.77, median ~$19.3, mean ~$20.8 (weight is a weak predictor: a 50 lb
+  item quoted $26.89, a 1 lb item $16.69, a 6.2 lb item $30.77).
+Action taken: golf listings now fetch the live per-item quote; fallback when a quote
+cannot be obtained is $20.00 (measured median, rounded); other categories keep 13.50.
+
+FINDING 3 - the bot only ever sees ShopGoodwill auctions in their final hour (the
+closing-soon filter admits <=15 min contested / <=30 min uncontested), which is why
+most observations sit at x1.00. Bid count was not recorded for ShopGoodwill rows, so
+this analysis had to rebuild it from bid histories. It is now logged (bid_count).

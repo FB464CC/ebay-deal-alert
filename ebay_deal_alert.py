@@ -2316,6 +2316,15 @@ GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE = float(
 # it can excuse only a failed relative price-vs-AI-estimate comparison. The
 # modern/set/brand/handedness/playability/condition/authenticity gates below
 # remain identical, and unknown eBay shipping cannot qualify.
+# Measured 2026-10-05 from the full bid histories of 1,738 closed ShopGoodwill
+# golf auctions: the displayed price ~15 minutes before close versus the final
+# price. Auctions with NO bids essentially never moved (p90 x1.00). Contested
+# ones (>=1 bid) closed a median ~x1.0-1.06 but with a real upper tail: brand-
+# name sets p75 ~x1.2-1.3, p90 ~x1.4-1.7, ~1-6% reaching double. These two
+# multipliers frame "typical" and "high" for the alert text only; they never
+# gate delivery.
+SHOPGOODWILL_CONTESTED_CLOSE_TYPICAL_MULT = 1.20
+SHOPGOODWILL_CONTESTED_CLOSE_HIGH_MULT = 1.45
 GOLF_MODERN_SET_MAX_LANDED_PRICE = float(
     _CONFIG.get("GOLF_MODERN_SET_MAX_LANDED_PRICE", 225)
 )
@@ -8118,6 +8127,24 @@ def send_alert(result):
             parts.append(f"resale ~${resale_str}")
         message += "\n" + " / ".join(parts)
 
+    # ShopGoodwill current bids are not final prices. Show the measured close
+    # range so the owner sees what he would likely pay, not just the live bid.
+    if is_golf and listing.get("platform") == "shopgoodwill":
+        sgw_bids = result.get("bid_count")
+        sgw_price = item_price if item_price is not None else (listing.get("price") or {}).get("value")
+        if isinstance(sgw_bids, int) and not isinstance(sgw_bids, bool) and sgw_price:
+            if sgw_bids >= 1:
+                low = float(sgw_price) * SHOPGOODWILL_CONTESTED_CLOSE_TYPICAL_MULT
+                high = float(sgw_price) * SHOPGOODWILL_CONTESTED_CLOSE_HIGH_MULT
+                bid_word = "bid" if sgw_bids == 1 else "bids"
+                message += (
+                    f"\nBid is ${float(sgw_price):.2f} now ({sgw_bids} {bid_word}): contested "
+                    f"auctions usually close higher - expect ~${low:.0f}-${high:.0f} "
+                    f"before shipping"
+                )
+            else:
+                message += "\nNo bids yet - uncontested auctions here almost never rise before close"
+
     # Seller feedback as a trust signal, shown for EVERY eBay listing that
     # carries it (not just watches) so the user can factor it in even where
     # it isn't a hard gate. Non-eBay listings never carry the field, so
@@ -10465,6 +10492,8 @@ def run():
             if listing.get("is_ending_soon_auction"):
                 result["is_ending_soon_auction"] = True
                 result["auction_minutes_remaining"] = listing.get("auction_minutes_remaining")
+                result["bid_count"] = listing.get("bid_count")
+            elif listing.get("platform") == "shopgoodwill" and listing.get("bid_count") is not None:
                 result["bid_count"] = listing.get("bid_count")
             if search_total_listings is not None:
                 result["search_total_listings"] = search_total_listings

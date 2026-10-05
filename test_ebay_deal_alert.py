@@ -6796,6 +6796,56 @@ class SendAlertRetailResaleLine(unittest.TestCase):
         )
 
 
+class SendAlertShopGoodwillCloseRange(unittest.TestCase):
+    """The live ShopGoodwill bid is not the final price. Measured on 1,738
+    closed golf auctions: uncontested ones never moved, contested ones usually
+    closed ~20% higher with a tail to ~45%+. Display only."""
+
+    def _send_and_capture(self, result):
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status = lambda: None
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured["message"] = data.decode("utf-8")
+            return fake_resp
+
+        with mock.patch("requests.post", side_effect=fake_post):
+            m.send_alert(result)
+        return captured["message"]
+
+    def _result(self, bids, platform="shopgoodwill", price=40.0):
+        return {
+            "listing": {"title": "Callaway Rogue Iron Set 5-PW RH", "itemWebUrl": "https://x",
+                        "platform": platform, "price": {"value": price}},
+            "category": "golf-equipment",
+            "price": 60.0,
+            "item_price": price,
+            "bid_count": bids,
+        }
+
+    def test_contested_auction_shows_expected_close_range(self):
+        message = self._send_and_capture(self._result(7))
+        self.assertIn("Bid is $40.00 now (7 bids)", message)
+        self.assertIn("expect ~$48-$58 before shipping", message)
+
+    def test_single_bid_uses_singular_wording(self):
+        self.assertIn("(1 bid)", self._send_and_capture(self._result(1)))
+
+    def test_uncontested_auction_says_no_bids_yet(self):
+        message = self._send_and_capture(self._result(0))
+        self.assertIn("No bids yet", message)
+        self.assertNotIn("expect ~", message)
+
+    def test_other_platforms_and_unknown_bids_show_nothing(self):
+        self.assertNotIn("expect ~", self._send_and_capture(self._result(7, platform="ebay")))
+        result = self._result(7)
+        result.pop("bid_count")
+        message = self._send_and_capture(result)
+        self.assertNotIn("expect ~", message)
+        self.assertNotIn("No bids yet", message)
+
+
 class SendAlertGolfDecisionLines(unittest.TestCase):
     """Golf alerts need club run / handedness evidence / brand / a verify
     line so the owner can decide bid-or-skip in seconds. These lines are
