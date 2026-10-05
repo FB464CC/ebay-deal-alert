@@ -2317,7 +2317,7 @@ GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE = float(
 # modern/set/brand/handedness/playability/condition/authenticity gates below
 # remain identical, and unknown eBay shipping cannot qualify.
 GOLF_MODERN_SET_MAX_LANDED_PRICE = float(
-    _CONFIG.get("GOLF_MODERN_SET_MAX_LANDED_PRICE", 200)
+    _CONFIG.get("GOLF_MODERN_SET_MAX_LANDED_PRICE", 225)
 )
 # The historical Rogue auction arrived through the rotating HTML scrape 80.95
 # seconds before close. All configured Browse-API auction searches were also
@@ -2530,6 +2530,133 @@ GOLF_IRON_ENUMERATION_SIGNAL = re.compile(
     r"(?:[2-9]|p(?:w)?|aw|gw|sw|lw))+\b",
     re.IGNORECASE,
 )
+GOLF_SPACE_SEPARATED_IRON_ENUMERATION_SIGNAL = re.compile(
+    r"\birons?(?:\s+sets?)?\b.{0,20}?\b"
+    r"(?P<run>(?:[2-9]|p(?:w)?|aw|gw|sw|lw)"
+    r"(?:\s+(?:[2-9]|p(?:w)?|aw|gw|sw|lw)){4,})\b",
+    re.IGNORECASE,
+)
+GOLF_EXPLICIT_MISSING_IRON_SIGNAL = re.compile(
+    r"\b(?:missing|without|no|minus|lacks?|lacking|excludes?|"
+    r"does\s+not\s+(?:include|have|come\s+with)|"
+    r"doesn(?:'|\N{RIGHT SINGLE QUOTATION MARK})t\s+(?:include|have|come\s+with))\s+"
+    r"(?:(?:the|a|an)\s+)?"
+    r"(?:[2-9](?:\s*[-#]?\s*(?:iron|i))?|p(?:itching)?\s*w(?:edge)?|pw)\b|"
+    r"\b(?:[2-9](?:\s*[-#]?\s*(?:iron|i))?|p(?:itching)?\s*w(?:edge)?|pw)\s+"
+    r"(?:is\s+)?(?:missing|not\s+(?:included|present)|absent|omitted)\b",
+    re.IGNORECASE,
+)
+GOLF_MIXED_LIE_OR_LOFT_SIGNAL = re.compile(
+    r"\b(?:mixed|mismatched|different)\s+(?:(?:color(?:ed)?|lie)\s+)?dots?\b|"
+    r"\b(?:black|blue|green|red|orange|yellow|white|brown|gold|silver)\s*"
+    r"(?:dots?\s*)?(?:and|&|/)\s*"
+    r"(?:black|blue|green|red|orange|yellow|white|brown|gold|silver)\s+dots?\b|"
+    r"\b(?:mixed|mismatched|different)\s+(?:lofts?|lie(?:\s+angles?)?)\b",
+    re.IGNORECASE,
+)
+GOLF_EXPLICIT_FRANKENSET_SIGNAL = re.compile(
+    r"\b(?:frankenstein|mix(?:ed)?[\s-]+and[\s-]+match)\b|"
+    r"\bmismatched\s+(?:irons?|clubs?|sets?|models?|heads?|shafts?)\b|"
+    r"\b(?:irons?|clubs?|sets?|models?|heads?|shafts?)\s+(?:are\s+)?"
+    r"mismatched\b(?!\s+grips?\b)|"
+    r"\b(?:mixed|assorted)\s+(?:iron\s+)?sets?\b|"
+    r"\b(?:different|multiple)\s+(?:iron\s+)?models?\b",
+    re.IGNORECASE,
+)
+GOLF_LOT_TOTAL_COUNT_SIGNAL = re.compile(
+    r"\b(?:lot\s+(?:of\s+)?|golf\s+clubs?\s+lot\s+)"
+    r"(\d{1,2})\s*(?:clubs?|pieces?|pcs?|items?)\b|"
+    r"\blot\s+(\d{1,2})\s+(?:golf\s+)?clubs?\b",
+    re.IGNORECASE,
+)
+GOLF_ASSORTED_LOT_COMPONENT_SIGNALS = {
+    "driver": re.compile(r"\bdrivers?\b", re.IGNORECASE),
+    "wood": re.compile(r"\bwoods?\b", re.IGNORECASE),
+    "hybrid": re.compile(r"\bhybrids?\b", re.IGNORECASE),
+    "putter": re.compile(r"\bputters?\b", re.IGNORECASE),
+    "bag": GOLF_BAG_TITLE_SIGNAL,
+}
+GOLF_IRON_BRAND_MENTION_SIGNAL = re.compile(
+    r"\b(?P<brand>callaway|ping|titleist|taylor\s*made|cobra|mizuno|"
+    r"wilson(?:\s+staff)?|adams|ben\s+hogan|cleveland|nike|bridgestone|srixon|pxg)\b"
+    r".{0,36}?\birons?\b",
+    re.IGNORECASE,
+)
+# The historical leak below literally says ``6 irons. Taylormade
+# aeroburner,R11,R9 TP,rocketballz``.  Treat only a model list explicitly
+# introduced as TaylorMade irons as proof; model names elsewhere in a full-set
+# title may correctly belong to its driver or woods.
+GOLF_TAYLORMADE_IRON_MODEL_LIST_SIGNAL = re.compile(
+    r"\birons?\b[\s.:-]{0,8}taylor\s*made\b(?P<models>[^;|]{0,120})",
+    re.IGNORECASE,
+)
+GOLF_TAYLORMADE_IRON_MODEL_SIGNALS = (
+    ("AeroBurner", re.compile(r"\baero\s*burner\b", re.IGNORECASE)),
+    ("R11", re.compile(r"\br11\b", re.IGNORECASE)),
+    ("R9", re.compile(r"\br9(?:\s+tp)?\b", re.IGNORECASE)),
+    ("RocketBallz", re.compile(r"\b(?:rocket\s*ballz|rbz)\b", re.IGNORECASE)),
+)
+GOLF_CONDITION_SPEC_HARD_FAIL_SIGNAL = re.compile(
+    r"\bdry[\s-]+rott(?:ed|en)\s+grips?\b|"
+    r"\bgrips?\b.{0,16}\bdry[\s-]+rott(?:ed|en)\b|"
+    r"\bneeds?\s+(?:new\s+)?grips?\b|"
+    r"\bgrips?\s+(?:need|needs|require|requires)\s+(?:replacement|replacing)\b|"
+    r"\bregrip(?:ping)?\s+(?:is\s+)?(?:needed|required)\b|"
+    r"(?<!\d)\+(?:1(?:[.]5)?|2)(?:[\s-]*(?:in(?:ch(?:es)?)?|[\"”]))(?!\w)|"
+    r"\bplus\s+(?:one|two|1(?:[.]5)?|2)\s+inch(?:es)?\b|"
+    r"\b(?:one|two|1(?:[.]5)?|2)\s+inch(?:es)?\s+over\b|"
+    r"\bextended\b(?!\s+(?:(?:manufacturer(?:'s)?|limited|product)\s+)?"
+    r"(?:warrant(?:y|ies)|coverage|returns?|return\s+(?:period|window)|protection))|"
+    r"\b(?:shafts?|clubs?)\s+(?:are\s+|were\s+)?extended\b",
+    re.IGNORECASE,
+)
+GOLF_NEGATABLE_DAMAGE_SIGNAL = re.compile(r"\b(?:cracked|pitting)\b", re.IGNORECASE)
+GOLF_RUST_SIGNAL = re.compile(r"\brust(?:ed|y|ing)?\b", re.IGNORECASE)
+GOLF_FLEX_VERIFY_SIGNALS = (
+    ("Senior/A-flex", re.compile(r"\b(?:senior|a[\s-]?flex)\b", re.IGNORECASE)),
+    ("Ladies/L-flex", re.compile(r"\b(?:lad(?:y|ies)|l[\s-]?flex)\b", re.IGNORECASE)),
+)
+GOLF_SHAFT_FLEX_DISPLAY_SIGNALS = (
+    (
+        "Senior",
+        re.compile(
+            r"\bsenior(?:\s+flex)?\b|\ba[\s-]?flex\b|\bflex\s*[:/-]?\s*a\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Ladies",
+        re.compile(
+            r"\blad(?:y|ies)(?:\s+flex)?\b|\bl[\s-]?flex\b|"
+            r"\bflex\s*[:/-]?\s*l\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Stiff",
+        re.compile(
+            r"\bstiff(?:\s+flex)?\b|\bs[\s-]?flex\b|"
+            r"\bflex\s*[:/-]?\s*s\b|"
+            r"\bs\s+(?=shafts?\b|(?:steel|graphite)\s+shafts?\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "Regular",
+        re.compile(
+            r"\breg(?:ular)?(?:\s+flex)?\b|\br[\s-]?flex\b|"
+            r"\bflex\s*[:/-]?\s*r\b|"
+            r"\br\s+(?=shafts?\b|(?:steel|graphite)\s+shafts?\b)",
+            re.IGNORECASE,
+        ),
+    ),
+)
+GOLF_SHAFT_MATERIAL_DISPLAY_SIGNALS = (
+    ("Graphite", re.compile(r"\bgraphite\b", re.IGNORECASE)),
+    # Word boundaries deliberately do not match model names such as
+    # Callaway Steelhead.
+    ("Steel", re.compile(r"\bsteel\b", re.IGNORECASE)),
+)
 
 
 def _golf_profile_regexes(field):
@@ -2597,8 +2724,16 @@ def _golf_iron_enumerations(title):
     """Return count/gap/span evidence for explicit iron-number lists."""
     values = {"p": 10, "pw": 10, "aw": 11, "gw": 11, "sw": 12, "lw": 13}
     enumerations = []
-    for match in GOLF_IRON_ENUMERATION_SIGNAL.finditer(title):
-        tokens = re.findall(r"[2-9]|p(?:w)?|aw|gw|sw|lw", match.group(0), re.I)
+    matches = [
+        (match, match.group(0))
+        for match in GOLF_IRON_ENUMERATION_SIGNAL.finditer(title)
+    ]
+    matches.extend(
+        (match, match.group("run"))
+        for match in GOLF_SPACE_SEPARATED_IRON_ENUMERATION_SIGNAL.finditer(title)
+    )
+    for match, run_text in matches:
+        tokens = re.findall(r"[2-9]|p(?:w)?|aw|gw|sw|lw", run_text, re.I)
         numbers = [int(token) if token.isdigit() else values[token.casefold()] for token in tokens]
         # A numbered gap before/through PW proves a loose partial group. Sets
         # commonly append SW without GW, so optional wedges after PW do not by
@@ -2685,6 +2820,121 @@ def _golf_club_run_text(title):
     if enum_match:
         tokens = re.findall(r"[2-9]|p(?:w)?|aw|gw|sw|lw", enum_match.group(0), re.I)
         return f"{enum_match.group(0).strip()} ({len(tokens)} clubs)"
+    space_enum = GOLF_SPACE_SEPARATED_IRON_ENUMERATION_SIGNAL.search(title)
+    if space_enum:
+        run = space_enum.group("run").strip()
+        tokens = re.findall(r"[2-9]|p(?:w)?|aw|gw|sw|lw", run, re.I)
+        return f"{run} ({len(tokens)} clubs)"
+    return None
+
+
+def golf_condition_spec_reason(result):
+    """Return a golf-only seller-text condition or altered-length hard stop."""
+    listing_text = _golf_listing_title_and_description(result)
+    match = GOLF_CONDITION_SPEC_HARD_FAIL_SIGNAL.search(listing_text)
+    if match:
+        return f"condition/spec hard stop: {match.group(0)!r}"
+    for damage in GOLF_NEGATABLE_DAMAGE_SIGNAL.finditer(listing_text):
+        nearby = listing_text[max(0, damage.start() - 24):damage.end() + 8]
+        if not re.search(
+            r"\bnot\s+cracked\b|"
+            r"\b(?:no|without|free\s+of)\s+(?:visible\s+|any\s+)?pitting\b|"
+            r"\bpitting[\s-]*free\b",
+            nearby,
+            re.IGNORECASE,
+        ):
+            return f"condition/spec hard stop: {damage.group(0)!r}"
+    for rust in GOLF_RUST_SIGNAL.finditer(listing_text):
+        nearby = listing_text[max(0, rust.start() - 24):rust.end() + 8]
+        if not re.search(
+            r"\b(?:no|without|free\s+of)\s+(?:visible\s+|any\s+)?"
+            r"(?:(?:pitting|corrosion|damage|dings?)\s*(?:,|and|or|/)\s*)*rust|"
+            r"\brust[\s-]*free\b",
+            nearby,
+            re.IGNORECASE,
+        ):
+            return f"condition/spec hard stop: {rust.group(0)!r}"
+    return None
+
+
+def golf_shaft_spec_text(result):
+    """Return concise seller-stated shaft flex/material for alert display."""
+    listing_text = _golf_listing_title_and_description(result)
+    parts = []
+    for label, pattern in GOLF_SHAFT_FLEX_DISPLAY_SIGNALS:
+        if pattern.search(listing_text):
+            parts.append(label)
+            break
+    for label, pattern in GOLF_SHAFT_MATERIAL_DISPLAY_SIGNALS:
+        if pattern.search(listing_text):
+            parts.append(label)
+    return " / ".join(parts) if parts else None
+
+
+def golf_set_integrity_reason(result):
+    """Return a title/description-proven completeness or coherence failure.
+
+    These are deliberately literal seller disclosures and narrowly structured
+    lot shapes.  Unknown model relationships fail open; a legitimate full set
+    may mix woods/putter brands as long as its iron set remains coherent.
+    """
+    listing_text = _golf_listing_title_and_description(result)
+    listing = result.get("listing") or {}
+    title = str(listing.get("title") or "")
+
+    condition_reason = golf_condition_spec_reason(result)
+    if condition_reason:
+        return condition_reason
+    missing = GOLF_EXPLICIT_MISSING_IRON_SIGNAL.search(listing_text)
+    if missing:
+        return f"listing explicitly says an iron is missing: {missing.group(0)!r}"
+    mixed_fit = GOLF_MIXED_LIE_OR_LOFT_SIGNAL.search(listing_text)
+    if mixed_fit:
+        return f"mixed lie/color-dot or loft specification: {mixed_fit.group(0)!r}"
+    franken = GOLF_EXPLICIT_FRANKENSET_SIGNAL.search(listing_text)
+    if franken:
+        return f"seller identifies a mismatched/mixed-model set: {franken.group(0)!r}"
+
+    model_list = GOLF_TAYLORMADE_IRON_MODEL_LIST_SIGNAL.search(title)
+    if model_list:
+        model_text = model_list.group("models")
+        named_models = [
+            label
+            for label, pattern in GOLF_TAYLORMADE_IRON_MODEL_SIGNALS
+            if pattern.search(model_text)
+        ]
+        if len(named_models) >= 2 and re.search(r"[,/&+]|\band\b", model_text, re.IGNORECASE):
+            return "title identifies multiple TaylorMade models as the irons: " + ", ".join(named_models)
+
+    iron_brands = {
+        re.sub(r"\s+", " ", match.group("brand").casefold()).strip()
+        for match in GOLF_IRON_BRAND_MENTION_SIGNAL.finditer(title)
+    }
+    if len(iron_brands) > 1:
+        return "title identifies multiple different brands as the irons"
+
+    lot_match = GOLF_LOT_TOTAL_COUNT_SIGNAL.search(title)
+    if lot_match:
+        total = int(lot_match.group(1) or lot_match.group(2))
+        component_types = {
+            name
+            for name, pattern in GOLF_ASSORTED_LOT_COMPONENT_SIGNALS.items()
+            if pattern.search(title)
+        }
+        has_irons = bool(GOLF_FULL_SET_CLUB_FAMILY_SIGNALS["irons"].search(title))
+        explicitly_complete = bool(GOLF_FULL_COMPLETE_SET_TITLE_SIGNAL.search(title))
+        iron_run_is_coherent = golf_iron_set_title_reason(title) is None
+        if (
+            total <= 9
+            and has_irons
+            and len(component_types) >= 2
+            and not explicitly_complete
+            and not iron_run_is_coherent
+        ):
+            return (
+                f"assorted {total}-club lot bundles a handful of unspecified irons "
+                "with unrelated club types"
+            )
     return None
 
 
@@ -2711,6 +2961,16 @@ def golf_full_set_only_reason(result, *, allow_iron_sets=None):
         )
         if part
     )
+    integrity_reason = golf_set_integrity_reason(result)
+    if integrity_reason:
+        return "golf full-set-only: " + integrity_reason
+    # Preserve the more actionable established diagnosis for an explicitly
+    # gapped iron run even when the same title also names an old model.  Both
+    # are hard stops, but the missing-club fact tells the buyer exactly why the
+    # set is unusable and keeps the settled reason contract stable.
+    early_iron_reason = golf_iron_set_title_reason(title)
+    if early_iron_reason == "gapped/non-contiguous loose irons are not an iron set":
+        return "golf full-set-only: non-qualifying iron set: " + early_iron_reason
     for pattern in _golf_profile_regexes("full_set_junk_patterns"):
         match = pattern.search(evidence_text)
         if match:
@@ -2722,6 +2982,20 @@ def golf_full_set_only_reason(result, *, allow_iron_sets=None):
                 "golf full-set-only: pre-2012 vintage model "
                 f"{match.group(0)!r}"
             )
+    identified_model = str(result.get("golf_identified_model") or "").strip()
+    release_year = result.get("golf_model_release_year")
+    if (
+        identified_model
+        and isinstance(release_year, (int, float))
+        and not isinstance(release_year, bool)
+        and math.isfinite(release_year)
+        and int(release_year) == release_year
+        and int(release_year) < 2012
+    ):
+        return (
+            "golf full-set-only: AI identified pre-2012 model "
+            f"{identified_model!r} ({int(release_year)})"
+        )
     if GOLF_BEGINNER_UNSUITABLE_IRON_SIGNAL.search(title):
         return "golf full-set-only: beginner-unsuitable muscle-back/blade irons"
     if result.get("golf_is_playable_first_set") is not True:
@@ -2818,8 +3092,8 @@ def golf_modern_set_absolute_price_path_applies(result, landed):
     This deliberately repeats the non-price requirements that the surrounding
     golf gate will enforce again. A True result excuses exactly one decision:
     whether ``landed`` beats the AI estimate by at least 50%. It cannot excuse
-    a missing appraisal, low confidence, unknown eBay shipping, wrong shape or
-    era, junk/blades, uncertain handedness/claims, damage, or counterfeit risk.
+    a missing appraisal, unknown eBay shipping, wrong shape or era,
+    junk/blades, uncertain handedness/claims, damage, or counterfeit risk.
     """
     if (
         not result.get("golf_ai_checked")
@@ -2837,9 +3111,6 @@ def golf_modern_set_absolute_price_path_applies(result, landed):
         return False
 
     cheap_full_set_exception = _golf_cheap_full_set_exception(result, landed)
-    price_confidence = (result.get("price_confidence") or "").lower() or None
-    if price_confidence == "low" and not cheap_full_set_exception:
-        return False
     if result.get("golf_is_left_handed"):
         return False
     if (
@@ -2897,6 +3168,28 @@ def golf_blocked_brand(identified_brand):
                 ):
                     continue
                 return blocked_brand
+    return None
+
+
+def golf_zero_feedback_seller_reason(result):
+    """Reject a proven zero-feedback seller only on official eBay data.
+
+    Browse item summaries are the sole golf source that supplies the actual
+    feedbackScore field.  Every absent, malformed, scraped, or non-eBay case
+    fails open rather than treating missing marketplace data as zero.
+    """
+    listing = result.get("listing") or {}
+    platform = listing.get("platform")
+    if platform not in (None, "", "ebay"):
+        return None
+    score = result.get("seller_feedback_score")
+    if (
+        isinstance(score, (int, float))
+        and not isinstance(score, bool)
+        and math.isfinite(score)
+        and score == 0
+    ):
+        return "golf-equipment bar: official eBay seller has zero feedback"
     return None
 
 
@@ -5678,10 +5971,13 @@ def check_photos_with_gemini(
             "Wilson, Top Flite, Adams, Cobra, Ping, TaylorMade, Titleist, Mizuno, or "
             "Cleveland); mixed or unknown brands are acceptable in this reporting field "
             "and should be reported honestly. "
-            "identified_model is the exact visibly supported model family, or null when "
-            "markings are insufficient. model_release_year is the known first release "
-            "year for that exact model, or null when the model/year is uncertain; never "
-            "guess a year from condition or styling. "
+            "When irons are present, identified_model MUST describe the coherent IRON "
+            "model family, not a driver, wood, hybrid, putter, or bag. Use null if the "
+            "iron markings are insufficient or the visible irons span multiple product "
+            "lines. Only a standalone-component listing with no irons may use that "
+            "component's exact visibly supported model. model_release_year is the known "
+            "first release year for that exact identified model, or null when the model/"
+            "year is uncertain; never guess a year from condition or styling. "
             "brand_claims_present is true only when "
             "the title or description actually claims a manufacturer or model; a generic "
             "title such as 'Golf clubs' has no brand claim and must use false. "
@@ -6431,6 +6727,9 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     if category == "golf-equipment":
         if not result.get("golf_ai_checked"):
             return "golf-equipment bar: no AI price estimate yet - needs a real AI check"
+        zero_feedback_reason = golf_zero_feedback_seller_reason(result)
+        if zero_feedback_reason:
+            return zero_feedback_reason
         component_kind = golf_component_search_kind(result.get("search_query"))
         identified_brand = result.get("golf_identified_brand")
         blocked_brand = golf_blocked_brand(identified_brand)
@@ -6484,7 +6783,15 @@ def is_blocked_by_steal_quality_gate(result, category=None):
                 return relative_price_failure
             uses_modern_absolute_path = True
         cheap_full_set_exception = _golf_cheap_full_set_exception(result, landed)
-        if price_confidence == "low" and not cheap_full_set_exception:
+        # Low confidence remains a veto for the relative-appraisal route. A
+        # listing that independently clears the strict modern-set absolute
+        # path does not need confidence in the appraisal to establish that its
+        # known landed price is within the owner's approved ceiling.
+        if (
+            price_confidence == "low"
+            and not cheap_full_set_exception
+            and not modern_absolute_path
+        ):
             return "golf-equipment bar: AI price estimate confidence too low to trust"
         is_wanted_component = bool(
             component_kind and result.get("golf_is_wanted_component")
@@ -7214,6 +7521,8 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "deal_rating",
         "discount_pct",
         "price_confidence",
+        "seller_feedback_score",
+        "seller_feedback_percentage",
         "brand_tier",
         "liquidity",
         "search_total_listings",
@@ -7691,6 +8000,13 @@ def send_alert(result):
             message += f"\nAI ID: {brand}"
         else:
             unverified.append("brand/model")
+        shaft_spec = golf_shaft_spec_text(result)
+        if shaft_spec:
+            message += f"\nshaft: {shaft_spec}"
+        golf_listing_text = _golf_listing_title_and_description(result)
+        for flex_label, flex_pattern in GOLF_FLEX_VERIFY_SIGNALS:
+            if flex_pattern.search(golf_listing_text):
+                unverified.append(f"shaft flex {flex_label}")
         if unverified:
             message += f"\nverify: {', '.join(unverified)}"
     if result.get("is_ending_soon_auction"):
@@ -7712,7 +8028,7 @@ def send_alert(result):
         )
 
     deal_rating = result.get("deal_rating")
-    if deal_rating:
+    if deal_rating and not is_golf:
         message += f"\n{deal_rating}"
         discount_pct = result.get("discount_pct")
         if discount_pct is not None:
@@ -7778,7 +8094,23 @@ def send_alert(result):
     # Kept to one short line each, same "ntfy truncates long messages on
     # the lock screen" constraint noted above - the full flags/reasoning
     # already live in alerts_log.jsonl for the mobile app.
-    if retail_str or resale_str:
+    if is_golf and resale_str:
+        asking_value = item_price
+        if asking_value is None:
+            listing_price = listing.get("price") or {}
+            asking_value = listing_price.get("value") if isinstance(listing_price, dict) else None
+        if asking_value is None:
+            asking_value = price
+        try:
+            asking_str = f"{float(asking_value):g}"
+        except (TypeError, ValueError):
+            asking_str = None
+        if asking_str:
+            message += (
+                f"\ntypical used price ~${resale_str} (AI estimate) "
+                f"vs asking ${asking_str}"
+            )
+    elif retail_str or resale_str:
         parts = []
         if retail_str:
             parts.append(f"retail ~${retail_str}")

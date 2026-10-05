@@ -1,0 +1,816 @@
+GOLF GATES - 2026-10-04 OWNER RULE IMPLEMENTATION
+=================================================
+
+Scope and safeguards
+--------------------
+- Required owner/rule and prior golf reports were read in full before repo
+  inspection or edits. No fetch, pull, clone, commit, or push was performed.
+- Initial tracked worktree was clean. Pre-existing untracked files were
+  OWNER_RULES_2026_10_04.txt, run.stdout.log, and task.txt.
+- HEAD at baseline: ec1575701c2e8ebcf1b3eec43243d266d6d6a4f2
+  (2026-10-05T01:51:52Z, chore: update poll state [skip ci]).
+- Pre-change full suite: 807 passed, 3 warnings, 591 subtests passed in 26.93s.
+  The three warnings are the established lxml strip_cdata deprecations.
+
+TASK 1 - AUDIT (complete)
+-------------------------
+
+Reconstruction method and reach
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- Used only GitHub's read-only commits API for commits touching
+  alerts_log.jsonl, chose the newest commit in each UTC hour, downloaded that
+  commit's raw alerts_log.jsonl, deduplicated exact JSON lines, then restricted
+  rows by their own timestamps. This is the same conservative method documented
+  in GOLF_DEEP_DIVE_2026_10_01.txt; a row that appeared and rolled away between
+  hourly samples cannot be recovered.
+- Window: row timestamps 2026-09-08T00:00:00Z through 2026-10-06T00:00:00Z.
+- 4,089 commits in 41 API pages; 619 hourly snapshots spanning commit times
+  2026-09-08T00:52:06Z through 2026-10-05T01:56:26Z. All downloaded.
+- Recovered 26,664 rows with zero malformed lines, including 14,042 golf rows
+  and 60 delivered golf rows / 60 distinct item IDs. This extends the prior
+  57-row audit with the three measured Oct 4-5 leaks.
+- Golf dispositions: NO_AI_BUDGET 3,935; GOLF_REJECT 2,004;
+  GOLF_WRONG_ITEM 1,963; STALE_LISTING 1,861; CONDITION_REJECT 1,239;
+  MONTHLY_BUDGET_EXHAUSTED 1,008; BELOW_MARGIN 685; AI_NO_PRICE 471;
+  GENDER_EXCLUDE 365; OVER_MAX_PRICE 361; DELIVERED 60;
+  AI_NO_PRICE_CAPPED 42; COUNTERFEIT 23; GOLF_FULL_SET_ONLY_REJECT 21;
+  GATE_REJECTED 4.
+
+Audit legend
+~~~~~~~~~~~~
+- Owner groups: E=era, C=completeness/coherence, D=condition,
+  S=length/flex spec, T=seller trust/photo contradiction.
+- "E?" means the retained title/log lacks affirmative 2012+ model evidence;
+  it is not silently treated as modern. "T?" means seller feedback was not
+  serialized on any of the 60 historical deliveries, so seller trust cannot be
+  reconstructed from the log. No delivered title states any of the owner's
+  exact condition hard stops or +1/+1.5/+2-inch modifications; therefore D and
+  length-S are not assigned from title speculation. Senior/Ladies flex is also
+  absent from these 60 titles.
+- The "audit baseline" result replays the code as it stood before Tasks 2-7,
+  with the category-neutral retained ai_checked=true restored to the in-memory
+  golf_ai_checked marker. It uses the exact two-stage path in run():
+  is_blocked_by_steal_quality_gate(), then golf_full_set_only_reason().
+  Descriptions were not retained, so replay is title/AI-log based.
+
+Every delivered golf row
+~~~~~~~~~~~~~~~~~~~~~~~~
+No. | timestamp (UTC) | item id | landed | exact title | owner-rule result | audit-baseline replay
+01 | 2026-09-09T01:34:04.334543Z | v1|168537888092|0 | $26.50 | Odyssey White Hot #4 Putter, Right Hand Nice!! | BLOCK C (single putter, not iron/full set); T? | BLOCK shape: AI not playable first set
+02 | 2026-09-09T01:44:34.749218Z | shopgoodwill:276141527 | $52.47 | Adams Golf Idea Forged CB3 Iron Set 4-PW KBS Tour Steel Shafts Golf Clubs | ALLOW: Adams launched CB3 in Q1 2012; modern boundary control, coherent 4-PW; T? | PASS (wanted shape)
+03 | 2026-09-09T15:33:58.184211Z | v1|406972182864|0 | $21.06 | Vintage Ping A Blade Putter Mang Bronze RH Karsten 85029 Heel-Toe Approx 35'' | BLOCK E+C; T? | BLOCK junk "Vintage"
+04 | 2026-09-10T00:59:44.254940Z | shopgoodwill:276236705 | $48.11 | Ping G10 Irons 3-9 + PING i5 3-7 & G30 Utility U-Wedge Golf Clubs Set | BLOCK E+C (G10/i5/G30 mixed generations/models); T? | BLOCK existing Ping G10 vintage-model pattern
+05 | 2026-09-10T01:17:48.045704Z | shopgoodwill:275771078 | $48.23 | KZG EL/250 Golf Iron Set 4-9, Pitching & Sand Wedge with Maxfli Stand Bag | E?; otherwise coherent title; T? | BLOCK no mainstream brand identified
+06 | 2026-09-10T21:44:06.609429Z | v1|407200536847|0 | $74.40 | 9-Piece Men's Golf Iron Set with Steel Shafts, Right-Handed, Includes Wedges | E? and exact model unknown; T? | BLOCK no mainstream brand identified
+07 | 2026-09-12T08:27:33.473076Z | v1|407095063855|0 | $1.06 | Golf Stand Bag W/ 6 Way Top Dividers Lightweight Golf Bag W/ Adjustable Dual | BLOCK C (bag only); T? | BLOCK shape
+08 | 2026-09-12T08:27:45.619407Z | v1|407057232382|0 | $7.42 | Golf Stand Bag W/ 6 Way Top Dividers Lightweight Golf Bag W/ Adjustable Dual | BLOCK C (bag only); T? | BLOCK shape
+09 | 2026-09-12T09:08:06.635892Z | v1|147278468418|0 | $26.49 | Vintage PING KARSTEN J-BLADE 35" PUTTER RH | BLOCK E+C; T? | BLOCK junk "Vintage"
+10 | 2026-09-12T09:43:09.128639Z | v1|336671107402|0 | $32.85 | Vintage Ping Anser Putter Karsten Mfg Phoenix AZ Original Ping Grip USA RH | BLOCK E+C; T? | BLOCK junk "Vintage"
+11 | 2026-09-12T12:59:03.480138Z | v1|298664939156|0 | $46.26 | golf clubs ping eye 2 | BLOCK E; C not proven; T? | BLOCK no multi-club set evidence
+12 | 2026-09-12T12:59:08.410995Z | v1|298664972747|0 | $40.96 | golf clubs ping eye wedge | BLOCK E+C (single wedge); T? | BLOCK no multi-club set evidence
+13 | 2026-09-12T16:42:30.781185Z | v1|298474434572|0 | $21.93 | Vintage Ping A Blade Karsten MFG Putter - RH 36" 85028 | BLOCK E+C; T? | BLOCK junk "Vintage"
+14 | 2026-09-13T23:08:24.841820Z | v1|116523315179|0 | $21.15 | *****VINTAGE - PING- KARSTEN 3 -PUTTER- RIGHT HANDED-LENGTH 35 INCHES-***** | BLOCK E+C; T? | BLOCK junk "VINTAGE"
+15 | 2026-09-14T00:48:29.694296Z | shopgoodwill:276642973 | $20.66 | Taylormade R540 Xd 9.5 Driver 540D415I, Aldila Nv 65 S .350 Green Shaft, Fair | BLOCK E+C (old driver only); T? | BLOCK shape
+16 | 2026-09-14T00:53:21.803870Z | shopgoodwill:276899152 | $27.02 | Lot Of Assorted Wilson Prostaff Ultra Mixed Variety Golf Clubs In Case | BLOCK C (assorted/mixed/variety); E?; T? | BLOCK junk "Assorted"
+17 | 2026-09-14T01:32:52.918144Z | shopgoodwill:276873033 | $28.08 | Top-Flite Golf Club Set with Bag 3,5,7,9 Irons, Putter, 3 Wood, Driver | BLOCK C (missing middle irons); E?; T? | BLOCK quality: Top Flite
+18 | 2026-09-14T01:57:57.727587Z | shopgoodwill:276640003 | $20.66 | TaylorMade Burner SuperSteel 4pc Driver & 3 5 7 Wood, Bubble L 60 & Advent Shaft | BLOCK E+C (old woods-only group, no irons); T? | BLOCK shape
+19 | 2026-09-14T03:13:04.154598Z | shopgoodwill:276625273 | $35.50 | Top Flite Xl Golf Clubs With Stand Bag | E?/C not proven; T? | BLOCK quality: Top Flite
+20 | 2026-09-15T00:43:09.163714Z | shopgoodwill:277016153 | $24.90 | Vintage 5 Wilson X31 Muscle-Back Blade Iron Golf Clubs | BLOCK E+C (vintage blade set); T? | BLOCK junk "Vintage"
+21 | 2026-09-15T01:27:46.671417Z | v1|168671052271|0 | $12.19 | Ping Tsi Marsten II Sporting Equipment Driver Golf Clubs Lot Of 4 | BLOCK C (driver lot, not iron/full set); E?; T? | BLOCK shape
+22 | 2026-09-15T11:48:09.327383Z | shopgoodwill:276775592 | $35.50 | Used TaylorMade R11S 9-Degree Driver Venom Flex S Shaft Stiff Flex | BLOCK C (driver only); T? | BLOCK shape
+23 | 2026-09-16T01:28:05.932505Z | shopgoodwill:276566579 | $25.97 | Dynacraft Golf Club Set 9 Clubs With Ping Stand Bag Right Hand | E?/model coherence not proven; T? | BLOCK no mainstream club brand identified
+24 | 2026-09-16T02:12:58.983744Z | shopgoodwill:276978721 | $24.90 | Wilson 1200 LT Golf Iron Set Lot 13 Clubs Steel Shaft Right Hand | BLOCK E (pre-2012 line; Task 2 citation); T? | BLOCK no mainstream club brand identified (plain Wilson is not Wilson Staff)
+25 | 2026-09-16T02:13:01.204337Z | shopgoodwill:276997831 | $24.90 | TaylorMade Titanium Driver 9.5 Degree Loft S-90 Plus Shaft Right Hand | BLOCK C (driver only); E?; T? | BLOCK shape
+26 | 2026-09-16T02:57:39.188561Z | shopgoodwill:276606911 | $34.72 | TaylorMade Burner SuperFast 2.0 Driver 10.5 Flex S | BLOCK C (driver only); T? | BLOCK shape
+27 | 2026-09-16T03:03:36.854236Z | shopgoodwill:276605474 | $35.50 | Strata Plus & Ultimate Titanium Golf Irons Woods & Stand Bag Used | BLOCK C (two named Strata lines/mixed model); E?; T? | BLOCK no mainstream club brand identified
+28 | 2026-09-16T07:22:50.359201Z | v1|186750247843|0 | $29.55 | VTG Ping Anser 3 Putter 85068 Karsten 35" Inch (RH) Orig Shaft Good Lamkin Grip | BLOCK E+C; T? | BLOCK junk "VTG"
+29 | 2026-09-16T07:43:13.631957Z | v1|318877528122|0 | $53.00 | Golf Clubs Set With Bag | E? and exact iron-model coherence unknown; T? | PASS (leak/unknown-evidence full set)
+30 | 2026-09-16T14:43:15.004492Z | v1|257380533695|0 | $37.10 | Complete Golfcraft Chuck Courtney, H&B Golf Clubs w/ Highlinder Golf Bag | BLOCK C (multiple club makes/models); E?; T? | BLOCK no mainstream club brand identified
+31 | 2026-09-16T16:38:05.803437Z | v1|237059680303|0 | $10.60 | TaylorMade Original One 12-degree Loft 1 Metal Wood Driver Right Handed Golf Club USA | BLOCK C (driver only); T? | BLOCK shape
+32 | 2026-09-16T18:12:53.510680Z | v1|117057460212|0 | $27.56 | Wilson 1200 GE Iron Set 3-9 Dynamic Steel Stiff RH Golf Club Irons Gear Effect | BLOCK E (pre-2012 line; Task 2 citation); T? | BLOCK no mainstream club brand identified
+33 | 2026-09-17T00:37:47.911575Z | shopgoodwill:277027941 | $22.78 | Wilson 1200 LT TN Golf Irons Set 2-9 PW SW Steel V2 R Flex | BLOCK E (pre-2012 line; Task 2 citation); T? | BLOCK no mainstream club brand identified
+34 | 2026-09-17T00:53:38.074594Z | v1|318848922756|0 | $10.59 | Ping Si3 380 Forged Titanium golf driver with a 10-degree loft used | BLOCK E+C (old driver only); T? | BLOCK shape
+35 | 2026-09-17T02:08:08.666023Z | v1|158300224973|0 | $37.10 | Ping Anser Putter - Karsten Mfg - RH - 35" - Classic Bronze | BLOCK E+C; T? | BLOCK shape ("Classic" is not yet an era keyword)
+36 | 2026-09-17T13:42:42.724862Z | v1|227466738361|0 | $23.75 | TaylorMade Titanium 10.5 Degree Driver Graphite Regular Flex w/Cover 45" | BLOCK C (driver only); E?; T? | BLOCK shape
+37 | 2026-09-17T21:43:17.889922Z | v1|307172602206|0 | $31.79 | Men's RH Golf Club Set (12 Clubs) With Golf Bag, Golf Balls & More. Read/Info. | C violated by AI identified brand "Mixed (Titleist, Warrior, Wilson, Adams, Paragon)"; E?; T? | BLOCK junk "Mixed" from AI brand evidence
+38 | 2026-09-18T04:23:05.181448Z | v1|178506569829|0 | $10.59 | Vintage TaylorMade Burner 1 Driver RH Right Hand Golf Club 10.5-degree Loft | BLOCK E+C; T? | BLOCK junk "Vintage"
+39 | 2026-09-18T17:13:39.090052Z | v1|178507976595|0 | $9.67 | TaylorMade System 2 Tour Preferred 10* Driver Dynamic Gold Stiff Flex Steel RH | BLOCK E+C (old driver only); T? | BLOCK shape
+40 | 2026-09-18T22:27:42.944520Z | v1|407227736395|0 | $22.26 | TaylorMade R580XD Driver 10.5-degree 1-Wood Stiff Graphite Right-Handed | BLOCK E+C (old driver only); T? | BLOCK shape
+41 | 2026-09-18T22:27:53.339879Z | v1|327364166966|0 | $14.44 | TaylorMade 200 Steel Driver 10.5* RH 45 in Graphite Shaft Stiff Flex golf club | BLOCK E+C (old driver only); T? | BLOCK shape
+42 | 2026-09-19T01:03:13.599391Z | shopgoodwill:277296216 | $30.20 | Lot Of 14 Pieces TaylorMade Right Handed Golf Clubs And Black Bag Set | E? and exact iron model unknown; no explicit owner-rule violation in retained title/AI facts; T? | PASS
+43 | 2026-09-19T01:37:51.658256Z | shopgoodwill:276851277 | $24.90 | Set of Vintage Steel-Shafted Wilson Counter Torque Midsize Golf Irons | BLOCK E; T? | BLOCK junk "Vintage"
+44 | 2026-09-19T03:27:51.726677Z | shopgoodwill:277296225 | $30.20 | Lot Of 9 Pcs Silver-Tone Right Handed Mixed Variety Golf Clubs In Bag | BLOCK C; E?; T? | BLOCK junk "Mixed"
+45 | 2026-09-19T17:52:40.526134Z | v1|800623138980|0 | $30.74 | Odyssey White Hot #1 Putter, Nice Super Stroke Grip | BLOCK C (putter only); T? | BLOCK shape
+46 | 2026-09-19T19:38:30.895371Z | v1|137756324117|0 | $28.62 | PING Karsten Anser 5KS Blade Putter Right-Handed Steel Shaft Gray/Black | BLOCK C (putter only); E?; T? | BLOCK shape
+47 | 2026-09-20T03:02:52.570182Z | shopgoodwill:277487924 | $23.84 | Lot Of Assorted Wilson Prostaff Ultra Mixed Variety Golf Clubs In Case | BLOCK C; E?; T? | BLOCK junk "Assorted"
+48 | 2026-09-20T18:22:42.774569Z | v1|318895920289|0 | $33.92 | Taylormade Jetspeed RH Driver 10.5 Matrix 49 Grams Shaft | BLOCK C (driver only); T? | BLOCK shape
+49 | 2026-09-21T01:42:42.841214Z | shopgoodwill:277348678 | $36.57 | Vintage PING Eye Golf Irons Set Chrome Steel Shafts Black Grips Right Handed | BLOCK E; T? | BLOCK junk "Vintage"
+50 | 2026-09-21T01:47:58.692000Z | shopgoodwill:277745023 | $19.60 | TaylorMade Titanium Driver 9.5 Degree Loft S-90 Plus Shaft Right Hand | BLOCK C (driver only); E?; T? | BLOCK shape
+51 | 2026-09-21T02:08:09.915705Z | v1|366660632022|0 | $24.38 | Original VTG Ping Anser Karsten RH Slotted Putter, Box 9990 Phoenix AZ 85068 | BLOCK E+C; T? | BLOCK junk "VTG"
+52 | 2026-09-21T02:22:44.598055Z | shopgoodwill:277513478 | $35.48 | Wilson Prestige Irons PW Hybrid Putters & SW Golf Club Set w/ Jones Sports Bag | BLOCK C (incomplete/mixed family; no continuous iron run); E?; T? | BLOCK no mainstream club brand identified
+53 | 2026-09-22T01:51:42.254229Z | shopgoodwill:277730904 | $27.02 | Lot Of 14 Pieces TaylorMade Right Handed Golf Clubs And Black Bag Set | E? and exact iron model unknown; no explicit owner-rule violation in retained title/AI facts; T? | PASS
+54 | 2026-09-23T03:06:34.477555Z | shopgoodwill:277589943 | $24.90 | Ben Hogan Radial Golf Irons Set 3 5 6 7 8 9 P Clubs | BLOCK E+C (old Radial line and missing 4 iron); T? | PASS (leak)
+55 | 2026-09-24T01:46:53.789736Z | shopgoodwill:277425036 | $24.90 | Adams Golf Tight Lies Golf Iron 6-Club Set 3/4/5/6/7/8 | E?; title is contiguous/coherent; T? | PASS (unknown era evidence)
+56 | 2026-09-25T15:46:19.053751Z | v1|237080223566|0 | $140.45 | Callaway Rogue Irons 5-P A Stiff Flex Steel Right Handed Excellent Condition | CLEAR OWNER-RULE PASS: modern coherent RH 5-P/A set; no hard condition/spec issue; T? | PASS
+57 | 2026-09-29T02:31:43.386189Z | shopgoodwill:277909948 | $36.56 | Callaway Big Bertha 8-Pc Golf Iron Set 3-PW True Temper Memphis Shafts 36-39" RH | BLOCK E (specific old Memphis-shaft Big Bertha generation; Task 2 evidence); T? | PASS (leak)
+58 | 2026-10-04T13:06:54.151771Z | shopgoodwill:278816330 | $164.83 | Golf Club Lot 6 Clubs Taylormade M2 Driver Hybrid Odyssey Putter Pinnacle Irons | BLOCK C (assorted brands/components and only a handful of irons); T? | PASS (leak)
+59 | 2026-10-05T01:37:18.638277Z | shopgoodwill:278850633 | $52.57 | PING EYE2 Green & Black Dots RH Golf Clubs 3,4,5,6,7,8,9,W | BLOCK E+C (Eye2 and mixed lie/color dots); T? | PASS (leak)
+60 | 2026-10-05T01:41:28.365955Z | shopgoodwill:278837622 | $51.63 | Ping IST Green Dot 3, 4, 5, 6, 7, 8, & 9 Irons Golf Clubs RH - Pre-Owned | BLOCK E ("IST" is a marketplace rendering of PING's 1996 ISI-era iron; Task 2 evidence and spelling caveat); T? | PASS (leak)
+
+Exact path for the 11 rows that passed the audit-baseline code
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- Rows 02, 29, 42, 53-60 first clear is_blocked_by_steal_quality_gate(): a
+  real AI check is retained; AI brand is not in the blocked tier; landed price
+  is <=$300; confidence is medium; AI says playable and right-handed; any brand
+  claim is confirmed; no counterfeit or damage flag exists.
+- Ten pass the relative-price branch: rows 02, 29, 42, 54, 55, 56, 57, 59,
+  and 60 are Great Deal (51%-69% under AI estimate); row 53 is Steal (75%
+  under). Row 58 is the dangerous exception: landed $164.83 exceeds its $140
+  estimate, but golf_modern_set_absolute_price_path_applies() returns true
+  because the AI year 2016/model refers to the TaylorMade M2 DRIVER, while the
+  title's irons are Pinnacle. The helper does not currently require the year to
+  describe the irons. That wrongly excuses the relative-price failure.
+- The second-stage shape paths are equally exact. Iron parser acceptance lets
+  rows 02 (4-PW), 54 (bare "Iron Set" claim; its space-separated missing 4 is
+  not parsed), 55 (3/4/5/6/7/8), 56 (5-P/A), 57 (3-PW), 59 (comma run), and 60
+  (comma run) through. Rows 29, 42, and 53 use grouped title + AI starter-kit +
+  bag. Row 58 uses grouped title + the broad composition test
+  irons+long-club+putter; that test cannot tell a legitimate full set from its
+  random six-club M2/Odyssey/Pinnacle assortment.
+- Of the 11 current passes, rows 02 and 56 are affirmatively clean 2012+
+  coherent owner-target sets in retained evidence. Rows 42/53 may be real full sets but
+  lack retained exact iron model/year; row 29 is even less identified. Missing
+  evidence is reported, not converted into a speculative rejection.
+
+Task 1 owner-rule conclusion
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- The historical alert stream was overwhelmingly the wrong shape: single
+  putters/drivers/bags, old clubs, gapped runs, or assorted/mixed lots. The
+  only the modern coherent Adams CB3 and Callaway Rogue are affirmative owner
+  targets: 2/60 delivered rows.
+- Audit-baseline code already blocked 49/60 when replayed, but 11 still passed.
+  Proven
+  leaks among those are gapped/old Ben Hogan Radial, old Big Bertha, the mixed
+  six-club lot, Eye2 mixed dots, and IST. The implementation
+  tasks below close those evidenced holes while retaining honest unknowns.
+- Seller-trust history is not reconstructible from these log records: all
+  60 omit seller_feedback_score and seller_feedback_percentage. Task 5 audits
+  the live listing dictionaries platform by platform and applies the owner rule
+  only where the marketplace really supplies it.
+
+
+TASK 2 - ERA GATE (completed and checkpointed)
+================================================
+
+Implementation
+--------------
+- Extended golf-equipment.full_set_vintage_model_patterns with researched,
+  name-bounded pre-2012 families. The gate searches seller title/description;
+  it does not invent an age from styling or an unidentified brand.
+- Added generic era wording: Classic, Retro, 90s/1990's, 80s, Antique. The
+  Classic regex explicitly exempts the prose phrases "classic fit" and
+  "classic condition". The rule only runs inside the golf profile, so it is
+  golf-context scoped. Existing Vintage/VTG rules remain unchanged.
+- Added a second evidence path for vision output. The production golf prompt
+  already requests identified_model and model_release_year, the merge already
+  stores them as golf_identified_model/golf_model_release_year, and the alert
+  log already persists them. The new veto requires BOTH a nonblank identified
+  model and a finite integral numeric year below 2012. Missing, boolean,
+  fractional, or string years fail open.
+- Tightened the prompt's meaning without adding a call or field: whenever
+  irons are present, identified_model/model_release_year must describe the
+  coherent iron line, never a driver/wood/hybrid/putter/bag; mixed or unreadable
+  iron lines must return null. This prevents the exact Task-1 failure where the
+  delivered assorted lot's 2016 M2 DRIVER made Pinnacle irons look modern.
+- Historical availability is sparse but usable: 139 of 4,517 AI-checked golf
+  rows carry both fields; 100 distinct rows say pre-2012. Spot checks line up
+  with named releases (for example Eye2=1982 and Zing=1992). The rule is used
+  as a negative veto only, never as proof that an otherwise incoherent set is
+  modern. Seventeen rows that escaped both the old gate and every newly named
+  regex are newly stopped specifically by the structured AI year.
+
+Release-year evidence used (no uncited model was added)
+------------------------------------------------------
+- PING: Eye2 1982; Zing 1992; Zing2 1994; ISI 1996; i3 2000; i3+ 2002;
+  G2 2003; i5/G5 2005; i10 2007; i15 2009. The same chronology puts i20
+  at 2012 and i25 at 2014, so those two are intentionally NOT blocked. PING's
+  own history calls the 1996 iron "ISI". Some non-US sellers render that same
+  iron "IST"; the exact delivered title used that spelling, and a retailer's
+  IST iron page independently labels its model year 1996. There is no support
+  for the earlier draft's "1998 ISI-T" wording, which has been removed.
+  Sources:
+  https://pinggolf.co.kr/main3/history4
+  https://www.golfworks.com/images/art/ping.pdf
+  https://www.golflink.com/equipment/ping-irons-by-year-2944817
+  https://ocasiongolf.com/producto/hierros-ping-ist-mujer/
+- Titleist: official previous-model archive dates the DCI families to
+  1993-2003, 681/690/695/735/755/775 before 2012, 710 to 2009, and 712 to
+  2011; 714 is 2013 and is intentionally protected.
+  https://www.titleist.com/previous-models?searchterm=dci
+  https://www.titleist.com/previous-models?golfclubtype=3&modelyear=1990-1999&orderby=name
+  https://www.titleist.com/previous-models?golfclubtype=3&orderby=name
+- Callaway: corporate filings date Hawk Eye to September 1999 and X-14 to
+  January 2000; Callaway's historical catalog lists X-18 in 2006 and X-20 in
+  2008. Big Bertha is deliberately NOT a blanket match because the name was
+  reused after 2012; only an explicitly old edition/Hawk Eye/Memphis context
+  is added. Sources:
+  https://ir.callawaygolf.com/static-files/3c4941ea-d183-49b1-ba11-1b5b5a68e260
+  https://ir.callawaygolf.com/node/7406/pdf
+  https://odysseyeustaging.callawaygolf.com/en/gb/customer-service?fid=help
+  https://www.2ndswing.com/golf-clubs/iron-sets/callaway-1996-big-bertha-iron-set/right-handed-regular-steel-36dot0in-w-92649436177
+- TaylorMade: the official legacy archive dates RAC to 2002/2006, r7 to
+  2006/2007, Burner Plus/XD/Tour to 2008, Burner and the exact "Tour Preferred
+  TP" model to 2009, and Burner Super Launch/2.0 to 2010. The archive also
+  shows Tour Preferred CB/MC/MB in both 2011 and 2013; those reused generic
+  names are deliberately NOT blocked without an AI year below 2012.
+  https://www.taylormadegolf.com/ironslegacy.html?lang=default
+  https://www.taylormadegolf.com/Product-Specs-2.html?lang=en_US
+- Mizuno: the manufacturer's iron timeline dates the named MX and MP families
+  before 2012 and JPX 800 to 2010/2011. JPX 800 Pro is excluded because the
+  timeline labels it 2012-13. Sources:
+  https://mizunogolf.com/uk/irons-timeline/
+  https://jpn.mizuno.com/golf/clubs/history/index04
+- Cobra: contemporary launch reports date FP to 2006, UFi to 2008, S2 to
+  2009, and S3 Pro to 2011.
+  https://www.newswire.co.kr/newsRead.php?no=192140
+  https://www.golfmonthly.com/news/tour-news/first-look-callaway-ft-fairway-wood-king-cobra-ufi-irons-and-new-titleist-irons-24902
+  https://www.etnews.com/200910070270
+  https://view.asiae.co.kr/article/2011040407215119027
+- Wilson: GolfWorks' MPF catalog dates 1200 to 1973 and 1200 GE to 1986;
+  independent chronology dates 1200 LT to 1978. X-31 is deliberately NOT a
+  blanket pattern: although the original is old, Wilson reused X31 for a
+  currently listed complete set, so the name alone cannot prove pre-2012.
+  https://www.golfworks.com/content/PDFs/Head_MPFs/MPF_WILSON.pdf
+  https://pitchmarks.com/wilson-irons-by-year/
+  https://au.wilson.com/products/x31-complete-golf-set-right-hand-0-5-inch-r-flex
+  https://golfersonly.dk/wilson-x31-golf-package-set-2019-2/
+- Adams: the model chronology dates the exact Tight Lies GT/Tour GT to 2000
+  and UC10 to 2004, plus the named early Idea families before 2012. Generic
+  "Tight Lies" is deliberately NOT blocked because Adams reused the name for
+  post-2012 package sets. Consequently delivered item shopgoodwill:277425036
+  remains unknown-era rather than being rejected on a guess. Adams' 2012 10-K
+  calls CB3 "recently launched," and the launch report is dated February 2,
+  2012; CB3 is a protected modern control, not a vintage pattern.
+  https://pitchmarks.com/adams-irons-by-year/
+  https://loftchart.com/adams/tight-lies-irons/
+  https://getfilings.com/sec-filings/120306/ADAMS-GOLF-INC_10-K/
+  https://www.golfshake.com/news/view/3528/Adams_Golf_Launch_Idea_Black_CB3.html
+- Ben Hogan: the Radial chronology dates the original cast/forged releases to
+  1983/1987 and production through 1990.
+  https://loftchart.com/ben-hogan/radial-irons/
+
+Backtest summary
+----------------
+- Scope: all 4,517 AI-checked golf rows in the reconstructed 2026-09-08..
+  2026-10-05 hourly-snapshot history, comparing pre-task profile/code against
+  this task's era rules.
+- Result: 162 rows / 160 distinct item ids newly blocked. The two repeated
+  items are repeated observations with changed prices, retained below.
+- Delivered leaks newly stopped: shopgoodwill:277589943 (Ben Hogan Radial),
+  shopgoodwill:277909948 (Big Bertha Memphis), shopgoodwill:278850633 (Eye2),
+  and shopgoodwill:278837622 (IST). Generic Adams Tight Lies remains unknown
+  rather than guessed vintage; CB3 and Rogue remain allowed.
+- Clean-control proof: CB3 (2012), PING i20 (2012), PING i25 (2014), Mizuno
+  JPX 800 Pro (2012), Titleist 714 (2013), TaylorMade Tour Preferred CB
+  (2013 reuse), Adams Tight Lies Plus (2015), Wilson X31 (2019 reuse), Rogue,
+  "Classic Fit", and "classic condition" all pass the era gate. No
+  affirmative clean modern complete set the owner would want is newly blocked.
+
+Exhaustive newly-blocked rows by first matching new rule
+--------------------------------------------------------
+The entry format is timestamp | item id | landed price | title. Rules with no
+matching historical row are listed after the nonzero table; they remain
+covered by direct regression tests.
+
+Rule: `model:\bping\s+i3\+?\b` (9 rows / 9 ids)
+- 2026-09-09T03:37:41.946834+00:00 | v1|206544502633|0 | $216.52 | PING I3 Plus Black Dot Iron Golf Club Set 4-9 & W Steel Shaft 7 Clubs
+- 2026-09-11T11:14:51.937069+00:00 | v1|395313379348|0 | $148.39 | Ping i3 Red Dot O-Size 3-9 Iron Golf Club Steel Stiff Shaft Set RH Golf Clubs
+- 2026-09-16T06:33:10.868949+00:00 | v1|137650908528|0 | $158.99 | PING i3 + Plus Red Dot 4-9 Irons Men's RH Golf Clubs Steel Shaft Set
+- 2026-09-21T07:32:23.065111+00:00 | v1|315144806176|0 | $157.94 | golf clubs PING i3 green dot irons set RIGHT H  7 pcs , iron 8 is black dot ,...
+- 2026-09-26T14:11:15.823156+00:00 | v1|287610244118|0 | $150.52 | PING i3 O-SIZE Iron Set 4-9i Pw  7pc RH graphite senior flex Red Dot Men Golf
+- 2026-09-27T01:11:28.450344+00:00 | v1|137783618320|0 | $143.10 | Ping i3 O-Size Iron Set 3-9 3-W Right Handed Steel Shaft Golf Clubs 8 Piece
+- 2026-09-27T16:41:50.236329+00:00 | v1|188996781952|0 | $127.20 | Ping i3 Iron Set 3-PW Right-Handed Steel stiff Flex Golf Pride Grips Orange dot
+- 2026-09-28T23:31:46.974136+00:00 | v1|168736999302|0 | $156.64 | PING i3+ Black Dot RH Iron Set 5-PW Stiff Graphite 6pc Golf Pride/PING Grips
+- 2026-09-28T23:31:46.974136+00:00 | v1|168736999302|0 | $156.64 | PING i3+ Black Dot RH Iron Set 5-PW Stiff Graphite 6pc Golf Pride/PING Grips
+- 2026-09-29T01:21:29.484317+00:00 | shopgoodwill:277931427 | $109.71 | PING I3 O-Size Golf Irons Set 3-9 W + 58� MB Sand Wedge Steel JZ Reg Flex
+
+Rule: `model:\btitleist\s+dci\b` (11 rows / 11 ids)
+- 2026-09-09T08:54:26.405641+00:00 | v1|318846676716|0 | $211.99 | Titleist DCI 962 Iron Set 3-PW + 990 2 Iron Dynamic Golf Shaft Steel Lot Of 9 RH
+- 2026-09-11T11:14:26.369165+00:00 | v1|407188499365|0 | $153.69 | RH Titleist DCi Iron set 3-PW Steel Shaft Stiff Flex -.25" Golf Clubs UPC4832
+- 2026-09-16T04:47:36.272578+00:00 | v1|800669047143|0 | $89.04 | Titleist DCI 981 Iron Set 2-9 RH Steel Shafts 8 Clubs Golf Irons
+- 2026-09-18T00:08:00.296242+00:00 | v1|227526467233|0 | $116.59 | Titleist DCI Oversize Golf Iron Set | Graphite Regular Flex | RH Mens
+- 2026-09-27T00:41:32.001913+00:00 | v1|128100686239|0 | $104.94 | TItleist DCI Oversize+ Iron Set Golf Irons 3 4 5 7 9 56
+- 2026-09-29T18:01:52.911381+00:00 | v1|318934446942|0 | $210.94 | Golf irons set TITLEIST DCI OVERSIZE+ TRISPEC graphite shaft FIRM FLEX 7 clubs r
+- 2026-09-30T01:06:26.515539+00:00 | v1|137795225501|0 | $127.19 | Titleist DCI 962 Iron Set Right Hand Golf Clubs 2-PW (no 6 Iron) Men Steel Shaft
+- 2026-09-30T01:41:30.611770+00:00 | shopgoodwill:278273243 | $36.57 | Titleist DCI Oversize + 4, 5, 6, 7, 8, 9, & P Irons Golf Clubs RH - Pre-Owned
+- 2026-09-30T13:11:50.879854+00:00 | v1|327381422590|0 | $105.99 | Titleist DCI Oversized + Right Hand Steel Shaft Golf Iron Set 3 4 5 6 7 8 9 P S
+- 2026-10-03T15:21:42.580972+00:00 | v1|407252491439|0 | $158.99 | Titleist DCI 962 Prototype 3-PW Golf Iron Set Stiff DCI 96 + Gap & Sand Wedge
+- 2026-10-04T22:26:39.105937+00:00 | v1|237106388632|0 | $174.90 | Titleist DCI 962 Iron Set 9pcs -  3,4,5,6,7,8,9, PW, W, L Golf Clubs RH
+
+Rule: `model:\btaylor\s*made\s+rac(?:\s+(?:lt|os|mb|cb|cgb|tp))?\b` (17 rows / 16 ids)
+- 2026-09-09T09:28:14.086865+00:00 | v1|147560910527|0 | $220.41 | Taylormade RAC OS Iron Golf Clubs 3-PW Light Metal  Steel Shaft Stiff Flex RH
+- 2026-09-09T14:08:12.439425+00:00 | v1|158271960855|0 | $237.42 | TaylorMade RAC OS Iron Set 3-PW Steel Shaft Stiff Flex Right Handed Golf Clubs
+- 2026-09-12T14:08:59.018026+00:00 | v1|406819045172|0 | $243.79 | Taylormade RAC CGB 8pcs 4-5-6-7-8-9-Pw-Aw RH Golf Iron Wedge Set R Regular 850GH
+- 2026-09-12T17:38:39.532537+00:00 | v1|227322189176|0 | $201.39 | TaylorMade RAC OS Oversize Stainless Steel Golf Clubs Irons Set 3 thru PW S Flex
+- 2026-09-13T19:57:53.647917+00:00 | v1|800642231035|0 | $158.99 | 6pcs TaylorMade RAC HT Cavity Irons Set 4-5-6-7-8-9 Stiff Flex RH Golf Clubs
+- 2026-09-13T20:33:37.941408+00:00 | v1|800642231108|0 | $264.99 | TaylorMade RAC OS Irons Set 3-4-5-6-7-8-9-P-A-S 10pcs TM-RAC PLUS Stiff RH Golf
+- 2026-09-15T03:03:04.668691+00:00 | v1|298675481495|0 | $239.56 | RH TaylorMade RAC OS Irons 4-PW+56degree Wedge Stiff Steel Golf Clubs pre owned
+- 2026-09-15T22:58:25.295652+00:00 | shopgoodwill:276574143 | $98.05 | TaylorMade RAC OS Irons 3-9 + R540 Driver & Woods Golf Set with Cards
+- 2026-09-24T20:57:04.585631+00:00 | v1|316281437402|0 | $265.00 | golf clubs irons set TAYLOR MADE rac  RIGHT H 9 pcs S flex wedge included origin
+- 2026-09-25T20:46:31.266212+00:00 | v1|406819045172|0 | $222.59 | Taylormade RAC CGB 8pcs 4-5-6-7-8-9-Pw-Aw RH Golf Iron Wedge Set R Regular 850GH
+- 2026-09-28T08:46:16.442353+00:00 | v1|127843387053|0 | $168.96 | TaylorMade rac OS Iron Set 8pcs 3-Pw Flex S Stiff Graphite Shaft Golf Clubs RH
+- 2026-10-01T05:01:40.700770+00:00 | v1|189022298261|0 | $211.99 | TaylorMade RAC OS Iron Set 3-PW 8 Clubs RH True Temper Steel Shafts Golf
+- 2026-10-01T05:11:39.370017+00:00 | v1|128108411600|0 | $152.64 | TaylorMade rac OS Iron Set 7pcs 5-P,A Flex R Regular Graphite Shaft Golf Clubs
+- 2026-10-01T05:46:28.435994+00:00 | v1|127632291088|0 | $168.96 | TaylorMade rac CGB Iron Set 7pcs 4-Pw Flex S Stiff Steel Shaft Golf Clubs RH
+- 2026-10-03T02:01:23.369104+00:00 | v1|407262582878|0 | $222.55 | Used Right Handed TaylorMade RAC OS Irons 3-PW Regular Steel Golf Club Set
+- 2026-10-04T13:26:35.375392+00:00 | v1|137811498430|0 | $286.20 | TaylorMade rac OS Iron Set 8pcs 3-Pw S Stiff Graphite Shaft Golf Clubs RH RARE??
+- 2026-10-05T01:06:44.742565+00:00 | v1|860009286113|0 | $286.20 | TaylorMade RAC OC Golf Club Iron Set with Graphite Shafts. Clubs 3-9
+
+Rule: `model:\btaylor\s*made\s+burner\b` (10 rows / 10 ids)
+- 2026-09-09T14:08:31.630641+00:00 | v1|407202503417|0 | $188.63 | TaylorMade Burner Oversize 3-PW SW Golf Iron Set - Dynalite  Regular "EXCELLENT"
+- 2026-09-09T21:08:13.402750+00:00 | v1|800637494141|0 | $263.94 | TAYLORMADE BURNER/MIZUNO Complete Golf Club Set!  (No Bag) RH.  13 Pcs
+- 2026-09-12T17:03:16.533938+00:00 | v1|377426452265|0 | $121.90 | TaylorMade Burner Super Steel Stainless Golf Clubs Irons Set 3 thru PW w S flex
+- 2026-09-16T18:47:53.437588+00:00 | v1|227524683745|0 | $233.20 | TaylorMade Burner Plus 85 R Flex RH Golf Club Irons Set 4/5/6/7/8/9/P/A
+- 2026-09-19T23:42:49.112732+00:00 | shopgoodwill:277213219 | $301.57 | Complete Golf Club Set Nike Extreme IV Bag TaylorMade Burner Cobra AMP Hybrid
+- 2026-09-20T22:18:38.680070+00:00 | v1|327366993261|0 | $207.92 | TaylorMade BURNER PLUS 5 Piece Iron Set 4-8 Uni Flex Steel Shaft RH Golf Club
+- 2026-09-26T01:21:25.577496+00:00 | shopgoodwill:277679299 | $77.91 | TaylorMade Burner LCG Golf Iron Set 5i-9i,P,S,L R-80 Steel Shafts  Right Handed
+- 2026-09-26T08:41:29.972529+00:00 | v1|198596368374|0 | $196.10 | TaylorMade Burner Plus 8S USA Iron Set RE-AX 85 Flex S 6pcs RH Golf Club
+- 2026-09-30T19:01:46.788821+00:00 | v1|318939363350|0 | $265.95 | TaylorMade Burner Iron Set 5-PW Golf Clubs Uniflex Steel Shafts RH
+- 2026-10-03T14:56:25.920837+00:00 | v1|377541197268|0 | $148.40 | TaylorMade Burner Oversize RH Golf Clubs Irons Set 3 thru PW w Rifle R-80 flex
+
+Rule: `model:\bping\s+i5\b` (2 rows / 2 ids)
+- 2026-09-09T17:38:45.757142+00:00 | v1|135762764546|0 | $297.33 | PING I5 GOLF SET 3-9 IRONS LENGHT: (5)37.5 IN FLEX:STIFF RH NEW GRIPS
+- 2026-09-15T04:13:06.070945+00:00 | v1|318872469376|0 | $212.00 | Ping i5 Black Dot Iron Set 3-PW RH Steel Shaft 8pc Golf Clubs
+
+Rule: `model:\bmizuno\s+mp[\s-]?(?:14|30|32|33|37|52|53|57|58|60|62|63|67|68)\b` (12 rows / 12 ids)
+- 2026-09-10T14:44:15.055685+00:00 | v1|206548416263|0 | $191.85 | Mizuno MP-60 Cut Muscle Iron Set 3-PW Golf Clubs S300 SFlex RH Mid Grips NICE
+- 2026-09-17T19:58:22.191982+00:00 | v1|407225114352|0 | $318.00 | Mizuno MP-63 Iron Set 4-PW 7 Clubs Forged Steel Stiff Golf Clubs Exc Cond
+- 2026-09-21T03:03:37.742519+00:00 | v1|800642231024|0 | $296.79 | Mizuno MP-63 Forged Irons Set 4-5-6-7-8-9-P PW 7pcs DG S200 Stiff RH Golf Clubs
+- 2026-09-21T03:11:38.927042+00:00 | v1|398297524327|0 | $170.51 | Mizuno MP-57 Iron Set 4-9 6 Pieces Stiff NSPro 950GH Steel Shaft Golf Clubs
+- 2026-09-21T03:11:56.306491+00:00 | v1|406922724992|0 | $254.39 | Mizuno MP-57 Forged 4-5-6-7-8-9-Pw 7pcs RH Stiff DG S200 Golf Club Iron Set JDM
+- 2026-09-21T03:31:35.384889+00:00 | v1|407004017612|0 | $307.39 | Mizuno MP-68 Forged 4-5-6-7-8-9-Pw 7pcs RH Stiff NSPRO 950GH Golf Iron Set JDM
+- 2026-09-21T03:51:48.366367+00:00 | v1|198618745375|0 | $243.79 | Mizuno MP-57 Forged 4-PW 7pcs Iron Set NS PRO 950GH SR Flex RH JDM Golf Clubs
+- 2026-09-21T04:11:24.369628+00:00 | v1|206533271646|0 | $222.59 | 7pcs Mizuno MP-58 Forged 4-5-6-7-8-9-PW Iron Set DG S300 Flex S Stiff RH Golf
+- 2026-09-22T04:01:32.879278+00:00 | v1|800642269039|0 | $317.99 | Mizuno MP-53 Forged Irons Set 4-5-6-7-8-9-P PW 7pcs NS 950GH Stiff RH Golf Clubs
+- 2026-09-28T02:16:33.905395+00:00 | v1|800725854304|0 | $317.99 | 7pcs Mizuno MP-57 Forged Irons Set 4-5-6-7-8-9-P PW DG S200 Stiff RH Golf Clubs
+- 2026-10-03T14:16:48.812485+00:00 | v1|198685213439|0 | $275.59 | Mizuno MP-57 Forged 4-PW 7pcs Iron Set NS PRO 950GH SR Flex RH JDM Golf Clubs
+- 2026-10-03T21:21:35.792002+00:00 | v1|398409643780|0 | $317.99 | Mizuno MP-60 Forged 4-5-6-7-8-9-Pw 7pcs RH Stiff DG S300 Golf Club Iron Set JDM
+
+Rule: `model:\bping\s+eye\s*2(?:\+)?\b` (16 rows / 16 ids)
+- 2026-09-10T18:49:15.681738+00:00 | v1|297537199008|0 | $201.36 | Ping Eye 2 Red Dot Plus No Plus Iron Set 4-PW Steel Shafts RH Golf Pride
+- 2026-09-15T16:27:47.487841+00:00 | v1|147575160002|0 | $238.50 | PING GOLF PING EYE2 GREEN DOT IRON SET 2-W RH STEEL SHAFTS 
+- 2026-09-15T21:08:34.034616+00:00 | v1|318875545287|0 | $256.41 | Ping Eye 2 Blue Dot ?? Golf Club Set 3-SW Irons Zz Lite Stiff Flex RH
+- 2026-09-16T03:37:53.718128+00:00 | v1|117414627987|0 | $211.99 | Ping Eye 2 Green Dot Iron Set 4-Pw ZZ Regular Flex Ping Golf Steel
+- 2026-09-21T01:53:07.599739+00:00 | v1|137723404297|0 | $318.00 | Ping Eye 2 Iron Set 2,3,4,5,6,7,8,9,S,W White Dot Right Karsten KT Golf Clubs
+- 2026-09-21T07:17:04.905670+00:00 | v1|315810627343|0 | $157.94 | Golf irons set PING EYE2 RED DOT eye 2 right h 6 clubs.  Zz lite flex Very good
+- 2026-09-21T13:01:55.472353+00:00 | v1|315709254365|0 | $157.94 | Golf irons set PING EYE2 orange dot 7 clubs shorter RIGHT H ZZ LITE flex, ...
+- 2026-09-24T23:27:27.519761+00:00 | v1|257763928862|0 | $275.58 | Ping Eye 2 Black Dot Golf Iron Set 3-W With Ping Zing 2 Putter
+- 2026-09-29T00:46:31.795473+00:00 | v1|306478086550|0 | $212.00 | Ping Eye 2 Red Dot No Plus Iron Set 4-PW Steel Shafts RH Golf Pride
+- 2026-09-29T02:01:34.128263+00:00 | v1|318931553158|0 | $148.40 | Ping Eye 2 Black Dot 3-8 Right-Handed TrueTemper Steel Shafts Golf Iron Set
+- 2026-09-30T01:01:50.340282+00:00 | shopgoodwill:278298290 | $42.93 | Ping Eye2 6pc Golf Irons Golf Club Set
+- 2026-09-30T21:11:39.816535+00:00 | v1|237099463895|0 | $179.14 | Lot Set of 9 Golf Clubs: PING EYE 2 irons 3-9 wedges S W, RH, EXCELLENT! red dot
+- 2026-10-01T18:41:39.335283+00:00 | v1|336822567344|0 | $157.94 | Lot Set of 8 Golf Clubs: PING EYE 2 irons 3-9 wedge W, RH, EXCELLENT! orange dot
+- 2026-10-03T16:26:36.394942+00:00 | v1|407263839412|0 | $158.95 | Ping Eye 2 Red Dot Golf Club Iron Set 3-9+W
+- 2026-10-04T07:26:18.100991+00:00 | v1|235587335828|0 | $253.34 | Ping Eye 2 Orange Dot set 2-9+W irons 9 golf clubs RH Ping Steel shafts Royal
+- 2026-10-05T01:37:18.638277+00:00 | shopgoodwill:278850633 | $52.57 | PING EYE2 Green & Black Dots RH Golf Clubs 3,4,5,6,7,8,9,W
+
+Rule: `model:\bping\s+i10\b` (1 rows / 1 ids)
+- 2026-09-10T18:49:43.657603+00:00 | v1|157751042787|0 | $158.99 | Ping i10 4-9 Iron Set Yellow Dot Project X 5.5 Steel Shafts RH Players Golf Firm
+
+Rule: `model:\bmizuno\s+mx[\s-]?(?:15|17|19|20|23|25|100|200|300|900|950|1000)\b` (4 rows / 3 ids)
+- 2026-09-12T07:43:04.122738+00:00 | v1|227517702678|0 | $264.99 | *EXCELLENT* Mizuno MX-23 Iron Set 5-PW | Dynamic Gold Stiff | Golf Pride Grips
+- 2026-09-12T15:53:21.328787+00:00 | v1|137640300453|0 | $190.79 | Mizuno MX-900 Irons Set 4-PW Reg Dynalite Gold Steel Shaft RH Golf Pride Grip
+- 2026-09-16T07:08:15.318340+00:00 | v1|137640300453|0 | $159.00 | Mizuno MX-900 Irons Set 4-PW Reg Dynalite Gold Steel Shaft RH Golf Pride Grip
+- 2026-09-24T04:41:19.974967+00:00 | v1|800642231085|0 | $264.99 | 8pcs Mizuno MX-17 Irons Set 3-4-5-6-7-8-9-P PW DG S300 Stiff RH Golf Clubs
+
+Rule: `model:\btaylor\s*made\s+r7(?:\s+(?:draw|tp|xd|cgb(?:\s+max)?))?\b` (8 rows / 8 ids)
+- 2026-09-12T10:38:09.618166+00:00 | v1|800642231091|0 | $211.99 | 7pcs TaylorMade r7 TP Tour Preferred Irons Set 4-5-6-7-8-9-P PW S RH Golf Clubs
+- 2026-09-15T12:58:15.669555+00:00 | v1|127475212828|0 | $195.04 | TaylorMade R7 TP Iron Set 6pcs 5-Pw Flex S Stiff Graphite Shaft Golf Clubs
+- 2026-09-24T09:12:01.132459+00:00 | v1|800708485483|0 | $264.99 | TaylorMade R7 DRAW Irons Set 5-6-7-8-9-PW-AW-SW 8pcs GS75 Regular RH Golf Clubs
+- 2026-09-24T23:27:29.524251+00:00 | v1|398429097009|0 | $265.00 | Golf Club Set - Acer Irons 7-AW, TaylorMade r7 Driver, Wood, Hybrid  & Putter
+- 2026-09-28T12:16:47.499471+00:00 | v1|800550053716|0 | $316.94 | TAYLORMADE R7/MIZUNO Complete Golf Club Set(No Bag) RH.  11 Pcs. STIFF
+- 2026-10-01T06:11:16.841819+00:00 | v1|127891698620|0 | $205.64 | TaylorMade R7 Draw Iron Set 7pcs 5-P,S Flex R Regular Steel Shaft Golf Clubs RH
+- 2026-10-01T17:41:46.034004+00:00 | v1|318943435218|0 | $212.95 | TaylorMade R7 Draw Model Iron Set 4-PW Golf Clubs R Flex Steel RH
+- 2026-10-03T02:36:29.151443+00:00 | shopgoodwill:278431958 | $147.87 | TaylorMade R7 Golf Irons Set 4-9 A P Wedges Steel Shafts Right Handed
+
+Rule: `model:\badams(?:\s+golf)?\s+idea\s+(?:a12|mb2|black\s+cb[12]|a7os(?:\s+max)?|a4r|pro\s+gold|a3os?|a2os?|a1(?:\s+pro)?)\b` (3 rows / 3 ids)
+- 2026-09-12T17:03:12.144519+00:00 | v1|135454947014|0 | $316.94 | Adams IDEA a12 OS / SPEEDLINE / KING COBRA Full Golf Set w/ IZZO STAND GOLF BAG
+- 2026-10-01T18:36:26.731849+00:00 | v1|206595604014|0 | $111.30 | Adams Golf IDEA a7OS Hybrid Iron Set | 5h, 6h, 7-SW |Senior Flex graphite 
+- 2026-10-04T01:31:39.044130+00:00 | v1|920005605255|0 | $189.58 | Adams Idea A7OS Max Hybrid Iron Golf Set 3-8 Grafalloy Regular Flex Graphite RH
+
+Rule: `model:\bping\s+i15\b` (3 rows / 3 ids)
+- 2026-09-12T19:58:22.299979+00:00 | v1|128073413123|0 | $168.96 | Ping i15 Iron Set 6pcs 5-Pw Flex 5.5 Project X Steel Shaft Golf Clubs Black Dot
+- 2026-09-29T13:57:56.430170+00:00 | v1|235193021511|0 | $249.10 | PING i15 White Dot Iron Set 6-PW Golf Clubs ? Graphite TFC 149 Stiff Flex Shafts
+- 2026-10-01T13:41:45.849725+00:00 | v1|137800556418|0 | $259.70 | PING i15 (4-PW) Blue Dot Iron Set Golf Clubs w/ N.S. Pro Steel Shafts (Stiff)
+
+Rule: `model:\bping\s+g2\b` (4 rows / 4 ids)
+- 2026-09-13T20:32:55.953930+00:00 | v1|365978468740|0 | $211.95 | PING G2 Black Dot 5-PW Irons Set Stiff Steel Shaft Golf
+- 2026-09-23T01:26:28.108442+00:00 | shopgoodwill:277555801 | $89.57 | Ping G2 Green Dot 4, 5, 6, 7, 8, 9, U, & W Irons Golf Clubs RH - Pre-Owned
+- 2026-09-23T01:46:35.870850+00:00 | shopgoodwill:277556437 | $84.80 | Ping G2 Red Dot 5, 6, 7, 8, 9, S, & W Irons Golf Clubs RH - Pre-Owned
+- 2026-10-01T01:21:40.374114+00:00 | shopgoodwill:278165879 | $147.87 | RH Ping G2 HL Golf Irons Set 3i-9i,W Steel Shafts Black Golf Pride Grips R Flex
+
+Rule: `model:\bping\s+eye\b` (9 rows / 9 ids)
+- 2026-09-13T21:43:02.893405+00:00 | v1|318866846535|0 | $133.03 | Ping Eye Golf Iron Set 3-W Club Set, Steel Shafts, Silver, 8 Clubs
+- 2026-09-20T01:52:59.981515+00:00 | v1|146165999893|0 | $147.34 | Original Ping Eye Cat Eye Golf Club Iron Set 2 through PW & SW
+- 2026-09-25T20:46:36.009673+00:00 | v1|123271900497|0 | $121.89 | Ping Eye Apollo Steel Shaft 3-W Iron Golf Club Set Black Dot RH Right Hand
+- 2026-09-26T17:36:21.879420+00:00 | v1|206583784133|0 | $212.00 | Ping Eye Golf Club Set Of Irons 2-9 / S / W Karsten Arizona Avon Grips
+- 2026-09-27T06:11:17.354922+00:00 | v1|304807424578|0 | $158.99 | Ping Eye Golf Iron Set 3-PW (8) Apollo Regular Steel Shaft Orange Dot Mens RH
+- 2026-09-28T11:46:23.870092+00:00 | v1|398440050293|0 | $148.38 | Ping Eye "Cat Eye" Iron Set (2-PW) Black Dot RH ZZ Lite Siff Flex Shafts
+- 2026-10-04T16:36:16.778489+00:00 | v1|820202953593|0 | $174.90 | Ping Eye Iron Set Black Dot, 4-9, & W ZZ Lite Flex S RH Golf Clubs REGRIPPED
+- 2026-10-04T21:51:45.738748+00:00 | v1|960013959514|0 | $122.96 | PING EYE BLACK DOT Irons 3 thru 9 (7 Golf Clubs) ZZ Lite Stiff Steel Shafts RH
+- 2026-10-05T01:06:48.751172+00:00 | v1|920008700377|0 | $144.18 | PING Eye Blue Dot Irons Set 3-9 PW Karsten MFG Stainless Steel Golf Clubs 8pc
+
+Rule: `model:\bping\s+zing\s*2?\b` (5 rows / 5 ids)
+- 2026-09-14T01:03:10.593894+00:00 | shopgoodwill:276562994 | $89.57 | Ping Zing Golf Iron Set Right Handed - No Flex Noted
+- 2026-09-15T20:33:13.905885+00:00 | v1|267786407642|0 | $231.07 | Ping Zing Green Dot FULL 10 Iron Set 3-Lob Stiff Shaft Golf Pride RH 
+- 2026-09-16T02:07:44.562995+00:00 | shopgoodwill:276613202 | $123.49 | PING ZING 2 Karsten Golf Irons Set W 3-9 Senior Flex Graphite Shafts
+- 2026-09-24T23:01:56.962923+00:00 | v1|398429041068|0 | $296.80 | Golf Set- PING Zing 2 Irons 3-P, Taylormade Driver, Wood, Hybrid Putter
+- 2026-10-02T17:36:38.599567+00:00 | v1|287622399213|0 | $193.93 | Ping Zing Black Dot Original Iron Set RH Golf Club included 3 to 9  Steel Shaft
+
+Rule: `model:\btitleist\s+(?:681|690|695|735|755|775)(?:\s*(?:cb|mb|cm))?\b` (2 rows / 2 ids)
+- 2026-09-14T21:42:41.716377+00:00 | v1|198633539634|0 | $211.99 | Titleist 695CB Forged 3-PW 8pcs Iron Set DG S200 Stiff RH JDM Golf Clubs Irons
+- 2026-09-21T03:22:27.863693+00:00 | v1|127684045930|0 | $171.53 | Titleist 695 CB Iron Set 6pcs 5-Pw Flex S Stiff KBS Steel Shaft Golf Clubs
+
+Rule: `model:\bben\s+hogan\s+(?:radial|apex(?:\s+ii)?)\b` (3 rows / 3 ids)
+- 2026-09-15T03:03:02.660933+00:00 | v1|198155212660|0 | $243.79 | Used RH Ben Hogan Apex Forged Irons 3-9 Stiff Flex Steel Golf Club Set
+- 2026-09-23T03:06:34.477555+00:00 | shopgoodwill:277589943 | $24.90 | Ben Hogan Radial Golf Irons Set 3 5 6 7 8 9 P Clubs
+- 2026-09-23T08:41:23.688714+00:00 | v1|286471006211|0 | $106.00 | Ben Hogan Radial 3-E Golf Irons Set Regular Steel Shafts
+
+Rule: `model:\bcallaway\s+(?:steelhead\s+)?x[\s-]?(?:12|14|16|18)\b` (10 rows / 10 ids)
+- 2026-09-17T12:23:24.079775+00:00 | v1|318145273402|0 | $159.00 | golf clubs irons set used callaway X16
+- 2026-09-21T08:46:41.031374+00:00 | v1|315413878145|0 | $104.94 | golf irons set CALLAWAY X14 STEELHEAD 6 clubs right hand UNIFLEX see pictures...
+- 2026-09-21T20:46:56.878461+00:00 | v1|317004870564|0 | $104.94 | Golf Irons Set CALLAWAY X14 Steelhead 6 Clubs RIGHT H Original Grips See Picture
+- 2026-09-23T04:42:20.419481+00:00 | v1|127647742596|0 | $142.04 | Callaway Steelhead X-14 Iron Set 8pcs 3-Pw UNI Flex Steel Shaft Golf Clubs
+- 2026-09-26T06:06:30.724721+00:00 | v1|800642231082|0 | $264.99 | 8pcs Callaway X-18 Pro Irons Set 3-4-5-6-7-8-9-P PW 1150GH Stiff RH Golf Clubs
+- 2026-09-28T01:21:34.691324+00:00 | v1|800725854382|0 | $264.99 | 7pcs Callaway X-18 Irons Set 5-6-7-8-9-P-S PW SW JV 70i Stiff RH Golf Clubs
+- 2026-09-30T01:01:43.775845+00:00 | shopgoodwill:278272396 | $63.07 | Callaway X-14 Steelhead 5, 6, 7, 8, 9, & P Irons Golf Clubs RH - Pre-Owned
+- 2026-09-30T11:46:45.873318+00:00 | v1|206592435825|0 | $169.49 | 8pcs Callaway X-14 Steelhead 5-6-7-8-9-PW-AW-SW Iron Set Flex R Regular RH Golf
+- 2026-10-02T02:21:31.917413+00:00 | v1|407248479294|0 | $185.49 | Callaway Steelhead X16 Pro Series Iron Set 3-PW Stiff RCH Pro Series Graphite Sh
+- 2026-10-02T02:31:44.814962+00:00 | shopgoodwill:278319709 | $109.71 | Callaway X-18 Pro Series Golf Irons Set 4-PW Steel Shafts Right Handed
+
+Rule: `model:\bcallaway\s+s2h2\b` (2 rows / 2 ids)
+- 2026-09-17T17:38:41.144009+00:00 | v1|198648476332|0 | $115.31 | CALLAWAY S2H2 IRONS IRON SET 6-PW UNIFLEX RIGHT HANDED GOLF CLUBS
+- 2026-09-21T03:11:27.521458+00:00 | v1|168461307990|0 | $190.80 | Callaway S2H2 Iron Golf Set 4, 5, 6, 7, 8, 9, PW RH RCH60 Regular Flex Clubs
+
+Rule: `model:\bcallaway\s+x[\s-]?tour\b` (2 rows / 2 ids)
+- 2026-09-22T18:32:50.080540+00:00 | v1|206563231074|0 | $180.19 | 6pcs Callaway X TOUR Iron Set 5-6-7-8-9-PW Flex UNIFLEX RH Golf
+- 2026-09-24T12:46:56.441841+00:00 | v1|206522850645|0 | $280.66 | Set of 8x Callaway X Tour 3-PW Stiff Steel Shafts Golf Pride Grips
+
+Rule: `model:\bping\s+g5\b` (3 rows / 3 ids)
+- 2026-09-23T02:36:49.141648+00:00 | shopgoodwill:277321852 | $106.53 | Ping G5 Golf Iron Set 4-9 Irons Chrome Steel Shafts ZZ Lite Grips
+- 2026-09-23T02:41:48.538818+00:00 | v1|168711995247|0 | $210.94 | Ping G5 White Dot Golf Iron Set 5-9 PW SW UW Steel Shaft Men's RH +0.5" Length
+- 2026-09-26T18:21:43.423399+00:00 | v1|188990461447|0 | $158.99 | Ping G5 Black Dot 4-9 + U Iron Set Used Golf Set Right Handed RH Graphite Shaft
+
+Rule: `model:\bping\s+is[ti](?:[-\s]?(?:k|tour))?\b` (4 rows / 4 ids)
+- 2026-09-23T03:11:27.879397+00:00 | shopgoodwill:277333544 | $102.28 | 8 Ping ISI-K Golf Clubs- Pitching Wedge & Irons 3-9
+- 2026-10-03T20:26:28.475648+00:00 | v1|178551803965|0 | $195.99 | 7 Ping ISI K Golf Set 4-SW Iron Set Regular Blue Dot .75 - Steel JZ Very Good+
+- 2026-10-04T21:06:29.616889+00:00 | v1|189042369470|0 | $126.49 | Ping ISI Golf Iron Set 3-9 Iron Black Dot Karsten RH Regular Flex Steel Matching
+- 2026-10-05T01:41:28.365955+00:00 | shopgoodwill:278837622 | $51.63 | Ping IST Green Dot 3, 4, 5, 6, 7, 8, & 9 Irons Golf Clubs RH - Pre-Owned
+
+Rule: `model:\b(?:king\s+)?cobra\s+(?:s2|s3(?:\s+pro)?|s9|ufi|fp)\b` (3 rows / 3 ids)
+- 2026-09-24T03:01:51.083029+00:00 | shopgoodwill:277456900 | $106.53 | Golf Club Lot 10 Clubs King Cobra S9 Irons Titleist Driver Ping Wood With Bag
+- 2026-09-25T02:43:03.925806+00:00 | v1|147597464804|0 | $264.93 | King Cobra S9 Iron Set 4-GW Golf Club NS Pro 900XH Steel Shaft Regular Flex RH 
+- 2026-09-26T23:36:22.473292+00:00 | v1|198669477654|0 | $159.00 | Cobra S3 Max Golf Club Set 8 Clubs Woods Hybrids Irons 3,4,5 W 6-pw irons
+
+Rule: `junk:\bclassic\b(?!\s+(?:fit|condition)\b)` (1 rows / 1 ids)
+- 2026-09-24T23:46:29.134696+00:00 | v1|398429140362|0 | $275.60 | Golf Club Set -Tour Classic 3-P Irons, Taylormade Driver, Wood, Hybrid & Putter
+
+Rule: `model:\btitleist\s+(?:(?:ap[12]|cb|mb)\s*[- ]?(?:710|712)|(?:710|712)\s*[- ]?(?:ap[12]|cb|mb))\b` (1 rows / 1 ids)
+- 2026-09-25T19:41:24.089098+00:00 | v1|278409110893|0 | $264.95 | Titleist AP1 710 Iron Set 5-PW (6 Clubs) Right Handed Steel Shafts Men's Golf Cl
+
+Rule: `model:\bcallaway\s+(?:great\s+)?big\s+bertha\b.{0,80}\bmemphis(?:\s+10)?\b` (1 rows / 1 ids)
+- 2026-09-29T02:31:43.386189+00:00 | shopgoodwill:277909948 | $36.56 | Callaway Big Bertha 8-Pc Golf Iron Set 3-PW True Temper Memphis Shafts 36-39" RH
+
+Rule: `AI year < 2012` (17 rows / 17 ids)
+- 2026-10-01T19:26:47.764142+00:00 | v1|237100845455|0 | $168.54 | Lot / Set of 7 Golf Clubs: CLEVELAND TA5 TOUR ACTION irons, wedge, RH, PRISTINE!
+- 2026-10-01T21:56:33.915248+00:00 | v1|188978808103|0 | $109.71 | Callaway Golf Club Set 10 Clubs Nike Xtreme Sport Bag Titleist Vokey Wedge
+- 2026-10-01T23:46:25.801904+00:00 | shopgoodwill:278315169 | $126.67 | Callaway X Golf Club Set 8 Irons & 2 Woods
+- 2026-10-02T03:12:02.085563+00:00 | shopgoodwill:278294688 | $68.90 | King Cobra 3100 I/H Iron Set & TaylorMade Wood Golf Club Lot 8 Items RH
+- 2026-10-02T04:36:18.445580+00:00 | v1|198681568684|0 | $296.79 | NIKE SQ Machspeed Iron Set 4-9 PW LW 8pcs AXIVCORE Regular RH JDM Golf Clubs
+- 2026-10-02T06:06:42.834345+00:00 | v1|227548615619|0 | $127.19 | King Cobra SS-i Golf Iron Set Tour - Regular  Flex - MID Kick 75 g
+- 2026-10-03T01:36:21.312895+00:00 | shopgoodwill:278604541 | $102.82 | Callaway Diablo Forged Golf Irons Set Chrome Shafts Black Grips Right Handed
+- 2026-10-03T02:31:48.330721+00:00 | v1|407262611155|0 | $95.35 | Callaway Golf Steelhead X-14 Iron Set 3-9 Constant Weight Steel Uniflex
+- 2026-10-03T21:21:50.476343+00:00 | v1|407256207405|0 | $270.29 | Nike NDS 4-5-6-7-8-9-Pw-Sw 8pcs RH Stiff Fujikura Shaft Golf Club Iron Set JDM
+- 2026-10-03T23:46:40.144927+00:00 | v1|318931287292|0 | $211.98 | BRIDGESTONE "J33" forged COMBO blade-&-cavity (4-PW) iron set w/TTDG S-300 STIFF
+- 2026-10-03T23:51:21.343116+00:00 | v1|147617601825|0 | $222.60 | Cleveland CG Gold MCT Golf Iron Set 3-PW Stiff Steel Shaft 8 Pcs
+- 2026-10-04T14:46:46.488061+00:00 | v1|198687755571|0 | $296.79 | Used RH Ping Blue Dot Zing Irons 3-PW KT-M Stiff Flex Steel Golf Club Set
+- 2026-10-04T18:21:43.367549+00:00 | v1|198688059357|0 | $275.59 | Mizuno JPX E500 Ti-FACE Iron Set 4-PW 7pcs DG S200 Stiff RH JDM Golf Clubs Irons
+- 2026-10-04T20:31:37.043260+00:00 | v1|237093947056|0 | $265.00 | Cleveland Tour Action Iron Set 3-9 (7 Clubs) Steel Shaft Right-Handed
+- 2026-10-04T22:51:28.725965+00:00 | v1|128102107821|0 | $238.50 | Cleveland CG Red Iron Set 3-PW Steel Stiff Right
+- 2026-10-04T23:01:36.453548+00:00 | v1|800758065749|0 | $212.00 | Right-Handed Golf Clubs Iron Set
+- 2026-10-05T01:26:28.695449+00:00 | shopgoodwill:278842840 | $46.11 | Taylormade Supersteel Burner Golf Irons Set 4 5 6 7 8 9 Clubs
+
+Rule: `model:\bmizuno\s+jpx[\s-]?800\b(?!\s*pro\b)` (1 rows / 1 ids)
+- 2026-10-03T17:51:59.417323+00:00 | v1|267796518010|0 | $210.94 | Mizuno JPX 800 Golf Iron Set  Clubs 6-PW Graphite Senior Shaft
+
+Rules with zero newly blocked historical rows
+- `junk:\bretro\b` - 0 rows
+- `junk:\b(?:19)?90['']?s\b` - 0 rows
+- `junk:\b(?:19)?80['']?s\b` - 0 rows
+- `junk:\bantique\b` - 0 rows
+- `model:\bcallaway\s+(?:great\s+)?big\s+bertha\s+(?:hawk\s*eye|war\s*bird|tungsten|gold|tour|(?:19)?9[46]|0[246])\b` - 0 rows
+- `model:\bcallaway\s+(?:big\s+bertha\s+)?hawk\s*eye\b` - 0 rows
+- `model:\btaylor\s*made\s+tour\s+preferred\s+tp\b` - 0 rows
+- `model:\bwilson(?:\s+staff)?\s+1200(?:\s*(?:lt|ge|tn))?\b` - 0 rows
+- `model:\badams(?:\s+golf)?\s+tight\s+lies\s+(?:gt|tour\s+gt|uc10)\b` - 0 rows
+
+
+TASK 3 - COMPLETENESS / COHERENCE (completed and checkpointed)
+================================================================
+
+Implementation
+--------------
+- Added golf_set_integrity_reason(), called before the general junk/model and
+  shape paths. It hard-stops literal seller disclosures in title OR retained
+  description: missing/no/without/lacks/does-not-come-with/excludes/omitted/
+  not-included/absent numbered iron, 7i-style shorthand, or PW. Optional
+  articles ("missing a 5 iron") are covered.
+- Extended the existing continuity parser to a seller's five-or-more-club
+  space-separated run after "irons" (for example `3 5 6 7 8 9 P`). It now
+  proves the missing 4 in delivered Ben Hogan item shopgoodwill:277589943,
+  while a contiguous `4 5 6 7 8 9 P` control passes and is also displayed as
+  the alert's club run.
+- Added a fit-coherence stop for two stated PING dot colors, mixed/mismatched
+  dots, green-dot-and-black-dot syntax, mixed/mismatched/different lie angles,
+  and mixed/mismatched/different lofts. This catches the delivered Eye2 phrase
+  "Green & Black Dots" independently of its vintage veto.
+- Existing profile rules already stopped the literal words Mixed and Assorted.
+  Added Mixed/Assorted set, Mismatched, Frankenstein, mix-and-match, and
+  different/multiple model disclosures, plus conservative parsers for titles
+  that independently name two different manufacturers as "... irons" or that
+  explicitly introduce a comma/slash list of multiple recognized TaylorMade
+  models as the irons. The latter is derived from historical item
+  v1|267672319614|0 (AeroBurner, R11, R9 TP, RocketBallz).
+- Added a narrow assorted-lot shape: a title explicitly says lot plus <=9
+  total clubs, contains irons plus at least two of driver/wood/hybrid/putter/
+  bag, does not say full/complete, and does not state a coherent >=5-iron run.
+  That closes shopgoodwill:278816330 without treating every multi-brand full
+  bag as junk.
+- Deliberate fail-open boundary: arbitrary product names elsewhere in a full-
+  set title are not inferred as iron models. The model-list parser requires
+  "irons" immediately introducing TaylorMade plus at least two recognized,
+  delimiter-separated model families. Thus a named M2 driver plus a separate
+  coherent RocketBallz iron run remains valid. The existing vision prompt also
+  marks a visibly incoherent multi-line/multi-era grab-bag unplayable.
+
+Backtest table - rows newly blocked after Task 2
+------------------------------------------------
+Rule | Timestamp | Item id | Landed | Title
+explicit missing iron | 2026-09-15T00:42:49.668996+00:00 | v1|820127863533|0 | $71.42 | Adams Golf Tight Lies 5-9 PW (NO 7 Iron) + Hybrid 4 Iron Set Uniflex Steel Shaft
+explicit missing iron | 2026-09-23T19:16:42.136788+00:00 | v1|128095000512|0 | $217.28 | Ping G30 Irons 5-6,7-SW(no 7) Black Dot /CFS Regular Flex Steel/RH
+explicit missing iron | 2026-09-29T12:16:49.803438+00:00 | v1|800733130914|0 | $83.74 | Mizuno T-Zoid MX-11 Golf Set 3-PW Right-handed Orientation Mens No 9 Iron
+space-separated gapped run | 2026-09-14T00:48:16.446464+00:00 | shopgoodwill:276664539 | $22.99 | Cleveland Golf Tour Action TA4 Irons Set 3 4 6 7 P
+space-separated gapped run | 2026-09-21T19:36:40.679470+00:00 | v1|377513518445|0 | $211.99 | Callaway Rogue CF18 Irons Set RH 6 8 9 AW SW Regular Flex 60 SYNERGY GRAPHITE
+space-separated gapped run | 2026-09-22T10:32:53.616681+00:00 | v1|188305649750|0 | $74.20 | Callaway Steelhead Pro Series X-14 Iron Set 3 4 5 8 9 Stiff Flex RH Golf Clubs
+space-separated gapped run | 2026-09-30T11:46:43.865359+00:00 | v1|398446898146|0 | $116.59 | Cleveland W Series Iron Set 4 6 7 8 9 Steel Shaft Right Handed Golf Clubs
+space-separated gapped run | 2026-10-03T02:31:46.327733+00:00 | v1|168757457103|0 | $95.39 | Mizuno Cimarron Golf Iron Set 3 4 5 6 8 9 Graphite Shafts Right Handed
+small assorted multi-component lot | 2026-10-04T13:06:54.151771+00:00 | shopgoodwill:278816330 | $164.83 | Golf Club Lot 6 Clubs Taylormade M2 Driver Hybrid Odyssey Putter Pinnacle Irons
+mixed lie/color dots or lofts | - | - | - | 0 additional rows after Task 2; shopgoodwill:278850633 is caught by this rule too but was already newly blocked by the Eye2 era rule
+explicit frankenstein/mixed-model irons | - | - | - | 0 additional AI-checked rows; historical item v1|267672319614|0 directly exercises the multi-model parser but was already suppressed as a 114-day-old fixed-price listing before AI
+
+Task 3 therefore newly blocks 9 rows / 9 item ids after Task 2. Delivered
+shopgoodwill:277589943 is additionally and independently caught for its
+`3 5 6 7 8 9 P` run, but does not appear in the nine because Task 2 already
+blocked its Radial model. Every newly blocked row above either explicitly says
+an iron is missing, visibly skips a middle club in its stated run, or is the
+measured six-club assortment leak.
+
+Historical delivered full-set/clean-set rows that still pass
+-------------------------------------------------------------
+- shopgoodwill:276141527 | Adams Idea Black CB3 4-PW: coherent modern iron set.
+- v1|318877528122|0 | Golf Clubs Set With Bag: retained evidence is generic,
+  so no factual mismatch/missing-club claim exists; remains fail-open.
+- shopgoodwill:277296216 and shopgoodwill:277730904 | Lot Of 14 Pieces
+  TaylorMade Right Handed Golf Clubs And Black Bag Set: 14-piece full-set
+  shapes, not handful-of-irons lots; both remain eligible.
+- v1|237080223566|0 | Callaway Rogue 5-P/A: coherent modern iron run.
+
+Regression controls also prove that an 8-club lot with an explicit Rogue
+5-PW run plus driver/putter, a complete mixed-brand woods + coherent PING
+5-PW irons + putter + bag set, and the real TaylorMade 14-piece title still
+pass. The complete GolfEquipmentGate focused result is 58 tests / 181
+subtests. No clean modern complete set the owner would want is newly blocked.
+
+
+TASK 4 - CONDITION AND SPEC (completed and checkpointed)
+========================================================
+
+Existing coverage audit
+-----------------------
+- CONDITION_HARD_FAIL_KEYWORDS already contains cracked shaft(s), broken/bent
+  shaft(s), needs new shaft(s)/reshaft, no shaft/shaft only, and head only /
+  heads only / clubhead only / club head only. The golf vision contract also
+  defines damage_found to include visible rust, cracked/bent shafts, and
+  missing/torn grips; damage_found was already an unconditional final veto.
+- Missing text coverage was: dry-rotted grips, needs grips/regrip needed,
+  generic cracked damage, pitting, seller-disclosed rust, and modified length.
+  Those are now golf-only text hard stops; the global condition list was not
+  broadened and its existing heads-only behavior was not duplicated.
+
+Implementation
+--------------
+- Added title/description hard stops for dry-rotted grips, needs/new grips or
+  regripping needed, cracked, pitting, and rust/rusted/rusty/rusting. Literal
+  "not cracked", "no pitting", "no pitting or rust", "no rust", "without
+  rust", "free of rust", "pitting-free", and "rust-free" are protected
+  negations rather than false damage claims.
+- Added length-modification hard stops for +1, +1.5, +2 inch/inches/in/quote,
+  plus one/two inches, one/two inches over, and extended/extended length/
+  extended shafts or clubs. Bare "extended" still stops a golf listing, but a
+  following warranty/coverage/return/protection phrase is explicitly excluded
+  so "extended manufacturer warranty" does not masquerade as altered length.
+- Senior/A-flex and Ladies/L-flex text is deliberately NOT a veto. It now adds
+  a visible `verify: shaft flex Senior/A-flex` or `verify: shaft flex
+  Ladies/L-flex` alert note.
+
+Backtest table - rows newly blocked after Task 3
+------------------------------------------------
+Rule | Timestamp | Item id | Landed | Title
+length modified +1.5 inches | 2026-09-28T18:41:54.371169+00:00 | v1|147589512217|0 | $211.99 | Cleveland Golf LAUNCHER UHX Iron Set 5-PW Regular DG DST 98 Steel Shafts (+1.5")
+dry-rotted/needs grips | - | - | - | 0 newly gate-eligible historical rows
+cracked | - | - | - | 0 newly gate-eligible historical rows
+pitting | - | - | - | 0 newly gate-eligible historical rows
+non-negated rust | - | - | - | 0 newly gate-eligible historical rows
+
+The only newly blocked row is explicitly +1.5 inches and therefore violates
+the owner's fit rule even though Launcher UHX itself is modern. Standard-length
+modern controls, negated damage wording, and extended-warranty wording pass.
+The complete GolfEquipmentGate focused result is 58 tests / 181 subtests. No
+clean modern complete set the owner would want is newly blocked.
+
+
+TASK 5 - SELLER TRUST / PHOTO CONTRADICTION (completed and checkpointed)
+=======================================================================
+
+Seller fields actually present in normalized listing dictionaries
+-----------------------------------------------------------------
+- Official eBay Browse API: item summaries expose seller.feedbackScore and
+  seller.feedbackPercentage. Both the ordinary Browse search and the official
+  auction lane call _attach_seller_feedback(), which flattens those values to
+  seller_feedback_score and seller_feedback_percentage on the listing/result.
+  This is the only current golf source with a true feedback-count field.
+- eBay HTML scrape: the parser extracts item id, title, price, image, and
+  auction timing/bid count. It does not extract seller identity, rating, or
+  feedback. Its platform is explicitly ebay_scraped, so it fails open.
+- ShopGoodwill: the search response provides sellerName/sellerId (the Goodwill
+  store identity), which is normalized only as seller.username. No feedback
+  count or rating is present in the listing dictionary, so it fails open.
+- Facebook/Scout: the accepted queue schema carries platform, item id, title,
+  price, URL, optional image/description, discovery time, and search routing.
+  It has no seller or feedback field, so it fails open.
+- Other normalized adapters, although not productive golf lanes in this
+  history: Poshmark and Vinted retain a seller identifier but no feedback
+  count; OfferUp and Depop retain none. Grailed exposes seller_trusted,
+  seller_rating, and seller_total_sales, but total transactions are not the
+  same fact as a zero feedbackScore and no golf search currently routes there.
+  No zero-feedback inference is made from any of those different fields.
+
+Implementation
+--------------
+- Added golf_zero_feedback_seller_reason() before the golf price paths. It
+  rejects only a finite numeric feedbackScore exactly equal to zero on the
+  official eBay path. A missing value, malformed/string value, boolean, HTML-
+  scraped eBay row, or any non-eBay platform fails open.
+- Persisted seller_feedback_score/percentage in future alert-log rows so this
+  rule can be audited rather than disappearing after dispatch. All 60
+  historical delivered rows predate that serialization and omit both fields;
+  none is retroactively classified as a zero-feedback seller.
+- Focused verification: 4 tests / 6 subtests pass, including official zero,
+  missing/malformed fields, ebay_scraped, and ShopGoodwill controls.
+
+Photo-count contradiction audit
+-------------------------------
+- The golf prompt requests clubs_identified as one free-form string. Examples
+  range from a parseable-looking phrase such as "5 mixed-brand irons" to
+  uncounted prose such as "mixed clubs, bag, and range balls". There is no
+  structured visible_iron_count field, no per-club array, no confidence flag,
+  and clubs_identified is not merged into the result or historical log.
+- Therefore the retained historical rows cannot establish that a number in
+  that prose is photo-derived, complete, or comparable with a title range.
+  Implementing a numeric veto would guess from an unvalidated sentence and
+  could block a clean set whose gallery hid one club. Per the owner's explicit
+  instruction, no speculative photo-count veto was implemented. The existing
+  AI playability/incoherent-grab-bag verdict remains enforced, but it is not
+  represented as a precise title-versus-photo count check.
+
+Backtest result
+---------------
+- Newly blocked historical rows: zero can be proven, because feedback was not
+  serialized on the reconstructed rows. Missing evidence is deliberately not
+  converted to zero.
+- Clean modern sets newly blocked: zero. Only a future official eBay listing
+  carrying an actual numeric feedbackScore=0 is newly rejected; every platform
+  or row without that fact remains eligible.
+
+
+TASK 6 - $225 MODERN-SET CEILING (completed and checkpointed)
+=============================================================
+
+Implementation
+--------------
+- Changed only top-level config key GOLF_MODERN_SET_MAX_LANDED_PRICE from 200
+  to 225. The code fallback is also 225. config.json remains fully CRLF after
+  the surgical edit: 3,338 LF bytes, 3,338 CRLF pairs, zero lone LF bytes, and
+  a final CRLF.
+- Removed the low-price-confidence rejection from
+  golf_modern_set_absolute_price_path_applies(). The final golf gate now keeps
+  low confidence as a veto for the relative-appraisal route but exempts a row
+  that independently clears the strict absolute path. This is the only
+  confidence relaxation.
+- The helper still requires a real AI check, a usable estimate, finite landed
+  price <=$225, proven shipping, affirmative modern-model evidence, qualifying
+  full/iron-set shape, a mainstream identified brand, no vintage/junk/blade/
+  integrity/condition stop, right-handed evidence, playability, confirmed
+  seller brand/model claims, no damage, and no counterfeit suspicion. The
+  official-eBay zero-feedback veto also runs before either price path.
+- No auction projection or change to the earlier auction lane was made.
+
+Required regressions
+--------------------
+- Clean modern Callaway Rogue CF18 set, known shipping, $210 landed versus a
+  $150 estimate: delivers through the absolute path.
+- The same facts at $230: blocked; it is over the $225 absolute ceiling and
+  does not clear the unchanged relative deal bar.
+- The $210 set with price_confidence=low: delivers because every independent
+  absolute-path fact is present.
+- The veto matrix remains blocking under the ceiling for unknown shipping,
+  left-handed clubs, unknown handedness, unconfirmed brand/model claim,
+  counterfeit suspicion, damage, non-playability, vintage model, junk wording,
+  blade construction, too few irons, and obscure/non-mainstream brand. A
+  missing estimate remains covered by its established retry regression.
+- Focused result: 63 tests / 210 subtests pass.
+
+Exact pre-existing test changes authorized by Task 6
+----------------------------------------------------
+- GolfRampConfiguration.test_modern_set_ceiling_and_golf_auction_lane_are_active:
+  both expected values changed from 200 to 225 (the parsed config value and
+  loaded module constant). Nothing else in that test changed.
+- GolfEquipmentGate.test_modern_absolute_path_preserves_every_non_relative_veto:
+  the over-ceiling fixture changed from 200.01 to 225.01; the low-confidence
+  case moved out of the blocking-controls dictionary and now explicitly
+  asserts an allowed absolute-path result. No other pre-existing test method
+  was edited for this task. The $210/$230 boundary regression is a new method.
+
+Historical replay
+-----------------
+- Replayed all 4,517 AI-checked golf rows against the pre-task $200 + low-
+  confidence restriction and the implemented $225 policy. For old log rows,
+  shipping provenance was restored only where safe: ShopGoodwill's adapter
+  always supplies its documented $13.50 assumption; absent eBay provenance
+  remained unknown and blocking.
+- Two rows / two item ids become newly eligible, and both clear every current
+  owner-rule gate on retained evidence:
+  * 2026-09-24T00:56:44.690818Z | shopgoodwill:277446531 | $121.37 |
+    TaylorMade RH RBZ Rocketballz Iron Golf Club Set | AI estimate $120,
+    confidence low. The old absolute path rejected low confidence and the
+    relative route rejected paying $1.37 over the estimate.
+  * 2026-09-30T01:21:11.143718Z | shopgoodwill:278289466 | $201.93 |
+    Taylormade Black Yellow Rbz Iron Set Golf Clubs | AI estimate $120,
+    confidence medium. It was above the old $200 cap and fails the relative
+    appraisal test, but is inside the approved $225 known-landed ceiling.
+- This task is a bounded relaxation, so it newly blocks no row. The replay
+  admits no vintage, mixed, incomplete, damaged, left-handed, obscure-brand,
+  counterfeit, or unknown-shipping set.
+
+
+TASK 7 - BUYER-ORIENTED ALERT TEXT (completed and checkpointed)
+================================================================
+
+Implementation
+--------------
+- Added display-only golf_shaft_spec_text(). It reads title plus description
+  and recognizes explicit Senior/A-flex, Ladies/L-flex, Stiff/S-flex/Flex S,
+  Regular/R-flex/Flex R, Graphite, and word-bounded Steel. A bare sand-wedge
+  token such as the S in "5-PW,S" is not treated as stiff flex, and Steelhead
+  does not match the word-bounded Steel material token.
+- Golf alerts now add one concise line such as `shaft: Stiff / Steel` or
+  `shaft: Regular / Graphite` when seller text supplies the fact. Senior and
+  Ladies still also produce the required nonblocking `verify:` fit note.
+- Golf alerts replace all displayed appraisal-margin language with exactly one
+  plain buyer line when the required AI estimate exists:
+  `typical used price ~$X (AI estimate) vs asking $Y`.
+  X is the rounded AI used-market estimate; Y is the seller's item ask (not the
+  tax-inclusive landed total already shown on the first line). Golf no longer
+  displays the deal-rating label, `% under resale`, or generic `resale ~$X`
+  line. Non-golf alert formatting is unchanged.
+- The absolute-path banner now naturally renders the configured `$225` value.
+  Its internal delivery-path token retains the pre-existing legacy name
+  `modern-set-under-200`; that token is not user-visible and changing it would
+  add needless state/test churn.
+
+Validation and behavior boundary
+--------------------------------
+- Focused alert suite: 19 tests / 4 subtests pass. Coverage includes literal
+  S/R forms, Stiff/Regular, description-only flex/material, Senior/Ladies
+  verify notes, the sand-wedge S false-positive control, exactly one value
+  line, and absence of golf resale-margin wording.
+- This task changes send_alert() formatting only. It adds no gate, changes no
+  score, and therefore newly blocks or delivers zero historical rows. No clean
+  modern complete set is affected.
+- One pre-existing alert-text test necessarily changed because it asserted the
+  superseded literal `$200` banner and `Marginal (-27% under resale)` text.
+  SendAlertGolfDecisionLines.test_absolute_ceiling_alert_is_good_price_not_steal_framing
+  now expects `$225`, the required typical-used-price line, and absence of the
+  old margin wording. This is the direct Task 7 output contract; retaining the
+  old assertion would contradict the requested alert text. No unrelated
+  existing alert test was changed.

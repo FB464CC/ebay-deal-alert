@@ -1211,8 +1211,7 @@ class GolfEquipmentGate(unittest.TestCase):
         )
         controls = {
             "unknown shipping": {"shipping_cost_known": False},
-            "over ceiling": {"price": 200.01},
-            "low price confidence": {"price_confidence": "low"},
+            "over ceiling": {"price": 225.01},
             "left handed": {"golf_is_left_handed": True},
             "handedness unknown": {
                 "listing": {"title": "Callaway Rogue CF18 4-9 Irons"},
@@ -1249,6 +1248,54 @@ class GolfEquipmentGate(unittest.TestCase):
                 self.assertNotEqual(
                     result.get("golf_delivery_path"), "modern-set-under-200"
                 )
+
+        low_confidence = dict(base, price_confidence="low")
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            low_confidence, category="golf-equipment"
+        ))
+        self.assertEqual(
+            low_confidence.get("golf_delivery_path"), "modern-set-under-200"
+        )
+
+    def test_modern_absolute_225_boundary_with_known_shipping(self):
+        base = self._result(
+            listing={
+                "title": "Callaway Rogue CF18 4-9 Irons Right Handed",
+                "shippingOptions": [{"shippingCost": {"value": "10.00"}}],
+            },
+            shipping_cost_known=True,
+            estimated_resale_value=150.0,
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=False,
+            golf_is_left_handed=False,
+            golf_handedness_confirmed=True,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_identified_brand="Callaway",
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+
+        under = dict(base, price=210.0)
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            under, category="golf-equipment"
+        ))
+        self.assertEqual(under.get("golf_delivery_path"), "modern-set-under-200")
+
+        over = dict(base, price=230.0)
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(
+            over, category="golf-equipment"
+        ))
+        self.assertNotIn("golf_delivery_path", over)
+
+        low_confidence = dict(base, price=210.0, price_confidence="low")
+        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+            low_confidence, category="golf-equipment"
+        ))
+        self.assertEqual(
+            low_confidence.get("golf_delivery_path"), "modern-set-under-200"
+        )
 
     def test_relative_steal_path_is_unchanged_when_shipping_is_unknown(self):
         result = self._result(
@@ -2045,6 +2092,332 @@ class GolfEquipmentGate(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIsNone(m.golf_full_set_only_reason(result))
 
+    def test_researched_pre_2012_model_families_and_ai_year_are_rejected(self):
+        old_models = (
+            ("PING Eye2", "Ping"),
+            ("PING Zing 2", "Ping"),
+            ("PING ISI-K", "Ping"),
+            ("PING IST", "Ping"),
+            ("PING i3+", "Ping"),
+            ("PING i5", "Ping"),
+            ("PING i10", "Ping"),
+            ("PING i15", "Ping"),
+            ("Titleist DCI 962", "Titleist"),
+            ("Titleist 690 CB", "Titleist"),
+            ("Titleist AP1 712", "Titleist"),
+            ("Callaway Steelhead X-14", "Callaway"),
+            ("Callaway Golf Steelhead X-14", "Callaway"),
+            ("Callaway Steelhead Pro Series X-14", "Callaway"),
+            ("Callaway Hawk Eye", "Callaway"),
+            ("TaylorMade Burner", "TaylorMade"),
+            ("TaylorMade r7 Draw", "TaylorMade"),
+            ("TaylorMade RAC OS", "TaylorMade"),
+            ("TaylorMade Tour Preferred TP", "TaylorMade"),
+            ("Cobra S3 Pro", "Cobra"),
+            ("Mizuno JPX 800", "Mizuno"),
+            ("Mizuno MX-23", "Mizuno"),
+            ("Mizuno MP-60", "Mizuno"),
+            ("Wilson Staff 1200 LT", "Wilson Staff"),
+            ("Adams Tight Lies GT iron set", "Adams"),
+            ("Adams Idea a7OS", "Adams"),
+            ("Ben Hogan Radial", "Ben Hogan"),
+        )
+        for model, brand in old_models:
+            result = self._result(
+                listing={"title": f"{model} 5-PW RH"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand=brand,
+            )
+            with self.subTest(model=model):
+                self.assertIn(
+                    "pre-2012 vintage model",
+                    m.golf_full_set_only_reason(result),
+                )
+
+        ai_dated = self._result(
+            listing={"title": "Cleveland Tour Action 5-PW RH Iron Set"},
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_identified_brand="Cleveland",
+            golf_identified_model="Tour Action TA5",
+            golf_model_release_year=2001,
+        )
+        self.assertIn("AI identified pre-2012 model", m.golf_full_set_only_reason(ai_dated))
+
+    def test_era_gate_protects_2012_boundary_and_classic_prose_controls(self):
+        controls = (
+            ("Adams Idea Black CB3 4-PW RH Iron Set", "Adams", 2012),
+            ("PING i20 4-PW RH Iron Set", "Ping", 2012),
+            ("PING i25 4-PW RH Iron Set", "Ping", 2014),
+            ("Mizuno JPX 800 Pro 4-PW RH Iron Set", "Mizuno", 2012),
+            ("Titleist AP1 714 4-PW RH Iron Set", "Titleist", 2013),
+            ("Callaway Rogue 5-PW RH Classic Fit Iron Set", "Callaway", 2018),
+            ("Callaway Rogue 5-PW RH classic condition Iron Set", "Callaway", 2018),
+            ("TaylorMade Tour Preferred CB 4-PW RH Iron Set", "TaylorMade", 2013),
+            ("Adams Tight Lies Plus 6-SW RH Iron Set", "Adams", 2015),
+            ("Wilson Staff X31 6-SW RH Iron Set", "Wilson Staff", 2019),
+        )
+        for title, brand, year in controls:
+            result = self._result(
+                listing={"title": title},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand=brand,
+                golf_identified_model=title.split(" RH", 1)[0],
+                golf_model_release_year=year,
+            )
+            with self.subTest(title=title):
+                self.assertIsNone(m.golf_full_set_only_reason(result))
+
+        for era_word in ("Classic", "Retro", "90s", "1990's", "80s", "Antique"):
+            result = self._result(
+                listing={"title": f"{era_word} Callaway 5-PW RH Iron Set"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand="Callaway",
+            )
+            with self.subTest(era_word=era_word):
+                self.assertIn("junk wording", m.golf_full_set_only_reason(result))
+
+        for release_year in (None, "2001", True, 2012.5):
+            malformed = self._result(
+                listing={"title": "Callaway Rogue 5-PW RH Iron Set"},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand="Callaway",
+                golf_identified_model="Callaway Rogue",
+                golf_model_release_year=release_year,
+            )
+            with self.subTest(release_year=release_year):
+                self.assertIsNone(m.golf_full_set_only_reason(malformed))
+
+    def test_explicit_missing_irons_mixed_fit_and_frankensets_are_hard_stops(self):
+        bad_text = (
+            "Callaway Rogue iron set missing 5 iron 6-PW RH",
+            "Callaway Rogue iron set missing a 5 iron 6-PW RH",
+            "TaylorMade M2 irons 5-PW RH - no 7 iron",
+            "TaylorMade M2 irons 5-PW RH - lacks the 7 iron",
+            "TaylorMade M2 irons 5-PW RH - does not come with the 7i",
+            "Ping G400 5-PW RH, missing the PW",
+            "Ping G400 5-PW RH, 5 iron omitted",
+            "Ping G400 irons 5-PW green and black dots RH",
+            "Ping G400 irons 5-PW green dot & black dot RH",
+            "Ping G400 irons 5-PW mixed dots RH",
+            "Ping G400 irons 5-PW different lie angles RH",
+            "Titleist AP1 irons 5-PW mixed lofts RH",
+            "Callaway Rogue 5-PW mismatched iron set RH",
+            "Callaway Rogue 5-PW mixed iron set RH",
+            "Callaway Rogue 5-PW assorted iron set RH",
+            "Callaway Rogue 5-PW different iron models RH",
+            "Callaway irons 5-PW and Ping irons 3-4 RH",
+            "7 Right 6 irons. Taylormade aeroburner,R11,R9 TP,rocketballz",
+        )
+        for title in bad_text:
+            result = self._result(
+                listing={"title": title},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand="Callaway",
+            )
+            with self.subTest(title=title):
+                self.assertIsNotNone(m.golf_set_integrity_reason(result))
+                self.assertIsNotNone(m.golf_full_set_only_reason(result))
+
+        description_only = self._result(
+            listing={
+                "title": "Callaway Rogue 5-PW RH Iron Set",
+                "description": "Please note: the 7 iron is missing.",
+            },
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_identified_brand="Callaway",
+        )
+        self.assertIn("explicitly says an iron is missing", m.golf_full_set_only_reason(description_only))
+
+        cosmetic_only = self._result(
+            listing={"title": "Callaway Rogue 5-PW RH Iron Set mismatched grips"},
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_identified_brand="Callaway",
+        )
+        self.assertIsNone(m.golf_set_integrity_reason(cosmetic_only))
+        self.assertIsNone(m.golf_full_set_only_reason(cosmetic_only))
+
+        spaced_gap = self._result(
+            listing={
+                "title": "Ben Hogan Radial Golf Irons Set 3 5 6 7 8 9 P Clubs"
+            },
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_identified_brand="Ben Hogan",
+        )
+        self.assertEqual(
+            m.golf_iron_set_title_reason(spaced_gap["listing"]["title"]),
+            "gapped/non-contiguous loose irons are not an iron set",
+        )
+        self.assertIn(
+            "gapped/non-contiguous",
+            m.golf_full_set_only_reason(spaced_gap),
+        )
+
+        spaced_complete = self._result(
+            listing={
+                "title": "Callaway Rogue Golf Irons Set 4 5 6 7 8 9 P RH"
+            },
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_identified_brand="Callaway",
+        )
+        self.assertIsNone(m.golf_iron_set_title_reason(
+            spaced_complete["listing"]["title"]
+        ))
+        self.assertIsNone(m.golf_full_set_only_reason(spaced_complete))
+        self.assertEqual(
+            m._golf_club_run_text(spaced_complete["listing"]["title"]),
+            "4 5 6 7 8 9 P (7 clubs)",
+        )
+
+    def test_small_assorted_lot_blocks_but_real_full_sets_still_pass(self):
+        mixed_six = self._result(
+            price=164.83,
+            listing={
+                "itemId": "shopgoodwill:278816330",
+                "title": (
+                    "Golf Club Lot 6 Clubs Taylormade M2 Driver Hybrid "
+                    "Odyssey Putter Pinnacle Irons"
+                ),
+            },
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=True,
+            golf_identified_brand="TaylorMade / Odyssey / Pinnacle",
+        )
+        self.assertIn("assorted 6-club lot", m.golf_full_set_only_reason(mixed_six))
+
+        controls = (
+            (
+                "Lot of 8 Clubs Callaway Rogue 5-PW Irons Driver Putter RH",
+                "Callaway",
+                False,
+            ),
+            (
+                "Complete Golf Club Set TaylorMade Driver Ping G400 5-PW Irons Odyssey Putter Bag RH",
+                "Ping / TaylorMade / Odyssey",
+                True,
+            ),
+            (
+                "Lot Of 14 Pieces TaylorMade Right Handed Golf Clubs And Black Bag Set",
+                "TaylorMade",
+                True,
+            ),
+            (
+                "Complete Golf Set TaylorMade M2 Driver RocketBallz 5-PW Irons Putter Bag RH",
+                "TaylorMade",
+                True,
+            ),
+        )
+        for title, brand, starter in controls:
+            result = self._result(
+                listing={"title": title},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_is_starter_kit=starter,
+                golf_identified_brand=brand,
+            )
+            with self.subTest(title=title):
+                self.assertIsNone(m.golf_set_integrity_reason(result))
+                self.assertIsNone(m.golf_full_set_only_reason(result))
+
+    def test_golf_condition_and_length_modification_text_are_hard_stops(self):
+        hard_stops = (
+            "Callaway Rogue 5-PW dry rotted grips RH",
+            "Callaway Rogue 5-PW needs grips RH",
+            "Callaway Rogue 5-PW cracked RH",
+            "Callaway Rogue 5-PW face pitting RH",
+            "Callaway Rogue 5-PW rust RH",
+            "Callaway Rogue 5-PW +1 inch RH",
+            "Callaway Rogue 5-PW +1.5 inches RH",
+            "Callaway Rogue 5-PW +2\" RH",
+            "Callaway Rogue 5-PW plus 1 inch RH",
+            "Callaway Rogue 5-PW 1 inch over standard RH",
+            "Callaway Rogue 5-PW extended length RH",
+        )
+        for title in hard_stops:
+            result = self._result(
+                listing={"title": title},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand="Callaway",
+            )
+            with self.subTest(title=title):
+                self.assertIn("condition/spec hard stop", m.golf_full_set_only_reason(result))
+
+        for title in (
+            "Callaway Rogue 5-PW RH no rust, standard length",
+            "Callaway Rogue 5-PW RH no visible pitting or rust",
+            "Callaway Rogue 5-PW RH faces are not cracked",
+        ):
+            clean_negation = self._result(
+                listing={"title": title},
+                golf_ai_checked=True,
+                golf_is_playable_first_set=True,
+                golf_identified_brand="Callaway",
+            )
+            with self.subTest(title=title):
+                self.assertIsNone(m.golf_condition_spec_reason(clean_negation))
+
+        warranty_text = self._result(
+            listing={
+                "title": "Callaway Rogue 5-PW RH standard length",
+                "description": "Includes an extended manufacturer warranty.",
+            }
+        )
+        self.assertIsNone(m.golf_condition_spec_reason(warranty_text))
+
+        # Heads-only wording was already covered globally. Do not duplicate it
+        # in the golf-only regex or disturb the established condition path.
+        self.assertIsNotNone(m.matched_keyword("callaway rogue heads only", m.CONDITION_HARD_FAIL_KEYWORDS))
+        self.assertIsNone(m.golf_condition_spec_reason(self._result(
+            listing={"title": "Callaway Rogue heads only"}
+        )))
+
+    def test_zero_feedback_blocks_only_when_official_ebay_supplies_the_field(self):
+        clean = self._result(
+            price=100,
+            listing={
+                "title": "Callaway Rogue 5-PW RH Iron Set",
+                "platform": "ebay",
+            },
+            estimated_resale_value=300,
+            golf_ai_checked=True,
+            golf_is_playable_first_set=True,
+            golf_is_starter_kit=False,
+            golf_brand_claims_present=True,
+            golf_brand_claims_confirmed=True,
+            golf_counterfeit_suspected=False,
+            damage_found=False,
+        )
+        zero = dict(clean, seller_feedback_score=0)
+        self.assertIn(
+            "zero feedback",
+            m.is_blocked_by_steal_quality_gate(zero, category="golf-equipment"),
+        )
+
+        for candidate in (
+            clean,
+            dict(clean, seller_feedback_score=None),
+            dict(clean, seller_feedback_score="0"),
+            dict(clean, seller_feedback_score=False),
+            dict(clean, listing={**clean["listing"], "platform": "ebay_scraped"}),
+            dict(clean, listing={**clean["listing"], "platform": "shopgoodwill"}, seller_feedback_score=0),
+        ):
+            with self.subTest(candidate=candidate):
+                self.assertIsNone(m.golf_zero_feedback_seller_reason(candidate))
+                self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+                    candidate, category="golf-equipment"
+                ))
+
     def test_missing_model_name_is_not_age_evidence(self):
         generic = self._result(
             listing={"title": "Callaway 5-PW Iron Set RH"},
@@ -2272,11 +2645,34 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertIn("never transfer a 2-PW/3-PW full-set comp unchanged", prompt)
         self.assertIn("older sparse entry-level boxed set", prompt)
 
+    def test_golf_prompt_ties_model_year_to_the_irons_not_a_driver(self):
+        listing = {
+            "title": "TaylorMade M2 Driver with Callaway Rogue 5-PW Irons RH",
+            "image": {"imageUrl": "https://example.test/full-set.jpg"},
+        }
+        with mock.patch.object(
+            m, "_download_listing_image", return_value=(b"image", "image/jpeg")
+        ), mock.patch.object(m, "_call_photo_check", return_value={}) as check:
+            m.check_photos_with_gemini(
+                listing,
+                category="golf-equipment",
+                search_query="golf club set",
+            )
+        prompt = check.call_args.args[0]
+        self.assertIn(
+            "identified_model MUST describe the coherent IRON model family",
+            prompt,
+        )
+        self.assertIn(
+            "not a driver, wood, hybrid, putter, or bag",
+            prompt,
+        )
+
 
 class GolfRampConfiguration(unittest.TestCase):
     def test_modern_set_ceiling_and_golf_auction_lane_are_active(self):
-        self.assertEqual(m.load_config()["GOLF_MODERN_SET_MAX_LANDED_PRICE"], 200)
-        self.assertEqual(m.GOLF_MODERN_SET_MAX_LANDED_PRICE, 200)
+        self.assertEqual(m.load_config()["GOLF_MODERN_SET_MAX_LANDED_PRICE"], 225)
+        self.assertEqual(m.GOLF_MODERN_SET_MAX_LANDED_PRICE, 225)
         self.assertIn(m.GOLF_EBAY_AUCTION_SEARCH, m.EBAY_AUCTION_SEARCHES)
         self.assertEqual(m.GOLF_EBAY_AUCTION_SEARCH["id"], "golf-irons")
         self.assertIn("golf-irons", m.FOCUS_SEARCH_IDS)
@@ -6465,6 +6861,102 @@ class SendAlertGolfDecisionLines(unittest.TestCase):
         self.assertIn("RH: AI photo confirmed", message)
         self.assertIn("verify: brand/model", message)
 
+    def test_senior_and_ladies_flex_are_visible_verify_notes_not_blocks(self):
+        for flex_text, expected, shaft in (
+            ("Senior A-Flex Graphite", "shaft flex Senior/A-flex", "Senior / Graphite"),
+            ("Ladies L-Flex Steel", "shaft flex Ladies/L-flex", "Ladies / Steel"),
+        ):
+            result = {
+                "listing": {
+                    "title": f"Callaway Rogue 5-PW RH {flex_text}",
+                    "itemWebUrl": "https://x",
+                    "platform": "ebay",
+                },
+                "category": "golf-equipment",
+                "price": 120.0,
+                "golf_identified_brand": "Callaway",
+            }
+            with self.subTest(flex_text=flex_text):
+                message = self._send_and_capture(result)
+                self.assertIn(f"verify: {expected}", message)
+                self.assertIn(f"shaft: {shaft}", message)
+                self.assertIsNone(m.golf_condition_spec_reason(result))
+
+    def test_shaft_flex_and_material_parse_from_title_or_description(self):
+        fixtures = (
+            (
+                {"title": "Titleist AP2 5-PW S Flex Steel Shafts RH"},
+                "Stiff / Steel",
+            ),
+            (
+                {
+                    "title": "Callaway Rogue 5-PW RH Iron Set",
+                    "description": "Fitted with graphite shafts, Flex R.",
+                },
+                "Regular / Graphite",
+            ),
+            (
+                {"title": "Mizuno JPX 921 5-PW RH S Shaft"},
+                "Stiff",
+            ),
+            (
+                {"title": "Ping G400 5-PW RH R Shaft"},
+                "Regular",
+            ),
+        )
+        for listing_text, expected in fixtures:
+            result = {
+                "listing": {
+                    **listing_text,
+                    "itemWebUrl": "https://x",
+                    "platform": "ebay",
+                },
+                "category": "golf-equipment",
+                "price": 120.0,
+                "golf_identified_brand": "Mainstream brand",
+            }
+            with self.subTest(listing_text=listing_text):
+                self.assertIn(
+                    f"shaft: {expected}", self._send_and_capture(result)
+                )
+
+        wedge_s = {
+            "listing": {
+                "title": "Callaway Rogue Irons 5-PW,S RH",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 120.0,
+            "golf_identified_brand": "Callaway",
+        }
+        self.assertNotIn("\nshaft:", self._send_and_capture(wedge_s))
+
+    def test_golf_value_line_replaces_resale_margin_wording(self):
+        result = {
+            "listing": {
+                "title": "Callaway Rogue 5-PW Regular Graphite RH",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 190.0,
+            "item_price": 170.0,
+            "shipping_cost": 9.25,
+            "estimated_resale_value": 300.0,
+            "deal_rating": "Great Deal",
+            "discount_pct": 37,
+            "golf_identified_brand": "Callaway",
+        }
+        message = self._send_and_capture(result)
+        self.assertIn(
+            "typical used price ~$300 (AI estimate) vs asking $170", message
+        )
+        self.assertEqual(message.count("typical used price"), 1)
+        self.assertNotIn("under resale", message)
+        self.assertNotIn("resale ~$", message)
+        self.assertNotIn("\nGreat Deal", message)
+
     def test_golf_alert_drops_stale_flip_label(self):
         result = {
             "listing": {
@@ -6491,15 +6983,20 @@ class SendAlertGolfDecisionLines(unittest.TestCase):
             "price": 190.0,
             "item_price": 170.0,
             "shipping_cost": 9.25,
+            "estimated_resale_value": 150.0,
             "deal_rating": "Marginal",
             "discount_pct": -27,
             "golf_identified_brand": "Callaway",
             "golf_delivery_path": "modern-set-under-200",
         }
         message = self._send_and_capture(result)
-        self.assertIn("GOOD PRICE: modern set under $200 landed", message)
+        self.assertIn("GOOD PRICE: modern set under $225 landed", message)
         self.assertIn("absolute ceiling, not the steal test", message)
-        self.assertIn("Marginal (-27% under resale)", message)
+        self.assertIn(
+            "typical used price ~$150 (AI estimate) vs asking $170", message
+        )
+        self.assertNotIn("under resale", message)
+        self.assertNotIn("\nMarginal", message)
 
     def test_non_golf_alert_keeps_flip_label(self):
         result = {
