@@ -659,6 +659,49 @@ class ExtensionFocusContractTests(unittest.TestCase):
             self.assertEqual(queries["poker"], [])
 
 
+class ExtensionNeverOpensFacebookTabsTests(unittest.TestCase):
+    """The owner turned the extension off because Facebook tabs kept opening and
+    closing all day. Facebook targets must be scanned with a background fetch:
+    no tab, no window, nothing visible. Only the non-Facebook "generic-og" page
+    type is allowed to open a tab, and no shipped default target uses it."""
+
+    def _opened_by(self, parser, platform):
+        scan_source = background_javascript("async function scanTarget", "\nfunction retryDelayMs")
+        script = (
+            "const opened=[];"
+            "const DealScoutUrls={normalizeUrl:(u)=>u};"
+            "const sleep=async()=>{};"
+            "const waitForTab=async()=>{};"
+            "const withTabRetry=async(fn)=>fn();"
+            "const getScanWindowId=async()=>{opened.push('window');return 1;};"
+            "const scanFacebookTargetViaFetch=async()=>[];"
+            "const chrome={tabs:{create:async()=>{opened.push('tab');return {id:7};},remove:async()=>{}},"
+            "windows:{create:async()=>{opened.push('window');return {id:2};}},"
+            "scripting:{executeScript:async()=>[]}};"
+            + scan_source
+            + "(async()=>{await scanTarget({platform:%s,parser:%s,"
+            "searchUrl:'https://www.facebook.com/marketplace/category/search/?query=golf'});"
+            "process.stdout.write(JSON.stringify(opened));})();"
+            % (json.dumps(platform), json.dumps(parser))
+        )
+        return run_node_script(script)
+
+    def test_facebook_scans_never_open_a_tab_or_window(self):
+        for parser in ("facebook-json", None, "anything-unrecognised"):
+            with self.subTest(parser=parser):
+                self.assertEqual(self._opened_by(parser, "facebook"), [])
+
+    def test_control_the_tab_path_is_detected_for_generic_og(self):
+        # Proves the harness can see a tab open, so the test above is not vacuous.
+        self.assertIn("tab", self._opened_by("generic-og", "other"))
+
+    def test_no_shipped_default_target_uses_the_tab_path(self):
+        source = BACKGROUND_JS.read_text(encoding="utf-8")
+        block = source[source.index("const DEFAULT_TARGETS = ["): source.index("let lastRunStatus")]
+        self.assertNotIn("generic-og", block)
+        self.assertIn('parser: "facebook-json"', block)
+
+
 class ScoutIngestValidationTests(unittest.TestCase):
     def test_duplicate_items_are_removed_against_queue_and_request(self):
         script = (
