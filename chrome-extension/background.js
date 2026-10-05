@@ -3,7 +3,7 @@ importScripts("url-utils.js");
 const ALARM_NAME = "deal-scout-scan";
 // 8: add generic poker-chip Marketplace targets that route to saved searches.
 // 7: target labels corrected from a stale "+124mi" to the real radius.
-const TARGETS_VERSION = 8;
+const TARGETS_VERSION = 9;
 const RETRY_QUEUE_KEY = "scoutRetryQueue";
 const FAILURE_STATE_KEY = "scoutIngestFailures";
 const MAX_INGEST_ATTEMPTS = 5;
@@ -45,17 +45,21 @@ const GOLF_RADIUS_MILES = Math.round(GOLF_ORIGIN.radius / 1.609344);
 const GOLF_QUERIES = [
   "golf club set",
   "complete golf set",
-  "mens golf clubs",
   "golf irons set",
-  "golf bag clubs",
-  // Poorly-titled listings are where local mispricing actually lives: a seller
-  // who writes "TaylorMade M4" has already priced to market, while "golf clubs
-  // and bag" is the guy clearing out a garage who never looked up what he has.
-  // These deliberately match nothing specific - the value is in the vagueness.
   "golf clubs and bag",
-  "mens golf set used",
   "full golf set",
-  "golf clubs garage"
+  // Added 2026-10-05. These match saved searches that are in the bot's
+  // FOCUS_SEARCH_IDS, so their results can actually be scored; before this the
+  // extension scanned for queries whose only matching search had left focus
+  // ("mens golf clubs", "golf bag clubs", "mens golf set used", "golf clubs
+  // garage") and every listing they found deferred forever.
+  "complete golf iron set",
+  "golf set",
+  "golf clubs",
+  "callaway golf set",
+  "taylormade golf set",
+  "ping golf set",
+  "cobra golf set"
 ];
 
 // Poker chips reuse the proven Columbia metro boundary. There is no explicit
@@ -69,14 +73,14 @@ const POKER_MARKETPLACE_MAX_PRICE = 200;
 // sellers who do not know the maker/value. Every string exactly matches an
 // enabled poker-chips SAVED_SEARCHES query in config.json; do not casually
 // reword one or Scout will defer every result as unmatched.
-const POKER_QUERIES = [
-  "casino poker chips set",
-  "vintage \"casino chip\" set",
-  "clay poker chips lot",
-  "\"poker chip\" set vintage",
-  "ceramic poker chips set",
-  "casino chips lot"
-];
+// Poker is deliberately OFF: the bot's FOCUS_SEARCH_IDS is golf-only, so none of
+// these could match a focused saved search and every poker listing would defer
+// forever while still costing a Facebook request per scan. To bring poker back,
+// restore the queries below AND put the matching search ids back in
+// FOCUS_SEARCH_IDS (config.json), then bump TARGETS_VERSION.
+//   "casino poker chips set", "vintage \"casino chip\" set", "clay poker chips lot",
+//   "\"poker chip\" set vintage", "ceramic poker chips set", "casino chips lot"
+const POKER_QUERIES = [];
 
 // Stable per-default id, independent of array order/text tweaks - the
 // migration merge below matches on this, never on array position, so

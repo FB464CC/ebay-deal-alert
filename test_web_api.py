@@ -597,6 +597,68 @@ class ExtensionConfigContractTests(unittest.TestCase):
                 self.assertEqual(matches[0].get("category"), category, query)
 
 
+class ExtensionFocusContractTests(unittest.TestCase):
+    """Regression for a silent failure: the Scout matcher only considers the
+    bot's FOCUSED searches, but the older contract test above checked every
+    ENABLED search. Four of nine golf targets matched only searches that had
+    left focus, so every listing they found deferred forever (the queue sat at
+    104 rows that never drained) while the extension kept spending Facebook
+    requests on them."""
+
+    def test_every_shipped_target_matches_a_focused_saved_search(self):
+        query_source = background_javascript(
+            "const GOLF_QUERIES =",
+            "// Stable per-default id",
+        )
+        queries = run_node_script(
+            "const GOLF_ORIGIN={radius:65};"
+            + query_source
+            + "process.stdout.write(JSON.stringify({golf:GOLF_QUERIES,poker:POKER_QUERIES}));"
+        )
+        config = json.loads(ROOT_CONFIG.read_text(encoding="utf-8"))
+        focus = set(config.get("FOCUS_SEARCH_IDS") or [])
+        if not focus:
+            self.skipTest("no FOCUS_SEARCH_IDS: every enabled search is in play")
+
+        def clean_query(search):
+            return search.get("query", "").split(" -", 1)[0].strip()
+
+        shipped = list(queries["golf"]) + list(queries["poker"])
+        self.assertTrue(shipped, "extension ships no targets at all")
+        for query in shipped:
+            matches = [
+                search["id"]
+                for search in config["SAVED_SEARCHES"]
+                if search.get("enabled", True)
+                and search.get("id") in focus
+                and "facebook" in (search.get("platforms") or [])
+                and clean_query(search) == query
+            ]
+            self.assertTrue(
+                matches,
+                f"Facebook target {query!r} matches no FOCUSED saved search, so every "
+                "listing it finds would defer forever",
+            )
+
+    def test_poker_is_not_scanned_while_focus_is_golf_only(self):
+        query_source = background_javascript(
+            "const GOLF_QUERIES =",
+            "// Stable per-default id",
+        )
+        queries = run_node_script(
+            "const GOLF_ORIGIN={radius:65};"
+            + query_source
+            + "process.stdout.write(JSON.stringify({golf:GOLF_QUERIES,poker:POKER_QUERIES}));"
+        )
+        config = json.loads(ROOT_CONFIG.read_text(encoding="utf-8"))
+        focus = set(config.get("FOCUS_SEARCH_IDS") or [])
+        if focus and not any(
+            s.get("id") in focus and s.get("category") == "poker-chips"
+            for s in config["SAVED_SEARCHES"]
+        ):
+            self.assertEqual(queries["poker"], [])
+
+
 class ScoutIngestValidationTests(unittest.TestCase):
     def test_duplicate_items_are_removed_against_queue_and_request(self):
         script = (
