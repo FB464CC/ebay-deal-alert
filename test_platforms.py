@@ -1737,6 +1737,34 @@ class ShopGoodwillGolfShippingQuote(unittest.TestCase):
         self.assertNotIn("is_ending_soon_auction", listings[0])
         self.assertNotIn("auction_minutes_remaining", listings[0])
 
+    def test_registry_still_points_at_the_real_search_function(self):
+        """Regression for a production outage: helpers inserted between the
+        @adapter("shopgoodwill") decorator and search_shopgoodwill silently
+        re-registered a helper as the adapter, so every ShopGoodwill search
+        returned a bare bool. Tests that call p.search_shopgoodwill directly
+        cannot see that; this goes through the real registry."""
+        self.assertIs(p.ADAPTERS["shopgoodwill"], p.search_shopgoodwill)
+        for registry in (p.ADAPTERS, p.BATCH_ADAPTERS):
+            for name, fn in registry.items():
+                with self.subTest(adapter=name):
+                    self.assertFalse(
+                        fn.__name__.startswith("_"),
+                        f"{name} is registered to private helper {fn.__name__}",
+                    )
+
+    def test_registered_adapter_returns_a_listings_total_pair(self):
+        fake = mock.MagicMock()
+        fake.post.side_effect = [
+            _FakeScraplingResp(200, {"searchResults": {"itemCount": 1, "items": [_sgw_item(276987333)]}}),
+            _FakeScraplingResp(200, _REAL_SGW_SHIPPING_REPLY),
+        ]
+        with mock.patch.dict("sys.modules", {"scrapling.fetchers": mock.MagicMock(Fetcher=fake)}), \
+                mock.patch.object(p, "_pace"), \
+                mock.patch.object(p, "shopgoodwill_circuit_breaker_allows_calls", return_value=True):
+            listings, total = p.ADAPTERS["shopgoodwill"]({"id": "golf-irons", "query": "golf irons set"})
+        self.assertEqual(len(listings), 1)
+        self.assertEqual(total, 1)
+
     def test_lookups_per_search_are_capped(self):
         items = [_sgw_item(1000 + i) for i in range(p.SHOPGOODWILL_SHIPPING_LOOKUPS_PER_SEARCH + 4)]
         fake = mock.MagicMock()

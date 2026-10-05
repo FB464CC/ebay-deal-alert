@@ -1285,7 +1285,6 @@ def _parse_shopgoodwill_remaining(remaining_str):
     return days * 24 * 60 + hours * 60 + minutes
 
 
-@adapter("shopgoodwill")
 def _is_golf_search(saved_search):
     """True for the golf-equipment saved searches (id prefix or eBay category)."""
     sid = str((saved_search or {}).get("id") or "")
@@ -1348,6 +1347,7 @@ def _shopgoodwill_calculated_shipping(item_id, proxy_url):
     return value
 
 
+@adapter("shopgoodwill")
 def search_shopgoodwill(saved_search):
     payload = {
         "isSize": False, "isWeddingCatagory": "false", "isMultipleCategoryIds": False,
