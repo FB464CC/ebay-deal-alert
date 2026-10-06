@@ -600,6 +600,14 @@ GOLF_STRONG_VISION_DAILY_LIMIT = max(
 GOLF_STRONG_VISION_TIMEOUT_SECONDS = float(
     _CONFIG.get("GOLF_STRONG_VISION_TIMEOUT_SECONDS", 35)
 )
+JEV_PREFILTER_ENABLED = bool(_CONFIG.get("JEV_PREFILTER_ENABLED", True))
+JEV_SKIP_THRESHOLD = float(_CONFIG.get("JEV_SKIP_THRESHOLD", 0.05))
+JEV_MODEL = _CONFIG.get("JEV_MODEL", "typesafe/jev-1.13")
+JEV_TIMEOUT_SECONDS = float(_CONFIG.get("JEV_TIMEOUT_SECONDS", 4))
+JEV_MAX_CALLS_PER_RUN = max(
+    0, int(_CONFIG.get("JEV_MAX_CALLS_PER_RUN", 80))
+)
+JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 DEEPSEEK_VISION_TIMEOUT_SECONDS = float(
     _CONFIG.get("DEEPSEEK_VISION_TIMEOUT_SECONDS", 30)
 )
@@ -645,6 +653,14 @@ _PAID_AI_BUDGET_EXHAUSTION = None
 # candidate when several golf sets reach the final gate together.
 _GOLF_STRONG_VISION_DISABLED_FOR_RUN = None
 _GOLF_STRONG_VISION_FAILURE_WARNED = False
+# Jev is a negative-only pre-photo screen. Missing credentials are expected at
+# rollout, so that state is informational and process-deduped. Provider/schema/
+# cap/deadline failures are also process-deduped, while the disabled marker and
+# actual-call counter reset for each five-minute run.
+_JEV_MISSING_KEY_INFO_LOGGED = False
+_JEV_FAILURE_WARNED = False
+_JEV_DISABLED_FOR_RUN = None
+_JEV_CALLS_THIS_RUN = 0
 # Every alert now requires a real AI check, and GEMINI_CALL_LIMIT paces that
 # to a handful per run so the daily Gemini quota lasts the whole day (see
 # GEMINI_CALL_LIMIT's comment). Ending-soon auctions sort FIRST in the AI
@@ -1757,6 +1773,15 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS ai_pending "
         "(item_id TEXT PRIMARY KEY, first_seen_at TEXT, "
         "ai_no_price_attempts INTEGER NOT NULL DEFAULT 0)"
+    )
+    # Durable Jev decisions prevent the same unchanged listing from spending
+    # a text-model call every five-minute poll. A title edit changes the hash
+    # and forces a fresh score; no seller, URL, description, or photo data is
+    # stored or sent.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS jev_prefilter_cache ("
+        "item_id TEXT PRIMARY KEY, title_sha TEXT NOT NULL, "
+        "score REAL NOT NULL, scored_at TEXT NOT NULL)"
     )
     # In-place migration for the existing checked-in seen_items.db. Keeping
     # this on ai_pending reuses the state already dedicated to unresolved AI
@@ -4717,6 +4742,181 @@ def _deadline_timeout(hard_stop, maximum):
     if remaining <= 0:
         return None
     return min(maximum, max(0.001, remaining))
+
+
+_JEV_IRON_SET_QUESTION = {
+    "iron_set": {
+        "type": "noul",
+        "instructions": (
+            "Does this listing sell a run of at least five matching iron clubs, "
+            "such as 5-PW or 4-9, or a complete set that includes such a run?"
+        ),
+        "criteria": {
+            "true": (
+                "Five or more irons from one set are sold together, or a full "
+                "set including them."
+            ),
+            "false": (
+                "Only one to four clubs, or only drivers, woods, putters, wedges, "
+                "hybrids or a bag, or an assorted mix of unrelated clubs."
+            ),
+        },
+    }
+}
+
+
+def _jev_api_key():
+    """Return the environment-only OpenRouter key, logging absence once."""
+    global _JEV_MISSING_KEY_INFO_LOGGED
+    key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    if JEV_PREFILTER_ENABLED and not key and not _JEV_MISSING_KEY_INFO_LOGGED:
+        logger.info(
+            "Jev pre-photo screen is inert: OPENROUTER_API_KEY is missing or empty"
+        )
+        _JEV_MISSING_KEY_INFO_LOGGED = True
+    return key
+
+
+def _jev_fail_open(reason, http_status=None):
+    """Disable Jev for this run and emit at most one warning per process."""
+    global _JEV_DISABLED_FOR_RUN, _JEV_FAILURE_WARNED
+    _JEV_DISABLED_FOR_RUN = str(reason)
+    if not _JEV_FAILURE_WARNED:
+        status = "not available" if http_status is None else str(http_status)
+        logger.warning(
+            "Jev pre-photo screen failed open and is disabled for this run "
+            "(HTTP status %s): %s",
+            status,
+            reason,
+        )
+        _JEV_FAILURE_WARNED = True
+    return None
+
+
+def _jev_title_sha(title):
+    return hashlib.sha256(str(title).encode("utf-8")).hexdigest()
+
+
+def _cached_jev_iron_set_score(conn, item_id, title):
+    row = conn.execute(
+        "SELECT title_sha, score FROM jev_prefilter_cache WHERE item_id = ?",
+        (item_id,),
+    ).fetchone()
+    if not row or row[0] != _jev_title_sha(title):
+        return None
+    score = row[1]
+    if (
+        isinstance(score, (int, float))
+        and not isinstance(score, bool)
+        and math.isfinite(score)
+        and 0 <= score <= 1
+    ):
+        return float(score)
+    return None
+
+
+def _cache_jev_iron_set_score(conn, item_id, title, score):
+    conn.execute(
+        "INSERT INTO jev_prefilter_cache "
+        "(item_id, title_sha, score, scored_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(item_id) DO UPDATE SET "
+        "title_sha = excluded.title_sha, score = excluded.score, "
+        "scored_at = excluded.scored_at",
+        (
+            item_id,
+            _jev_title_sha(title),
+            score,
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+
+
+def _jev_iron_set_score(conn, listing, hard_stop=None):
+    """Return Jev's iron-set probability, or ``None`` on every failure.
+
+    The function is intentionally incapable of approving an item. Its caller
+    may only use a validated low probability to avoid a photo check; cache
+    hits and high scores continue through the unchanged vision/delivery path.
+    """
+    global _JEV_CALLS_THIS_RUN
+    if not JEV_PREFILTER_ENABLED or _JEV_DISABLED_FOR_RUN:
+        return None
+    api_key = _jev_api_key()
+    if not api_key:
+        return None
+
+    item_id = str(listing.get("itemId") or "").strip()
+    title = str(listing.get("title") or "")
+    if not item_id or not title:
+        return _jev_fail_open("candidate is missing item_id or title")
+
+    try:
+        cached = _cached_jev_iron_set_score(conn, item_id, title)
+    except sqlite3.Error as exc:
+        return _jev_fail_open(f"cache read failed: {exc}")
+    if cached is not None:
+        return cached
+
+    if _JEV_CALLS_THIS_RUN >= JEV_MAX_CALLS_PER_RUN:
+        return _jev_fail_open(
+            f"per-run call cap of {JEV_MAX_CALLS_PER_RUN} exhausted"
+        )
+    timeout = _deadline_timeout(hard_stop, JEV_TIMEOUT_SECONDS)
+    # Do not start a network request with less than one measured Jev call's
+    # typical latency left. The request timeout is still bounded by the exact
+    # run deadline through _deadline_timeout above.
+    if timeout is None or timeout < 0.05:
+        return _jev_fail_open("run deadline is too close for another call")
+
+    condition = listing.get("ebay_condition")
+    if condition is None:
+        condition = listing.get("condition")
+    condition = str(condition).strip() if condition is not None else ""
+    if not condition:
+        condition = "not stated"
+    payload = {
+        "model": JEV_MODEL,
+        "state": {"title": title, "listing_condition": condition},
+        "questions": _JEV_IRON_SET_QUESTION,
+    }
+    _JEV_CALLS_THIS_RUN += 1
+    response = None
+    try:
+        response = requests.post(
+            JEV_DECISIONS_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        body = response.json()
+        score = body["answers"]["iron_set"]["noul"]
+        if (
+            not isinstance(score, (int, float))
+            or isinstance(score, bool)
+            or not math.isfinite(score)
+            or not 0 <= score <= 1
+        ):
+            raise ValueError(f"invalid iron_set probability {score!r}")
+        score = float(score)
+        _cache_jev_iron_set_score(conn, item_id, title, score)
+        return score
+    except (
+        requests.exceptions.RequestException,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        sqlite3.Error,
+    ) as exc:
+        status = getattr(response, "status_code", None)
+        if isinstance(exc, requests.exceptions.RequestException):
+            status = getattr(getattr(exc, "response", None), "status_code", status)
+        return _jev_fail_open(str(exc), http_status=status)
 
 
 def _download_listing_image(image_url, hard_stop=None):
@@ -7744,6 +7944,7 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
         (("ai check returned no usable resale value",), "AI_NO_PRICE"),
         (("stale fixed-price listing",), "STALE_LISTING"),
         (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
+        (("jev pre-photo screen",), "JEV_NOT_A_SET"),
         (("golf wrong-item title",), "GOLF_WRONG_ITEM"),
         (("golf full-set-only",), "GOLF_FULL_SET_ONLY_REJECT"),
         (("poker pre-ai reject",), "POKER_PRETRIAGE_REJECT"),
@@ -7899,6 +8100,7 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_identified_model",
         "golf_model_release_year",
         "golf_delivery_path",
+        "jev_iron_set",
         "golf_strong_checked",
         "golf_strong_skipped_reason",
         "golf_strong_left_handed_warning",
@@ -10075,8 +10277,13 @@ def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
 def run():
     global SAVED_SEARCHES, _PAID_AI_BUDGET_EXHAUSTION
     global _GOLF_STRONG_VISION_DISABLED_FOR_RUN
+    global _JEV_DISABLED_FOR_RUN, _JEV_CALLS_THIS_RUN
     _PAID_AI_BUDGET_EXHAUSTION = None
     _GOLF_STRONG_VISION_DISABLED_FOR_RUN = None
+    _JEV_DISABLED_FOR_RUN = None
+    _JEV_CALLS_THIS_RUN = 0
+    if JEV_PREFILTER_ENABLED and not _jev_api_key():
+        _JEV_DISABLED_FOR_RUN = "OPENROUTER_API_KEY is missing or empty"
     SAVED_SEARCHES, config_warnings = validate_config(
         {"SAVED_SEARCHES": SAVED_SEARCHES}
     )
@@ -11094,6 +11301,40 @@ def run():
             candidate["fingerprint"],
             candidate["total_price"],
         )
+
+    # Negative-only text screen after every existing free/deterministic gate
+    # and before photo candidates are sorted or queued. A low score mirrors
+    # the GOLF_WRONG_ITEM final-disposition bookkeeping: visible alert-log row,
+    # durable seen/fingerprint state, and no photo call. Every cache/provider/
+    # deadline/cap error returns None and therefore preserves today's path.
+    for item_id, candidate in list(review_candidates.items()):
+        if candidate["category"] != "golf-equipment":
+            continue
+        result = candidate["result"]
+        jev_score = _jev_iron_set_score(
+            conn, candidate["listing"], hard_stop=hard_stop
+        )
+        if jev_score is None:
+            continue
+        result["jev_iron_set"] = jev_score
+        if jev_score > JEV_SKIP_THRESHOLD:
+            continue
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "Jev pre-photo screen: not an iron set "
+            f"(iron_set={jev_score:.6f} <= {JEV_SKIP_THRESHOLD:.6f})"
+        )
+        logger.info(
+            "Jev-filtered %s before photo check: %s", item_id, result["reason"]
+        )
+        append_alert_log(result)
+        mark_seen(
+            conn,
+            item_id,
+            candidate["fingerprint"],
+            candidate["total_price"],
+        )
+        review_candidates.pop(item_id, None)
 
     def _ai_check_priority(candidate):
         result = candidate["result"]

@@ -12087,6 +12087,299 @@ class RunIntegration(unittest.TestCase):
         )
         self.assertTrue(self.alerts[0]["golf_ai_checked"])
 
+    def _jev_response(self, score=None, *, status=200, body=None, json_error=None):
+        response = mock.Mock()
+        response.status_code = status
+        if status >= 400:
+            response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+                f"HTTP {status}", response=response
+            )
+        else:
+            response.raise_for_status.return_value = None
+        if json_error is not None:
+            response.json.side_effect = json_error
+        elif body is not None:
+            response.json.return_value = body
+        else:
+            response.json.return_value = {
+                "answers": {"iron_set": {"type": "noul", "noul": score}}
+            }
+        return response
+
+    def _wire_jev(self, responder, *, max_calls=80):
+        self._patch("JEV_PREFILTER_ENABLED", True)
+        self._patch("JEV_SKIP_THRESHOLD", 0.05)
+        self._patch("JEV_MAX_CALLS_PER_RUN", max_calls)
+        self._patch("_JEV_MISSING_KEY_INFO_LOGGED", False)
+        self._patch("_JEV_FAILURE_WARNED", False)
+        self._patch("_JEV_DISABLED_FOR_RUN", None)
+        self._patch("_JEV_CALLS_THIS_RUN", 0)
+        env_patcher = mock.patch.dict(
+            os.environ, {"OPENROUTER_API_KEY": "test-openrouter-key"}
+        )
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+        post_patcher = mock.patch.object(m.requests, "post", side_effect=responder)
+        post = post_patcher.start()
+        self.addCleanup(post_patcher.stop)
+        return post
+
+    def _golf_search(self, query="golf irons set"):
+        return {
+            "id": "golf-jev-test",
+            "query": query,
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+        }
+
+    def test_jev_is_inert_without_environment_key_and_logs_once(self):
+        self._patch("JEV_PREFILTER_ENABLED", True)
+        self._patch("_JEV_MISSING_KEY_INFO_LOGGED", False)
+        env_patcher = mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": ""})
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+        post_patcher = mock.patch.object(m.requests, "post")
+        post = post_patcher.start()
+        self.addCleanup(post_patcher.stop)
+        self.ai_result = None
+        item = self._ebay_item(
+            "v1|jev-no-key|0",
+            "Callaway Rogue Irons 5-P A Stiff Flex Steel Right Handed Excellent Condition",
+            120.0,
+        )
+        self._serve(self._golf_search(), [item])
+
+        with self.assertLogs("ebay_deal_alert", level="INFO") as cm:
+            m.run()
+            m.run()
+
+        self.assertEqual(post.call_count, 0)
+        inert_lines = [
+            line for line in cm.output if "Jev pre-photo screen is inert" in line
+        ]
+        self.assertEqual(len(inert_lines), 1)
+        self.assertEqual(self.ai_calls, [item["itemId"], item["itemId"]])
+
+    def test_jev_run_path_skips_at_threshold_logs_and_marks_seen(self):
+        post = self._wire_jev(
+            lambda *args, **kwargs: self._jev_response(0.05)
+        )
+        item_id = "v1|jev-driver|0"
+        item = self._ebay_item(
+            item_id,
+            "TaylorMade R7 460cc Driver 9.5 Graphite Shaft Stiff Flex",
+            39.0,
+        )
+        self._serve(self._golf_search("taylormade driver"), [item])
+
+        m.run()
+
+        records = self._alert_log_records()
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+        self.assertEqual(records[0]["disposition_code"], "JEV_NOT_A_SET")
+        self.assertEqual(records[0]["jev_iron_set"], 0.05)
+        self.assertFalse(m.is_new(self._db(), item_id))
+
+    def test_jev_score_above_threshold_still_requires_photo_and_cannot_deliver(self):
+        post = self._wire_jev(
+            lambda *args, **kwargs: self._jev_response(0.06)
+        )
+        self.ai_result = None
+        item_id = "v1|jev-rogue-keep|0"
+        item = self._ebay_item(
+            item_id,
+            "Callaway Rogue Irons 5-P A Stiff Flex Steel Right Handed Excellent Condition",
+            120.0,
+        )
+        self._serve(self._golf_search(), [item])
+
+        m.run()
+
+        records = self._alert_log_records()
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(self.ai_calls, [item_id])
+        self.assertEqual(self.alerts, [])
+        self.assertEqual(records[0]["jev_iron_set"], 0.06)
+        self.assertEqual(records[0]["disposition_code"], "NO_AI_BUDGET")
+
+    def test_jev_cache_survives_runs_and_changed_title_rescores(self):
+        post = self._wire_jev(
+            lambda *args, **kwargs: self._jev_response(0.95)
+        )
+        self.ai_result = None
+        item_id = "v1|jev-rbz-cache|0"
+        title = "TaylorMade RH RBZ Rocketballz Iron Golf Club Set"
+        item = self._ebay_item(item_id, title, 100.0)
+        self._serve(self._golf_search(), [item])
+
+        m.run()
+        m.run()
+        changed = self._ebay_item(item_id, title + " Excellent", 100.0)
+        self._serve(self._golf_search(), [changed])
+        m.run()
+
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(self.ai_calls, [item_id, item_id, item_id])
+        row = self._db().execute(
+            "SELECT title_sha, score, scored_at FROM jev_prefilter_cache "
+            "WHERE item_id = ?",
+            (item_id,),
+        ).fetchone()
+        self.assertEqual(row[0], m._jev_title_sha(changed["title"]))
+        self.assertEqual(row[1], 0.95)
+        self.assertTrue(row[2])
+
+    def test_jev_payload_uses_only_title_condition_and_measured_fixtures(self):
+        scores = {
+            "TaylorMade R7 460cc Driver 9.5 Graphite Shaft Stiff Flex": 0.02,
+            "Odyssey White Hot #4 Right-Handed Putter 35 Inch": 0.02,
+            "Golf Lightweight Stand Bag, Small Sunday Carry Bags": 0.02,
+            "Callaway Rogue Irons 5-P A Stiff Flex Steel Right Handed Excellent Condition": 0.95,
+            "TaylorMade RH RBZ Rocketballz Iron Golf Club Set": 0.95,
+        }
+        payloads = []
+
+        def respond(*args, **kwargs):
+            payload = kwargs["json"]
+            payloads.append(payload)
+            return self._jev_response(scores[payload["state"]["title"]])
+
+        post = self._wire_jev(respond)
+        conn = m.init_db()
+        self.addCleanup(conn.close)
+        observed = {}
+        for index, (title, expected) in enumerate(scores.items()):
+            listing = {
+                "itemId": f"fixture-{index}",
+                "title": title,
+                "ebay_condition": "Pre-owned - Good" if index == 3 else None,
+                "itemWebUrl": "https://must-not-be-sent.example/item",
+                "seller": {"username": "must-not-be-sent"},
+                "description": "must not be sent",
+            }
+            observed[title] = m._jev_iron_set_score(conn, listing)
+            self.assertEqual(observed[title], expected)
+
+        self.assertEqual(post.call_count, 5)
+        for payload in payloads:
+            self.assertEqual(set(payload), {"model", "state", "questions"})
+            self.assertEqual(
+                set(payload["state"]), {"title", "listing_condition"}
+            )
+            self.assertEqual(payload["questions"], m._JEV_IRON_SET_QUESTION)
+            self.assertNotIn("must-not-be-sent", json.dumps(payload))
+        self.assertEqual(payloads[3]["state"]["listing_condition"], "Pre-owned - Good")
+        self.assertEqual(payloads[0]["state"]["listing_condition"], "not stated")
+
+    def test_jev_failures_fail_open_once_for_many_candidates(self):
+        self._wire_jev(lambda *args, **kwargs: self._jev_response(0.95))
+        conn = m.init_db()
+        self.addCleanup(conn.close)
+
+        def timeout(*args, **kwargs):
+            raise requests.exceptions.Timeout("timed out")
+
+        cases = {
+            "timeout": timeout,
+            "500": lambda *args, **kwargs: self._jev_response(status=500),
+            "429": lambda *args, **kwargs: self._jev_response(status=429),
+            "garbage": lambda *args, **kwargs: self._jev_response(
+                json_error=json.JSONDecodeError("bad json", "x", 0)
+            ),
+            "missing-answer": lambda *args, **kwargs: self._jev_response(body={}),
+            "out-of-range": lambda *args, **kwargs: self._jev_response(1.01),
+        }
+        for case_index, (name, failure) in enumerate(cases.items()):
+            with self.subTest(name=name):
+                m._JEV_DISABLED_FOR_RUN = None
+                m._JEV_FAILURE_WARNED = False
+                m._JEV_CALLS_THIS_RUN = 0
+                with mock.patch.object(m.requests, "post", side_effect=failure) as post:
+                    with self.assertLogs("ebay_deal_alert", level="WARNING") as cm:
+                        scores = [
+                            m._jev_iron_set_score(
+                                conn,
+                                {
+                                    "itemId": f"failure-{case_index}-{candidate}",
+                                    "title": (
+                                        "Callaway Rogue Irons 5-P A Stiff Flex Steel "
+                                        f"Right Handed {name} {candidate}"
+                                    ),
+                                },
+                            )
+                            for candidate in range(5)
+                        ]
+                self.assertEqual(scores, [None] * 5)
+                self.assertEqual(post.call_count, 1)
+                warnings = [
+                    line for line in cm.output if "Jev pre-photo screen failed open" in line
+                ]
+                self.assertEqual(len(warnings), 1)
+                self.assertIn("HTTP status", warnings[0])
+                if name in {"500", "429"}:
+                    self.assertIn(name, warnings[0])
+
+    def test_jev_cap_and_deadline_guard_fail_open_without_extra_http(self):
+        post = self._wire_jev(
+            lambda *args, **kwargs: self._jev_response(0.95), max_calls=2
+        )
+        conn = m.init_db()
+        self.addCleanup(conn.close)
+        with self.assertLogs("ebay_deal_alert", level="WARNING"):
+            scores = [
+                m._jev_iron_set_score(
+                    conn,
+                    {"itemId": f"cap-{index}", "title": f"Golf Iron Set 5-PW {index}"},
+                )
+                for index in range(5)
+            ]
+        self.assertEqual(scores, [0.95, 0.95, None, None, None])
+        self.assertEqual(post.call_count, 2)
+
+        m._JEV_DISABLED_FOR_RUN = None
+        m._JEV_FAILURE_WARNED = False
+        m._JEV_CALLS_THIS_RUN = 0
+        with self.assertLogs("ebay_deal_alert", level="WARNING") as cm:
+            score = m._jev_iron_set_score(
+                conn,
+                {"itemId": "deadline", "title": "Golf Iron Set 5-PW Deadline"},
+                hard_stop=time.monotonic() + 0.001,
+            )
+        self.assertIsNone(score)
+        self.assertEqual(post.call_count, 2)
+        self.assertIn("HTTP status", cm.output[0])
+
+    def test_non_golf_run_never_calls_jev(self):
+        post = self._wire_jev(
+            lambda *args, **kwargs: self._jev_response(0.01)
+        )
+        item_id = "v1|jev-non-golf|0"
+        item = self._ebay_item(
+            item_id, "Loro Piana Cashmere Crewneck Sweater Mens Large Navy", 100.0
+        )
+        self._serve(
+            {
+                "id": "knitwear-jev-control",
+                "query": "loro piana sweater",
+                "category": "knitwear",
+                "category_id": "11484",
+                "max_price": 400,
+                "enabled": True,
+                "profile": "fast",
+            },
+            [item],
+        )
+
+        m.run()
+
+        self.assertEqual(post.call_count, 0)
+        self.assertEqual(self.ai_calls, [item_id])
+
     def test_ending_soon_auction_gets_a_reserved_ai_slot(self):
         # Every alert needs a real AI check, and GEMINI_CALL_LIMIT paces
         # that to a handful per run. An auction closing in minutes that

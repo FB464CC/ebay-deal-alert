@@ -1,0 +1,78 @@
+JEV PRE-PHOTO SCREEN IMPLEMENTATION
+===================================
+
+Checkpoint 1 - required reading and clean baseline
+--------------------------------------------------
+- Read STRONG_SECOND_LOOK.txt, GOLF_GATES_2026_10_04.txt,
+  PRETRIAGE_FILTER_INVESTIGATION.txt, and GOLF_IRON_MODE.txt in full before
+  inspecting or editing implementation code.
+- Used the supplied checkout only; no fetch, pull, clone, commit, or push.
+- HEAD at baseline: 74dedbc1e9f99b1cf8444c4b1297cfce77632370
+  (chore: update poll state [skip ci]).
+- Initial tracked worktree was clean. Pre-existing untracked files were
+  run.stdout.log and task.txt; both remain out of scope.
+- Baseline full suite: `python3 -m pytest -q` -> 848 passed, 3 warnings,
+  701 subtests passed in 30.55s. The warnings are the established lxml
+  strip_cdata deprecations.
+
+Checkpoint 2 - implementation and focused regressions
+-----------------------------------------------------
+- Added exactly the five requested top-level Jev settings and the poll
+  workflow secret mapping. OPENROUTER_API_KEY is read only from the process
+  environment; a missing/blank value makes the feature inert, performs zero
+  HTTP calls, and produces one process-level INFO message.
+- Added a negative-only golf screen after existing deterministic/staleness
+  rejection and before AI prioritization. A validated score at or below the
+  configured threshold logs JEV_NOT_A_SET, persists jev_iron_set, marks the
+  listing seen with its fingerprint, and never reaches photo vision. Higher
+  scores only continue through the unchanged path; priority and delivery
+  gates are untouched.
+- Added a persistent jev_prefilter_cache table in seen_items.db containing
+  item_id, SHA-256 of the exact title, score, and UTC timestamp. Cache hits do
+  not consume the per-run call cap; a title change replaces the row after a
+  fresh request.
+- The OpenRouter request uses the exact measured Jev question and sends no
+  listing data beyond title and condition. Calls use _deadline_timeout against
+  the run deadline and the configured four-second maximum.
+- Missing credentials, timeout, HTTP 429/500/other request failure, bad JSON,
+  missing answer, invalid/out-of-range probability, cache error, per-run cap,
+  and near-deadline state all fail open. A provider/control failure disables
+  Jev for the rest of that run and emits at most one process-level warning,
+  always including the HTTP status or an explicit unavailable marker.
+- Added run()-level coverage for inert/no-key behavior, the inclusive 0.05
+  skip boundary with logging/seen bookkeeping, 0.06 continuation, cache reuse
+  across runs and changed-title re-score, non-golf isolation, and proof that a
+  high Jev score cannot bypass photo vetting. Added focused provider/schema/
+  cap/deadline and exact-payload coverage using all five measured titles.
+- Focused result: `python3 -m pytest -q test_ebay_deal_alert.py -k jev` ->
+  8 passed, 621 deselected, 6 subtests passed.
+- First post-change full suite: 856 passed, 4 warnings, 707 subtests passed in
+  26.92s. The warnings remain the established lxml strip_cdata deprecations.
+
+Checkpoint 3 - final validation and scope audit
+-----------------------------------------------
+- Required AST parse of ebay_deal_alert.py passed.
+- Required json.load checks for config.json and category_profiles.json passed.
+- Final full suite: `python3 -m pytest -q` -> 856 passed, 4 warnings,
+  707 subtests passed in 26.34s. The warnings are the established lxml
+  strip_cdata deprecations; there are zero failures.
+- `git diff --check` passed (Git emitted only its working-copy newline
+  advisory for the two Python files).
+- config.json contains 3,346 LF bytes, all 3,346 paired as CRLF, zero bare LF
+  bytes, and a final CRLF. Parsed comparison with HEAD shows exactly the five
+  requested new top-level Jev keys and no changed existing key.
+- The CRLF checkout form of SAVED_SEARCHES is byte-identical to HEAD and both
+  hash to SHA-256 4691df45eedb3745be9e39c6f90ae7bca62faa58918cade9fc4295d38d980c8b.
+- Every protected AI budget/provider/batch/call/timeout/strong-vision setting
+  is unchanged. category_profiles.json, platforms.py, chrome-extension/*, and
+  web/* have no diff. No production decorator exists near the inserted helper
+  or run path, and no existing decorator/function pair was split.
+- poll.yml is fully CRLF and its diff is exactly one added line (1 insertion,
+  0 deletions) for OPENROUTER_API_KEY in the existing poll env block.
+- Modified tracked files are exactly .github/workflows/poll.yml, config.json,
+  ebay_deal_alert.py, and test_ebay_deal_alert.py. This report is the only
+  task-created untracked file; pre-existing run.stdout.log and task.txt remain
+  untouched.
+- No commit or push was made. No live OpenRouter call was attempted; the key
+  is absent in this checkout environment, which exercises the intended inert
+  deployment state.
