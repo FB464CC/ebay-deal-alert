@@ -1,0 +1,80 @@
+STRONG SECOND LOOK IMPLEMENTATION
+=================================
+
+Checkpoint 1 - required reading and clean baseline
+--------------------------------------------------
+- Read GOLF_MODERN_IRON_CRITERIA.txt, GOLF_IRON_MODE.txt,
+  GOLF_GATES_2026_10_04.txt, GEMINI_TIMEOUT_INVESTIGATION.txt,
+  AUCTION_INFLATION_MEASURED_2026_10_05.txt, and VISION_PROVIDER_SWITCH.txt
+  in full before inspecting or editing the implementation.
+- Used the supplied checkout only; no fetch, pull, clone, commit, or push.
+- HEAD at baseline: e6046a1d991bfd01db057c1bc1900b0b3ce7c16f
+  (chore: update poll state [skip ci]).
+- Initial tracked worktree was clean. Pre-existing untracked files were
+  run.stdout.log and task.txt; both remain out of scope.
+- Baseline full suite: `python3 -m pytest -q` -> 838 passed, 4 warnings,
+  701 subtests passed in 21.27s. The warnings are the existing lxml
+  strip_cdata deprecations.
+
+Checkpoint 2 - implementation and focused regressions
+-----------------------------------------------------
+- Added only the requested top-level strong-vision config values: model
+  gemini-3.8-flash, daily limit 15, and timeout 35 seconds.
+- Added an explicit optional model argument through the Gemini JSON helper;
+  the normal GEMINI_MODEL environment/default route remains unchanged.
+- Added a mirrored SQLite UTC-day request ledger. A request is durably charged
+  before network I/O and failures remain charged, so restarts cannot reset or
+  overspend the 15-call cap.
+- Added a 45-second pre-call deadline guard and the under-four-minute auction
+  lead-time bypass. Both store a visible skip reason in the alert log.
+- Rescue runs only when a probe proves unknown handedness is the sole normal
+  gate failure. It accepts only strict strong-model RH confirmation and merges
+  all other evidence conservatively before rerunning the unchanged golf and
+  set-shape gates.
+- Shadow runs only after the listing clears the normal gate and final sanity
+  check. Its verdicts are telemetry-only; confirmed LH disagreement adds a
+  visible verify note but never suppresses delivery.
+- HTTP/provider failure is cached for the rest of the run and emits one
+  process-level warning including HTTP status when present. Rescue fails
+  closed; shadow fails open.
+- The pre-existing full suite still passed unchanged after the production
+  implementation: 838 passed, 4 warnings, 701 subtests passed.
+- Added run()-level regressions for Nike-style rescue; left/unknown/error
+  closure; conservative damage/counterfeit/shape/era/brand/price vetoes;
+  durable daily cap and UTC reset; 45-second deadline guard; non-golf,
+  cheap-gate, and near-close no-call paths; shadow disagreement; and one
+  warning/one provider attempt across multiple candidates after an HTTP 503.
+- Added alert formatting checks for the exact `(second look)` suffix and the
+  strong-model LEFT-handed verify note. Focused result: 10 passed.
+
+Checkpoint 3 - final validation and scope audit
+-----------------------------------------------
+- The cheap golf request's exact prompt and downloaded image bytes are reused
+  for the strong call; no environment mutation and no second gallery download
+  is required.
+- Required AST parse passed for ebay_deal_alert.py.
+- Required JSON loads passed for config.json and category_profiles.json.
+- Final full suite: `python3 -m pytest -q` -> 848 passed, 4 warnings,
+  701 subtests passed in 23.49s. Baseline was 838 passed; ten tests were added.
+  The four warnings remain the established lxml strip_cdata deprecations.
+- `git diff --check` passed (Git emitted only its working-copy newline
+  advisory for the two Python files).
+- config.json has 3,341 LF bytes, all 3,341 paired as CRLF, zero bare LF
+  bytes, and a final CRLF.
+- Parsed comparison with HEAD shows exactly three added/changed top-level
+  keys: GOLF_STRONG_VISION_MODEL, GOLF_STRONG_VISION_DAILY_LIMIT, and
+  GOLF_STRONG_VISION_TIMEOUT_SECONDS. All protected budget, provider, batch,
+  call-limit, and existing timeout values are unchanged.
+- The SAVED_SEARCHES source bytes are identical to filtered HEAD; both hash to
+  SHA-256 4691df45eedb3745be9e39c6f90ae7bca62faa58918cade9fc4295d38d980c8b.
+- category_profiles.json, platforms.py, chrome-extension/*, and web/* have no
+  diff. No decorator line changed, so no helper was inserted between an
+  existing decorator and its function.
+- Modified tracked files are exactly config.json, ebay_deal_alert.py, and
+  test_ebay_deal_alert.py. This report is the only task-created untracked file;
+  pre-existing run.stdout.log and task.txt remain untouched.
+- No commit or push was made. Live availability of gemini-3.8-flash for the
+  owner's Gemini API key is unverified because no real key is available here;
+  production will expose the first 403/404/429/5xx status in its single strong-
+  vision warning and continue safely.
+

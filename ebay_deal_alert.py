@@ -591,6 +591,15 @@ AI_PHOTO_PROVIDER = _CONFIG.get("AI_PHOTO_PROVIDER", "deepseek")  # "deepseek" |
 GEMINI_VISION_TIMEOUT_SECONDS = float(
     _CONFIG.get("GEMINI_VISION_TIMEOUT_SECONDS", 20)
 )
+GOLF_STRONG_VISION_MODEL = _CONFIG.get(
+    "GOLF_STRONG_VISION_MODEL", "gemini-3.8-flash"
+)
+GOLF_STRONG_VISION_DAILY_LIMIT = max(
+    0, int(_CONFIG.get("GOLF_STRONG_VISION_DAILY_LIMIT", 15))
+)
+GOLF_STRONG_VISION_TIMEOUT_SECONDS = float(
+    _CONFIG.get("GOLF_STRONG_VISION_TIMEOUT_SECONDS", 35)
+)
 DEEPSEEK_VISION_TIMEOUT_SECONDS = float(
     _CONFIG.get("DEEPSEEK_VISION_TIMEOUT_SECONDS", 30)
 )
@@ -630,6 +639,12 @@ DEEPSEEK_TEXT_MAX_OUTPUT_TOKENS = int(
 # analytics use the structured snapshot to distinguish it from per-run slot
 # pacing. Reset at the start of run() so tests/manual reuse cannot leak state.
 _PAID_AI_BUDGET_EXHAUSTION = None
+# A strong-model availability failure is cached only for the current run, so
+# the next five-minute process/run probes again. The warning flag is process-
+# wide: one bad model ID or exhausted quota must not emit one warning per
+# candidate when several golf sets reach the final gate together.
+_GOLF_STRONG_VISION_DISABLED_FOR_RUN = None
+_GOLF_STRONG_VISION_FAILURE_WARNED = False
 # Every alert now requires a real AI check, and GEMINI_CALL_LIMIT paces that
 # to a handful per run so the daily Gemini quota lasts the whole day (see
 # GEMINI_CALL_LIMIT's comment). Ending-soon auctions sort FIRST in the AI
@@ -4858,18 +4873,27 @@ def _gemini_key_usage_snapshot():
         ]
 
 
-def _call_gemini_parts_json(parts, timeout=20, generation_config=None):
+def _call_gemini_parts_json(
+    parts, timeout=20, generation_config=None, model=None,
+    warn_on_failure=True, raise_on_http_error=False, cache_rate_limit=True,
+):
     """Send one Gemini request through the existing credential pool."""
     key_candidates = _gemini_key_candidates()
     if not _configured_gemini_api_keys():
-        logger.warning(
-            "Skipping Gemini call: GEMINI_API_KEY/GEMINI_API_KEYS is not configured"
-        )
+        if warn_on_failure:
+            logger.warning(
+                "Skipping Gemini call: GEMINI_API_KEY/GEMINI_API_KEYS is not configured"
+            )
         return None
     if not key_candidates:
-        logger.warning("Skipping Gemini call: every configured key slot was rate-limited this run")
+        if warn_on_failure:
+            logger.warning(
+                "Skipping Gemini call: every configured key slot was rate-limited this run"
+            )
         return None
-    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
+    gemini_model = model or os.environ.get(
+        "GEMINI_MODEL", "gemini-flash-lite-latest"
+    )
 
     config = {"responseMimeType": "application/json"}
     if generation_config:
@@ -4890,10 +4914,12 @@ def _call_gemini_parts_json(parts, timeout=20, generation_config=None):
     )
     deadline = time.monotonic() + max(0.0, float(timeout))
     pool_size = len(_configured_gemini_api_keys())
+    last_http_error = None
     for slot, gemini_api_key, fingerprint in key_candidates:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            logger.warning("Gemini key-pool retry deadline reached")
+            if warn_on_failure:
+                logger.warning("Gemini key-pool retry deadline reached")
             return None
         _record_gemini_key_outcome(fingerprint, "attempt")
         resp = requests.post(
@@ -4903,12 +4929,28 @@ def _call_gemini_parts_json(parts, timeout=20, generation_config=None):
             timeout=remaining,
         )
         if resp.status_code == 429:
-            _record_gemini_key_outcome(fingerprint, "rate_limited")
-            logger.warning(
-                "Gemini credential slot %s/%s was rate-limited; trying another slot",
-                slot,
-                pool_size,
-            )
+            if cache_rate_limit:
+                _record_gemini_key_outcome(fingerprint, "rate_limited")
+            else:
+                # The strong model may have a separate tiny quota or an
+                # unavailable model ID. Do not poison the cheap model's key
+                # pool, and let the next run probe strong availability again.
+                with _GEMINI_KEY_POOL_LOCK:
+                    usage = _GEMINI_KEY_POOL_USAGE.setdefault(
+                        fingerprint,
+                        {"attempts": 0, "successes": 0, "rate_limited": 0},
+                    )
+                    usage["rate_limited"] += 1
+            try:
+                resp.raise_for_status()
+            except requests.exceptions.HTTPError as exc:
+                last_http_error = exc
+            if warn_on_failure:
+                logger.warning(
+                    "Gemini credential slot %s/%s was rate-limited; trying another slot",
+                    slot,
+                    pool_size,
+                )
             continue
         resp.raise_for_status()
         parts = resp.json()["candidates"][0]["content"]["parts"]
@@ -4916,13 +4958,24 @@ def _call_gemini_parts_json(parts, timeout=20, generation_config=None):
         result = json.loads(_strip_json_code_fence(text))
         _record_gemini_key_outcome(fingerprint, "success")
         return result
-    logger.warning("Gemini call failed: every available credential slot returned 429")
+    if raise_on_http_error and last_http_error is not None:
+        raise last_http_error
+    if warn_on_failure:
+        logger.warning("Gemini call failed: every available credential slot returned 429")
     return None
 
 
-def _call_gemini_json(prompt, image_parts, timeout=20):
+def _call_gemini_json(
+    prompt, image_parts, timeout=20, model=None,
+    warn_on_failure=True, raise_on_http_error=False, cache_rate_limit=True,
+):
     return _call_gemini_parts_json(
-        [{"text": prompt}] + list(image_parts), timeout=timeout
+        [{"text": prompt}] + list(image_parts),
+        timeout=timeout,
+        model=model,
+        warn_on_failure=warn_on_failure,
+        raise_on_http_error=raise_on_http_error,
+        cache_rate_limit=cache_rate_limit,
     )
 
 
@@ -5121,6 +5174,80 @@ def _ensure_paid_ai_schema(conn):
         "CREATE TABLE IF NOT EXISTS ai_budget_exhaustion_notified ("
         "event_key TEXT PRIMARY KEY, notified_at TEXT NOT NULL)"
     )
+
+
+def _ensure_golf_strong_vision_schema(conn):
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS golf_strong_vision_daily ("
+        "utc_day TEXT PRIMARY KEY, calls INTEGER NOT NULL)"
+    )
+
+
+def _golf_strong_vision_daily_count(now=None):
+    """Return the reconciled durable call count for one UTC day."""
+    now = now or datetime.now(timezone.utc)
+    utc_day = now.astimezone(timezone.utc).date().isoformat()
+    counts = []
+    for path in _paid_ai_ledger_paths():
+        with closing(sqlite3.connect(path, timeout=10)) as ledger:
+            _ensure_golf_strong_vision_schema(ledger)
+            ledger.commit()
+            row = ledger.execute(
+                "SELECT calls FROM golf_strong_vision_daily WHERE utc_day = ?",
+                (utc_day,),
+            ).fetchone()
+            counts.append(int(row[0]) if row else 0)
+    return max(counts, default=0)
+
+
+def _claim_golf_strong_vision_call(now=None):
+    """Persist one strong-model request slot, failing closed at the UTC cap.
+
+    The counter uses the paid-AI ledger plus its seen-DB safety mirror. A slot
+    is charged before network I/O and remains charged on timeout/provider
+    failure, because those requests may still count against Google's daily
+    quota. Returns ``(claimed, reason)`` for auditable skip telemetry.
+    """
+    if GOLF_STRONG_VISION_DAILY_LIMIT <= 0:
+        return False, "daily limit disabled"
+    now = now or datetime.now(timezone.utc)
+    utc_day = now.astimezone(timezone.utc).date().isoformat()
+    paths = _paid_ai_ledger_paths()
+    primary = paths[0]
+    try:
+        reconciled = _golf_strong_vision_daily_count(now)
+        with closing(sqlite3.connect(primary, timeout=10)) as ledger:
+            ledger.execute("BEGIN IMMEDIATE")
+            _ensure_golf_strong_vision_schema(ledger)
+            row = ledger.execute(
+                "SELECT calls FROM golf_strong_vision_daily WHERE utc_day = ?",
+                (utc_day,),
+            ).fetchone()
+            current = max(reconciled, int(row[0]) if row else 0)
+            if current >= GOLF_STRONG_VISION_DAILY_LIMIT:
+                ledger.rollback()
+                return False, "daily limit reached"
+            claimed = current + 1
+            ledger.execute(
+                "INSERT INTO golf_strong_vision_daily(utc_day, calls) VALUES (?, ?) "
+                "ON CONFLICT(utc_day) DO UPDATE SET calls=excluded.calls",
+                (utc_day, claimed),
+            )
+            ledger.commit()
+        for path in paths[1:]:
+            with closing(sqlite3.connect(path, timeout=10)) as mirror:
+                mirror.execute("BEGIN IMMEDIATE")
+                _ensure_golf_strong_vision_schema(mirror)
+                mirror.execute(
+                    "INSERT INTO golf_strong_vision_daily(utc_day, calls) "
+                    "VALUES (?, ?) ON CONFLICT(utc_day) DO UPDATE SET "
+                    "calls=MAX(calls, excluded.calls)",
+                    (utc_day, claimed),
+                )
+                mirror.commit()
+        return True, None
+    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+        return False, f"daily counter unavailable: {exc}"
 
 
 def _seed_paid_ai_accounting(conn, month):
@@ -6078,6 +6205,13 @@ def check_photos_with_gemini(
             "stock-looking photos. Explain briefly in counterfeit_reason, or leave it "
             "empty if not suspected."
         )
+        # Keep the exact cheap-model request in memory for the rare strong
+        # second look. Reusing it avoids another gallery download and proves
+        # both models receive byte-for-byte identical prompt/image inputs.
+        listing["_golf_prepared_photo_check"] = {
+            "prompt": golf_prompt,
+            "images": images,
+        }
         return _finish_or_prepare_photo_check(
             golf_prompt, images, hard_stop, prepare_only
         )
@@ -6337,6 +6471,209 @@ def check_photos_with_gemini(
     )
 
     return _finish_or_prepare_photo_check(prompt, images, hard_stop, prepare_only)
+
+
+def _warn_golf_strong_vision_failure(exc):
+    global _GOLF_STRONG_VISION_DISABLED_FOR_RUN
+    global _GOLF_STRONG_VISION_FAILURE_WARNED
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is not None:
+        reason = f"HTTP {status}"
+    elif exc:
+        reason = f"{type(exc).__name__}: {exc}"
+    else:
+        reason = "no usable result"
+    _GOLF_STRONG_VISION_DISABLED_FOR_RUN = reason
+    if not _GOLF_STRONG_VISION_FAILURE_WARNED:
+        logger.warning(
+            "Golf strong vision unavailable for this run (%s; model=%s); "
+            "rescue stays fail-closed and shadow stays fail-open",
+            reason,
+            GOLF_STRONG_VISION_MODEL,
+        )
+        _GOLF_STRONG_VISION_FAILURE_WARNED = True
+
+
+def _golf_strong_near_close_skip_reason(result):
+    minutes = result.get("auction_minutes_remaining")
+    if (
+        result.get("is_ending_soon_auction")
+        and isinstance(minutes, (int, float))
+        and not isinstance(minutes, bool)
+        and math.isfinite(minutes)
+        and minutes < 4
+    ):
+        return "ending-soon auction has under 4 minutes remaining"
+    return None
+
+
+def _record_golf_strong_verdict(result, strong_result):
+    result["golf_strong_checked"] = True
+    for source_key, result_key in (
+        ("is_left_handed", "golf_strong_is_left_handed"),
+        ("handedness_confirmed", "golf_strong_handedness_confirmed"),
+        ("clubs_identified", "golf_strong_clubs_identified"),
+        ("damage_found", "golf_strong_damage_found"),
+    ):
+        result[result_key] = strong_result.get(source_key)
+    if (
+        strong_result.get("is_left_handed") is True
+        and strong_result.get("handedness_confirmed") is True
+    ):
+        result["golf_strong_left_handed_warning"] = True
+
+
+def _run_golf_strong_vision(result, listing, current_month_name, hard_stop):
+    """Run one same-prompt check on the configured stronger Gemini model."""
+    prepared = listing.pop("_golf_prepared_photo_check", None)
+    if result.get("golf_strong_checked"):
+        return None
+    near_close_reason = _golf_strong_near_close_skip_reason(result)
+    if near_close_reason:
+        result["golf_strong_skipped_reason"] = near_close_reason
+        return None
+    if _GOLF_STRONG_VISION_DISABLED_FOR_RUN:
+        result["golf_strong_skipped_reason"] = (
+            "strong model unavailable for the rest of this run: "
+            f"{_GOLF_STRONG_VISION_DISABLED_FOR_RUN}"
+        )
+        return None
+    # Avoid image downloads and durable quota claims when the credential is
+    # absent. Production has the key; this also keeps offline/test runs free
+    # from accidental network work.
+    if not _configured_gemini_api_keys():
+        result["golf_strong_skipped_reason"] = "Gemini API key is not configured"
+        return None
+    remaining = hard_stop - time.monotonic() if hard_stop is not None else None
+    if remaining is not None and remaining < 45:
+        result["golf_strong_skipped_reason"] = (
+            "less than 45 seconds of run budget remains"
+        )
+        return None
+    try:
+        if not prepared:
+            prepared = check_photos_with_gemini(
+                listing,
+                category="golf-equipment",
+                current_month_name=current_month_name,
+                hard_stop=hard_stop,
+                search_query=result.get("search_query"),
+                prepare_only=True,
+            )
+    except Exception as exc:
+        _warn_golf_strong_vision_failure(exc)
+        result["golf_strong_skipped_reason"] = "strong model preparation failed"
+        return None
+    if not isinstance(prepared, dict) or not prepared.get("images"):
+        _warn_golf_strong_vision_failure(
+            RuntimeError("photo preparation returned no usable request")
+        )
+        result["golf_strong_skipped_reason"] = "no usable strong-model photo request"
+        return None
+    remaining = hard_stop - time.monotonic() if hard_stop is not None else None
+    if remaining is not None and remaining < 45:
+        result["golf_strong_skipped_reason"] = (
+            "less than 45 seconds of run budget remains after image preparation"
+        )
+        return None
+    claimed, claim_reason = _claim_golf_strong_vision_call()
+    if not claimed:
+        result["golf_strong_skipped_reason"] = claim_reason
+        return None
+    timeout = _deadline_timeout(hard_stop, GOLF_STRONG_VISION_TIMEOUT_SECONDS)
+    if timeout is None:
+        result["golf_strong_skipped_reason"] = "run deadline reached before strong call"
+        return None
+    image_parts = [
+        _make_gemini_inline_part(content, mime_type)
+        for content, mime_type in prepared["images"]
+    ]
+    try:
+        strong_result = _call_gemini_json(
+            prepared["prompt"],
+            image_parts,
+            timeout=timeout,
+            model=GOLF_STRONG_VISION_MODEL,
+            warn_on_failure=False,
+            raise_on_http_error=True,
+            cache_rate_limit=False,
+        )
+    except Exception as exc:
+        _warn_golf_strong_vision_failure(exc)
+        result["golf_strong_skipped_reason"] = "strong model request failed"
+        return None
+    if not isinstance(strong_result, dict):
+        _warn_golf_strong_vision_failure(None)
+        result["golf_strong_skipped_reason"] = "strong model returned no usable result"
+        return None
+    _record_golf_strong_verdict(result, strong_result)
+    return strong_result
+
+
+def _merge_golf_strong_rescue(result, strong_result):
+    """Add RH evidence while allowing the strong model only to tighten vetoes."""
+    result["golf_handedness_confirmed"] = True
+    result["golf_handedness_source"] = "strong-second-look"
+    if strong_result.get("is_playable_first_set") is False:
+        result["golf_is_playable_first_set"] = False
+    if strong_result.get("damage_found") is True:
+        result["damage_found"] = True
+    if strong_result.get("counterfeit_suspected") is True:
+        result["golf_counterfeit_suspected"] = True
+        result["counterfeit_suspected"] = True
+    if strong_result.get("brand_claims_present") is True:
+        result["golf_brand_claims_present"] = True
+        if strong_result.get("brand_claims_confirmed") is not True:
+            result["golf_brand_claims_confirmed"] = False
+    strong_brand = strong_result.get("identified_brand")
+    if isinstance(strong_brand, str) and strong_brand.strip():
+        # The cheap result already had an acceptable mainstream brand or the
+        # handedness-only probe would not have qualified. Replacing it with
+        # the strong identification can therefore only preserve that pass or
+        # expose a blocked/unknown/non-mainstream disagreement for re-gating.
+        result["golf_identified_brand"] = strong_brand
+    strong_year = strong_result.get("model_release_year")
+    if (
+        isinstance(strong_year, (int, float))
+        and not isinstance(strong_year, bool)
+        and math.isfinite(strong_year)
+        and int(strong_year) == strong_year
+        and strong_year < 2012
+    ):
+        result["golf_identified_model"] = strong_result.get("identified_model")
+        result["golf_model_release_year"] = int(strong_year)
+    strong_resale = _sane_ai_price(strong_result.get("estimated_resale_value"))
+    cheap_resale = _sane_ai_price(result.get("estimated_resale_value"))
+    if strong_resale is not None and cheap_resale is not None and strong_resale < cheap_resale:
+        result["estimated_resale_value"] = strong_resale
+        rating, discount = compute_deal_rating(result.get("price"), strong_resale)
+        result["deal_rating"] = rating
+        result["discount_pct"] = discount
+    confidence_rank = {"low": 0, "medium": 1, "high": 2}
+    strong_confidence = str(strong_result.get("price_confidence") or "").lower()
+    cheap_confidence = str(result.get("price_confidence") or "").lower()
+    if (
+        strong_confidence in confidence_rank
+        and cheap_confidence in confidence_rank
+        and confidence_rank[strong_confidence] < confidence_rank[cheap_confidence]
+    ):
+        result["price_confidence"] = strong_confidence
+
+
+def _golf_handedness_is_only_gate_failure(result, gate_reason):
+    unknown_reason = (
+        "golf-equipment bar: AI could not visually confirm right-handed clubs"
+    )
+    if gate_reason != unknown_reason:
+        return False
+    probe = dict(result)
+    probe["golf_handedness_confirmed"] = True
+    if is_blocked_by_steal_quality_gate(probe, category="golf-equipment"):
+        return False
+    if GOLF_FULL_SET_ONLY and golf_full_set_only_reason(probe):
+        return False
+    return True
 
 
 def draft_resale_listing(image_paths):
@@ -7554,6 +7891,7 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_is_starter_kit",
         "golf_is_left_handed",
         "golf_handedness_confirmed",
+        "golf_handedness_source",
         "golf_brand_claims_present",
         "golf_brand_claims_confirmed",
         "golf_counterfeit_suspected",
@@ -7561,6 +7899,9 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_identified_model",
         "golf_model_release_year",
         "golf_delivery_path",
+        "golf_strong_checked",
+        "golf_strong_skipped_reason",
+        "golf_strong_left_handed_warning",
         "damage_found",
         # The historical auction audit had to recover end times from live
         # marketplace pages because these already-computed fields were dropped
@@ -7577,6 +7918,18 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         value = result.get(key)
         if value is not None:
             record[key] = value
+
+    if category == "golf-equipment" and result.get("golf_strong_checked"):
+        # Preserve explicit false and unknown/null verdicts. Omitting them
+        # would make a malformed/abstaining strong response indistinguishable
+        # from an old row that predates second-look telemetry.
+        for key in (
+            "golf_strong_is_left_handed",
+            "golf_strong_handedness_confirmed",
+            "golf_strong_clubs_identified",
+            "golf_strong_damage_found",
+        ):
+            record[key] = result.get(key)
 
     if category == "watches" and ai_checked:
         # Retain both the explicit false and the unknown/null state. The
@@ -8001,7 +8354,12 @@ def send_alert(result):
         if golf_has_explicit_right_handed_text(result):
             message += "\nRH: title confirms"
         elif result.get("golf_handedness_confirmed"):
-            message += "\nRH: AI photo confirmed"
+            second_look = (
+                " (second look)"
+                if result.get("golf_handedness_source") == "strong-second-look"
+                else ""
+            )
+            message += f"\nRH: AI photo confirmed{second_look}"
         else:
             unverified.append("handedness")
         brand = result.get("golf_identified_brand")
@@ -8016,6 +8374,8 @@ def send_alert(result):
         for flex_label, flex_pattern in GOLF_FLEX_VERIFY_SIGNALS:
             if flex_pattern.search(golf_listing_text):
                 unverified.append(f"shaft flex {flex_label}")
+        if result.get("golf_strong_left_handed_warning"):
+            unverified.append("strong model thinks LEFT-handed")
         if unverified:
             message += f"\nverify: {', '.join(unverified)}"
     if result.get("is_ending_soon_auction"):
@@ -9714,7 +10074,9 @@ def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
 
 def run():
     global SAVED_SEARCHES, _PAID_AI_BUDGET_EXHAUSTION
+    global _GOLF_STRONG_VISION_DISABLED_FOR_RUN
     _PAID_AI_BUDGET_EXHAUSTION = None
+    _GOLF_STRONG_VISION_DISABLED_FOR_RUN = None
     SAVED_SEARCHES, config_warnings = validate_config(
         {"SAVED_SEARCHES": SAVED_SEARCHES}
     )
@@ -11736,6 +12098,37 @@ def run():
             and result.get("golf_ai_checked")
         ):
             gate_reason = golf_full_set_only_reason(result)
+        # Rescue is intentionally narrower than the ordinary golf gate: the
+        # cheap result must fail on unknown handedness alone. A probe with only
+        # that fact supplied must clear every other normal gate before the
+        # scarce strong request is allowed. The real result is then gated again
+        # after a conservative merge, so damage/counterfeit/era/shape/brand/
+        # price disagreements can only veto, never create another way through.
+        if (
+            category == "golf-equipment"
+            and ai_result is not None
+            and result.get("golf_is_left_handed") is False
+            and result.get("golf_handedness_confirmed") is False
+            and _golf_handedness_is_only_gate_failure(result, gate_reason)
+        ):
+            strong_result = _run_golf_strong_vision(
+                result, listing, current_month_name, hard_stop
+            )
+            if (
+                isinstance(strong_result, dict)
+                and strong_result.get("is_left_handed") is False
+                and strong_result.get("handedness_confirmed") is True
+            ):
+                _merge_golf_strong_rescue(result, strong_result)
+                gate_reason = is_blocked_by_steal_quality_gate(
+                    result, category=category
+                )
+                if (
+                    not gate_reason
+                    and GOLF_FULL_SET_ONLY
+                    and result.get("golf_ai_checked")
+                ):
+                    gate_reason = golf_full_set_only_reason(result)
         # EVERY alert must be AI-vetted first. Per explicit user
         # instruction: "it should always be ai checked right? every alert?
         # theres only a few a day that get through - those should really
@@ -11895,6 +12288,15 @@ def run():
             append_alert_log(result)
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
+
+        # Shadow only listings that have cleared every delivery gate, including
+        # the final text sanity pass. It is telemetry, never a suppression
+        # path. A confirmed LH disagreement is surfaced visibly for the buyer,
+        # while all failures leave delivery unchanged.
+        if category == "golf-equipment" and not result.get("golf_strong_checked"):
+            _run_golf_strong_vision(
+                result, listing, current_month_name, hard_stop
+            )
 
         if should_queue_quiet_alert(result, current_utc):
             if enqueue_quiet_alert(result, current_utc):

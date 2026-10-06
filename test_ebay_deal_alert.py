@@ -6911,6 +6911,38 @@ class SendAlertGolfDecisionLines(unittest.TestCase):
         self.assertIn("RH: AI photo confirmed", message)
         self.assertIn("verify: brand/model", message)
 
+    def test_strong_rescue_handedness_has_second_look_suffix(self):
+        result = {
+            "listing": {
+                "title": "Nike Slingshot Iron Set 4-PW",
+                "itemWebUrl": "https://x",
+                "platform": "shopgoodwill",
+            },
+            "category": "golf-equipment",
+            "price": 35.5,
+            "golf_identified_brand": "Nike",
+            "golf_handedness_confirmed": True,
+            "golf_handedness_source": "strong-second-look",
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("RH: AI photo confirmed (second look)", message)
+
+    def test_shadow_left_disagreement_is_visible_verify_note(self):
+        result = {
+            "listing": {
+                "title": "Callaway Rogue Iron Set 5-PW RH",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 120.0,
+            "golf_identified_brand": "Callaway",
+            "golf_strong_left_handed_warning": True,
+        }
+        message = self._send_and_capture(result)
+        self.assertIn("RH: title confirms", message)
+        self.assertIn("verify: strong model thinks LEFT-handed", message)
+
     def test_senior_and_ladies_flex_are_visible_verify_notes_not_blocks(self):
         for flex_text, expected, shaft in (
             ("Senior A-Flex Graphite", "shaft flex Senior/A-flex", "Senior / Graphite"),
@@ -12109,6 +12141,326 @@ class RunIntegration(unittest.TestCase):
             any("Losing ending-soon auction" in line for line in cm.output),
             "an auction deferred past its closing time must be logged, not silently dropped",
         )
+
+    def _strong_golf_search(self):
+        return {
+            "id": "golf-golf-set",
+            "query": (
+                'golf set -junior -youth -kids -ladies -womens '
+                '-"left hand" -lefty -"left handed" -scarf'
+            ),
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "max_price": 300,
+            "enabled": True,
+            "profile": "fast",
+        }
+
+    def _strong_golf_item(self, suffix, *, auction_minutes=None):
+        item = self._ebay_item(
+            f"v1|strong-{suffix}|0",
+            f"Nike Golf Slingshot 4D Iron Set 4-PW Steel Right Fit {suffix}",
+            35.0,
+        )
+        if auction_minutes is not None:
+            item["is_ending_soon_auction"] = True
+            item["auction_minutes_remaining"] = auction_minutes
+            item["bid_count"] = 3
+        return item
+
+    def _cheap_golf_result(self, *, handedness=False, brand="Nike"):
+        return {
+            "clubs_identified": "Nike Slingshot irons 4-PW",
+            "identified_brand": brand,
+            "identified_model": "Slingshot 4D",
+            "model_release_year": 2012,
+            "brand_claims_present": True,
+            "brand_claims_confirmed": True,
+            "is_playable_first_set": True,
+            "is_wanted_component": False,
+            "is_starter_kit_quality": False,
+            "is_left_handed": False,
+            "handedness_confirmed": handedness,
+            "damage_found": False,
+            "looks_good": True,
+            "counterfeit_suspected": False,
+            "estimated_resale_value": 100.0,
+            "price_confidence": "medium",
+            "summary": "matched playable Nike Slingshot iron set",
+        }
+
+    def _strong_golf_result(self, *, left=False, confirmed=True, damage=False):
+        return {
+            **self._cheap_golf_result(handedness=confirmed),
+            "is_left_handed": left,
+            "handedness_confirmed": confirmed,
+            "damage_found": damage,
+        }
+
+    def _wire_strong_golf(self, cheap_by_id, strong_call):
+        self._patch("_configured_gemini_api_keys", lambda: ["fake-key"])
+        self._patch("_GOLF_STRONG_VISION_FAILURE_WARNED", False)
+        self._patch("_GOLF_STRONG_VISION_DISABLED_FOR_RUN", None)
+
+        def photo_check(
+            listing, category="other", current_month_name=None, hard_stop=None,
+            search_query=None, prepare_only=False,
+        ):
+            if prepare_only:
+                return {
+                    "prompt": f"same golf prompt for {listing['itemId']}",
+                    "images": [(b"image", "image/jpeg")],
+                }
+            self.ai_calls.append(listing["itemId"])
+            return cheap_by_id[listing["itemId"]]
+
+        self._patch("check_photos_with_gemini", photo_check)
+        self._patch("_call_gemini_json", strong_call)
+
+    def test_strong_rescue_delivers_real_nike_like_unknown_hand_candidate(self):
+        item = self._strong_golf_item("rescue")
+        cheap = {item["itemId"]: self._cheap_golf_result(handedness=False)}
+        strong_calls = []
+
+        def strong(prompt, parts, **kwargs):
+            strong_calls.append(kwargs)
+            return self._strong_golf_result(left=False, confirmed=True)
+
+        self._wire_strong_golf(cheap, strong)
+        self._serve(self._strong_golf_search(), [item])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1)
+        rescued = self.alerts[0]
+        self.assertEqual(rescued["golf_handedness_source"], "strong-second-look")
+        self.assertTrue(rescued["golf_handedness_confirmed"])
+        self.assertEqual(strong_calls[0]["model"], "gemini-3.8-flash")
+        self.assertEqual(strong_calls[0]["timeout"], 35)
+        self.assertFalse(strong_calls[0]["cache_rate_limit"])
+        record = self._alert_log_records()[0]
+        self.assertEqual(record["disposition_code"], "DELIVERED")
+        self.assertTrue(record["golf_strong_checked"])
+        self.assertIs(record["golf_strong_is_left_handed"], False)
+
+    def test_strong_rescue_fails_closed_for_left_unknown_and_error(self):
+        items = [self._strong_golf_item(kind) for kind in ("left", "unknown", "error")]
+        cheap = {
+            item["itemId"]: self._cheap_golf_result(handedness=False)
+            for item in items
+        }
+        outcomes = [
+            self._strong_golf_result(left=True, confirmed=True),
+            self._strong_golf_result(left=False, confirmed=False),
+            requests.exceptions.Timeout("strong timeout"),
+        ]
+        calls = []
+
+        def strong(prompt, parts, **kwargs):
+            calls.append(prompt)
+            outcome = outcomes[len(calls) - 1]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        self._wire_strong_golf(cheap, strong)
+        self._serve(self._strong_golf_search(), items)
+
+        m.run()
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.alerts, [])
+        records = self._alert_log_records()
+        self.assertEqual(len(records), 3)
+        self.assertTrue(all("could not visually confirm" in row["reason"] for row in records))
+
+    def test_strong_rescue_rechecks_every_existing_veto_conservatively(self):
+        self._patch("GEMINI_CALL_LIMIT", 6)
+        suffixes = ("veto-a", "veto-b", "veto-c", "veto-d", "veto-e", "veto-f")
+        items = [self._strong_golf_item(suffix) for suffix in suffixes]
+        cheap = {
+            item["itemId"]: self._cheap_golf_result(handedness=False)
+            for item in items
+        }
+        # Keep the price-veto control off the separate modern-set absolute
+        # ceiling path so its lowered appraisal is judged by the normal
+        # Great-Deal-or-better rule.
+        cheap[items[5]["itemId"]]["identified_model"] = None
+        cheap[items[5]["itemId"]]["model_release_year"] = None
+        strong_by_id = {}
+        for item in items:
+            strong_by_id[item["itemId"]] = self._strong_golf_result(
+                left=False, confirmed=True
+            )
+        strong_by_id[items[0]["itemId"]]["damage_found"] = True
+        strong_by_id[items[1]["itemId"]]["counterfeit_suspected"] = True
+        strong_by_id[items[2]["itemId"]]["is_playable_first_set"] = False
+        strong_by_id[items[3]["itemId"]].update({
+            "identified_model": "Nike Machspeed",
+            "model_release_year": 2010,
+        })
+        strong_by_id[items[4]["itemId"]]["identified_brand"] = "Top Flite"
+        strong_by_id[items[5]["itemId"]]["estimated_resale_value"] = 45.0
+        calls = []
+
+        def strong(prompt, parts, **kwargs):
+            item_id = next(item["itemId"] for item in items if item["itemId"] in prompt)
+            calls.append(item_id)
+            return strong_by_id[item_id]
+
+        self._wire_strong_golf(cheap, strong)
+        self._serve(self._strong_golf_search(), items)
+
+        m.run()
+
+        self.assertEqual(set(calls), set(strong_by_id))
+        self.assertEqual(self.alerts, [])
+        reasons = "\n".join(row["reason"] for row in self._alert_log_records())
+        for expected in (
+            "damage", "counterfeit", "playable first set", "pre-2012",
+            "blocked brand", "below Great Deal",
+        ):
+            self.assertIn(expected, reasons)
+
+    def test_strong_rescue_daily_cap_is_durable_and_fail_closed(self):
+        self._patch("GOLF_STRONG_VISION_DAILY_LIMIT", 1)
+        items = [self._strong_golf_item("quota-a"), self._strong_golf_item("quota-b")]
+        cheap = {
+            item["itemId"]: self._cheap_golf_result(handedness=False)
+            for item in items
+        }
+        calls = []
+
+        def strong(prompt, parts, **kwargs):
+            calls.append(prompt)
+            return self._strong_golf_result(left=False, confirmed=True)
+
+        self._wire_strong_golf(cheap, strong)
+        self._serve(self._strong_golf_search(), items)
+
+        m.run()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(m._golf_strong_vision_daily_count(), 1)
+        records = {row["item_id"]: row for row in self._alert_log_records()}
+        blocked = next(row for row in records.values() if not row["delivered"])
+        self.assertEqual(blocked["golf_strong_skipped_reason"], "daily limit reached")
+        # Re-opened SQLite connections still see the cap; it is not a
+        # process-local/run-local counter.
+        claimed, reason = m._claim_golf_strong_vision_call()
+        self.assertFalse(claimed)
+        self.assertEqual(reason, "daily limit reached")
+        tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+        claimed, reason = m._claim_golf_strong_vision_call(now=tomorrow)
+        self.assertTrue(claimed)
+        self.assertIsNone(reason)
+        self.assertEqual(m._golf_strong_vision_daily_count(now=tomorrow), 1)
+
+    def test_strong_rescue_skips_when_less_than_45_seconds_remain(self):
+        self._patch("RUN_BUDGET_SECONDS", 44)
+        item = self._strong_golf_item("deadline")
+        cheap = {item["itemId"]: self._cheap_golf_result(handedness=False)}
+        calls = []
+        self._wire_strong_golf(
+            cheap,
+            lambda *args, **kwargs: calls.append(args) or self._strong_golf_result(),
+        )
+        self._serve(self._strong_golf_search(), [item])
+
+        m.run()
+
+        self.assertEqual(calls, [])
+        self.assertEqual(self.alerts, [])
+        record = self._alert_log_records()[0]
+        self.assertIn("less than 45 seconds", record["golf_strong_skipped_reason"])
+
+    def test_shadow_left_disagreement_is_visible_but_never_suppresses(self):
+        item = self._strong_golf_item("shadow-left")
+        cheap = {item["itemId"]: self._cheap_golf_result(handedness=True)}
+        self._wire_strong_golf(
+            cheap,
+            lambda *args, **kwargs: self._strong_golf_result(
+                left=True, confirmed=True, damage=True
+            ),
+        )
+        self._serve(self._strong_golf_search(), [item])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1)
+        self.assertTrue(self.alerts[0]["golf_strong_left_handed_warning"])
+        self.assertTrue(self.alerts[0]["golf_strong_damage_found"])
+        self.assertEqual(self._alert_log_records()[0]["disposition_code"], "DELIVERED")
+
+    def test_no_strong_call_for_non_golf_cheap_gate_failure_or_near_close(self):
+        calls = []
+        self._patch("_configured_gemini_api_keys", lambda: ["fake-key"])
+        self._patch(
+            "_call_gemini_json",
+            lambda *args, **kwargs: calls.append(args) or self._strong_golf_result(),
+        )
+
+        # Non-golf delivery: no golf second-look branch exists.
+        non_golf = self._ebay_item(
+            "v1|strong-non-golf|0", "Canali Cashmere Sport Coat Mens 42L", 100.0
+        )
+        self._serve(
+            {"query": "canali sport coat", "category": "tailoring", "max_price": 400,
+             "category_id": "3001", "enabled": True, "profile": "fast"},
+            [non_golf],
+        )
+        m.run()
+
+        # Golf candidate that fails an existing cheap post-AI brand gate.
+        blocked = self._strong_golf_item("blocked-brand")
+        cheap = {blocked["itemId"]: self._cheap_golf_result(handedness=True, brand="Top Flite")}
+        self._wire_strong_golf(cheap, lambda *args, **kwargs: calls.append(args))
+        self._serve(self._strong_golf_search(), [blocked])
+        m.run()
+
+        # A deliverable golf auction under four minutes keeps lead time and
+        # skips shadow mode without spending a call.
+        closing = self._strong_golf_item("near-close", auction_minutes=3.5)
+        cheap = {closing["itemId"]: self._cheap_golf_result(handedness=True)}
+        self._wire_strong_golf(cheap, lambda *args, **kwargs: calls.append(args))
+        self._serve(self._strong_golf_search(), [closing])
+        m.run()
+
+        self.assertEqual(calls, [])
+        closing_record = next(
+            row for row in self._alert_log_records()
+            if row["item_id"] == closing["itemId"]
+        )
+        self.assertTrue(closing_record["delivered"])
+        self.assertIn("under 4 minutes", closing_record["golf_strong_skipped_reason"])
+
+    def test_one_strong_failure_warns_once_and_shadow_still_delivers_many(self):
+        items = [self._strong_golf_item("warn-a"), self._strong_golf_item("warn-b")]
+        cheap = {
+            item["itemId"]: self._cheap_golf_result(handedness=True)
+            for item in items
+        }
+        calls = []
+
+        def unavailable(prompt, parts, **kwargs):
+            calls.append(prompt)
+            response = requests.Response()
+            response.status_code = 503
+            error = requests.exceptions.HTTPError("503 Server Error", response=response)
+            raise error
+
+        self._wire_strong_golf(cheap, unavailable)
+        self._serve(self._strong_golf_search(), items)
+
+        with self.assertLogs("ebay_deal_alert", level="WARNING") as captured:
+            m.run()
+
+        warnings = [line for line in captured.output if "Golf strong vision unavailable" in line]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("HTTP 503", warnings[0])
+        self.assertEqual(len(calls), 1, "the failed model is cached for the rest of the run")
+        self.assertEqual(len(self.alerts), 2, "shadow failure must fail open")
 
 
 class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
