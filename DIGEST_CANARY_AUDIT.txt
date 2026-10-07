@@ -1,0 +1,67 @@
+DAILY DIGEST, ADAPTER CANARY, AND JEV AUDIT IMPLEMENTATION
+==========================================================
+
+Checkpoint 1 - required reading and clean baseline
+--------------------------------------------------
+- Read JEV_PREFILTER.txt, STRONG_SECOND_LOOK.txt,
+  GOLF_GATES_2026_10_04.txt, GOLF_200_CEILING_AND_LEAD_TIME.txt,
+  AUCTION_INFLATION_MEASURED_2026_10_05.txt, and .github/workflows/poll.yml in
+  full before inspecting implementation code.
+- Confirmed the poll workflow commits weekly_digest_state.json and the listed
+  JSON/log/database state files, while seen_items.db is persisted separately
+  through the Actions cache. No new workflow state file is planned.
+- Initial tracked worktree was clean. Pre-existing untracked files were
+  run.stdout.log and task.txt; both remain out of scope.
+- Untouched baseline: `python3 -m pytest -q` -> 856 passed, 3 warnings,
+  707 subtests passed in 30.38s.
+
+Checkpoint 2 - implementation and focused regressions
+-----------------------------------------------------
+- Added a read-only daily golf heartbeat/closest-misses digest scheduled from
+  run() on the first eligible poll at or after 08:00 in OWNER_TIMEZONE. It
+  uses priority 2, respects configured quiet hours, and claims the local date
+  in weekly_digest_state.json before sending so a state-write failure cannot
+  produce a five-minute notification storm.
+- The digest replays the existing golf shape and delivery gates from the last
+  24 hours of alerts_log.jsonl, lists at most three clean modern price-only
+  misses by landed price, and still sends a zero-count heartbeat for an empty
+  or corrupt log. It never calls or changes normal listing delivery.
+- Added per-search exception telemetry to real adapter dispatch. A platform
+  with at least max(3, ceil(searches/2)) raised exceptions gets one priority-3
+  `Source failing: <platform>` canary containing count, exception type, and
+  first message line. Per-platform three-hour claims share the same persisted
+  weekly_digest_state.json and all canary failures are logged/swallowed.
+- Added deterministic Jev audit sampling through SHA-256(item_id) modulo 20 at
+  the new JEV_AUDIT_SAMPLE_RATE=0.05 default. Audited would-skips continue into
+  the unchanged photo/gate path and log jev_would_skip plus jev_iron_set;
+  scores above the skip threshold retain the prior path.
+- Focused result after initial test correction: 11 passed. Additional focused
+  coverage now also checks the three-item ordering/cap and audited-pass
+  heartbeat count.
+
+Checkpoint 3 - final validation and scope audit
+-----------------------------------------------
+- Focused final result: 13 passed, 629 deselected.
+- First full run exposed one preserved batch-health expectation: a single
+  batch-wrapper exception must not be counted as N per-query exceptions. The
+  telemetry was corrected to count the one observed exception, and no existing
+  test was edited to accommodate it.
+- Final full suite: `python3 -m pytest -q` -> 869 passed, 3 warnings,
+  707 subtests passed in 25.40s. Baseline was 856; all 13 additions pass and
+  every pre-existing test remains unchanged. The warnings are the established
+  lxml strip_cdata deprecations.
+- Required AST parse and JSON loads pass. config.json contains 3,347 CRLF
+  pairs, zero bare LF bytes, and a final CRLF. Parsed config comparison to HEAD
+  shows exactly one added key, JEV_AUDIT_SAMPLE_RATE, with no changed or removed
+  existing keys. Every protected AI/strong-vision/existing-Jev value is
+  unchanged.
+- The CRLF checkout form of SAVED_SEARCHES is byte-identical to HEAD and hashes
+  to SHA-256 4691df45eedb3745be9e39c6f90ae7bca62faa58918cade9fc4295d38d980c8b.
+- .github/workflows/poll.yml is unchanged; the persistence regression proves
+  weekly_digest_state.json is already in its existing commit loop. No new state
+  path was added. category_profiles.json, platforms.py, chrome-extension/*,
+  and web/* are unchanged. No decorator line changed or moved.
+- Modified tracked files are exactly config.json, ebay_deal_alert.py, and
+  test_ebay_deal_alert.py. This report is the only task-created untracked file;
+  pre-existing run.stdout.log and task.txt remain untouched. No commit or push
+  was made.

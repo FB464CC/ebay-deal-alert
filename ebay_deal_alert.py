@@ -602,6 +602,9 @@ GOLF_STRONG_VISION_TIMEOUT_SECONDS = float(
 )
 JEV_PREFILTER_ENABLED = bool(_CONFIG.get("JEV_PREFILTER_ENABLED", True))
 JEV_SKIP_THRESHOLD = float(_CONFIG.get("JEV_SKIP_THRESHOLD", 0.05))
+JEV_AUDIT_SAMPLE_RATE = min(
+    1.0, max(0.0, float(_CONFIG.get("JEV_AUDIT_SAMPLE_RATE", 0.05)))
+)
 JEV_MODEL = _CONFIG.get("JEV_MODEL", "typesafe/jev-1.13")
 JEV_TIMEOUT_SECONDS = float(_CONFIG.get("JEV_TIMEOUT_SECONDS", 4))
 JEV_MAX_CALLS_PER_RUN = max(
@@ -4797,6 +4800,19 @@ def _jev_title_sha(title):
     return hashlib.sha256(str(title).encode("utf-8")).hexdigest()
 
 
+def _jev_should_audit(item_id):
+    """Deterministically sample would-be skips without changing other scores."""
+    if JEV_AUDIT_SAMPLE_RATE <= 0:
+        return False
+    if JEV_AUDIT_SAMPLE_RATE >= 1:
+        return True
+    slots = max(1, round(1.0 / JEV_AUDIT_SAMPLE_RATE))
+    stable_hash = int.from_bytes(
+        hashlib.sha256(str(item_id).encode("utf-8")).digest()[:8], "big"
+    )
+    return stable_hash % slots == 0
+
+
 def _cached_jev_iron_set_score(conn, item_id, title):
     row = conn.execute(
         "SELECT title_sha, score FROM jev_prefilter_cache WHERE item_id = ?",
@@ -6909,19 +6925,34 @@ def draft_resale_listing(image_paths):
 # ALERT DISPATCH
 # ---------------------------------------------------------------------------
 
-def notify_bot_down(message, title="[ALERT-BOT DOWN]"):
+def _ntfy_is_configured():
+    return bool(NTFY_TOPIC and not NTFY_TOPIC.startswith("REPLACE_ME"))
+
+
+def _send_ntfy_notice(message, title, priority=3, tags=None):
+    """Best-effort shared ntfy sender for non-listing system notices."""
+    if not _ntfy_is_configured():
+        logger.info("Skipping ntfy notice %r: NTFY_TOPIC is not configured", title)
+        return False
+    headers = {"Title": _ascii_safe_header(title), "Priority": str(priority)}
+    if tags:
+        headers["Tags"] = ",".join(tags)
     try:
         resp = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=message.encode("utf-8"),
-            headers={"Title": title},
+            headers=headers,
             timeout=10,
         )
         resp.raise_for_status()
         return True
     except requests.exceptions.RequestException:
-        logger.exception("Failed to send bot-down notification")
+        logger.exception("Failed to send ntfy notice %r", title)
         return False
+
+
+def notify_bot_down(message, title="[ALERT-BOT DOWN]"):
+    return _send_ntfy_notice(message, title, priority=3)
 
 
 def _release_paid_ai_budget_notification_claim(paths, event_key):
@@ -8101,6 +8132,8 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_model_release_year",
         "golf_delivery_path",
         "jev_iron_set",
+        "jev_would_skip",
+        "golf_cleared_all_gates",
         "golf_strong_checked",
         "golf_strong_skipped_reason",
         "golf_strong_left_handed_warning",
@@ -8772,18 +8805,23 @@ def send_alert(result):
 
 
 def _read_alert_log_records():
-    if not ALERTS_LOG_PATH.exists():
-        return []
     records = []
-    with ALERTS_LOG_PATH.open("r", encoding="utf-8") as log_file:
-        for line in log_file:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError as exc:
-                logger.warning("Skipping invalid alerts_log.jsonl line: %s", exc)
+    try:
+        with ALERTS_LOG_PATH.open("r", encoding="utf-8") as log_file:
+            for line in log_file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if isinstance(record, dict):
+                        records.append(record)
+                except json.JSONDecodeError as exc:
+                    logger.warning("Skipping invalid alerts_log.jsonl line: %s", exc)
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeError) as exc:
+        logger.warning("Unable to read alerts_log.jsonl: %s", exc)
     return records
 
 
@@ -8829,6 +8867,33 @@ def prune_alert_log_if_oversized():
         logger.warning("Failed to prune alerts_log.jsonl: %s", exc)
 
 
+def _load_weekly_digest_state():
+    try:
+        state = json.loads(WEEKLY_DIGEST_STATE_PATH.read_text(encoding="utf-8"))
+        return state if isinstance(state, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError, UnicodeError):
+        return {}
+
+
+def _update_weekly_digest_state(updates):
+    """Atomically merge state used by every persisted summary/canary marker."""
+    state = _load_weekly_digest_state()
+    state.update(updates)
+    state.setdefault("schema_version", 1)
+    try:
+        tmp_path = WEEKLY_DIGEST_STATE_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(
+            json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+        os.replace(tmp_path, WEEKLY_DIGEST_STATE_PATH)
+        return True
+    except OSError:
+        logger.exception("Unable to persist weekly/daily digest state")
+        return False
+
+
 def _weekly_ai_spend(now):
     """Return (weekly_delta, current_month_total) from the existing ledger.
 
@@ -8851,32 +8916,223 @@ def _weekly_ai_spend(now):
         logger.warning("Unable to read paid-AI spend for weekly digest: %s", exc)
 
     previous_total = 0.0
+    state = _load_weekly_digest_state()
     try:
-        state = json.loads(WEEKLY_DIGEST_STATE_PATH.read_text(encoding="utf-8"))
-        if isinstance(state, dict) and state.get("month") == month:
+        if state.get("month") == month:
             previous_total = float(state.get("paid_ai_reserved_usd") or 0)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+    except (TypeError, ValueError):
         pass
     return max(0.0, current_total - previous_total), current_total
 
 
 def _persist_weekly_ai_spend_snapshot(now, current_total):
-    state = {
-        "schema_version": 1,
+    _update_weekly_digest_state({
         "digest_sent_at": now.isoformat(),
         "month": now.strftime("%Y-%m"),
         "paid_ai_reserved_usd": round(float(current_total), 6),
-    }
+    })
+
+
+def _alert_record_timestamp(record):
     try:
-        tmp_path = WEEKLY_DIGEST_STATE_PATH.with_suffix(".json.tmp")
-        tmp_path.write_text(
-            json.dumps(state, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-            newline="",
+        parsed = datetime.fromisoformat(str(record.get("timestamp") or ""))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _golf_record_result(record):
+    """Rehydrate only the logged fields needed by the shipped golf gates."""
+    result = dict(record)
+    result["category"] = "golf-equipment"
+    result["search_query"] = record.get("query") or ""
+    result["golf_ai_checked"] = bool(record.get("ai_checked"))
+    result["listing"] = {
+        "itemId": record.get("item_id"),
+        "title": record.get("title") or "",
+        "description": record.get("description") or "",
+        "itemWebUrl": record.get("url") or "",
+        "platform": record.get("platform") or "ebay",
+        "price": {"value": record.get("item_price")},
+    }
+    return result
+
+
+def _golf_record_looks_like_set(record):
+    try:
+        return golf_full_set_only_reason(_golf_record_result(record)) is None
+    except Exception:
+        logger.exception("Failed to classify a golf digest row's set shape")
+        return False
+
+
+def _finite_number(value):
+    return bool(
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _golf_record_is_closest_price_miss(record):
+    """True only for a modern clean set whose logged blocker was price."""
+    if record.get("delivered"):
+        return False
+    landed = record.get("price")
+    resale = record.get("estimated_resale_value")
+    if (
+        not _finite_number(landed)
+        or not _finite_number(resale)
+        or landed <= GOLF_MODERN_SET_MAX_LANDED_PRICE
+        or resale <= 0
+        or (resale - landed) / resale >= 0.50
+        or record.get("shipping_cost_known") is not True
+    ):
+        return False
+    reason = str(record.get("reason") or "").lower()
+    if (
+        record.get("disposition_code") not in {"BELOW_MARGIN", "OVER_MAX_PRICE"}
+        and "price $" not in reason
+        and "deal_rating" not in reason
+    ):
+        return False
+
+    result = _golf_record_result(record)
+    if (
+        golf_full_set_only_reason(result) is not None
+        or not golf_has_modern_model_evidence(result)
+        or result.get("golf_is_playable_first_set") is not True
+        or result.get("golf_is_left_handed") is True
+        or not (
+            result.get("golf_handedness_confirmed") is True
+            or golf_has_explicit_right_handed_text(result)
         )
-        os.replace(tmp_path, WEEKLY_DIGEST_STATE_PATH)
-    except OSError as exc:
-        logger.warning("Unable to persist weekly AI spend snapshot: %s", exc)
+        or result.get("damage_found") is True
+        or result.get("golf_counterfeit_suspected") is True
+    ):
+        return False
+    claims_present = result.get("golf_brand_claims_present")
+    if claims_present is None:
+        claims_present = True
+    if claims_present and result.get("golf_brand_claims_confirmed") is not True:
+        return False
+
+    # Reuse the complete production gate with only the two price facts replaced
+    # by a qualifying relative price. If anything non-price still vetoes the
+    # row, it is not informationally safe to call this a closest miss.
+    probe = dict(result)
+    probe["listing"] = dict(result["listing"])
+    probe["price"] = min(
+        GOLF_MODERN_SET_MAX_LANDED_PRICE,
+        max(0.01, float(resale) * 0.49),
+    )
+    probe["deal_rating"], probe["discount_pct"] = compute_deal_rating(
+        probe["price"], resale
+    )
+    return (
+        is_blocked_by_steal_quality_gate(probe, category="golf-equipment") is None
+        and golf_full_set_only_reason(probe) is None
+    )
+
+
+def _money_without_noise(value):
+    value = round(float(value), 2)
+    return f"{value:,.0f}" if value.is_integer() else f"{value:,.2f}"
+
+
+def _daily_golf_digest_message(now):
+    cutoff = now.astimezone(timezone.utc) - timedelta(hours=24)
+    recent_by_item = {}
+    anonymous_rows = []
+    for record in _read_alert_log_records():
+        if record.get("category") != "golf-equipment":
+            continue
+        timestamp = _alert_record_timestamp(record)
+        if timestamp is None or timestamp < cutoff:
+            continue
+        item_id = record.get("item_id")
+        if item_id:
+            recent_by_item[item_id] = record
+        else:
+            anonymous_rows.append(record)
+    records = list(recent_by_item.values()) + anonymous_rows
+    looks_like_sets = sum(_golf_record_looks_like_set(record) for record in records)
+    cleared = sum(
+        bool(record.get("golf_cleared_all_gates") or record.get("delivered"))
+        for record in records
+    )
+    jev_skipped = sum(
+        record.get("disposition_code") == "JEV_NOT_A_SET" for record in records
+    )
+    audited_cleared = sum(
+        bool(record.get("jev_would_skip"))
+        and bool(record.get("golf_cleared_all_gates") or record.get("delivered"))
+        for record in records
+    )
+    message = (
+        f"24h: {len(records)} golf listings seen; {looks_like_sets} looked like real "
+        f"iron/full sets; {cleared} cleared every gate; {jev_skipped} skipped by "
+        f"Jev; {audited_cleared} audited Jev skips cleared every gate."
+    )
+    misses = sorted(
+        (record for record in records if _golf_record_is_closest_price_miss(record)),
+        key=lambda record: float(record["price"]),
+    )[:3]
+    if misses:
+        message += "\nClosest misses:"
+        for record in misses:
+            landed = float(record["price"])
+            overage = landed - GOLF_MODERN_SET_MAX_LANDED_PRICE
+            message += (
+                f"\n- {record.get('title') or 'Untitled golf listing'} — "
+                f"${_money_without_noise(landed)} landed — "
+                f"{record.get('platform') or 'unknown'}"
+                f"\n  {record.get('url') or '(URL unavailable)'}"
+                f"\n  ${_money_without_noise(overage)} over the "
+                f"${_money_without_noise(GOLF_MODERN_SET_MAX_LANDED_PRICE)} line"
+            )
+    return message
+
+
+def maybe_send_daily_golf_digest(now=None):
+    """Send at most one informational golf digest per owner-local date."""
+    try:
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        owner_now = now.astimezone(ZoneInfo(OWNER_TIMEZONE))
+        if not _ntfy_is_configured() or owner_now.hour < 8 or is_quiet_hours(now):
+            return False
+        owner_date = owner_now.date().isoformat()
+        state = _load_weekly_digest_state()
+        if state.get("golf_closest_misses_sent_date") == owner_date:
+            return False
+        message = _daily_golf_digest_message(now)
+        # Claim the owner-local date before external I/O. If state cannot be
+        # persisted, do not send: an unrecorded successful push would repeat
+        # on every five-minute run. A claimed send that crashes in ntfy is at
+        # worst one missed daily heartbeat, never a notification storm.
+        if not _update_weekly_digest_state({
+            "golf_closest_misses_sent_date": owner_date,
+            "golf_closest_misses_claimed_at": now.astimezone(timezone.utc).isoformat(),
+        }):
+            return False
+        sent = _send_ntfy_notice(
+            message,
+            "Golf watch: closest misses",
+            priority=2,
+            tags=["golf"],
+        )
+        if sent:
+            _update_weekly_digest_state({
+                "golf_closest_misses_sent_at": now.astimezone(timezone.utc).isoformat(),
+            })
+        return sent
+    except Exception:
+        logger.exception("Daily golf closest-misses digest failed; continuing")
+        return False
 
 
 def load_search_activity():
@@ -9226,10 +9482,20 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
             raw_count,
             raw_count - len(listings),
             0,
+            None,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("%s search failed for query: %s", platform_name, saved_search["query"])
-        return platform_name, saved_search["query"], [], 0, 0, 1
+        first_line = str(exc).splitlines()[0] if str(exc).splitlines() else "(no message)"
+        return (
+            platform_name,
+            saved_search["query"],
+            [],
+            0,
+            0,
+            1,
+            (type(exc).__name__, first_line),
+        )
 
 
 # Was 6h. Real live complaint: with several platforms each independently
@@ -9241,6 +9507,75 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
 # platform per day; a genuinely broken platform still gets caught same-day,
 # it just can't re-page every few minutes for a condition that hasn't changed.
 MARKETPLACE_ANOMALY_SUPPRESS_HOURS = 24
+ADAPTER_FAILURE_CANARY_SUPPRESS_HOURS = 3
+
+
+def _maybe_send_adapter_failure_canary(platform, signals, now):
+    """Handle catastrophic adapter exceptions without ever raising."""
+    try:
+        search_count = max(
+            0,
+            int(
+                signals.get("scheduled_requests")
+                or signals.get("requests")
+                or 0
+            ),
+        )
+        exception_count = max(0, int(signals.get("adapter_exceptions") or 0))
+        threshold = max(3, math.ceil(search_count / 2))
+        if not search_count or exception_count < threshold:
+            return False
+        if not _ntfy_is_configured():
+            return False
+
+        state = _load_weekly_digest_state()
+        notified = state.get("adapter_failure_canary_notified")
+        if not isinstance(notified, dict):
+            notified = {}
+        last_sent = notified.get(platform)
+        if last_sent:
+            try:
+                parsed = datetime.fromisoformat(last_sent)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                if now - parsed < timedelta(
+                    hours=ADAPTER_FAILURE_CANARY_SUPPRESS_HOURS
+                ):
+                    return True
+            except (TypeError, ValueError):
+                pass
+
+        exception_type = signals.get("adapter_exception_type") or "Exception"
+        first_line = (
+            str(signals.get("adapter_exception_message") or "(no message)")
+            .splitlines()[0]
+        )
+        message = (
+            f"{platform}: {exception_count}/{search_count} searches raised "
+            f"{exception_type}: {first_line}"
+        )
+        # Persist the three-hour claim before notifying for the same at-most-
+        # once reason as the daily digest: a successful push followed by a
+        # state-write failure must not page again five minutes later.
+        notified = dict(notified)
+        notified[platform] = now.isoformat()
+        if not _update_weekly_digest_state({
+            "adapter_failure_canary_notified": notified
+        }):
+            return True
+        _send_ntfy_notice(
+            message,
+            f"Source failing: {platform}",
+            priority=3,
+            tags=["warning"],
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "Adapter-failure canary failed internally for %s; continuing",
+            platform,
+        )
+        return True
 
 
 def _check_marketplace_anomalies(conn, now, active, counts, health=None):
@@ -9310,6 +9645,10 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
             ),
         )
         conn.commit()
+        if _maybe_send_adapter_failure_canary(platform, signals, now):
+            # Catastrophic raised-exception runs get exactly the dedicated
+            # source-failing notice, not a second generic anomaly push.
+            continue
         prior_rows = [
             row
             for row in conn.execute(
@@ -9489,6 +9828,9 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
             "scheduled_requests": 0,
             "circuit_breaker_open": 0,
             "errors": 0,
+            "adapter_exceptions": 0,
+            "adapter_exception_type": None,
+            "adapter_exception_message": None,
             "timeouts": 0,
             "rate_limits": 0,
             "raw_listings": 0,
@@ -9667,12 +10009,22 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         health_context.platform = platform_name
         try:
             results = marketplaces.BATCH_ADAPTERS[platform_name](relevant, deadline=deadline)
-        except Exception:
+        except Exception as exc:
             logger.exception("%s batch fetch failed", platform_name)
             if time.monotonic() < hard_stop:
                 with results_lock:
                     if time.monotonic() < hard_stop:
                         health[platform_name]["errors"] += 1
+                        # The wrapper raised once before returning per-query
+                        # progress. Do not invent N individual search
+                        # exceptions from one batch-level exception.
+                        health[platform_name]["adapter_exceptions"] += 1
+                        if health[platform_name]["adapter_exception_type"] is None:
+                            health[platform_name]["adapter_exception_type"] = type(exc).__name__
+                            lines = str(exc).splitlines()
+                            health[platform_name]["adapter_exception_message"] = (
+                                lines[0] if lines else "(no message)"
+                            )
                         if platform_name not in {"offerup", "depop"}:
                             # Grailed's wrapper itself is its one logical
                             # request, so a prompt exception completes it.
@@ -9782,7 +10134,15 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                 health[platform_name]["requests"] += 1
             health_context.platform = platform_name
             try:
-                _platform, query, listings, raw_count, garbage_count, errors = (
+                (
+                    _platform,
+                    query,
+                    listings,
+                    raw_count,
+                    garbage_count,
+                    errors,
+                    adapter_exception,
+                ) = (
                     _fetch_marketplace(saved_search, platform_name, deadline)
                 )
             finally:
@@ -9802,6 +10162,13 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                 health[_platform]["raw_listings"] += raw_count
                 health[_platform]["known_garbage"] += garbage_count
                 health[_platform]["errors"] += errors
+                if adapter_exception is not None:
+                    health[_platform]["adapter_exceptions"] += 1
+                    if health[_platform]["adapter_exception_type"] is None:
+                        (
+                            health[_platform]["adapter_exception_type"],
+                            health[_platform]["adapter_exception_message"],
+                        ) = adapter_exception
                 if listings:
                     found.setdefault(query, []).extend(listings)
                     counts[_platform] = counts.get(_platform, 0) + len(listings)
@@ -11319,6 +11686,16 @@ def run():
         result["jev_iron_set"] = jev_score
         if jev_score > JEV_SKIP_THRESHOLD:
             continue
+        if _jev_should_audit(item_id):
+            result["jev_would_skip"] = True
+            logger.info(
+                "Jev audit sample passing %s through to the normal photo path "
+                "(iron_set=%.6f <= %.6f)",
+                item_id,
+                jev_score,
+                JEV_SKIP_THRESHOLD,
+            )
+            continue
         result["verdict"] = "PASS"
         result["reason"] = (
             "Jev pre-photo screen: not an iron set "
@@ -12530,6 +12907,9 @@ def run():
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
+        if category == "golf-equipment":
+            result["golf_cleared_all_gates"] = True
+
         # Shadow only listings that have cleared every delivery gate, including
         # the final text sanity pass. It is telemetry, never a suppression
         # path. A confirmed LH disagreement is surfaced visibly for the buyer,
@@ -12656,6 +13036,7 @@ def run():
     # Catch the final candidate's append (including delivery failures and
     # successful alerts) before this run exits.
     prune_alert_log_if_oversized()
+    maybe_send_daily_golf_digest()
     logger.info("Finished eBay deal alert run")
     _finish_run()
     if delivery_failures:

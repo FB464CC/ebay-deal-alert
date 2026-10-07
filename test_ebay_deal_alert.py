@@ -12755,6 +12755,89 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(len(calls), 1, "the failed model is cached for the rest of the run")
         self.assertEqual(len(self.alerts), 2, "shadow failure must fail open")
 
+    def test_daily_digest_hook_does_not_change_normal_golf_delivery(self):
+        item = self._strong_golf_item("daily-digest-control")
+        cheap = {item["itemId"]: self._cheap_golf_result(handedness=True)}
+        self._wire_strong_golf(
+            cheap,
+            lambda prompt, parts, **kwargs: self._strong_golf_result(
+                left=False, confirmed=True
+            ),
+        )
+        self._patch("JEV_PREFILTER_ENABLED", False)
+        digest = self._patch(
+            "maybe_send_daily_golf_digest", mock.Mock(return_value=True)
+        )
+        self._serve(self._strong_golf_search(), [item])
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1)
+        digest.assert_called_once_with()
+        delivered = next(
+            row for row in self._alert_log_records()
+            if row["item_id"] == item["itemId"]
+        )
+        self.assertTrue(delivered["delivered"])
+        self.assertTrue(delivered["golf_cleared_all_gates"])
+
+    def test_jev_audit_sample_runs_real_photo_path_and_logs_would_skip(self):
+        self._patch("JEV_AUDIT_SAMPLE_RATE", 0.05)
+        sample_id = next(
+            f"v1|jev-audit-{index}|0" for index in range(1000)
+            if m._jev_should_audit(f"v1|jev-audit-{index}|0")
+        )
+        skipped_id = next(
+            f"v1|jev-skip-{index}|0" for index in range(1000)
+            if not m._jev_should_audit(f"v1|jev-skip-{index}|0")
+        )
+        post = self._wire_jev(
+            lambda *args, **kwargs: self._jev_response(0.01)
+        )
+        self.ai_result = None
+        items = [
+            self._ebay_item(
+                sample_id,
+                "TaylorMade R7 Driver Graphite Shaft Right Handed Audit",
+                39.0,
+            ),
+            self._ebay_item(
+                skipped_id,
+                "TaylorMade R7 Driver Graphite Shaft Right Handed Skip",
+                39.0,
+            ),
+        ]
+        self._serve(self._golf_search("taylormade driver"), items)
+
+        m.run()
+
+        records = {row["item_id"]: row for row in self._alert_log_records()}
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(self.ai_calls, [sample_id])
+        self.assertTrue(records[sample_id]["jev_would_skip"])
+        self.assertEqual(records[sample_id]["jev_iron_set"], 0.01)
+        self.assertEqual(records[skipped_id]["disposition_code"], "JEV_NOT_A_SET")
+        self.assertNotIn("jev_would_skip", records[skipped_id])
+
+    def test_jev_audit_never_changes_scores_above_skip_threshold(self):
+        self._patch("JEV_AUDIT_SAMPLE_RATE", 1.0)
+        self._wire_jev(lambda *args, **kwargs: self._jev_response(0.06))
+        self.ai_result = None
+        item_id = "v1|jev-above-threshold-audit-control|0"
+        item = self._ebay_item(
+            item_id,
+            "Callaway Rogue Irons 5-P A Right Handed Audit Control",
+            120.0,
+        )
+        self._serve(self._golf_search(), [item])
+
+        m.run()
+
+        record = next(row for row in self._alert_log_records() if row["item_id"] == item_id)
+        self.assertEqual(self.ai_calls, [item_id])
+        self.assertEqual(record["jev_iron_set"], 0.06)
+        self.assertNotIn("jev_would_skip", record)
+
 
 class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
     """send_weekly_digest() counted EVERY record in alerts_log.jsonl as an
@@ -13659,3 +13742,313 @@ class SharedAiCategoryFairness(unittest.TestCase):
             6,
             "the ending auction consumes one normal shared slot but is exempt from the cap",
         )
+
+
+class DailyGolfClosestMissesDigest(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = pathlib.Path(tempfile.mkdtemp())
+        self.state_path = self.tmpdir / "weekly_digest_state.json"
+        self.log_path = self.tmpdir / "alerts_log.jsonl"
+        self.patchers = [
+            mock.patch.object(m, "WEEKLY_DIGEST_STATE_PATH", self.state_path),
+            mock.patch.object(m, "ALERTS_LOG_PATH", self.log_path),
+            mock.patch.object(m, "OWNER_TIMEZONE", "America/New_York"),
+            mock.patch.object(m, "QUIET_HOURS_START", "23:00"),
+            mock.patch.object(m, "QUIET_HOURS_END", "07:00"),
+            mock.patch.object(m, "NTFY_TOPIC", "test-golf-digest-topic"),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _now(self, hour=8):
+        return datetime(
+            2026, 10, 6, hour, tzinfo=m.ZoneInfo("America/New_York")
+        ).astimezone(timezone.utc)
+
+    def _clean_miss(self, now, item_id="clean", title=None, price=263.0):
+        return {
+            "schema_version": m.ALERT_LOG_SCHEMA_VERSION,
+            "timestamp": (now - timedelta(hours=1)).isoformat(),
+            "item_id": item_id,
+            "title": title or "Callaway Rogue CF18 Irons 5-PW Right Handed",
+            "url": f"https://example.test/{item_id}",
+            "platform": "shopgoodwill",
+            "category": "golf-equipment",
+            "price": price,
+            "item_price": price - 23,
+            "shipping_cost": 23.0,
+            "shipping_cost_known": True,
+            "estimated_resale_value": 400.0,
+            "price_confidence": "medium",
+            "ai_checked": True,
+            "golf_is_playable_first_set": True,
+            "golf_is_wanted_component": False,
+            "golf_is_left_handed": False,
+            "golf_handedness_confirmed": True,
+            "golf_brand_claims_present": True,
+            "golf_brand_claims_confirmed": True,
+            "golf_counterfeit_suspected": False,
+            "damage_found": False,
+            "golf_identified_brand": "Callaway",
+            "golf_identified_model": "Rogue CF18",
+            "golf_model_release_year": 2018,
+            "verdict": "PASS",
+            "delivered": False,
+            "disposition_code": "BELOW_MARGIN",
+            "reason": (
+                "blocked by steal-quality gate: deal_rating 'Good Deal' "
+                "below Great Deal"
+            ),
+        }
+
+    def _write_rows(self, rows):
+        self.log_path.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    def test_trigger_sends_exactly_once_across_every_five_minute_run(self):
+        self.log_path.write_text("", encoding="utf-8")
+        sender = mock.Mock(return_value=True)
+        local_start = datetime(
+            2026, 10, 6, tzinfo=m.ZoneInfo("America/New_York")
+        )
+        with mock.patch.object(m, "_send_ntfy_notice", sender):
+            outcomes = [
+                m.maybe_send_daily_golf_digest(
+                    (local_start + timedelta(minutes=5 * index)).astimezone(timezone.utc)
+                )
+                for index in range(24 * 12)
+            ]
+
+        self.assertEqual(sum(outcomes), 1)
+        self.assertEqual(
+            [index for index, sent in enumerate(outcomes) if sent],
+            [8 * 12],
+            "the first eligible five-minute run is 08:00 owner time",
+        )
+        sender.assert_called_once()
+        _message, title = sender.call_args.args
+        self.assertEqual(title, "Golf watch: closest misses")
+        self.assertEqual(sender.call_args.kwargs["priority"], 2)
+        self.assertEqual(
+            m._load_weekly_digest_state()["golf_closest_misses_sent_date"],
+            "2026-10-06",
+        )
+
+    def test_empty_or_corrupt_log_still_sends_interpretable_heartbeat(self):
+        self.log_path.write_text("not-json\n{broken\n", encoding="utf-8")
+        sender = mock.Mock(return_value=True)
+        with mock.patch.object(m, "_send_ntfy_notice", sender):
+            self.assertTrue(m.maybe_send_daily_golf_digest(self._now()))
+
+        message = sender.call_args.args[0]
+        self.assertIn("0 golf listings seen", message)
+        self.assertIn("0 looked like real iron/full sets", message)
+        self.assertIn("0 cleared every gate", message)
+        self.assertIn("0 skipped by Jev", message)
+        self.assertNotIn("Closest misses:", message)
+
+    def test_only_clean_modern_price_miss_is_listed(self):
+        now = self._now()
+        clean = self._clean_miss(now)
+        left = self._clean_miss(
+            now, "left", "Callaway Rogue CF18 Irons 5-PW Left Handed"
+        )
+        left["golf_is_left_handed"] = True
+        vintage = self._clean_miss(
+            now, "vintage", "Callaway X-18 Irons 3-PW Right Handed"
+        )
+        vintage["golf_identified_model"] = "X-18"
+        vintage["golf_model_release_year"] = 2006
+        assorted = self._clean_miss(
+            now,
+            "assorted",
+            "Lot Of Assorted Mixed TaylorMade Callaway Golf Clubs",
+        )
+        non_set = self._clean_miss(
+            now, "driver", "Callaway Rogue Driver Right Handed"
+        )
+        damaged = self._clean_miss(
+            now, "damaged", "Callaway Rogue CF18 Irons 4-PW Cracked Shaft"
+        )
+        damaged["damage_found"] = True
+        self._write_rows([left, vintage, assorted, non_set, damaged, clean])
+        sender = mock.Mock(return_value=True)
+
+        with mock.patch.object(m, "_send_ntfy_notice", sender):
+            m.maybe_send_daily_golf_digest(now)
+
+        message = sender.call_args.args[0]
+        self.assertIn(clean["title"], message)
+        self.assertIn("$263 landed — shopgoodwill", message)
+        self.assertIn(clean["url"], message)
+        self.assertIn("$38 over the $225 line", message)
+        for rejected in (left, vintage, assorted, non_set, damaged):
+            self.assertNotIn(rejected["title"], message)
+
+    def test_misses_are_limited_to_three_and_sorted_by_landed_price(self):
+        now = self._now()
+        rows = [
+            self._clean_miss(
+                now,
+                f"sorted-{price}",
+                f"Callaway Rogue CF18 Irons 5-PW RH ${price}",
+                float(price),
+            )
+            for price in (270, 240, 260, 230)
+        ]
+        self._write_rows(rows)
+        message = m._daily_golf_digest_message(now)
+
+        positions = [message.index(f"RH ${price}") for price in (230, 240, 260)]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("RH $270", message)
+
+    def test_heartbeat_counts_audited_jev_item_that_cleared_every_gate(self):
+        now = self._now()
+        row = self._clean_miss(now, price=210.0)
+        row.update({
+            "delivered": True,
+            "verdict": "REVIEW",
+            "disposition_code": "DELIVERED",
+            "jev_would_skip": True,
+            "golf_cleared_all_gates": True,
+        })
+        self._write_rows([row])
+
+        message = m._daily_golf_digest_message(now)
+
+        self.assertIn("1 cleared every gate", message)
+        self.assertIn("1 audited Jev skips cleared every gate", message)
+
+    def test_existing_workflow_persists_the_reused_state_path(self):
+        m._update_weekly_digest_state({"month": "2026-10", "paid_ai_reserved_usd": 1.5})
+        m._update_weekly_digest_state({"golf_closest_misses_sent_date": "2026-10-06"})
+        state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["paid_ai_reserved_usd"], 1.5)
+        self.assertEqual(state["golf_closest_misses_sent_date"], "2026-10-06")
+        workflow = pathlib.Path(".github/workflows/poll.yml").read_text(encoding="utf-8")
+        self.assertRegex(
+            workflow,
+            r"for file in [^\n]*weekly_digest_state\.json; do",
+        )
+
+
+class AdapterFailureCanaryIntegration(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = pathlib.Path(tempfile.mkdtemp())
+        self.state_path = self.tmpdir / "weekly_digest_state.json"
+        self.db_path = self.tmpdir / "seen.db"
+        self.searches = [
+            {
+                "id": f"canary-{index}",
+                "query": f"golf iron set canary {index}",
+                "category": "golf-equipment",
+                "enabled": True,
+                "platforms": ["shopgoodwill"],
+            }
+            for index in range(23)
+        ]
+
+    def _patch_dispatch(self, adapter, sender):
+        self.bot_down = mock.Mock()
+        patchers = [
+            mock.patch.object(m, "DB_PATH", str(self.db_path)),
+            mock.patch.object(m, "WEEKLY_DIGEST_STATE_PATH", self.state_path),
+            mock.patch.object(m, "SAVED_SEARCHES", self.searches),
+            mock.patch.object(m, "FOCUS_SEARCH_IDS", []),
+            mock.patch.object(m, "MARKETPLACES_ENABLED", ["shopgoodwill"]),
+            mock.patch.object(m, "MARKETPLACE_WORKERS_PER_PLATFORM", 4),
+            mock.patch.object(m, "MARKETPLACE_FETCH_BUDGET_SECONDS", 5),
+            mock.patch.object(m, "NTFY_TOPIC", "test-canary-topic"),
+            mock.patch.object(m.scout_queue, "load_scout_queue", return_value=[]),
+            mock.patch.object(m, "_send_ntfy_notice", sender),
+            mock.patch.object(m, "notify_bot_down", self.bot_down),
+            mock.patch.object(
+                p, "adapter_circuit_breaker_allows_calls", return_value=True
+            ),
+            mock.patch.dict(p.ADAPTERS, {"shopgoodwill": adapter}),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_bool_adapter_23_of_23_fires_once_and_realerts_after_three_hours(self):
+        sender = mock.Mock(return_value=True)
+        self._patch_dispatch(mock.Mock(return_value=True), sender)
+        conn = m.init_db()
+        self.addCleanup(conn.close)
+        now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+
+        _REAL_PREFETCH_MARKETPLACES(now, conn)
+        _REAL_PREFETCH_MARKETPLACES(now + timedelta(hours=2), conn)
+        self.assertEqual(sender.call_count, 1)
+        self.bot_down.assert_not_called()
+        message, title = sender.call_args.args
+        self.assertEqual(title, "Source failing: shopgoodwill")
+        self.assertIn("23/23 searches raised TypeError", message)
+        self.assertIn("cannot unpack non-iterable bool object", message)
+        self.assertEqual(sender.call_args.kwargs["priority"], 3)
+
+        _REAL_PREFETCH_MARKETPLACES(
+            now + timedelta(hours=3, minutes=1), conn
+        )
+        self.assertEqual(sender.call_count, 2)
+
+    def test_one_transient_timeout_does_not_fire(self):
+        sender = mock.Mock(return_value=True)
+        calls = 0
+        lock = threading.Lock()
+
+        def adapter(_search):
+            nonlocal calls
+            with lock:
+                calls += 1
+                call_number = calls
+            if call_number == 1:
+                raise requests.exceptions.Timeout("one transient timeout")
+            return [], 0
+
+        self._patch_dispatch(adapter, sender)
+        conn = m.init_db()
+        self.addCleanup(conn.close)
+
+        _REAL_PREFETCH_MARKETPLACES(
+            datetime(2026, 10, 6, 12, tzinfo=timezone.utc), conn
+        )
+
+        self.assertEqual(calls, 23)
+        sender.assert_not_called()
+        self.bot_down.assert_not_called()
+
+    def test_canary_sender_bug_is_logged_and_swallowed(self):
+        sender = mock.Mock(side_effect=RuntimeError("canary sender bug"))
+        self.searches = self.searches[:3]
+        self._patch_dispatch(mock.Mock(return_value=True), sender)
+        conn = m.init_db()
+        self.addCleanup(conn.close)
+
+        with self.assertLogs("ebay_deal_alert", level="ERROR") as captured:
+            result = _REAL_PREFETCH_MARKETPLACES(
+                datetime(2026, 10, 6, 12, tzinfo=timezone.utc), conn
+            )
+
+        self.assertEqual(result, {})
+        self.assertEqual(sender.call_count, 1)
+        self.assertTrue(
+            any("Adapter-failure canary failed internally" in line for line in captured.output)
+        )
+
+
+class JevAuditSampling(unittest.TestCase):
+    def test_stable_hash_samples_about_five_percent_and_skips_the_rest(self):
+        with mock.patch.object(m, "JEV_AUDIT_SAMPLE_RATE", 0.05):
+            first = [m._jev_should_audit(f"item-{index}") for index in range(4036)]
+            second = [m._jev_should_audit(f"item-{index}") for index in range(4036)]
+        self.assertEqual(first, second)
+        sampled = sum(first)
+        self.assertGreater(sampled, 4036 * 0.03)
+        self.assertLess(sampled, 4036 * 0.07)
+        self.assertGreater(sum(not value for value in first), 4036 * 0.93)
