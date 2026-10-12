@@ -591,6 +591,7 @@ AI_PHOTO_PROVIDER = _CONFIG.get("AI_PHOTO_PROVIDER", "deepseek")  # "deepseek" |
 GEMINI_VISION_TIMEOUT_SECONDS = float(
     _CONFIG.get("GEMINI_VISION_TIMEOUT_SECONDS", 20)
 )
+GOLF_STRONG_VISION_FALLBACK_MODEL = "gemini-3.7-flash"
 GOLF_STRONG_VISION_MODEL = _CONFIG.get(
     "GOLF_STRONG_VISION_MODEL", "gemini-3.8-flash"
 )
@@ -6805,17 +6806,28 @@ def _run_golf_strong_vision(result, listing, current_month_name, hard_stop):
         _make_gemini_inline_part(content, mime_type)
         for content, mime_type in prepared["images"]
     ]
-    try:
-        strong_result = _call_gemini_json(
-            prepared["prompt"],
-            image_parts,
-            timeout=timeout,
-            model=GOLF_STRONG_VISION_MODEL,
-            warn_on_failure=False,
-            raise_on_http_error=True,
-            cache_rate_limit=False,
-        )
-    except Exception as exc:
+    exc = None
+    # The primary strong model returns 503 under load (it did on both alerts
+    # that later failed the owner's manual check), so try one fallback model.
+    for strong_model in (GOLF_STRONG_VISION_MODEL, GOLF_STRONG_VISION_FALLBACK_MODEL):
+        try:
+            strong_result = _call_gemini_json(
+                prepared["prompt"],
+                image_parts,
+                timeout=timeout,
+                model=strong_model,
+                warn_on_failure=False,
+                raise_on_http_error=True,
+                cache_rate_limit=False,
+            )
+            exc = None
+            break
+        except Exception as err:
+            exc = err
+            status = getattr(getattr(err, "response", None), "status_code", None)
+            if status not in (429, 500, 502, 503, 504):
+                break
+    if exc is not None:
         _warn_golf_strong_vision_failure(exc)
         result["golf_strong_skipped_reason"] = "strong model request failed"
         return None
@@ -12915,9 +12927,36 @@ def run():
         # path. A confirmed LH disagreement is surfaced visibly for the buyer,
         # while all failures leave delivery unchanged.
         if category == "golf-equipment" and not result.get("golf_strong_checked"):
-            _run_golf_strong_vision(
+            strong_final = _run_golf_strong_vision(
                 result, listing, current_month_name, hard_stop
             )
+            # The strong look is a veto at delivery: it may only tighten.
+            strong_year = (strong_final or {}).get("model_release_year")
+            strong_veto = None
+            if isinstance(strong_final, dict):
+                if strong_final.get("is_playable_first_set") is False:
+                    strong_veto = "not a playable matching set"
+                elif strong_final.get("damage_found") is True:
+                    strong_veto = "damage found"
+                elif strong_final.get("counterfeit_suspected") is True:
+                    strong_veto = "counterfeit suspected"
+                elif (
+                    isinstance(strong_year, (int, float))
+                    and not isinstance(strong_year, bool)
+                    and strong_year < 2012
+                ):
+                    strong_veto = f"model released {int(strong_year)}, before 2012"
+            if strong_veto:
+                logger.info("Suppressing %s: strong second look - %s", item_id, strong_veto)
+                result["verdict"] = "PASS"
+                result["delivered"] = False
+                result["disposition_code"] = "GOLF_REJECT"
+                result["reason"] = f"strong second look: {strong_veto}"
+                append_alert_log(result)
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
+            if not result.get("golf_strong_checked"):
+                result["reason"] = (result.get("reason") or "") + " | UNVERIFIED: second look unavailable"
 
         if should_queue_quiet_alert(result, current_utc):
             if enqueue_quiet_alert(result, current_utc):

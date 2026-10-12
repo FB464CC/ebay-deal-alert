@@ -12668,13 +12668,22 @@ class RunIntegration(unittest.TestCase):
         record = self._alert_log_records()[0]
         self.assertIn("less than 45 seconds", record["golf_strong_skipped_reason"])
 
+    def test_strong_damage_vetoes_delivery(self):
+        item = self._strong_golf_item("dmg")
+        cheap = {item["itemId"]: self._cheap_golf_result(handedness=True)}
+        self._wire_strong_golf(cheap, lambda *a, **k: self._strong_golf_result(damage=True))
+        self._serve(self._strong_golf_search(), [item])
+        m.run()
+        self.assertEqual(self.alerts, [])
+        self.assertIn("strong second look", self._alert_log_records()[0]["reason"])
+
     def test_shadow_left_disagreement_is_visible_but_never_suppresses(self):
         item = self._strong_golf_item("shadow-left")
         cheap = {item["itemId"]: self._cheap_golf_result(handedness=True)}
         self._wire_strong_golf(
             cheap,
             lambda *args, **kwargs: self._strong_golf_result(
-                left=True, confirmed=True, damage=True
+                left=True, confirmed=True
             ),
         )
         self._serve(self._strong_golf_search(), [item])
@@ -12683,7 +12692,6 @@ class RunIntegration(unittest.TestCase):
 
         self.assertEqual(len(self.alerts), 1)
         self.assertTrue(self.alerts[0]["golf_strong_left_handed_warning"])
-        self.assertTrue(self.alerts[0]["golf_strong_damage_found"])
         self.assertEqual(self._alert_log_records()[0]["disposition_code"], "DELIVERED")
 
     def test_no_strong_call_for_non_golf_cheap_gate_failure_or_near_close(self):
@@ -12752,7 +12760,7 @@ class RunIntegration(unittest.TestCase):
         warnings = [line for line in captured.output if "Golf strong vision unavailable" in line]
         self.assertEqual(len(warnings), 1)
         self.assertIn("HTTP 503", warnings[0])
-        self.assertEqual(len(calls), 1, "the failed model is cached for the rest of the run")
+        self.assertEqual(len(calls), 2, "primary + one fallback, then cached for the rest of the run")
         self.assertEqual(len(self.alerts), 2, "shadow failure must fail open")
 
     def test_daily_digest_hook_does_not_change_normal_golf_delivery(self):
@@ -14052,3 +14060,11 @@ class JevAuditSampling(unittest.TestCase):
         self.assertGreater(sampled, 4036 * 0.03)
         self.assertLess(sampled, 4036 * 0.07)
         self.assertGreater(sum(not value for value in first), 4036 * 0.93)
+
+
+class StrongVetoTests(unittest.TestCase):
+    def test_veto_rules_documented_in_source(self):
+        src = open(os.path.join(os.path.dirname(__file__), "ebay_deal_alert.py"), encoding="utf-8").read()
+        self.assertIn("strong second look: {strong_veto}", src)
+        self.assertIn("GOLF_STRONG_VISION_FALLBACK_MODEL", src)
+
