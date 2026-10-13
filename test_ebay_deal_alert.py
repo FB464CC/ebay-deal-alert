@@ -1775,6 +1775,31 @@ class GolfEquipmentGate(unittest.TestCase):
             with self.subTest(query=query, title=title):
                 self.assertIsNone(m.golf_wrong_item_title_reason(title, query))
 
+    def test_title_prefilter_drops_per_club_listings_and_iron_weights(self):
+        # Real 2026-10-13 rows that jumped the steal-ratio photo queue.
+        rejected = (
+            "Mizuno JPX 921 Tour Individual Irons - Choose Club 4-PW + GAP Wedge",
+            "2023 Mizuno JPX 923 HM Indivdual Irons- -Choose Hand, Shaft,Flex and Loft",
+            "Callaway Apex Ai 300 Single Irons - New 2024 - Choose Set & Shaft",
+            "(YOU PICK) Callaway Apex Forged Irons, KBS Tour C-Taper 120 S Flex",
+            "（Dunlop Srixon ZX5 MkII Irons (Single) Dynamic Gold DST [SW]Golf RH Set）",
+            "Golf Weight Fit PING G440/G730/G430/G425/G410/G730/I230/I525/i59/Gle3",
+            "Ping Toe Weights Ping Irons i230 G425 i525 i59 G410 G710 G740 G L",
+        )
+        for title in rejected:
+            with self.subTest(title=title):
+                self.assertIsNotNone(m.golf_wrong_item_title_reason(title, "ping g425 irons"))
+        kept = (
+            "Principle Golf Flow Weight System HMG40 Iron Set 3-PW 8pc RH Steel",
+            "Callaway X-14 Steelhead 5-6-7-8-9-Pw-Aw-Sw 8pcs RH Constant Weight Golf Iron Set",
+            "Titleist T100 2019 Irons / 4-9i / Stiff Flex AMT Tour White S300 Shafts",
+            "Ping i500 Irons / 5-9i / Red Dot / Regular Flex UST Mamiya Recoil ES 780 Shafts",
+            "Finesse Square Two Golf Clubs (10PCS) - LIGHT WEIGHT HIGH LAUNCH SHAFTS",
+        )
+        for title in kept:
+            with self.subTest(title=title):
+                self.assertIsNone(m.golf_wrong_item_title_reason(title, "golf club set"))
+
     def test_counted_singular_group_does_not_bypass_the_iron_set_shape_gate(self):
         title = (
             "Callaway RAZR EDGE Set (5ct) Iron 5, 7-9, S Uni-flex Steel RH "

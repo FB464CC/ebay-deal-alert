@@ -2516,6 +2516,12 @@ GOLF_SINGLE_CLUB_TITLE_SIGNAL = re.compile(
     r"(?:iron|wedge|hybrid|wood)\b",
     re.IGNORECASE,
 )
+GOLF_PICK_YOUR_CLUB_TITLE_SIGNAL = re.compile(
+    r"\b(?:choose|pick|select)\s+(?:your\s+)?(?:club|loft|irons?|hand)\b|"
+    r"\byou\s*pick\b|\bpick\s+your\s+(?:club|iron|loft)\b|"
+    r"\b(?:single|individual|indivdual)\s+(?:irons?|clubs?)\b|\(\s*single\s*\)",
+    re.IGNORECASE,
+)
 # Marketplace titles sometimes express a group only as a compact inventory
 # count followed by a singular noun: ``(5ct) Iron`` / ``5pc Golf Club``.  The
 # count is still explicit multi-item evidence; requiring eBay's noun to be
@@ -3498,6 +3504,18 @@ def golf_wrong_item_title_reason(title, query):
         return None
 
     explicit_group = bool(GOLF_EXPLICIT_GROUP_TITLE_SIGNAL.search(title))
+    # Premium-model searches surface per-club storefronts ("Choose Club",
+    # "(Single)", "YOU PICK") whose single-club price looks like a 60%-off
+    # set and jumps the steal-ratio photo queue. 41/41 historical hits were
+    # singles, generic "set or single" listings, or trading cards.
+    pick_your_club = GOLF_PICK_YOUR_CLUB_TITLE_SIGNAL.search(title)
+    if pick_your_club:
+        return f"set-oriented search matched a per-club listing {pick_your_club.group(0)!r}"
+    # Iron weights ("Golf Weight Fit PING G430 ... 2-14g") price at ~1% of a
+    # set. Real sets say "Flow/Constant/Toe Weight ... Iron Set", so only a
+    # title without explicit set evidence counts as the accessory.
+    if re.search(r"(?<!light\s)(?<!light-)\bweights?\b", title, re.IGNORECASE) and not explicit_group:
+        return "set-oriented search matched a club-weight accessory"
     if GOLF_SINGLE_CLUB_TITLE_SIGNAL.search(title) and not explicit_group:
         return "set-oriented search matched a single/replacement club"
     if re.search(r"\b(?:shafts?|grips?)\b", title, re.IGNORECASE) and not (
