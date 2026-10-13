@@ -12,17 +12,27 @@
     "golf-callaway",
     "golf-ping",
     "golf-taylormade",
-    "golf-taylormade-m2-irons",
-    "golf-taylormade-m4-irons",
-    "golf-callaway-xr-irons",
+    "golf-taylormade-p790-irons",
+    "golf-taylormade-stealth-irons",
+    "golf-taylormade-sim2-irons",
+    "golf-titleist-t200-irons",
+    "golf-titleist-t100-irons",
+    "golf-ping-g425-irons",
+    "golf-ping-g410-irons",
+    "golf-ping-i210-irons",
+    "golf-ping-i500-irons",
+    "golf-callaway-rogue-st-irons",
+    "golf-callaway-apex-irons",
+    "golf-callaway-paradym-irons",
+    "golf-mizuno-jpx-921-irons",
+    "golf-mizuno-jpx-923-irons",
+    "golf-srixon-zx5-irons",
+    "golf-cobra-ltdx-irons",
     "golf-callaway-rogue-irons",
     "golf-callaway-mavrik-irons",
     "golf-ping-g30-irons",
     "golf-ping-g400-irons",
     "golf-cobra-f8-irons",
-    "golf-game-improvement-irons-regular-flex",
-    "golf-taylormade-rocketballz-irons",
-    "golf-taylormade-rbz-irons",
     "golf-and-bag",
     "golf-full"
   ],
@@ -1136,7 +1146,7 @@
     {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1150,7 +1160,7 @@
     {
       "query": "complete golf iron set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf -curling -beachwaver -crimper -waver -\"flat iron\" -\"hair iron\" -\"curling iron\"",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1164,7 +1174,7 @@
     {
       "query": "golf clubs -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1178,7 +1188,7 @@
     {
       "query": "golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1206,7 +1216,7 @@
     {
       "query": "golf irons set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf -curling -beachwaver -crimper -waver -\"flat iron\" -\"hair iron\" -\"curling iron\"",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1234,7 +1244,7 @@
     {
       "query": "complete golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1262,7 +1272,7 @@
     {
       "query": "cobra golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1276,7 +1286,7 @@
     {
       "query": "callaway golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1318,7 +1328,7 @@
     {
       "query": "ping golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1332,7 +1342,7 @@
     {
       "query": "taylormade golf set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
-      "max_price": 300,
+      "max_price": 400,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1549,6 +1559,182 @@
       ],
       "category_id": "115280",
       "id": "golf-ping-g400-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "TaylorMade P790 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-taylormade-p790-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "TaylorMade Stealth irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-taylormade-stealth-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "TaylorMade SIM2 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-taylormade-sim2-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Titleist T200 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-titleist-t200-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Titleist T100 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-titleist-t100-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Ping G425 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-ping-g425-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Ping G410 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-ping-g410-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Ping i210 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-ping-i210-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Ping i500 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-ping-i500-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Callaway Rogue ST irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-callaway-rogue-st-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Callaway Apex irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-callaway-apex-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Callaway Paradym irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-callaway-paradym-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Mizuno JPX 921 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-mizuno-jpx-921-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Mizuno JPX 923 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-mizuno-jpx-923-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Srixon ZX5 irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-srixon-zx5-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "Cobra LTDx irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -senior",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": ["shopgoodwill", "facebook"],
+      "category_id": "115280",
+      "id": "golf-cobra-ltdx-irons",
       "category": "golf-equipment"
     },
     {
@@ -3294,6 +3480,9 @@
   "GOLF_FULL_SET_ONLY": true,
   "GOLF_LOW_CONFIDENCE_FULL_SET_MAX_PRICE": 40,
   "GOLF_MODERN_SET_MAX_LANDED_PRICE": 225,
+  "GOLF_STEAL_MAX_LANDED_PRICE": 400,
+  "GOLF_STEAL_FRACTION": 0.55,
+  "GOLF_ABSOLUTE_PATH_DELIVERS": false,
   "POKER_CHIPS_SHARED_AI_SOFT_CAP": 2,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
   "AI_PHOTO_PROVIDER": "gemini",

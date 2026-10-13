@@ -1,0 +1,71 @@
+USED MEN'S IRON SET VALUES — RESEARCH REPORT
+Snapshot date: 2026-10-13 (US market, USD)
+
+SUMMARY
+
+values.json contains 158 rows covering every one of the 57 input group keys, expanded generations where the market differs materially, conservative family/group rows, and six suggested additions. The target is a right-handed men's complete set in good/very-good playable condition, normally 7 or 8 pieces (4-PW or 5-PW+GW/UW) with ordinary stock steel or graphite shafts.
+
+METHOD
+
+1. I searched current, model-specific used inventory, prioritizing GlobalGolf and 2nd Swing. These pages often expose the exact handedness, set makeup, shaft, condition, and asking price, and many show multiple examples or a model-level range.
+
+2. Public eBay completed/sold pages and third-party sold-price aggregators did not provide stable, model-level 2026 summaries in the accessible search results. I did not relabel active asks as sold results. Every evidence item in values.json is therefore explicitly marked used_retail, not ebay_sold. PGA Value Guide pages likewise did not expose useful current figures model by model. This is the main research limitation.
+
+3. Specialty used-retail is treated as an upper bound, not the expected selling price. The typical value is generally 10%-30% below a representative retailer price after normalizing for piece count, condition, handedness, and unusually expensive shafts. Older, slower-moving, or commodity game-improvement sets receive the larger discount. Very popular forged sets (PING, Titleist, P790, Mizuno Pro) receive a smaller discount because they retain value better.
+
+4. low_usd and high_usd describe a plausible normal-sale band for a complete good/very-good RH men's set, not damaged clubs, missing irons, premium exotic shafts, rare black finishes, unusual lie/length builds, or certified/mint dealer stock. A short 5- or 6-piece set should be scaled down, usually by roughly the per-club value implied by the complete set.
+
+5. For broad regex groups, the “conservative group value” is intentionally near the cheaper/older member. It is appropriate for an alert bot when the listing title does not reveal the generation. Once a generation is identified, the generation-specific row should override the group row.
+
+6. A TRUE STEAL rule should compare like with like. Before declaring a steal, require RH men's clubs, verify the exact included irons, reject broken/mismatched/re-shafted sets unless priced accordingly, and account for shipping and tax. The values here are fair-market estimates, not automatic bid ceilings.
+
+7. Confidence meanings:
+   high   = exact model and usually exact 7/8-piece RH configuration or a deep current inventory range;
+   medium = direct model retail evidence but broad condition/configuration spread, or a reasonable adjacent-generation normalization;
+   low    = sparse current stock, only adjacent-family evidence, or a broad group whose variants trade very differently.
+
+TEN LEAST-CERTAIN VALUES
+
+1. Callaway Epic / Epic Forged (2019) — The only visible current example was an expensive Epic Forged Star graphite configuration, so the standard-set estimate is an aggressive normalization rather than a direct comp.
+
+2. Callaway Big Bertha modern family — The 2019 and B21 sets have live evidence, but the 2014 generation is sparse and the family spans very different constructions and shaft mixes.
+
+3. TaylorMade RSi 1 / RSi 2 (2015) — No good current exact-set inventory appeared; value is benchmarked to adjacent RocketBladez, AeroBurner, and M2 sets.
+
+4. PING G700 (2018) — Current G710 evidence is strong, but live G700 inventory was thin. The estimate assumes the older hollow-body set sells modestly below G710.
+
+5. PING Anser Forged (2012) — Very thin current inventory and multiple Anser iron generations make title-only identification risky.
+
+6. Mizuno JPX 900 family (2016) — The dedicated product page exists, but current full-set stock is sparse; submodels (Hot Metal, Forged, Tour) can differ materially.
+
+7. Cobra King F6-F9 family — The F6 and F7 have visible anchors, but F8/F9 stock was thin and the One Length versions can trade differently from variable length.
+
+8. Srixon Z 585 / Z 785 (2018) — Current evidence was mostly individual-club inventory, so the full-set value is inferred from adjacent Z565 and ZX generations.
+
+9. Wilson C200 / C300 (2016-2018) — No useful live exact-set stock was exposed; the estimate is below current Dynapower/D9 retail and should be treated as a rough guide.
+
+10. Tour Edge Hot Launch/Exotics conservative family value — This regex spans many years and both value and premium sub-lines. The group value is deliberately low; use C521/C522/C523 or E722 rows when the title identifies them.
+
+TYPICAL VALUE UNDER $250
+
+These rows cannot be a “50% off steal” at a purchase price above $125, because half of the estimated typical value is below $125. Values exactly $250 are not included.
+
+- TaylorMade RocketBallz / RBZ (2012): $230
+- Mizuno JPX 825/850 conservative family value: $225
+- Cobra F6-F9/F-Max conservative family value: $225
+- Cobra Fly-Z/Bio Cell/AMP Cell conservative family value: $225
+- Cobra AMP (2012): $200
+- Wilson modern conservative family value: $200
+- Wilson C200 / C300 (2016-2018): $225
+- PXG 0211 (2019/2021): $200
+- Tour Edge Hot Launch/Exotics conservative family value: $200
+
+The $250 borderline rows (not in the list above) include Callaway RAZR X, TaylorMade RSi, TaylorMade AeroBurner, Mizuno JPX-EZ, Cleveland 588/CBX/Halo conservative group, Tour Edge Exotics E722, and Cobra Bio Cell/Fly-Z. At a strict 50%-off threshold, $125 is the maximum purchase price for those $250 rows.
+
+SUGGESTED ADDITIONS
+
+values.json includes suggested_pattern on six commonly traded models not cleanly represented by an input key: PING iBlade, PING i59, PING i530, Callaway X Forged CB, Srixon Z-Forged, and TaylorMade P7TW. Many premium models named in the task (T100/T150/T200/T350, Mizuno Pro 225/243, Srixon ZX5/ZX7, PING i230/i525/G430/Blueprint S, P770/P7MC/Qi, Apex Pro/Ai200/Ai300, Cobra King Tour/LTDx, and PXG 0311 generations) were already covered by broad input regex keys and were expanded there rather than duplicated as suggested keys.
+
+IMPORTANT BOT NOTE
+
+Retail inventory changes daily. The source URLs are evidence snapshots, while the rounded values are intended to be stable decision inputs for 2026. Recheck any low-confidence row or any alert near the decision boundary. A price far below the low_usd figure is a candidate steal only after verifying authenticity, set completeness, shaft suitability, and condition.

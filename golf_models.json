@@ -1,0 +1,499 @@
+[
+ {
+  "key": "callaway rogue st",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\brogue\\s*st\\b)",
+  "year": 2022,
+  "typical_used_set_value_usd": 450,
+  "value_source": "min(eBay-grounded starter 450, used-retail research family value 450); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway rogue",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\brogue\\b(?!\\s*st))",
+  "year": 2018,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 300, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway paradym",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\bparadym\\b)",
+  "year": 2023,
+  "typical_used_set_value_usd": 440,
+  "value_source": "min(eBay-grounded starter 600, used-retail research family value 440); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway apex ai200/ai300",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\bapex\\s*ai\\s*[23]00\\b)",
+  "year": 2024,
+  "typical_used_set_value_usd": 750,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "callaway ai smoke",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\b(?:ai[\\s-]?smoke|ai\\s*(?:200|300)|elyte)\\b)",
+  "year": 2024,
+  "typical_used_set_value_usd": 450,
+  "value_source": "min(eBay-grounded starter 650, used-retail research family value 450); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway mavrik",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\bmavrik\\b)",
+  "year": 2020,
+  "typical_used_set_value_usd": 350,
+  "value_source": "min(eBay-grounded starter 350, used-retail research family value 350); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway apex",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\bapex\\b(?!\\s*ii))",
+  "year": 2014,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 350, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway epic",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\bepic\\b)",
+  "year": 2019,
+  "typical_used_set_value_usd": 425,
+  "value_source": "min(eBay-grounded starter 450, used-retail research family value 425); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway big bertha modern",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\bbig\\s*bertha\\b.*\\b(?:2014|2019|b-?21|reva|os)\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 300, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway xr",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\b(?:steelhead\\s*xr|xr(?:\\s*(?:os|16|pro))?)\\b)(?!.*\\bx[-\\s]?(?:12|14|16|18|20|22|24)\\b)",
+  "year": 2015,
+  "typical_used_set_value_usd": 200,
+  "value_source": "min(eBay-grounded starter 200, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "callaway x2 hot",
+  "pattern": "^(?=.*\\bcallaway\\b)(?=.*\\bx2\\s*hot\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 170,
+  "value_source": "min(eBay-grounded starter 170, used-retail research family value 325); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade stealth",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bstealth\\b)",
+  "year": 2022,
+  "typical_used_set_value_usd": 450,
+  "value_source": "min(eBay-grounded starter 450, used-retail research family value 450); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade qi",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bqi\\s*(?:10|hl|irons?)?\\b)",
+  "year": 2024,
+  "typical_used_set_value_usd": 500,
+  "value_source": "min(eBay-grounded starter 600, used-retail research family value 500); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade sim",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bsim\\s*2?(?:\\s*(?:max|os))?\\b)",
+  "year": 2020,
+  "typical_used_set_value_usd": 375,
+  "value_source": "min(eBay-grounded starter 380, used-retail research family value 375); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade m1-m6",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bm[1-6]\\b)",
+  "year": 2016,
+  "typical_used_set_value_usd": 250,
+  "value_source": "min(eBay-grounded starter 250, used-retail research family value 275); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade p790",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bp[\\s-]?790\\b)",
+  "year": 2017,
+  "typical_used_set_value_usd": 500,
+  "value_source": "min(eBay-grounded starter 600, used-retail research family value 500); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade p770",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bp[\\s-]?770\\b)",
+  "year": 2020,
+  "typical_used_set_value_usd": 400,
+  "value_source": "min(eBay-grounded starter 600, used-retail research family value 400); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade p7xx other",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bp[\\s-]?(?:760|750|730|7mc|7mb|7cb)\\b)",
+  "year": 2018,
+  "typical_used_set_value_usd": 400,
+  "value_source": "min(eBay-grounded starter 450, used-retail research family value 400); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade rsi",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\brsi\\s*[12]?\\b)",
+  "year": 2015,
+  "typical_used_set_value_usd": 200,
+  "value_source": "min(eBay-grounded starter 200, used-retail research family value 250); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade speedblade",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\bspeed\\s*blade\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 180,
+  "value_source": "min(eBay-grounded starter 180, used-retail research family value 325); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade rocketbladez",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\brocket\\s*bladez\\b)",
+  "year": 2013,
+  "typical_used_set_value_usd": 170,
+  "value_source": "min(eBay-grounded starter 170, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade rocketballz",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\b(?:rocket\\s*ballz|rbz)\\b)",
+  "year": 2012,
+  "typical_used_set_value_usd": 150,
+  "value_source": "min(eBay-grounded starter 150, used-retail research family value 230); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "taylormade aeroburner",
+  "pattern": "^(?=.*\\btaylor\\s*made\\b)(?=.*\\baero\\s*burner\\b)",
+  "year": 2015,
+  "typical_used_set_value_usd": 170,
+  "value_source": "min(eBay-grounded starter 170, used-retail research family value 250); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g430",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*430\\b)",
+  "year": 2023,
+  "typical_used_set_value_usd": 750,
+  "value_source": "min(eBay-grounded starter 750, used-retail research family value 750); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g425",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*425\\b)",
+  "year": 2021,
+  "typical_used_set_value_usd": 550,
+  "value_source": "min(eBay-grounded starter 550, used-retail research family value 550); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g410",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*410\\b)",
+  "year": 2019,
+  "typical_used_set_value_usd": 450,
+  "value_source": "min(eBay-grounded starter 450, used-retail research family value 500); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g400",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*400\\b)",
+  "year": 2017,
+  "typical_used_set_value_usd": 380,
+  "value_source": "min(eBay-grounded starter 380, used-retail research family value 475); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g730",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*730\\b)",
+  "year": 2024,
+  "typical_used_set_value_usd": 750,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "ping g710",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*710\\b)",
+  "year": 2020,
+  "typical_used_set_value_usd": 550,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "ping g700/g710/g730",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*7(?:00|10|30)\\b)",
+  "year": 2018,
+  "typical_used_set_value_usd": 400,
+  "value_source": "min(eBay-grounded starter 400, used-retail research family value 500); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g (2016)",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s+(?:irons?|set|iron\\s*set)\\b)",
+  "year": 2016,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 300, used-retail research family value 350); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g30",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*30\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 250,
+  "value_source": "min(eBay-grounded starter 250, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping g25",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bg\\s*25\\b)",
+  "year": 2013,
+  "typical_used_set_value_usd": 220,
+  "value_source": "min(eBay-grounded starter 220, used-retail research family value 350); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping i525",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bi\\s*525\\b)",
+  "year": 2022,
+  "typical_used_set_value_usd": 600,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "ping i500/i525",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bi\\s*5(?:00|25)\\b)",
+  "year": 2018,
+  "typical_used_set_value_usd": 500,
+  "value_source": "min(eBay-grounded starter 550, used-retail research family value 500); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping i230",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bi\\s*230\\b)",
+  "year": 2022,
+  "typical_used_set_value_usd": 650,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "ping i210",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bi\\s*210\\b)",
+  "year": 2018,
+  "typical_used_set_value_usd": 500,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "ping i200/i210/i230",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bi\\s*2(?:00|10|30)\\b)",
+  "year": 2016,
+  "typical_used_set_value_usd": 450,
+  "value_source": "min(eBay-grounded starter 450, used-retail research family value 450); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping i25",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bi\\s*25\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 250,
+  "value_source": "min(eBay-grounded starter 250, used-retail research family value 350); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping i20",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bi\\s*20\\b)",
+  "year": 2012,
+  "typical_used_set_value_usd": 200,
+  "value_source": "min(eBay-grounded starter 200, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "ping blueprint",
+  "pattern": "^(?=.*\\bping\\b)(?=.*\\bblueprint\\b)",
+  "year": 2019,
+  "typical_used_set_value_usd": 550,
+  "value_source": "min(eBay-grounded starter 700, used-retail research family value 550); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "titleist t150",
+  "pattern": "^(?=.*\\btitleist\\b)(?=.*\\bt[\\s-]?150\\b)",
+  "year": 2023,
+  "typical_used_set_value_usd": 650,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "titleist t350",
+  "pattern": "^(?=.*\\btitleist\\b)(?=.*\\bt[\\s-]?350\\b)",
+  "year": 2023,
+  "typical_used_set_value_usd": 600,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "titleist t200",
+  "pattern": "^(?=.*\\btitleist\\b)(?=.*\\bt[\\s-]?200\\b)",
+  "year": 2019,
+  "typical_used_set_value_usd": 550,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "titleist t100",
+  "pattern": "^(?=.*\\btitleist\\b)(?=.*\\bt[\\s-]?100s?\\b)",
+  "year": 2019,
+  "typical_used_set_value_usd": 500,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "titleist t-series",
+  "pattern": "^(?=.*\\btitleist\\b)(?=.*\\bt[\\s-]?(?:100|150|200|300|350|400)s?\\b)",
+  "year": 2019,
+  "typical_used_set_value_usd": 450,
+  "value_source": "min(eBay-grounded starter 550, used-retail research family value 450); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "titleist 714/716/718",
+  "pattern": "^(?=.*\\btitleist\\b)(?=.*\\b(?:71[468]|ap[123]\\s*71[468]|71[468]\\s*ap[123])\\b)",
+  "year": 2013,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 300, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "titleist 620/u-series",
+  "pattern": "^(?=.*\\btitleist\\b)(?=.*\\b(?:620|u\\s*5[01]0)\\b)",
+  "year": 2019,
+  "typical_used_set_value_usd": 500,
+  "value_source": "min(eBay-grounded starter 500, used-retail research family value 600); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "mizuno jpx 925",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bjpx[\\s-]?925\\b)",
+  "year": 2024,
+  "typical_used_set_value_usd": 650,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "mizuno jpx 923",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bjpx[\\s-]?923\\b)",
+  "year": 2022,
+  "typical_used_set_value_usd": 525,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "mizuno jpx 921",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bjpx[\\s-]?921\\b)",
+  "year": 2020,
+  "typical_used_set_value_usd": 450,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "mizuno jpx 9xx",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bjpx[\\s-]?9[0-2][0-9]\\b)",
+  "year": 2016,
+  "typical_used_set_value_usd": 350,
+  "value_source": "min(eBay-grounded starter 400, used-retail research family value 350); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "mizuno jpx 8xx",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bjpx[\\s-]?8[2-5][0-9]\\b)",
+  "year": 2012,
+  "typical_used_set_value_usd": 220,
+  "value_source": "min(eBay-grounded starter 220, used-retail research family value 225); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "mizuno jpx ez",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bjpx[\\s-]?ez\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 200,
+  "value_source": "min(eBay-grounded starter 200, used-retail research family value 250); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "mizuno pro 2xx",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bmizuno\\s*pro\\s*2[0-9]{2}\\b)",
+  "year": 2021,
+  "typical_used_set_value_usd": 600,
+  "value_source": "min(eBay-grounded starter 650, used-retail research family value 600); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "mizuno mp modern",
+  "pattern": "^(?=.*\\bmizuno\\b)(?=.*\\bmp[\\s-]?(?:4|5|15|18|20|25|54|h5|h4)\\b)",
+  "year": 2012,
+  "typical_used_set_value_usd": 275,
+  "value_source": "min(eBay-grounded starter 300, used-retail research family value 275); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cobra f6-f9/fmax",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\b(?:f[6-9]|f[\\s-]?max|king\\s*f[6-9])\\b)",
+  "year": 2016,
+  "typical_used_set_value_usd": 225,
+  "value_source": "min(eBay-grounded starter 250, used-retail research family value 225); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cobra darkspeed",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\bdark\\s*speed\\b)",
+  "year": 2024,
+  "typical_used_set_value_usd": 400,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "cobra aerojet",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\baero\\s*jet\\b)",
+  "year": 2023,
+  "typical_used_set_value_usd": 350,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "cobra radspeed/ltdx/aerojet/darkspeed",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\b(?:rad\\s*speed|ltdx|aero\\s*jet|dark\\s*speed|speedzone)\\b)",
+  "year": 2020,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 380, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cobra fly-z/bio/amp cell",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\b(?:fly[\\s-]?z|bio\\s*cell|amp\\s*cell)\\b)",
+  "year": 2013,
+  "typical_used_set_value_usd": 170,
+  "value_source": "min(eBay-grounded starter 170, used-retail research family value 225); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cobra king modern",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\bking\\s*(?:forged\\s*tec|tec|oversize|utility|mim|cb|mb|tour)\\b)",
+  "year": 2017,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 350, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cobra t-rail",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\bt[\\s-]?rail\\b)",
+  "year": 2021,
+  "typical_used_set_value_usd": 350,
+  "value_source": "min(eBay-grounded starter 400, used-retail research family value 350); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "srixon zx",
+  "pattern": "^(?=.*\\bsrixon\\b)(?=.*\\bzx\\s*[457]\\b)",
+  "year": 2020,
+  "typical_used_set_value_usd": 475,
+  "value_source": "split from group using model-specific research row (min over generations), 2026-10-13"
+ },
+ {
+  "key": "srixon z/zx",
+  "pattern": "^(?=.*\\bsrixon\\b)(?=.*\\b(?:zx[457]|z\\s*(?:355|545|565|585|745|765|785|u85|u65|945))\\b)",
+  "year": 2012,
+  "typical_used_set_value_usd": 300,
+  "value_source": "min(eBay-grounded starter 400, used-retail research family value 300); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cleveland launcher",
+  "pattern": "^(?=.*\\bcleveland\\b)(?=.*\\blauncher\\b)",
+  "year": 2017,
+  "typical_used_set_value_usd": 250,
+  "value_source": "min(eBay-grounded starter 250, used-retail research family value 325); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cleveland 588/cbx/halo",
+  "pattern": "^(?=.*\\bcleveland\\b)(?=.*\\b(?:588|cbx|halo|zipcore)\\b)",
+  "year": 2012,
+  "typical_used_set_value_usd": 220,
+  "value_source": "min(eBay-grounded starter 220, used-retail research family value 250); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "wilson d7/d9/c200/c300/launch pad",
+  "pattern": "^(?=.*\\bwilson\\b)(?=.*\\b(?:d[79]|d100|d200|d300|c[23]00|launch\\s*pad|staff\\s*model\\s*(?:cb|blade)|fg\\s*tour\\s*(?:v6|f5))\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 200,
+  "value_source": "min(eBay-grounded starter 220, used-retail research family value 200); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "pxg",
+  "pattern": "^\\s*pxg\\b",
+  "year": 2016,
+  "typical_used_set_value_usd": 250,
+  "value_source": "min(eBay-grounded starter 550, used-retail research family value 250); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "tour edge hot launch/exotics",
+  "pattern": "^(?=.*\\btour\\s*edge\\b)(?=.*\\b(?:hot\\s*launch|exotics|e7|c52[1-9])\\b)",
+  "year": 2014,
+  "typical_used_set_value_usd": 200,
+  "value_source": "min(eBay-grounded starter 200, used-retail research family value 200); research 2026-10-13 VALUES_REPORT"
+ },
+ {
+  "key": "cobra amp",
+  "pattern": "^(?=.*\\bcobra\\b)(?=.*\\bamp\\b(?!\\s*cell))",
+  "year": 2012,
+  "typical_used_set_value_usd": 150,
+  "value_source": "min(eBay-grounded starter 150, used-retail research family value 200); research 2026-10-13 VALUES_REPORT"
+ }
+]

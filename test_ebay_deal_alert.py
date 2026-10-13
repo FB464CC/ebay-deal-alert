@@ -189,17 +189,27 @@ class RuntimeSearchFocus(unittest.TestCase):
         "golf-callaway",
         "golf-ping",
         "golf-taylormade",
-        "golf-taylormade-m2-irons",
-        "golf-taylormade-m4-irons",
-        "golf-callaway-xr-irons",
+        "golf-taylormade-p790-irons",
+        "golf-taylormade-stealth-irons",
+        "golf-taylormade-sim2-irons",
+        "golf-titleist-t200-irons",
+        "golf-titleist-t100-irons",
+        "golf-ping-g425-irons",
+        "golf-ping-g410-irons",
+        "golf-ping-i210-irons",
+        "golf-ping-i500-irons",
+        "golf-callaway-rogue-st-irons",
+        "golf-callaway-apex-irons",
+        "golf-callaway-paradym-irons",
+        "golf-mizuno-jpx-921-irons",
+        "golf-mizuno-jpx-923-irons",
+        "golf-srixon-zx5-irons",
+        "golf-cobra-ltdx-irons",
         "golf-callaway-rogue-irons",
         "golf-callaway-mavrik-irons",
         "golf-ping-g30-irons",
         "golf-ping-g400-irons",
         "golf-cobra-f8-irons",
-        "golf-game-improvement-irons-regular-flex",
-        "golf-taylormade-rocketballz-irons",
-        "golf-taylormade-rbz-irons",
         "golf-and-bag",
         "golf-full",
     ]
@@ -213,9 +223,9 @@ class RuntimeSearchFocus(unittest.TestCase):
             if search.get("enabled", True)
         ]
 
-    def test_shipped_focus_selects_23_real_enabled_searches(self):
+    def test_shipped_focus_selects_33_real_enabled_searches(self):
         config, enabled = self._shipped_enabled_searches()
-        self.assertEqual(len(enabled), 97)
+        self.assertEqual(len(enabled), 113)
         self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
         enabled_by_id = {search["id"]: search for search in enabled}
         self.assertEqual(
@@ -224,10 +234,10 @@ class RuntimeSearchFocus(unittest.TestCase):
         )
         with mock.patch.object(m, "FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"]):
             focused = m._focus_filter(enabled)
-        self.assertEqual(len(focused), 23)
-        self.assertEqual([search["id"] for search in focused], self.EXPECTED_IDS)
+        self.assertEqual(len(focused), 33)
+        self.assertEqual({search["id"] for search in focused}, set(self.EXPECTED_IDS))
 
-    def test_empty_focus_restores_all_97_enabled_searches(self):
+    def test_empty_focus_restores_all_113_enabled_searches(self):
         _config, enabled = self._shipped_enabled_searches()
         with mock.patch.object(m, "FOCUS_SEARCH_IDS", []):
             self.assertEqual(m._focus_filter(enabled), enabled)
@@ -243,7 +253,7 @@ class RuntimeSearchFocus(unittest.TestCase):
         self.assertEqual(filtered, searches)
         self.assertIn("matched none", "\n".join(captured.output))
 
-    def test_shopgoodwill_prefetch_queue_drops_from_97_to_focused_23(self):
+    def test_shopgoodwill_prefetch_queue_drops_from_113_to_focused_33(self):
         config, _enabled = self._shipped_enabled_searches()
 
         def scheduled_count(focus_ids):
@@ -272,8 +282,8 @@ class RuntimeSearchFocus(unittest.TestCase):
             self.assertEqual(len(health_snapshots), 1)
             return health_snapshots[0]["shopgoodwill"]["scheduled_requests"]
 
-        self.assertEqual(scheduled_count([]), 97)
-        self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 23)
+        self.assertEqual(scheduled_count([]), 113)
+        self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 33)
 
 
 class EbayRotationCapacity(unittest.TestCase):
@@ -459,7 +469,7 @@ class ConfigPreflight(unittest.TestCase):
             {
                 "id": "golf-good", "query": "golf club set",
                 "category": "golf-equipment", "profile": "fast",
-                "max_price": 350, "platforms": ["shopgoodwill", "ghost-market"],
+                "max_price": 450, "platforms": ["shopgoodwill", "ghost-market"],
                 "enabled": True,
             },
             {
@@ -489,7 +499,7 @@ class ConfigPreflight(unittest.TestCase):
         self.assertIn("duplicate active query", warning_text)
         self.assertIn("invalid profile", warning_text)
         self.assertIn("has no scoring/adapter path", warning_text)
-        self.assertIn("exceeds golf-equipment hard gate $300", warning_text)
+        self.assertIn("exceeds golf-equipment hard gate $400", warning_text)
 
 
 class CategoryProfileLoader(unittest.TestCase):
@@ -1011,6 +1021,93 @@ class PokerChipsConfiguration(unittest.TestCase):
                 ))
 
 
+class GolfCatalogModels(unittest.TestCase):
+    def test_real_history_titles_match_only_the_right_catalog_model(self):
+        cases = (
+            ("Callaway Rogue ST Max Fast Irons Right-Handed Wedge", "callaway rogue st"),
+            ("Callaway Rogue Irons 5-P A Stiff Flex Steel Right Handed Excellent Condition", "callaway rogue"),
+            ("Callaway Paradym Driver 10.5° Aldila Ascent", "callaway paradym"),
+            ("Callaway Golf Elyte X Iron Set (5-9)", "callaway ai smoke"),
+            ("Callaway Mavrik 6-PW AW Irons KBS Regular Steel 6 Club Golf Set", "callaway mavrik"),
+            ("Callaway Apex Golf Iron Set 5-PW True Temper XP 95", "callaway apex"),
+            ("Callaway Epic Max Fast Iron Set 5pcs 7-PW AW", "callaway epic"),
+            ("Callaway Steelhead XR Iron Set Graphite 6,7,8,9,PW,AW,SW", "callaway xr"),
+            ("Callaway X2 Hot Golf Irons Set AW-5 Iron", "callaway x2 hot"),
+            ("TaylorMade Stealth 8 Iron AeroTech SteelFiber", "taylormade stealth"),
+            ("TaylorMade Golf Clubs Qi10 LS Driver", "taylormade qi"),
+            ("Taylormade Sim2 Max Irons Set KBS S85 Shafts", "taylormade sim"),
+            ("TaylorMade M2 Iron Set 4-PW 7 Clubs", "taylormade m1-m6"),
+            ("TaylorMade P790 Iron Set 4-9,P Stiff Flex Right-Handed", "taylormade p790"),
+            ("TaylorMade P770 Iron Set 4 5 6 KBS Tour", "taylormade p770"),
+            ("TaylorMade RSi 1 Iron Set 4-PW Stiff Steel", "taylormade rsi"),
+            ("TaylorMade Golf SPEEDBLADE Iron Set 5-PW", "taylormade speedblade"),
+            ("TaylorMade ROCKETBLADEZ TOUR Iron Set 7pcs", "taylormade rocketbladez"),
+            ("TaylorMade RBZ RocketBallz Iron Set 5-PW", "taylormade rocketballz"),
+            ("TaylorMade AeroBurner Iron Set 5-PW", "taylormade aeroburner"),
+            ("Ping G425 Iron Set 4-PW Right Hand", "ping g425"),
+            ("2x Ping Irons G400 & G25 Green Dot", "ping g400"),
+            ("Ping G30 Iron Set 5pcs 7-W,U", "ping g30"),
+            ("Ping i200 Forged 5-6-7-8-9 RH", "ping i200/i210/i230"),
+            ("PING i25 Iron Set 6pcs 5,6,7,8,9,W", "ping i25"),
+            ("PING i20 Iron Set 7pcs 4-PW", "ping i20"),
+            ("Titleist T200 8 Iron", "titleist t200"),
+            ("Titleist AP1 714 Iron Set 5-PW", "titleist 714/716/718"),
+            ("Titleist U500 3-Iron RH", "titleist 620/u-series"),
+            ("Mizuno JPX 921 Forged Golf Clubs", "mizuno jpx 921"),
+            ("Mizuno JPX 825 Forged Iron Set 5pcs", "mizuno jpx 8xx"),
+            ("Mizuno MP-54 Forged 6pcs 5-PW", "mizuno mp modern"),
+            ("Cobra King F8 Carbon FT Iron 6,7 And 8", "cobra f6-f9/fmax"),
+            ("Cobra LTDx 6 Iron Aerotech i70", "cobra radspeed/ltdx/aerojet/darkspeed"),
+            ("Cobra AMP CELL 12-Club Golf Set", "cobra fly-z/bio/amp cell"),
+            ("Mint Cobra King CB 2023 Forged 4 Iron", "cobra king modern"),
+            ("Srixon Z785 Forged Irons 6-PW", "srixon z/zx"),
+            ("Cleveland Golf Launcher MAX 5-PW Iron Set", "cleveland launcher"),
+            ("Cleveland CBX 2 Black Satin Wedge Set", "cleveland 588/cbx/halo"),
+            ("Wilson Staff D7 RH Iron Golf Clubs 6-9 PW GW", "wilson d7/d9/c200/c300/launch pad"),
+            ("PXG Sugar Daddy 0311 60* Lob Wedge", "pxg"),
+            ("Tour Edge EXOTICS CBX FORGED Irons 4-PW", "tour edge hot launch/exotics"),
+            ("Cobra AMP Iron Set 6pcs 5-PW", "cobra amp"),
+            ("Ben Hogan Edge Forged Iron Set Apex 4", None),
+            ("Aldila Rogue Pro 124 Regular 65g Golf Shaft", None),
+            ("Acculine Probe Stealth III Bomber Golf Club", None),
+            ("Titleist P-790 Vintage Iron Set", None),
+            ("Ping G10 irons P-7 mixed lot", None),
+            ("Camel Trail Golf Clubs and Bag", None),
+            ("Vintage Wilson Dynapower Iron Set", None),
+            ("SIM Golf Training Membership Card", None),
+            ("RH Titleist DCI 6 Iron PXG PING Set Taylormade Putter", None),
+        )
+        self.assertGreaterEqual(len(cases), 40)
+        for title, expected in cases:
+            with self.subTest(title=title):
+                match = m.golf_catalog_title_match(title)
+                self.assertEqual(match["key"] if match else None, expected)
+
+    def test_piece_count_scales_down_and_conflicting_ai_model_uses_lower_value(self):
+        result = {
+            "listing": {"title": "TaylorMade P790 Iron Set 5-PW Right Handed"},
+            "price": 200.0,
+            "golf_identified_brand": "Callaway",
+            "golf_identified_model": "Rogue ST Max",
+        }
+        catalog = m.golf_catalog_value(result)
+        self.assertEqual(result["golf_catalog_piece_count"], 6)
+        self.assertEqual(result["golf_catalog_title_key"], "taylormade p790")
+        self.assertEqual(result["golf_catalog_ai_key"], "callaway rogue st")
+        self.assertEqual(catalog["key"], "callaway rogue st")
+        self.assertAlmostEqual(catalog["value"], round(450 * 6 / 7, 2))
+
+    def test_missing_and_corrupt_catalog_fail_open(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = pathlib.Path(directory) / "missing.json"
+            corrupt = pathlib.Path(directory) / "corrupt.json"
+            corrupt.write_text("{not json", encoding="utf-8")
+            with self.assertLogs("ebay_deal_alert", level="WARNING"):
+                self.assertEqual(m._load_golf_models(missing), [])
+            with self.assertLogs("ebay_deal_alert", level="WARNING"):
+                self.assertEqual(m._load_golf_models(corrupt), [])
+
+
 class GolfEquipmentGate(unittest.TestCase):
     def _result(self, price=200, **golf_fields):
         result = {
@@ -1187,10 +1284,11 @@ class GolfEquipmentGate(unittest.TestCase):
         )
 
         self.assertIsNone(m.golf_full_set_only_reason(result))
-        self.assertIsNone(
+        self.assertTrue(m.golf_modern_set_absolute_price_path_applies(result, 190.0))
+        self.assertIsNotNone(
             m.is_blocked_by_steal_quality_gate(result, category="golf-equipment")
         )
-        self.assertEqual(result["golf_delivery_path"], "modern-set-under-200")
+        self.assertNotIn("golf_delivery_path", result)
 
     def test_modern_absolute_path_preserves_every_non_relative_veto(self):
         base = self._result(
@@ -1250,12 +1348,13 @@ class GolfEquipmentGate(unittest.TestCase):
                 )
 
         low_confidence = dict(base, price_confidence="low")
-        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+        self.assertTrue(m.golf_modern_set_absolute_price_path_applies(
+            low_confidence, 190.0
+        ))
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(
             low_confidence, category="golf-equipment"
         ))
-        self.assertEqual(
-            low_confidence.get("golf_delivery_path"), "modern-set-under-200"
-        )
+        self.assertNotIn("golf_delivery_path", low_confidence)
 
     def test_modern_absolute_225_boundary_with_known_shipping(self):
         base = self._result(
@@ -1278,10 +1377,11 @@ class GolfEquipmentGate(unittest.TestCase):
         )
 
         under = dict(base, price=210.0)
-        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+        self.assertTrue(m.golf_modern_set_absolute_price_path_applies(under, 210.0))
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(
             under, category="golf-equipment"
         ))
-        self.assertEqual(under.get("golf_delivery_path"), "modern-set-under-200")
+        self.assertNotIn("golf_delivery_path", under)
 
         over = dict(base, price=230.0)
         self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(
@@ -1290,12 +1390,13 @@ class GolfEquipmentGate(unittest.TestCase):
         self.assertNotIn("golf_delivery_path", over)
 
         low_confidence = dict(base, price=210.0, price_confidence="low")
-        self.assertIsNone(m.is_blocked_by_steal_quality_gate(
+        self.assertTrue(m.golf_modern_set_absolute_price_path_applies(
+            low_confidence, 210.0
+        ))
+        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(
             low_confidence, category="golf-equipment"
         ))
-        self.assertEqual(
-            low_confidence.get("golf_delivery_path"), "modern-set-under-200"
-        )
+        self.assertNotIn("golf_delivery_path", low_confidence)
 
     def test_relative_steal_path_is_unchanged_when_shipping_is_unknown(self):
         result = self._result(
@@ -2671,8 +2772,13 @@ class GolfEquipmentGate(unittest.TestCase):
 
 class GolfRampConfiguration(unittest.TestCase):
     def test_modern_set_ceiling_and_golf_auction_lane_are_active(self):
-        self.assertEqual(m.load_config()["GOLF_MODERN_SET_MAX_LANDED_PRICE"], 225)
+        config = m.load_config()
+        self.assertEqual(config["GOLF_MODERN_SET_MAX_LANDED_PRICE"], 225)
         self.assertEqual(m.GOLF_MODERN_SET_MAX_LANDED_PRICE, 225)
+        self.assertIs(config["GOLF_ABSOLUTE_PATH_DELIVERS"], False)
+        self.assertEqual(config["GOLF_STEAL_MAX_LANDED_PRICE"], 400)
+        self.assertEqual(config["GOLF_STEAL_FRACTION"], 0.55)
+        self.assertEqual(m.GOLF_EBAY_AUCTION_SEARCH["max_price"], 400)
         self.assertIn(m.GOLF_EBAY_AUCTION_SEARCH, m.EBAY_AUCTION_SEARCHES)
         self.assertEqual(m.GOLF_EBAY_AUCTION_SEARCH["id"], "golf-irons")
         self.assertIn("golf-irons", m.FOCUS_SEARCH_IDS)
@@ -2714,10 +2820,8 @@ class GolfRampConfiguration(unittest.TestCase):
             search for search in m.SAVED_SEARCHES
             if search.get("category") == "golf-equipment"
         ]
-        # 43 original + golf-callaway/golf-mizuno/golf-titleist full-set brand
-        # searches added 2026-09-21 (owner wants a full golf set; Callaway,
-        # the most common set brand, had no brand-set search).
-        self.assertEqual(len(searches), 46)
+        # 46 existing searches plus 16 premium-model hunts.
+        self.assertEqual(len(searches), 62)
         bag_search_ids = {
             "golf-stand-bag",
             "golf-sun-mountain-or-ogio-stand-bag",
@@ -2760,7 +2864,10 @@ class GolfRampConfiguration(unittest.TestCase):
             self.assertEqual(search["category"], "golf-equipment")
             self.assertEqual(search["category_id"], "115280")
             self.assertIsNone(search["size"])
-            self.assertEqual(search["max_price"], 300)
+            expected_max = 300 if clean_query in {
+                "mens golf clubs", "golf bag clubs", "adams golf set"
+            } else 400
+            self.assertEqual(search["max_price"], expected_max)
             self.assertIs(search["enabled"], True)
             self.assertEqual(search["profile"], "fast")
             self.assertEqual(search["platforms"], ["shopgoodwill", "facebook"])
@@ -7080,6 +7187,30 @@ class SendAlertGolfDecisionLines(unittest.TestCase):
         self.assertNotIn("under resale", message)
         self.assertNotIn("\nMarginal", message)
 
+    def test_catalog_steal_leads_with_model_relative_value_line(self):
+        result = {
+            "listing": {
+                "title": "TaylorMade P790 Iron Set 4-PW Right Handed",
+                "itemWebUrl": "https://x",
+                "platform": "ebay",
+            },
+            "category": "golf-equipment",
+            "price": 330.0,
+            "item_price": 311.32,
+            "shipping_cost": 0.0,
+            "golf_catalog_key": "taylormade p790",
+            "golf_catalog_piece_count": 7,
+            "golf_catalog_value": 600.0,
+            "golf_steal_ratio": 0.55,
+            "golf_delivery_path": "catalog-steal",
+        }
+        message = self._send_and_capture(result)
+        self.assertEqual(
+            message.splitlines()[0],
+            "STEAL 45% off: taylormade p790 7pc - $330 landed vs ~$600 typical",
+        )
+        self.assertEqual(m.alert_urgency(result)[0], 4)
+
     def test_non_golf_alert_keeps_flip_label(self):
         result = {
             "listing": {"title": "Canali Suit", "itemWebUrl": "https://x", "platform": None},
@@ -10187,12 +10318,12 @@ class RunIntegration(unittest.TestCase):
         scraped = [
             self._ebay_item(
                 "v1|golf-shared-scrape-1|0",
-                "TaylorMade RBZ Right Hand Golf Iron Set 5-PW Regular Steel",
+                "TaylorMade Right Hand Golf Iron Set 5-PW Regular Steel",
                 180,
             ),
             self._ebay_item(
                 "v1|golf-shared-scrape-2|0",
-                "Ping G30 Right Hand Golf Iron Set 5-PW Regular Steel",
+                "Ping Right Hand Golf Iron Set 5-PW Regular Steel",
                 160,
             ),
         ]
@@ -10203,7 +10334,8 @@ class RunIntegration(unittest.TestCase):
         ):
             m.run()
 
-        self.assertEqual(
+        # Unmatched titles: no catalog price triage applies.
+        self.assertCountEqual(
             self.ai_calls,
             ["v1|golf-shared-scrape-1|0", "v1|golf-shared-scrape-2|0"],
         )
@@ -12087,6 +12219,152 @@ class RunIntegration(unittest.TestCase):
         )
         self.assertTrue(self.alerts[0]["golf_ai_checked"])
 
+    def _catalog_golf_ai(self, brand, model, year, resale=500.0):
+        return {
+            "identified_brand": brand,
+            "identified_model": model,
+            "model_release_year": year,
+            "brand_claims_present": True,
+            "brand_claims_confirmed": True,
+            "is_playable_first_set": True,
+            "is_wanted_component": False,
+            "is_starter_kit_quality": False,
+            "is_left_handed": False,
+            "handedness_confirmed": True,
+            "damage_found": False,
+            "weird_logo_found": False,
+            "looks_good": True,
+            "counterfeit_suspected": False,
+            "estimated_resale_value": resale,
+            "price_confidence": "high",
+            "summary": "clean matched right-handed iron set",
+        }
+
+    def _catalog_golf_search(self, search_id="golf-taylormade-p790-irons", max_price=500):
+        return {
+            "id": search_id,
+            "query": "TaylorMade P790 irons -lefty",
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "max_price": max_price,
+            "enabled": True,
+            "profile": "fast",
+        }
+
+    def test_catalog_p790_at_330_landed_delivers_and_420_does_not(self):
+        self._patch("_configured_gemini_api_keys", lambda: [])
+        self.ai_result = self._catalog_golf_ai("TaylorMade", "P790", 2017)
+        steal = self._ebay_item(
+            "v1|catalog-p790-330|0",
+            "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+            275 / 1.06,
+        )
+        self._serve(self._catalog_golf_search(), [steal])
+        m.run()
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(self.alerts[0]["golf_delivery_path"], "catalog-steal")
+        self.assertAlmostEqual(self.alerts[0]["golf_steal_ratio"], 0.55, places=4)
+
+        over = self._ebay_item(
+            "v1|catalog-p790-420|0",
+            "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+            420 / 1.06,
+        )
+        self._serve(self._catalog_golf_search(), [over])
+        m.run()
+        self.assertEqual(len(self.alerts), 1)
+
+    def test_catalog_amp_mid_price_does_not_deliver(self):
+        self.ai_result = self._catalog_golf_ai("Cobra", "AMP", 2012, resale=160)
+        item = self._ebay_item(
+            "v1|catalog-amp-mid|0",
+            "Cobra AMP Iron Set 5-PW 6pc Right Handed",
+            221 / 1.06,
+        )
+        self._serve(self._catalog_golf_search("golf-cobra", 400), [item])
+        m.run()
+        self.assertEqual(self.alerts, [])
+        self.assertEqual(self._alert_log_records()[0]["disposition_code"], "NOT_STEAL_PRICE")
+
+    def test_catalog_g425_at_500_skips_before_photo_but_unmatched_is_checked(self):
+        expensive = self._ebay_item(
+            "v1|catalog-g425-500|0",
+            "Ping G425 Iron Set 4-PW 7pc Right Handed",
+            500 / 1.06,
+        )
+        unmatched = self._ebay_item(
+            "v1|catalog-unmatched|0",
+            "Right Handed Complete Golf Club Set 10pc",
+            100,
+        )
+        self.ai_result = self._catalog_golf_ai("Titleist", "unknown", 2020)
+        self._serve(self._catalog_golf_search("golf-golf-club-set", 600), [expensive, unmatched])
+        m.run()
+        self.assertNotIn(expensive["itemId"], self.ai_calls)
+        self.assertIn(unmatched["itemId"], self.ai_calls)
+        expensive_record = next(
+            row for row in self._alert_log_records() if row["item_id"] == expensive["itemId"]
+        )
+        self.assertEqual(expensive_record["disposition_code"], "NOT_STEAL_PRICE")
+
+    def test_catalog_photo_budget_orders_lowest_ratio_before_unmatched(self):
+        self._patch("GEMINI_CALL_LIMIT", 1)
+        listings = [
+            self._ebay_item(
+                "v1|catalog-order-p790|0",
+                "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+                330 / 1.06,
+            ),
+            self._ebay_item(
+                "v1|catalog-order-unmatched|0",
+                "Right Handed Complete Golf Club Set 10pc",
+                80,
+            ),
+            self._ebay_item(
+                "v1|catalog-order-g430|0",
+                "Ping G430 Iron Set 4-PW 7pc Right Handed",
+                350 / 1.06,
+            ),
+        ]
+        self.ai_result = self._catalog_golf_ai("Ping", "G430", 2023, resale=750)
+        self._serve(self._catalog_golf_search("golf-golf-club-set", 400), listings)
+        m.run()
+        self.assertEqual(self.ai_calls, ["v1|catalog-order-g430|0"])
+
+    def test_catalog_steal_is_still_vetoed_by_strong_second_look(self):
+        item = self._ebay_item(
+            "v1|catalog-strong-veto|0",
+            "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+            270 / 1.06,
+        )
+        cheap_result = self._catalog_golf_ai("TaylorMade", "P790", 2017)
+        self._wire_strong_golf(
+            {item["itemId"]: cheap_result},
+            lambda *args, **kwargs: {**cheap_result, "damage_found": True},
+        )
+        self._serve(self._catalog_golf_search(), [item])
+        m.run()
+        self.assertEqual(self.alerts, [])
+        self.assertIn("strong second look", self._alert_log_records()[0]["reason"])
+
+    def test_empty_catalog_from_missing_or_corrupt_file_keeps_run_alive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = pathlib.Path(directory) / "missing.json"
+            corrupt = pathlib.Path(directory) / "corrupt.json"
+            corrupt.write_text("[", encoding="utf-8")
+            for index, path in enumerate((missing, corrupt)):
+                with self.subTest(path=path.name):
+                    self._patch("GOLF_MODELS", m._load_golf_models(path))
+                    item = self._ebay_item(
+                        f"v1|catalog-fail-open-{index}|0",
+                        "Right Handed Complete Golf Club Set 10pc",
+                        100,
+                    )
+                    self.ai_result = None
+                    self._serve(self._catalog_golf_search("golf-golf-club-set", 400), [item])
+                    m.run()
+                    self.assertIn(item["itemId"], self.ai_calls)
+
     def _jev_response(self, score=None, *, status=200, body=None, json_error=None):
         response = mock.Mock()
         response.status_code = status
@@ -12214,12 +12492,12 @@ class RunIntegration(unittest.TestCase):
         self.ai_result = None
         item_id = "v1|jev-rbz-cache|0"
         title = "TaylorMade RH RBZ Rocketballz Iron Golf Club Set"
-        item = self._ebay_item(item_id, title, 100.0)
+        item = self._ebay_item(item_id, title, 80.0)
         self._serve(self._golf_search(), [item])
 
         m.run()
         m.run()
-        changed = self._ebay_item(item_id, title + " Excellent", 100.0)
+        changed = self._ebay_item(item_id, title + " Excellent", 80.0)
         self._serve(self._golf_search(), [changed])
         m.run()
 
@@ -13913,6 +14191,33 @@ class DailyGolfClosestMissesDigest(unittest.TestCase):
         positions = [message.index(f"RH ${price}") for price in (230, 240, 260)]
         self.assertEqual(positions, sorted(positions))
         self.assertNotIn("RH $270", message)
+
+    def test_misses_rank_by_catalog_ratio_and_heartbeat_counts_price_triage(self):
+        now = self._now()
+        p790 = self._clean_miss(
+            now,
+            "ratio-p790",
+            "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+            360.0,
+        )
+        p790.update({
+            "golf_identified_brand": "TaylorMade",
+            "golf_identified_model": "P790",
+            "golf_model_release_year": 2017,
+        })
+        rogue = self._clean_miss(now, "ratio-rogue", price=200.0)
+        skipped = self._clean_miss(now, "price-skip", price=500.0)
+        skipped.update({
+            "ai_checked": False,
+            "disposition_code": "NOT_STEAL_PRICE",
+            "reason": "catalog pre-photo price screen: too expensive",
+        })
+        self._write_rows([rogue, skipped, p790])
+
+        message = m._daily_golf_digest_message(now)
+
+        self.assertLess(message.index(p790["title"]), message.index(rogue["title"]))
+        self.assertIn("2 steal-priced checked / 1 NOT_STEAL_PRICE skipped", message)
 
     def test_heartbeat_counts_audited_jev_item_that_cleared_every_gate(self):
         now = self._now()

@@ -728,6 +728,59 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+GOLF_MODELS_PATH = Path(__file__).resolve().with_name("golf_models.json")
+
+
+def _load_golf_models(path=None):
+    """Load the ordered golf value catalog once, failing open on bad data."""
+    target = Path(path) if path is not None else GOLF_MODELS_PATH
+    try:
+        with target.open("r", encoding="utf-8") as catalog_file:
+            data = json.load(catalog_file)
+        if not isinstance(data, list):
+            raise ValueError("catalog root must be a list")
+        catalog = []
+        seen_keys = set()
+        for entry in data:
+            if not isinstance(entry, dict):
+                raise ValueError("catalog entries must be objects")
+            required = {
+                "key", "pattern", "year", "typical_used_set_value_usd",
+                "value_source",
+            }
+            if set(entry) != required:
+                raise ValueError("catalog entry has the wrong schema")
+            key = str(entry["key"]).strip()
+            year = entry["year"]
+            value = entry["typical_used_set_value_usd"]
+            if (
+                not key
+                or key in seen_keys
+                or isinstance(year, bool)
+                or not isinstance(year, int)
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError("catalog entry has invalid values")
+            compiled = re.compile(str(entry["pattern"]), re.IGNORECASE)
+            loaded = dict(entry)
+            loaded["_catalog_regex"] = compiled
+            catalog.append(loaded)
+            seen_keys.add(key)
+        return catalog
+    except (OSError, ValueError, TypeError, re.error) as exc:
+        logger.warning(
+            "Golf model catalog unavailable at %s; continuing without catalog pricing: %s",
+            target,
+            exc,
+        )
+        return []
+
+
+GOLF_MODELS = _load_golf_models()
+
 
 def _focus_filter(searches):
     """Apply the reversible per-run search focus without mutating config.
@@ -2333,11 +2386,10 @@ SUIT_BLIND_TRUST_MAX_PRICE = 150
 # negotiates himself and the pieces move fast even at asking price, so a
 # margin bar just loses them. Damage/logo checks still apply.
 GAMECOCKS_GRAB_UNDER_PRICE = 50
-# Golf clubs are a personal-use first purchase, not a resale flip. $275 is
-# preferred, but $300 LANDED is the actual hard ceiling; the saved searches
-# and the final golf gate both use that ceiling. See the golf prompt and
-# is_blocked_by_steal_quality_gate() for the playable-partial-set semantics.
-GOLF_EQUIPMENT_MAX_PRICE = 300
+# Golf clubs are a personal-use first purchase, not a resale flip. The owner
+# will pay up to $400 landed for a true model-relative steal; saved searches,
+# the auction lane, and the final backstop all share that visibility ceiling.
+GOLF_EQUIPMENT_MAX_PRICE = 400
 # Reversible delivery policy: the owner currently wants one thing only, a
 # recognizable-brand full golf set. Searches remain untouched so the switch can
 # be rolled back without rewriting config inventory; this is enforced after AI
@@ -2371,6 +2423,13 @@ SHOPGOODWILL_CONTESTED_CLOSE_TYPICAL_MULT = 1.20
 SHOPGOODWILL_CONTESTED_CLOSE_HIGH_MULT = 1.45
 GOLF_MODERN_SET_MAX_LANDED_PRICE = float(
     _CONFIG.get("GOLF_MODERN_SET_MAX_LANDED_PRICE", 225)
+)
+GOLF_STEAL_MAX_LANDED_PRICE = float(
+    _CONFIG.get("GOLF_STEAL_MAX_LANDED_PRICE", 400)
+)
+GOLF_STEAL_FRACTION = float(_CONFIG.get("GOLF_STEAL_FRACTION", 0.55))
+GOLF_ABSOLUTE_PATH_DELIVERS = bool(
+    _CONFIG.get("GOLF_ABSOLUTE_PATH_DELIVERS", False)
 )
 # The historical Rogue auction arrived through the rotating HTML scrape 80.95
 # seconds before close. All configured Browse-API auction searches were also
@@ -2881,6 +2940,111 @@ def _golf_club_run_text(title):
     return None
 
 
+def golf_catalog_title_match(title):
+    """Return the first ordered catalog entry matching ``title``."""
+    text = str(title or "")
+    for entry in GOLF_MODELS:
+        if entry["_catalog_regex"].search(text):
+            return entry
+    return None
+
+
+def golf_catalog_piece_count(title):
+    """Return a title-proven iron count, preferring runs over generic counts."""
+    title = str(title or "")
+    range_match = GOLF_IRON_RANGE_TITLE_SIGNAL.search(title)
+    if range_match:
+        try:
+            count = _golf_iron_range_count(range_match.group(1), range_match.group(2))
+            endpoint = range_match.group(2).casefold()
+            trailing = title[range_match.end():range_match.end() + 32]
+            extra_wedges = {
+                token.casefold()
+                for token in re.findall(r"\b(?:aw|gw|sw|lw)\b", trailing, re.I)
+            }
+            if endpoint in extra_wedges:
+                extra_wedges.remove(endpoint)
+            return count + len(extra_wedges)
+        except (KeyError, ValueError):
+            pass
+    enumerations = _golf_iron_enumerations(title)
+    if enumerations:
+        return max(count for count, _gap, _start, _end in enumerations)
+    for pattern in GOLF_IRON_EXPLICIT_COUNT_SIGNALS:
+        match = pattern.search(title)
+        if match:
+            return int(match.group(1))
+    generic_count = re.search(
+        r"\b(\d{1,2})\s*[- ]?(?:pc|pcs|piece|pieces)\b",
+        title,
+        re.IGNORECASE,
+    )
+    return int(generic_count.group(1)) if generic_count else None
+
+
+def _adjusted_golf_catalog_value(entry, piece_count):
+    value = float(entry["typical_used_set_value_usd"])
+    if piece_count is not None and piece_count < 7:
+        value *= max(0, piece_count) / 7
+    return round(value, 2)
+
+
+def golf_catalog_value(result):
+    """Annotate and return the strictest title/vision catalog valuation."""
+    listing = result.get("listing") or {}
+    title = str(listing.get("title") or "")
+    title_match = golf_catalog_title_match(title)
+    identified_model = str(result.get("golf_identified_model") or "").strip()
+    ai_text = " ".join(
+        part
+        for part in (
+            str(result.get("golf_identified_brand") or "").strip(),
+            identified_model,
+        )
+        if part
+    ) if identified_model else ""
+    ai_match = golf_catalog_title_match(ai_text) if ai_text else None
+    if title_match is None and ai_match is None:
+        return None
+
+    piece_count = golf_catalog_piece_count(title)
+    candidates = []
+    if title_match is not None:
+        candidates.append(("title", title_match, _adjusted_golf_catalog_value(title_match, piece_count)))
+    if ai_match is not None and (
+        title_match is None or ai_match["key"] != title_match["key"]
+    ):
+        candidates.append(("ai", ai_match, _adjusted_golf_catalog_value(ai_match, piece_count)))
+    source, selected, adjusted_value = min(candidates, key=lambda item: item[2])
+
+    result["golf_catalog_key"] = selected["key"]
+    result["golf_catalog_year"] = selected["year"]
+    result["golf_catalog_value"] = adjusted_value
+    if piece_count is not None:
+        result["golf_catalog_piece_count"] = piece_count
+    if title_match is not None:
+        result["golf_catalog_title_key"] = title_match["key"]
+    if ai_match is not None:
+        result["golf_catalog_ai_key"] = ai_match["key"]
+    landed = result.get("price")
+    if (
+        isinstance(landed, (int, float))
+        and not isinstance(landed, bool)
+        and math.isfinite(landed)
+        and adjusted_value > 0
+    ):
+        result["golf_steal_ratio"] = round(float(landed) / adjusted_value, 6)
+    return {
+        "key": selected["key"],
+        "year": selected["year"],
+        "value": adjusted_value,
+        "piece_count": piece_count,
+        "source": source,
+        "title_key": title_match["key"] if title_match else None,
+        "ai_key": ai_match["key"] if ai_match else None,
+    }
+
+
 def golf_condition_spec_reason(result):
     """Return a golf-only seller-text condition or altered-length hard stop."""
     listing_text = _golf_listing_title_and_description(result)
@@ -3139,26 +3303,15 @@ def golf_has_modern_model_evidence(result):
     )
 
 
-def golf_modern_set_absolute_price_path_applies(result, landed):
-    """True only when the absolute ceiling may replace the relative price bar.
-
-    This deliberately repeats the non-price requirements that the surrounding
-    golf gate will enforce again. A True result excuses exactly one decision:
-    whether ``landed`` beats the AI estimate by at least 50%. It cannot excuse
-    a missing appraisal, unknown eBay shipping, wrong shape or era,
-    junk/blades, uncertain handedness/claims, damage, or counterfeit risk.
-    """
+def _golf_strict_price_path_nonprice_applies(result, landed):
+    """Shared non-price requirements for either strict golf price path."""
     if (
         not result.get("golf_ai_checked")
         or not isinstance(landed, (int, float))
         or isinstance(landed, bool)
         or not math.isfinite(landed)
-        or landed > GOLF_MODERN_SET_MAX_LANDED_PRICE
         or result.get("shipping_cost_known") is not True
-        or result.get("estimated_resale_value") is None
     ):
-        return False
-    if not golf_has_modern_model_evidence(result):
         return False
     if golf_full_set_only_reason(result) is not None:
         return False
@@ -3183,6 +3336,28 @@ def golf_modern_set_absolute_price_path_applies(result, landed):
         return False
     return not result.get("golf_counterfeit_suspected") and not result.get(
         "damage_found"
+    )
+
+
+def golf_modern_set_absolute_price_path_applies(result, landed):
+    """True only when the retained $225 absolute path's rules all pass."""
+    return bool(
+        _golf_strict_price_path_nonprice_applies(result, landed)
+        and landed <= GOLF_MODERN_SET_MAX_LANDED_PRICE
+        and result.get("estimated_resale_value") is not None
+        and golf_has_modern_model_evidence(result)
+    )
+
+
+def golf_catalog_steal_price_path_applies(result, landed):
+    """True only for a clean modern set at or below 55% of catalog value."""
+    catalog = golf_catalog_value(result)
+    return bool(
+        catalog
+        and catalog["year"] >= 2012
+        and _golf_strict_price_path_nonprice_applies(result, landed)
+        and landed <= GOLF_STEAL_MAX_LANDED_PRICE
+        and landed <= GOLF_STEAL_FRACTION * catalog["value"]
     )
 
 
@@ -7338,6 +7513,16 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         landed = result.get("price")
         if landed is not None and landed > GOLF_EQUIPMENT_MAX_PRICE:
             return f"golf-equipment bar: price ${landed} exceeds ${GOLF_EQUIPMENT_MAX_PRICE} personal-use cap"
+        is_wanted_component = bool(
+            component_kind and result.get("golf_is_wanted_component")
+        )
+        if not result.get("golf_is_playable_first_set") and not is_wanted_component:
+            if component_kind:
+                return (
+                    f"golf-equipment bar: AI did not confirm the requested whole "
+                    f"{component_kind} component"
+                )
+            return "golf-equipment bar: AI did not confirm a playable first set or useful partial set"
         # The goal is a BARGAIN, not merely an affordable set - user's words:
         # "the point was to get a fire deal on a set obv". Loosening this
         # category relaxed COMPLETENESS and brand tier, never price discipline,
@@ -7345,30 +7530,36 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         # miss this catches: a $160 mixed-brand Big Bertha set - playable,
         # right-handed, under the cap - whose own photo-level appraisal put it
         # at ~$100-110 (generic filler woods, missing PW, heavy sole wear).
+        catalog = golf_catalog_value(result)
+        catalog_steal_path = golf_catalog_steal_price_path_applies(result, landed)
+        modern_absolute_path = bool(
+            GOLF_ABSOLUTE_PATH_DELIVERS
+            and golf_modern_set_absolute_price_path_applies(result, landed)
+        )
         resale = result.get("estimated_resale_value")
-        if resale is None:
+        relative_value = resale
+        if catalog is not None and resale is not None:
+            relative_value = min(float(resale), catalog["value"])
+        if relative_value is None and not catalog_steal_path:
             return (
                 "golf-equipment bar: no AI price estimate - AI check returned "
                 "no usable resale value"
             )
-        modern_absolute_path = golf_modern_set_absolute_price_path_applies(
-            result, landed
-        )
         uses_modern_absolute_path = False
         relative_price_failure = None
-        if landed is not None and resale is not None and landed > resale:
+        if landed is not None and relative_value is not None and landed > relative_value:
             relative_price_failure = (
-                f"golf-equipment bar: price ${landed} exceeds the AI's own "
-                f"${resale} resale estimate - playable, but not a deal"
+                f"golf-equipment bar: price ${landed} exceeds the AI/catalog "
+                f"${relative_value} resale estimate ceiling - playable, but not a deal"
             )
-        golf_rating, _golf_discount_pct = compute_deal_rating(landed, resale)
+        golf_rating, _golf_discount_pct = compute_deal_rating(landed, relative_value)
         if relative_price_failure is None and golf_rating not in ("Steal", "Great Deal"):
             relative_price_failure = (
                 f"golf-equipment bar: deal_rating '{golf_rating}' below "
                 "Great Deal - needs at least 50% under current resale value"
             )
         if relative_price_failure:
-            if not modern_absolute_path:
+            if not modern_absolute_path and not catalog_steal_path:
                 return relative_price_failure
             uses_modern_absolute_path = True
         cheap_full_set_exception = _golf_cheap_full_set_exception(result, landed)
@@ -7380,18 +7571,9 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             price_confidence == "low"
             and not cheap_full_set_exception
             and not modern_absolute_path
+            and not catalog_steal_path
         ):
             return "golf-equipment bar: AI price estimate confidence too low to trust"
-        is_wanted_component = bool(
-            component_kind and result.get("golf_is_wanted_component")
-        )
-        if not result.get("golf_is_playable_first_set") and not is_wanted_component:
-            if component_kind:
-                return (
-                    f"golf-equipment bar: AI did not confirm the requested whole "
-                    f"{component_kind} component"
-                )
-            return "golf-equipment bar: AI did not confirm a playable first set or useful partial set"
         # A stand bag has no handedness. Every actual club/component keeps the
         # existing fail-closed rule for this right-handed buyer.
         if component_kind != "stand-bag":
@@ -7418,7 +7600,11 @@ def is_blocked_by_steal_quality_gate(result, category=None):
             return "golf-equipment bar: AI suspected counterfeit/replica club heads"
         if result.get("damage_found"):
             return "golf-equipment bar: AI found disqualifying damage"
-        if uses_modern_absolute_path:
+        if catalog_steal_path:
+            # Prefer the catalog marker even when the relative AI path also
+            # happens to pass: it is the evidence behind this price policy.
+            result["golf_delivery_path"] = "catalog-steal"
+        elif uses_modern_absolute_path:
             # Display/log marker only. Every non-price veto above ran, and the
             # full-set helper is run again at the call site.
             result["golf_delivery_path"] = "modern-set-under-200"
@@ -7964,7 +8150,9 @@ def _format_estimated_usd(value):
 # makes their ai_checked bit depend on the explicit completed-call marker.
 # v4 distinguishes a system-wide monthly paid-budget outage from an ordinary
 # per-run AI-slot miss and persists the cap/reset evidence on every such row.
-ALERT_LOG_SCHEMA_VERSION = 4
+# v5 persists the catalog model, adjusted value, piece count, ratio, and the
+# title/vision keys used when model identifications disagree.
+ALERT_LOG_SCHEMA_VERSION = 5
 
 
 def disposition_code_for(result, delivered=False, delivery_error=None):
@@ -7986,6 +8174,7 @@ def disposition_code_for(result, delivered=False, delivery_error=None):
         (("ai no-price retry cap reached",), "AI_NO_PRICE_CAPPED"),
         (("ai check returned no usable resale value",), "AI_NO_PRICE"),
         (("stale fixed-price listing",), "STALE_LISTING"),
+        (("catalog pre-photo price screen",), "NOT_STEAL_PRICE"),
         (("no ai price", "no ai budget", "ai budget", "ai check ran"), "NO_AI_BUDGET"),
         (("jev pre-photo screen",), "JEV_NOT_A_SET"),
         (("golf wrong-item title",), "GOLF_WRONG_ITEM"),
@@ -8142,6 +8331,13 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_identified_brand",
         "golf_identified_model",
         "golf_model_release_year",
+        "golf_catalog_key",
+        "golf_catalog_title_key",
+        "golf_catalog_ai_key",
+        "golf_catalog_year",
+        "golf_catalog_piece_count",
+        "golf_catalog_value",
+        "golf_steal_ratio",
         "golf_delivery_path",
         "jev_iron_set",
         "jev_would_skip",
@@ -8352,6 +8548,8 @@ def alert_urgency(result):
         return 2, ["warning", "mag"]
     if result.get("is_ending_soon_auction"):
         return 5, ["alarm_clock", "rotating_light"]
+    if result.get("golf_delivery_path") == "catalog-steal":
+        return 4, ["fire", "white_check_mark"]
     if discount >= 0.70 and confidence in {"high", "medium"}:
         return 5, ["fire", "chart_with_upwards_trend"]
     if (
@@ -8574,6 +8772,17 @@ def send_alert(result):
         price_line = f"${price}{profile_note}"
     source = (listing.get("platform") or "ebay").upper()
     message = f"[{source}] {price_line} - {title}"
+    if result.get("golf_delivery_path") == "catalog-steal":
+        ratio = result.get("golf_steal_ratio")
+        off_pct = round((1 - float(ratio)) * 100) if _finite_number(ratio) else 0
+        piece_count = result.get("golf_catalog_piece_count")
+        piece_label = f"{piece_count:g}" if _finite_number(piece_count) else "?"
+        catalog_value = result.get("golf_catalog_value")
+        message = (
+            f"STEAL {off_pct}% off: {result.get('golf_catalog_key')} "
+            f"{piece_label}pc - ${_money_without_noise(price)} landed vs "
+            f"~${_money_without_noise(catalog_value)} typical\n{message}"
+        )
     if listing.get("platform") == "shopgoodwill":
         # currentPrice on a live auction is a floor that climbs until close,
         # not a purchase price - do not read it as the eBay-style fixed price.
@@ -8989,32 +9198,29 @@ def _finite_number(value):
 
 
 def _golf_record_is_closest_price_miss(record):
-    """True only for a modern clean set whose logged blocker was price."""
+    """True only for a clean catalog set that narrowly missed the 55% line."""
     if record.get("delivered"):
         return False
     landed = record.get("price")
-    resale = record.get("estimated_resale_value")
-    if (
-        not _finite_number(landed)
-        or not _finite_number(resale)
-        or landed <= GOLF_MODERN_SET_MAX_LANDED_PRICE
-        or resale <= 0
-        or (resale - landed) / resale >= 0.50
-        or record.get("shipping_cost_known") is not True
-    ):
+    if not _finite_number(landed) or record.get("shipping_cost_known") is not True:
         return False
     reason = str(record.get("reason") or "").lower()
     if (
-        record.get("disposition_code") not in {"BELOW_MARGIN", "OVER_MAX_PRICE"}
+        record.get("disposition_code")
+        not in {"BELOW_MARGIN", "OVER_MAX_PRICE", "NOT_STEAL_PRICE"}
         and "price $" not in reason
         and "deal_rating" not in reason
+        and "catalog pre-photo price screen" not in reason
     ):
         return False
 
     result = _golf_record_result(record)
+    catalog = golf_catalog_value(result)
     if (
-        golf_full_set_only_reason(result) is not None
-        or not golf_has_modern_model_evidence(result)
+        catalog is None
+        or catalog["year"] < 2012
+        or float(landed) / catalog["value"] <= GOLF_STEAL_FRACTION
+        or golf_full_set_only_reason(result) is not None
         or result.get("golf_is_playable_first_set") is not True
         or result.get("golf_is_left_handed") is True
         or not (
@@ -9037,12 +9243,16 @@ def _golf_record_is_closest_price_miss(record):
     probe = dict(result)
     probe["listing"] = dict(result["listing"])
     probe["price"] = min(
-        GOLF_MODERN_SET_MAX_LANDED_PRICE,
-        max(0.01, float(resale) * 0.49),
+        GOLF_STEAL_MAX_LANDED_PRICE,
+        max(0.01, catalog["value"] * GOLF_STEAL_FRACTION),
     )
     probe["deal_rating"], probe["discount_pct"] = compute_deal_rating(
-        probe["price"], resale
+        probe["price"], probe.get("estimated_resale_value")
     )
+    record["golf_catalog_key"] = result["golf_catalog_key"]
+    record["golf_catalog_value"] = result["golf_catalog_value"]
+    record["golf_catalog_piece_count"] = result.get("golf_catalog_piece_count")
+    record["golf_steal_ratio"] = round(float(landed) / catalog["value"], 6)
     return (
         is_blocked_by_steal_quality_gate(probe, category="golf-equipment") is None
         and golf_full_set_only_reason(probe) is None
@@ -9083,14 +9293,25 @@ def _daily_golf_digest_message(now):
         and bool(record.get("golf_cleared_all_gates") or record.get("delivered"))
         for record in records
     )
+    not_steal_price_skipped = sum(
+        record.get("disposition_code") == "NOT_STEAL_PRICE" for record in records
+    )
+    steal_priced_checked = sum(
+        bool(record.get("ai_checked"))
+        and record.get("disposition_code") != "NOT_STEAL_PRICE"
+        and bool(record.get("golf_catalog_key") or golf_catalog_title_match(record.get("title")))
+        for record in records
+    )
     message = (
         f"24h: {len(records)} golf listings seen; {looks_like_sets} looked like real "
         f"iron/full sets; {cleared} cleared every gate; {jev_skipped} skipped by "
-        f"Jev; {audited_cleared} audited Jev skips cleared every gate."
+        f"Jev; {audited_cleared} audited Jev skips cleared every gate; "
+        f"{steal_priced_checked} steal-priced checked / "
+        f"{not_steal_price_skipped} NOT_STEAL_PRICE skipped."
     )
     misses = sorted(
         (record for record in records if _golf_record_is_closest_price_miss(record)),
-        key=lambda record: float(record["price"]),
+        key=lambda record: float(record["golf_steal_ratio"]),
     )[:3]
     if misses:
         message += "\nClosest misses:"
@@ -9824,13 +10045,6 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         and p in marketplaces.ADAPTERS
         and p not in marketplaces.BATCH_ADAPTERS
     ]
-    deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
-    if run_hard_stop is not None:
-        deadline = min(deadline, run_hard_stop)
-    # Outer daemon workers may outlive prefetch_marketplaces() when an adapter
-    # wedges. This is the last instant at which they may publish anything to
-    # shared state; late private results are discarded below.
-    hard_stop = deadline + HTTP_TIMEOUT_MARGIN
     found = {}
     counts = {}
     health = {
@@ -9993,6 +10207,18 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     if not active and not [p for p in MARKETPLACES_ENABLED if p in marketplaces.BATCH_ADAPTERS]:
         logger.info("Marketplace prefetch: %s", counts or "nothing returned")
         return found
+
+    # Scout queue classification is local bookkeeping, not marketplace fetch
+    # time. Start the external-request budget only after it completes; a large
+    # queue (or a larger saved-search catalog) must not expire every adapter
+    # lane before its worker threads can even start.
+    deadline = time.monotonic() + MARKETPLACE_FETCH_BUDGET_SECONDS
+    if run_hard_stop is not None:
+        deadline = min(deadline, run_hard_stop)
+    # Outer daemon workers may outlive prefetch_marketplaces() when an adapter
+    # wedges. This is the last instant at which they may publish anything to
+    # shared state; late private results are discarded below.
+    hard_stop = deadline + HTTP_TIMEOUT_MARGIN
 
     def batch_worker(platform_name):
         """Runs the platform's ONE batch call (covering every enabled
@@ -11437,6 +11663,8 @@ def run():
             result["category_id"] = saved_search.get("category_id", "260012")
             result["seller_feedback_score"] = listing.get("seller_feedback_score")
             result["seller_feedback_percentage"] = listing.get("seller_feedback_percentage")
+            if category == "golf-equipment":
+                golf_catalog_value(result)
             if listing.get("is_ending_soon_auction"):
                 result["is_ending_soon_auction"] = True
                 result["auction_minutes_remaining"] = listing.get("auction_minutes_remaining")
@@ -11681,6 +11909,40 @@ def run():
             candidate["total_price"],
         )
 
+    # Negative-only catalog price screen. A title-known model that is already
+    # more than 15% above the catalog steal line cannot become a steal merely
+    # because vision names a somewhat pricier model. Unmatched titles always
+    # continue to photos.
+    for item_id, candidate in list(review_candidates.items()):
+        if candidate["category"] != "golf-equipment":
+            continue
+        result = candidate["result"]
+        catalog = golf_catalog_value(result)
+        if catalog is None:
+            continue
+        landed = result.get("price")
+        threshold = GOLF_STEAL_FRACTION * catalog["value"] * 1.15
+        if not _finite_number(landed) or landed <= threshold:
+            continue
+        result["verdict"] = "PASS"
+        result["reason"] = (
+            "catalog pre-photo price screen: landed "
+            f"${landed:g} exceeds ${threshold:.2f} buffered steal line"
+        )
+        logger.info(
+            "Catalog-price-filtered %s before photo check: %s",
+            item_id,
+            result["reason"],
+        )
+        append_alert_log(result)
+        mark_seen(
+            conn,
+            item_id,
+            candidate["fingerprint"],
+            candidate["total_price"],
+        )
+        review_candidates.pop(item_id, None)
+
     # Negative-only text screen after every existing free/deterministic gate
     # and before photo candidates are sorted or queued. A low score mirrors
     # the GOLF_WRONG_ITEM final-disposition bookkeeping: visible alert-log row,
@@ -11863,6 +12125,30 @@ def run():
             else (2 if candidate.get("_stale_before_ai") else 1)
         )
     )
+    # Within each hard auction/fresh/stale partition, reorder only the slots
+    # already occupied by golf. This preserves every non-golf candidate's
+    # relative order while giving scarce golf photo checks to the lowest
+    # landed/catalog ratios first; unmatched golf remains eligible afterward.
+    for partition in (0, 1, 2):
+        golf_indexes = [
+            index
+            for index, candidate in enumerate(review_candidates)
+            if candidate["category"] == "golf-equipment"
+            and (
+                0
+                if candidate["result"].get("is_ending_soon_auction")
+                else (2 if candidate.get("_stale_before_ai") else 1)
+            ) == partition
+        ]
+        ordered_golf = sorted(
+            (review_candidates[index] for index in golf_indexes),
+            key=lambda candidate: (
+                0 if candidate["result"].get("golf_catalog_key") else 1,
+                candidate["result"].get("golf_steal_ratio", math.inf),
+            ),
+        )
+        for index, candidate in zip(golf_indexes, ordered_golf):
+            review_candidates[index] = candidate
 
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
     # then alert (cap-gated), in priority order.
@@ -12457,6 +12743,9 @@ def run():
             else:
                 result["golf_model_release_year"] = None
             result["damage_found"] = bool(ai_result.get("damage_found"))
+            # Reconcile the title model with vision's model name. A conflict
+            # can only lower the value used for delivery.
+            golf_catalog_value(result)
         if ai_result is not None and category == "watches":
             # Real live miss: a genuine Oris watch listed with its own
             # eBay item-specifics metadata mislabeled as "Seiko" - the
