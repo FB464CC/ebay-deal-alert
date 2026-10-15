@@ -12,11 +12,12 @@ the same HTTP call that rot as soon as an endpoint moves, and the whole
 GitHub Actions job has to finish inside the 60-second billing rounding
 boundary (private repo = metered minutes, rounded UP per job).
 
-OfferUp and Depop have no public JSON search API - their listing data is
-embedded in the rendered search page (a __NEXT_DATA__ blob and a Next.js
-RSC flight stream respectively), so those two adapters fetch the HTML via
-scrapling's plain-HTTP Fetcher (TLS-fingerprint spoofing, no browser)
-instead of `requests`. Same listing shape, same never-raise contract.
+OfferUp's own public GraphQL web endpoint supplies its complete modular feed;
+the old __NEXT_DATA__ parser remains only as a no-extra-request fallback.
+Craigslist likewise exposes the public positional JSON used by its own web
+search. Depop still embeds data in its Next.js RSC flight stream. These lanes
+use scrapling's plain-HTTP Fetcher (no browser), with the same listing shape
+and never-raise contract as the other adapters.
 
 READ-ONLY. These adapters only ever fetch public search results. Nothing
 here logs in, creates accounts, bids, buys, offers, or messages.
@@ -87,12 +88,38 @@ def _configured_marketplace_fetch_budget():
 
 MARKETPLACE_BATCH_DEADLINE_SECONDS = _configured_marketplace_fetch_budget()
 
+
+def _configured_local_search_values():
+    """Read local-pickup coordinates without importing the main module."""
+    defaults = (33.998, -81.03, 90.0)
+    try:
+        with Path(__file__).resolve().with_name("config.json").open(
+            "r", encoding="utf-8"
+        ) as config_file:
+            config = json.load(config_file)
+        values = (
+            float(config.get("LOCAL_SEARCH_LAT", defaults[0])),
+            float(config.get("LOCAL_SEARCH_LON", defaults[1])),
+            float(config.get("LOCAL_PICKUP_MAX_MILES", defaults[2])),
+        )
+        if not all(math.isfinite(value) for value in values) or values[2] <= 0:
+            raise ValueError("invalid local search coordinates/radius")
+        return values
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return defaults
+
+
+LOCAL_SEARCH_LAT, LOCAL_SEARCH_LON, LOCAL_PICKUP_MAX_MILES = (
+    _configured_local_search_values()
+)
+
 # Minimum seconds between requests to the same platform, enforced process-wide
 # across the thread pool. Keeps us a polite guest instead of hammering.
 _MIN_INTERVAL = {
     "grailed": 0.35,
     "depop": 0.35,
     "offerup": 0.50,
+    "craigslist": 0.50,
     # Tightened again from 0.35, live-tested this time rather than
     # inherited from Grailed's number: 55 real back-to-back requests
     # against the actual endpoint, explicit sleep intervals stepped down
@@ -160,6 +187,96 @@ _backoff_updated_ts = {}
 _BACKOFF_STATE_PATH = Path(__file__).resolve().with_name("platform_backoff_state.json")
 _BACKOFF_DECAY_SECONDS = 30 * 60
 _backoff_state_loaded = False
+
+# OfferUp and Craigslist are low-volume local lanes, but a 403/429 still means
+# stop for the run rather than continuing through the remaining saved searches.
+# Persist the same 30/60/120-minute cooldown shape used by ShopGoodwill so the
+# next five-minute Actions process does not immediately retry the same block.
+LOCAL_MARKETPLACE_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name(
+    "local_marketplace_rate_limit_state.json"
+)
+LOCAL_MARKETPLACE_BACKOFF_INITIAL_MINUTES = 30
+LOCAL_MARKETPLACE_BACKOFF_MAX_MINUTES = 120
+_local_marketplace_state_lock = threading.Lock()
+
+
+def _read_local_marketplace_rate_limit_state():
+    with _local_marketplace_state_lock:
+        try:
+            with LOCAL_MARKETPLACE_RATE_LIMIT_STATE_PATH.open(
+                "r", encoding="utf-8"
+            ) as state_file:
+                state = json.load(state_file)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _write_local_marketplace_rate_limit_state(state):
+    with _local_marketplace_state_lock:
+        try:
+            with LOCAL_MARKETPLACE_RATE_LIMIT_STATE_PATH.open(
+                "w", encoding="utf-8"
+            ) as state_file:
+                json.dump(state, state_file)
+                state_file.write("\n")
+        except OSError as exc:
+            logger.warning("Failed to persist local marketplace backoff: %s", exc)
+
+
+def local_marketplace_circuit_breaker_allows_calls(platform):
+    state = _read_local_marketplace_rate_limit_state().get(platform, {})
+    if not isinstance(state, dict):
+        return True
+    now_ts = time.time()
+    blocked_until = state.get("blocked_until_ts", 0)
+    if not isinstance(blocked_until, (int, float)) or not math.isfinite(
+        blocked_until
+    ):
+        return True
+    if blocked_until > now_ts + LOCAL_MARKETPLACE_BACKOFF_MAX_MINUTES * 60:
+        return True
+    if now_ts < blocked_until:
+        logger.warning(
+            "%s circuit breaker cooldown active for ~%s more min; stopping its local lane",
+            platform,
+            round((blocked_until - now_ts) / 60),
+        )
+        return False
+    return True
+
+
+def _trip_local_marketplace_circuit_breaker(platform, status):
+    state = _read_local_marketplace_rate_limit_state()
+    entry = state.get(platform, {})
+    streak = entry.get("consecutive_block_streak", 0) if isinstance(entry, dict) else 0
+    if not isinstance(streak, int) or streak < 0:
+        streak = 0
+    streak += 1
+    minutes = min(
+        LOCAL_MARKETPLACE_BACKOFF_INITIAL_MINUTES * (2 ** (streak - 1)),
+        LOCAL_MARKETPLACE_BACKOFF_MAX_MINUTES,
+    )
+    state[platform] = {
+        "blocked_until_ts": time.time() + minutes * 60,
+        "consecutive_block_streak": streak,
+        "last_status": status,
+    }
+    _write_local_marketplace_rate_limit_state(state)
+    logger.warning(
+        "%s circuit breaker: HTTP %s, backing off %s min and stopping this run",
+        platform,
+        status,
+        minutes,
+    )
+
+
+def _clear_local_marketplace_circuit_breaker(platform):
+    state = _read_local_marketplace_rate_limit_state()
+    if platform not in state:
+        return
+    state.pop(platform, None)
+    _write_local_marketplace_rate_limit_state(state)
 
 
 def _load_backoff_state_if_needed():
@@ -442,6 +559,70 @@ def _to_float(value, allow_zero=False):
     if number > 0 or (allow_zero and number == 0):
         return number
     return None
+
+
+def haversine_miles(lat1, lon1, lat2, lon2):
+    """Great-circle miles between two WGS84 points, or None if invalid."""
+    try:
+        values = tuple(float(value) for value in (lat1, lon1, lat2, lon2))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in values):
+        return None
+    lat1, lon1, lat2, lon2 = map(math.radians, values)
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
+    haversine = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
+    )
+    return 3958.8 * 2 * math.asin(min(1.0, math.sqrt(haversine)))
+
+
+# OfferUp exposes a city/state label but not coordinates in GetModularFeed.
+# These city centers cover the Columbia-radius feed observed live; exact item
+# coordinates are intentionally not inferred. Unknown places retain the label
+# without inventing a distance.
+_LOCAL_PLACE_COORDS = {
+    "aiken, sc": (33.5604, -81.7196),
+    "blythewood, sc": (34.2143, -80.9739),
+    "camden, sc": (34.2465, -80.6070),
+    "cayce, sc": (33.9657, -81.0734),
+    "chapin, sc": (34.1654, -81.3498),
+    "columbia, sc": (33.9980, -81.0300),
+    "elgin, sc": (34.1704, -80.7943),
+    "gaston, sc": (33.8177, -81.1009),
+    "irmo, sc": (34.0852, -81.1832),
+    "lexington, sc": (33.9815, -81.2362),
+    "lugoff, sc": (34.2274, -80.6892),
+    "newberry, sc": (34.2746, -81.6187),
+    "orangeburg, sc": (33.4918, -80.8556),
+    "pelion, sc": (33.7632, -81.2457),
+    "sumter, sc": (33.9204, -80.3415),
+    "swansea, sc": (33.7382, -81.1015),
+    "west columbia, sc": (33.9935, -81.0734),
+    "winnsboro, sc": (34.3807, -81.0865),
+}
+
+
+def _offerup_location_miles(location_name):
+    key = re.sub(r"\s+", " ", str(location_name or "")).strip().casefold()
+    coordinates = _LOCAL_PLACE_COORDS.get(key)
+    if coordinates is None:
+        return None
+    return haversine_miles(
+        LOCAL_SEARCH_LAT, LOCAL_SEARCH_LON, coordinates[0], coordinates[1]
+    )
+
+
+def _local_pickup_description(location_name, miles, existing=None):
+    location_name = re.sub(r"\s+", " ", str(location_name or "")).strip()
+    if not location_name:
+        return existing or None
+    distance = f" (~{round(miles):g} mi)" if miles is not None else ""
+    location_line = f"Location: {location_name}{distance}"
+    existing = str(existing or "").strip()
+    return f"{location_line}\n{existing}" if existing else location_line
 
 
 def make_listing(
@@ -1897,15 +2078,18 @@ def adapter_circuit_breaker_allows_calls(platform):
         return vinted_circuit_breaker_allows_calls()
     if platform == "shopgoodwill":
         return shopgoodwill_circuit_breaker_allows_calls()
+    if platform in {"offerup", "craigslist"}:
+        return local_marketplace_circuit_breaker_allows_calls(platform)
     return True
 
 
 # ---------------------------------------------------------------------------
-# OfferUp / Depop - HTML-page adapters via scrapling's Fetcher.
+# OfferUp / Craigslist / Depop - public web adapters via scrapling's Fetcher.
 #
-# OfferUp and Depop have no public JSON search API - their listing data is
-# embedded in the rendered search page: OfferUp in a <script id="__NEXT_DATA__">
-# JSON blob, Depop in Next.js App Router's RSC flight stream (repeated
+# OfferUp now uses the site's own public GraphQL modular feed; the prior
+# <script id="__NEXT_DATA__"> parser is retained as a zero-extra-request
+# fallback only. Craigslist uses its public positional search JSON. Depop's
+# listing data remains embedded in a Next.js App Router RSC flight stream (repeated
 # self.__next_f.push([1,"<escaped string>"]) calls carrying a dehydrated React
 # Query cache). Both are fetched with scrapling's plain-HTTP Fetcher
 # (TLS-fingerprint spoofing, no browser), then parsed here. Same listing
@@ -2059,6 +2243,135 @@ def _fetch_page(
 
 # --- OfferUp ----------------------------------------------------------------
 
+OFFERUP_GRAPHQL_URL = "https://offerup.com/api/graphql"
+OFFERUP_GRAPHQL_QUERY = """query GetModularFeed($searchParams: [SearchParam]) {
+  modularFeed(params: $searchParams) {
+    looseTiles {
+      __typename
+      ... on ModularFeedTileListing {
+        listing {
+          listingId
+          title
+          price
+          locationName
+          flags
+          isFirmPrice
+          conditionText
+          image { url }
+        }
+      }
+    }
+    pageCursor
+  }
+}"""
+OFFERUP_GRAPHQL_HEADERS = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "Origin": "https://offerup.com",
+}
+
+
+def _fetch_offerup_graphql(
+    platform,
+    query,
+    timeout=15,
+    *,
+    deadline=None,
+    on_request_started=None,
+):
+    """Fetch one complete OfferUp modular feed inside the shared deadline."""
+    try:
+        from scrapling.fetchers import Fetcher
+    except ImportError:
+        logger.warning("offerup skipped: scrapling is not installed")
+        return _FETCH_PAGE_NOT_STARTED if deadline is not None else None
+    if not local_marketplace_circuit_breaker_allows_calls("offerup"):
+        return _FETCH_PAGE_NOT_STARTED if deadline is not None else None
+    _pace("offerup")
+    if deadline is not None:
+        bounded_timeout = _batch_request_timeout(deadline)
+        if bounded_timeout is None:
+            return _FETCH_PAGE_NOT_STARTED
+        timeout = min(timeout, bounded_timeout)
+    payload = {
+        "operationName": "GetModularFeed",
+        "variables": {
+            "searchParams": [
+                {"key": "q", "value": query},
+                {"key": "lat", "value": f"{LOCAL_SEARCH_LAT:g}"},
+                {"key": "lon", "value": f"{LOCAL_SEARCH_LON:g}"},
+                {"key": "limit", "value": "50"},
+                {"key": "platform", "value": "web"},
+                # Confirmed live: radius=5 reduced the feed from 49 to 37
+                # Columbia-area rows. `sort=newest` changed order but the
+                # response exposes no timestamp to prove that semantic, so it
+                # is deliberately omitted rather than guessed.
+                {"key": "radius", "value": f"{LOCAL_PICKUP_MAX_MILES:g}"},
+            ]
+        },
+        "query": OFFERUP_GRAPHQL_QUERY,
+    }
+    try:
+        if on_request_started is not None and on_request_started() is False:
+            return _FETCH_PAGE_NOT_STARTED
+        response = Fetcher.post(
+            OFFERUP_GRAPHQL_URL,
+            json=payload,
+            headers=OFFERUP_GRAPHQL_HEADERS,
+            timeout=timeout,
+            proxy=os.environ.get("SHOPGOODWILL_PROXY_URL"),
+        )
+    except Exception as exc:
+        logger.warning("offerup request failed: %s", exc)
+        return None
+    if response.status in (403, 429):
+        if response.status == 429:
+            _register_rate_limit("offerup")
+        _trip_local_marketplace_circuit_breaker("offerup", response.status)
+        return None
+    if response.status != 200:
+        logger.warning("offerup returned HTTP %s", response.status)
+        return None
+    try:
+        body = response.json()
+    except Exception:
+        # Cheap legacy fallback only: if a proxy ever hands back the search
+        # HTML with a 200, parse that body without issuing a second request.
+        body = response.body
+        if isinstance(body, bytes):
+            body = body.decode(response.encoding or "utf-8", errors="replace")
+    _clear_local_marketplace_circuit_breaker("offerup")
+    _register_backoff_success("offerup")
+    return body
+
+
+def _offerup_graphql_listings(payload):
+    """LOCAL_PICKUP listing dicts from GraphQL, with cheap SSR fallback."""
+    if isinstance(payload, str):
+        return [
+            listing
+            for listing in _offerup_listings(payload)
+            if "LOCAL_PICKUP" in (listing.get("flags") or [])
+        ]
+    if not isinstance(payload, dict):
+        logger.warning("offerup: GraphQL response is not an object")
+        return []
+    if payload.get("errors"):
+        logger.warning("offerup: GraphQL returned errors")
+        return []
+    tiles = _dig(payload, "data.modularFeed.looseTiles")
+    if not isinstance(tiles, list):
+        logger.warning("offerup: data.modularFeed.looseTiles missing")
+        return []
+    return [
+        tile["listing"]
+        for tile in tiles
+        if isinstance(tile, dict)
+        and tile.get("__typename") == "ModularFeedTileListing"
+        and isinstance(tile.get("listing"), dict)
+        and "LOCAL_PICKUP" in (tile["listing"].get("flags") or [])
+    ]
+
 def _offerup_listings(html):
     """OfferUp listing dicts from the page's __NEXT_DATA__ blob. [] on failure."""
     m = _OFFERUP_NEXT_DATA_RE.search(html)
@@ -2085,7 +2398,11 @@ def _offerup_listings(html):
 def _offerup_to_listing(listing):
     image = listing.get("image")
     image_url = image.get("url") if isinstance(image, dict) else None
-    description = listing.get("description")
+    location_name = listing.get("locationName")
+    location_miles = _offerup_location_miles(location_name)
+    description = _local_pickup_description(
+        location_name, location_miles, listing.get("description")
+    )
     # allow_zero: a literal $0 card price is real on OfferUp (free-listing/
     # placeholder cards whose real ask is only on the detail page) and must
     # not be conflated with a missing/invalid price.
@@ -2107,8 +2424,14 @@ def _offerup_to_listing(listing):
         listing_price,
         f"https://offerup.com/item/detail/{listing.get('listingId')}",
         image_url=image_url,
+        condition=listing.get("conditionText"),
         description=description,
     )
+    if normalized and location_name:
+        normalized["local_pickup_location"] = str(location_name).strip()
+        normalized["local_pickup_miles"] = (
+            round(location_miles, 1) if location_miles is not None else None
+        )
     if normalized and search_price is not None and search_price <= OFFERUP_PLACEHOLDER_MAX_PRICE:
         normalized["offerup_search_price"] = search_price
         if description_price is not None and description_price > OFFERUP_PLACEHOLDER_MAX_PRICE:
@@ -2153,8 +2476,16 @@ class _HtmlBatchResult(dict):
         self.deadline_truncated = deadline_truncated
 
 
-def _run_html_batch(platform, saved_searches, build_url, extract_objects, normalize_object, deadline=None):
-    """Run a sequential HTML batch behind a hard, snapshotting deadline.
+def _run_html_batch(
+    platform,
+    saved_searches,
+    build_url,
+    extract_objects,
+    normalize_object,
+    deadline=None,
+    fetch_page=None,
+):
+    """Run a sequential web batch behind a hard, snapshotting deadline.
 
     Scrapling normally obeys its request timeout, but the outer marketplace
     caller intentionally uses daemon threads because a socket can still wedge.
@@ -2170,6 +2501,7 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
     """
     if deadline is None:
         deadline = time.monotonic() + MARKETPLACE_BATCH_DEADLINE_SECONDS
+    page_fetcher = fetch_page or _fetch_page
     working = {}
     progress = {
         "started_requests": 0,
@@ -2199,7 +2531,7 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
                     return True
 
                 try:
-                    html = _fetch_page(
+                    html = page_fetcher(
                         platform,
                         build_url(query),
                         deadline=deadline,
@@ -2298,25 +2630,304 @@ def _run_html_batch(platform, saved_searches, build_url, extract_objects, normal
 
 @batch_adapter("offerup")
 def search_offerup(saved_searches, deadline=None):
-    """Real bug caught in review before this ever shipped: this was built
+    """Fetch OfferUp's full public GraphQL feed once per clean query.
+
+    Real bug caught in review before this ever shipped: this was built
     single-search (saved_search -> [listings]), but prefetch_marketplaces()'s
     batch_worker calls every BATCH_ADAPTERS entry with the FULL list of
     matching searches and expects {query: [listings]} back (see
     search_grailed_batch above, the pattern this must match) - confirmed
     live, calling this the way batch_worker actually does raised
     "TypeError: list indices must be integers or slices, not str" every
-    time. Dormant only because no saved search currently lists "offerup" in
-    its own platforms array (MARKETPLACES_ENABLED alone isn't enough to
-    reach it - see batch_worker's `relevant` filter), so nothing had
-    exercised the real call path yet. One HTTP call per query (no combined
-    multi-query API like Grailed's Algolia endpoint exists for OfferUp)."""
+    time. One HTTP call per query (no combined multi-query operation is used)."""
     return _run_html_batch(
         "offerup",
         saved_searches,
-        lambda query: "https://offerup.com/search?" + urlencode({"q": query}),
-        _offerup_listings,
+        lambda query: query,
+        _offerup_graphql_listings,
         _offerup_to_listing,
         deadline=deadline,
+        fetch_page=_fetch_offerup_graphql,
+    )
+
+
+# --- Craigslist -------------------------------------------------------------
+
+CRAIGSLIST_SEARCH_URL = "https://sapi.craigslist.org/web/v8/postings/search/full"
+CRAIGSLIST_HEADERS = {
+    "Accept": "application/json",
+    "Origin": "https://columbia.craigslist.org",
+    "Referer": "https://columbia.craigslist.org/",
+}
+_CRAIGSLIST_MARKET_LABELS = {
+    "asheville": ("Asheville", "NC"),
+    "athensga": ("Athens", "GA"),
+    "atlanta": ("Atlanta", "GA"),
+    "augusta": ("Augusta", "GA"),
+    "charleston": ("Charleston", "SC"),
+    "charlotte": ("Charlotte", "NC"),
+    "columbia": ("Columbia", "SC"),
+    "greensboro": ("Greensboro", "NC"),
+    "greenville": ("Greenville", "SC"),
+    "hickory": ("Hickory", "NC"),
+    "macon": ("Macon", "GA"),
+    "myrtlebeach": ("Myrtle Beach", "SC"),
+    "raleigh": ("Raleigh", "NC"),
+    "wilmington": ("Wilmington", "NC"),
+}
+_CRAIGSLIST_CITY_STATES = {
+    "aiken": "SC",
+    "arden": "NC",
+    "ballantyne": "NC",
+    "berkeley lake": "GA",
+    "blackville": "SC",
+    "browns summit": "NC",
+    "franklin": "NC",
+    "greenville": "SC",
+    "hillsborough": "NC",
+    "lenoir": "NC",
+    "longs": "SC",
+    "matthews": "NC",
+    "monroe": "NC",
+    "montmorenci": "SC",
+    "mooresville": "NC",
+    "north myrtle beach": "SC",
+    "summerville": "SC",
+    "taylors": "SC",
+    "weddington": "NC",
+}
+
+
+def _fetch_craigslist_json(
+    platform,
+    query,
+    timeout=15,
+    *,
+    deadline=None,
+    on_request_started=None,
+):
+    """Fetch Craigslist's public sporting-goods JSON inside the batch budget."""
+    try:
+        from scrapling.fetchers import Fetcher
+    except ImportError:
+        logger.warning("craigslist skipped: scrapling is not installed")
+        return _FETCH_PAGE_NOT_STARTED if deadline is not None else None
+    if not local_marketplace_circuit_breaker_allows_calls("craigslist"):
+        return _FETCH_PAGE_NOT_STARTED if deadline is not None else None
+    _pace("craigslist")
+    if deadline is not None:
+        bounded_timeout = _batch_request_timeout(deadline)
+        if bounded_timeout is None:
+            return _FETCH_PAGE_NOT_STARTED
+        timeout = min(timeout, bounded_timeout)
+    url = CRAIGSLIST_SEARCH_URL + "?" + urlencode(
+        {
+            "batch": "1-0-360-0-0",
+            "cc": "US",
+            "lang": "en",
+            # Live comparison: sga returned golf/sporting-goods rows while
+            # sss admitted unrelated box trucks for the same query.
+            "searchPath": "sga",
+            "query": query,
+            "lat": f"{LOCAL_SEARCH_LAT:g}",
+            "lon": f"{LOCAL_SEARCH_LON:g}",
+            "search_distance": f"{LOCAL_PICKUP_MAX_MILES:g}",
+        }
+    )
+    try:
+        if on_request_started is not None and on_request_started() is False:
+            return _FETCH_PAGE_NOT_STARTED
+        response = Fetcher.get(
+            url,
+            headers=CRAIGSLIST_HEADERS,
+            timeout=timeout,
+            proxy=os.environ.get("SHOPGOODWILL_PROXY_URL"),
+        )
+    except Exception as exc:
+        logger.warning("craigslist request failed: %s", exc)
+        return None
+    if response.status in (403, 429):
+        if response.status == 429:
+            _register_rate_limit("craigslist")
+        _trip_local_marketplace_circuit_breaker("craigslist", response.status)
+        return None
+    if response.status != 200:
+        logger.warning("craigslist returned HTTP %s", response.status)
+        return None
+    try:
+        body = response.json()
+    except Exception:
+        logger.warning("craigslist returned HTTP 200 with a non-JSON body")
+        return None
+    _clear_local_marketplace_circuit_breaker("craigslist")
+    _register_backoff_success("craigslist")
+    return body
+
+
+def _indexed_decode(values, index):
+    if not isinstance(values, list) or not isinstance(index, int):
+        return None
+    if index <= 0 or index >= len(values):
+        return None
+    return values[index]
+
+
+def _craigslist_location_label(description, market_domain):
+    description = re.sub(r"\s+", " ", str(description or "")).strip()
+    explicit_state = re.search(r"(?:,|\s)\s*([A-Z]{2})\s*$", description)
+    if explicit_state:
+        city = re.sub(r"(?:,|\s)\s*[A-Z]{2}\s*$", "", description).strip()
+        return f"{city}, {explicit_state.group(1)}"
+    normalized_city = re.sub(r"[^a-z ]", "", description.casefold()).strip()
+    normalized_city = re.sub(r"\s+", " ", normalized_city)
+    state = _CRAIGSLIST_CITY_STATES.get(normalized_city)
+    market_city, market_state = _CRAIGSLIST_MARKET_LABELS.get(
+        market_domain, (market_domain.replace("-", " ").title(), "SC")
+    )
+    if description:
+        return f"{description}, {state or market_state}"
+    return f"{market_city}, {market_state}"
+
+
+def _craigslist_listings(payload):
+    """Decode Craigslist v8 positional rows and enforce a real mile radius."""
+    data = _dget(payload, "data")
+    if not isinstance(data, dict):
+        logger.warning("craigslist: data object missing")
+        return []
+    decode = _dget(data, "decode")
+    if not isinstance(decode, dict):
+        logger.warning("craigslist: decode object missing")
+        return []
+    min_posting_id = decode.get("minPostingId")
+    min_posted_date = decode.get("minPostedDate")
+    locations = decode.get("locations")
+    location_descriptions = decode.get("locationDescriptions")
+    if not isinstance(min_posting_id, int) or not isinstance(locations, list):
+        logger.warning("craigslist: required positional decode metadata missing")
+        return []
+    decoded = []
+    for row in data.get("items") or []:
+        if not isinstance(row, list) or len(row) < 7:
+            continue
+        try:
+            posting_id = min_posting_id + int(row[0])
+        except (TypeError, ValueError):
+            continue
+        price = _to_float(row[3])
+        if price is None:
+            continue
+        location_token = next(
+            (
+                value
+                for value in row
+                if isinstance(value, str)
+                and re.fullmatch(r"\d+:\d+~-?\d+(?:\.\d+)?~-?\d+(?:\.\d+)?", value)
+            ),
+            None,
+        )
+        if location_token is None:
+            continue
+        indices, lat_raw, lon_raw = location_token.split("~")
+        area_index, description_index = (int(value) for value in indices.split(":"))
+        miles = haversine_miles(
+            LOCAL_SEARCH_LAT, LOCAL_SEARCH_LON, lat_raw, lon_raw
+        )
+        if miles is None or miles > LOCAL_PICKUP_MAX_MILES:
+            continue
+        location_decode = _indexed_decode(locations, area_index)
+        if not isinstance(location_decode, list) or len(location_decode) < 2:
+            continue
+        market_domain = str(location_decode[1])
+        location_description = _indexed_decode(
+            location_descriptions, description_index
+        )
+        slug = None
+        images = []
+        for field in row:
+            if not isinstance(field, list) or not field:
+                continue
+            if field[0] == 4:
+                images = [str(value) for value in field[1:] if value]
+            elif field[0] == 6 and len(field) > 1:
+                slug = str(field[1])
+        title = str(row[-1]).strip() if isinstance(row[-1], str) else ""
+        if not title or not slug:
+            continue
+        image_urls = [
+            "https://images.craigslist.org/"
+            + image_key.removeprefix("3:")
+            + "_600x450.jpg"
+            for image_key in images
+        ]
+        location_name = _craigslist_location_label(
+            location_description, market_domain
+        )
+        item_creation_date = None
+        if isinstance(min_posted_date, int) and isinstance(row[1], int):
+            try:
+                item_creation_date = datetime.fromtimestamp(
+                    min_posted_date + row[1], tz=timezone.utc
+                ).isoformat().replace("+00:00", "Z")
+            except (OSError, OverflowError, ValueError):
+                pass
+        decoded.append(
+            {
+                "posting_id": posting_id,
+                "title": title,
+                "price": price,
+                "url": (
+                    f"https://{market_domain}.craigslist.org/spo/d/"
+                    f"{slug}/{posting_id}.html"
+                ),
+                "image_urls": image_urls,
+                "location_name": location_name,
+                "miles": miles,
+                "item_creation_date": item_creation_date,
+            }
+        )
+    # Reposts in adjacent Craigslist areas can share the exact title/price.
+    # Keep the closest row; its URL remains a real posting URL.
+    deduped = {}
+    for item in decoded:
+        key = (re.sub(r"\s+", " ", item["title"]).casefold(), item["price"])
+        previous = deduped.get(key)
+        if previous is None or item["miles"] < previous["miles"]:
+            deduped[key] = item
+    return list(deduped.values())
+
+
+def _craigslist_to_listing(item):
+    images = item.get("image_urls") or []
+    listing = make_listing(
+        "craigslist",
+        item.get("posting_id"),
+        item.get("title"),
+        item.get("price"),
+        item.get("url"),
+        image_url=images[0] if images else None,
+        extra_images=images[1:],
+        description=_local_pickup_description(
+            item.get("location_name"), item.get("miles")
+        ),
+        item_creation_date=item.get("item_creation_date"),
+    )
+    if listing:
+        listing["local_pickup_location"] = item.get("location_name")
+        listing["local_pickup_miles"] = round(item["miles"], 1)
+    return listing
+
+
+@batch_adapter("craigslist")
+def search_craigslist(saved_searches, deadline=None):
+    return _run_html_batch(
+        "craigslist",
+        saved_searches,
+        lambda query: query,
+        _craigslist_listings,
+        _craigslist_to_listing,
+        deadline=deadline,
+        fetch_page=_fetch_craigslist_json,
     )
 
 

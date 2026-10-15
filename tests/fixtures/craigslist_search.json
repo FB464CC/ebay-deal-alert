@@ -1,0 +1,34 @@
+{
+  "data": {
+    "categoryAbbr": "sga",
+    "canonicalUrl": "//www.craigslist.org/search/city/columbia-sc?cat=sga&lat=33.998&lon=-81.03&query=golf%20irons&radius=60",
+    "location": {
+      "areaId": 101,
+      "city": "Columbia",
+      "country": "US",
+      "lat": 33.998,
+      "lon": -81.03,
+      "region": "SC",
+      "url": "columbia.craigslist.org"
+    },
+    "decode": {
+      "locationDescriptions": [0, "Aiken", "AIKEN", 0, 0, 0, 0, 0, "Greenville"],
+      "locations": [
+        0,
+        [256, "augusta"],
+        [101, "columbia"],
+        [41, "charlotte"],
+        [128, "charleston"],
+        [253, "greenville"]
+      ],
+      "minPostingId": 7940913174,
+      "minPostedDate": 1788194720,
+      "version": 2
+    },
+    "items": [
+      [15702416, 2845053, 93, 125, "1:1~33.4951~-81.7505", "07K0ak", [13, "dpNHjhrgCGyFrB3CyhuRS9"], [4, "3:00Z0Z_lrgnk9NpSzW_07K0ak", "3:01616_Btm6uZ1Ryq_07K0ak"], [6, "aiken-ping-eye-golf-club-irons"], [10, "$125"], "Ping Eye 2 Golf Club Irons"],
+      [24890292, 3618878, 93, 200, "2:2~33.5059~-81.6951", "05O07K", [13, "6zofjKoBxMkoAJtmbS8ves"], [4, "3:00303_boGodo4efMA_05O07K"], [6, "montmorenci-ram-golf-clubs-ben-hogan"], [10, "$200"], "RAM GOLF CLUBS, BEN HOGAN BAG, ETC"],
+      [38634189, 3198216, 93, 180, "5:8~34.8873~-82.3011", "0t20CI", [13, "vdY6WhYiL6dh5KL2utE5nG"], [4, "3:00H0H_byEmoJ2GAkr_0t20CI"], [6, "greenville-complete-taylor-made-golf"], [10, "$180"], "Complete Taylor Made golf club set"]
+    ]
+  }
+}

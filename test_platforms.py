@@ -30,6 +30,9 @@ import requests
 import platforms as p
 
 
+_FIXTURES = pathlib.Path(__file__).resolve().parent / "tests" / "fixtures"
+
+
 class _FakeResp:
     """Minimal stand-in for requests.Response - just what the code reads."""
 
@@ -1263,11 +1266,19 @@ _OFFERUP_HTML = (
     '{"__typename":"ModularFeedTileListing","listing":{'
     '"listingId":"97415bd5-6ba9-3c3c-b357-b06f9301dd75",'
     '"title":"Rolex Watches ","price":"2000",'
+    '"flags":["LOCAL_PICKUP"],'
     '"image":{"__typename":"ModularFeedImage",'
     '"url":"https://images.offerup.com/abc.jpg","width":250,"height":250},'
     '"locationName":"Columbia, SC","conditionText":null}}'
     ']}}}}'
     '</script></body></html>'
+)
+
+_OFFERUP_GRAPHQL = json.loads(
+    (_FIXTURES / "offerup_graphql.json").read_text(encoding="utf-8")
+)
+_CRAIGSLIST_JSON = json.loads(
+    (_FIXTURES / "craigslist_search.json").read_text(encoding="utf-8")
 )
 
 
@@ -1328,18 +1339,36 @@ class OfferUpAdapter(unittest.TestCase):
     # test below exercises the REAL list-in/dict-out contract, not the
     # function in isolation with an untested calling convention.
     def test_extracts_real_listing_from_fixture(self):
-        with mock.patch.object(p, "_fetch_page", return_value=_OFFERUP_HTML):
+        with mock.patch.object(
+            p, "_fetch_offerup_graphql", return_value=_OFFERUP_GRAPHQL
+        ):
             result = p.search_offerup([{"query": "rolex watch"}])
 
         self.assertIn("rolex watch", result)
         listings = result["rolex watch"]
         self.assertEqual(len(listings), 1)
         l = listings[0]
-        self.assertEqual(l["itemId"], "offerup:97415bd5-6ba9-3c3c-b357-b06f9301dd75")
-        self.assertEqual(l["title"], "Rolex Watches")
-        self.assertEqual(l["price"], {"value": 2000.0, "currency": "USD"})
-        self.assertEqual(l["itemWebUrl"], "https://offerup.com/item/detail/97415bd5-6ba9-3c3c-b357-b06f9301dd75")
-        self.assertEqual(l["image"]["imageUrl"], "https://images.offerup.com/abc.jpg")
+        self.assertEqual(l["itemId"], "offerup:16b20d3b-9138-357e-a11e-132bec10890e")
+        self.assertEqual(l["title"], "Golf Clubs | PING iron Set + Brand New Driver")
+        self.assertEqual(l["price"], {"value": 175.0, "currency": "USD"})
+        self.assertEqual(l["itemWebUrl"], "https://offerup.com/item/detail/16b20d3b-9138-357e-a11e-132bec10890e")
+        self.assertEqual(l["image"]["imageUrl"], "https://images.offerup.com/ping-set.jpg")
+        self.assertEqual(l["description"], "Location: Columbia, SC (~0 mi)")
+
+    def test_graphql_keeps_local_pickup_only(self):
+        rows = p._offerup_graphql_listings(_OFFERUP_GRAPHQL)
+
+        self.assertEqual([row["listingId"] for row in rows], [
+            "16b20d3b-9138-357e-a11e-132bec10890e"
+        ])
+
+    def test_ssr_parser_remains_zero_request_fallback(self):
+        rows = p._offerup_graphql_listings(_OFFERUP_HTML)
+
+        self.assertEqual(
+            [row["listingId"] for row in rows],
+            ["97415bd5-6ba9-3c3c-b357-b06f9301dd75"],
+        )
 
     def test_real_reported_placeholder_price_prefers_450_description_ask(self):
         listing = p._offerup_to_listing({
@@ -1439,25 +1468,25 @@ class OfferUpAdapter(unittest.TestCase):
 
         self.assertEqual(description, "Seller says asking $450 & firm")
 
-    def test_missing_next_data_returns_empty_dict(self):
-        with mock.patch.object(p, "_fetch_page", return_value="<html><body>no data</body></html>"):
+    def test_missing_graphql_feed_returns_empty_dict(self):
+        with mock.patch.object(p, "_fetch_offerup_graphql", return_value={"data": {}}):
             with self.assertLogs("platforms", level="WARNING") as cm:
                 result = p.search_offerup([{"query": "rolex watch"}])
 
         self.assertEqual(result, {})
-        self.assertIn("__NEXT_DATA__", " ".join(cm.output))
+        self.assertIn("data.modularFeed.looseTiles", " ".join(cm.output))
 
-    def test_query_exclusions_stripped_before_building_url(self):
-        with mock.patch.object(p, "_fetch_page", return_value="<html></html>") as fetch:
+    def test_query_exclusions_stripped_before_graphql_post(self):
+        with mock.patch.object(p, "_fetch_offerup_graphql", return_value={"data": {}}) as fetch:
             p.search_offerup([{"query": "rolex watch -canteen -mug"}])
-        self.assertEqual(fetch.call_args[0][1], "https://offerup.com/search?q=rolex+watch")
+        self.assertEqual(fetch.call_args[0][1], "rolex watch")
 
     def test_multiple_searches_each_get_their_own_key(self):
         # The real bug class this bare-list contract exists to prevent:
         # every enabled search sharing this platform must get its OWN
         # results under its OWN (raw, unstripped) query key, not silently
         # merged or only the last one surviving.
-        with mock.patch.object(p, "_fetch_page", return_value=_OFFERUP_HTML):
+        with mock.patch.object(p, "_fetch_offerup_graphql", return_value=_OFFERUP_GRAPHQL):
             result = p.search_offerup([{"query": "rolex watch"}, {"query": "omega watch -parts"}])
         self.assertEqual(set(result.keys()), {"rolex watch", "omega watch -parts"})
 
@@ -1472,14 +1501,14 @@ class OfferUpAdapter(unittest.TestCase):
                 on_request_started()
             if not late_request_started.is_set() and fetch_page.calls == 0:
                 fetch_page.calls += 1
-                return _OFFERUP_HTML
+                return _OFFERUP_GRAPHQL
             late_request_started.set()
             release_late_request.wait(1)
-            return _OFFERUP_HTML
+            return _OFFERUP_GRAPHQL
 
         fetch_page.calls = 0
         with mock.patch.object(p, "MARKETPLACE_BATCH_DEADLINE_SECONDS", 0.05), \
-                mock.patch.object(p, "_fetch_page", side_effect=fetch_page) as fetch:
+                mock.patch.object(p, "_fetch_offerup_graphql", side_effect=fetch_page) as fetch:
             result = p.search_offerup(searches)
         self.assertTrue(late_request_started.is_set())
         self.assertEqual(fetch.call_count, 2)
@@ -1507,20 +1536,65 @@ class OfferUpAdapter(unittest.TestCase):
         # The outer snapshot returns at its deadline while the daemon is still
         # pacing.  Give it time to wake and prove it refuses the late dispatch.
         time.sleep(0.08)
-        fake_fetcher.get.assert_not_called()
+        fake_fetcher.post.assert_not_called()
         self.assertEqual(result.started_requests, 0)
         self.assertEqual(result.completed_requests, 0)
         self.assertEqual(result.scheduled_requests, 1)
         self.assertTrue(result.deadline_truncated)
 
 
+class CraigslistAdapter(unittest.TestCase):
+    def test_decodes_real_positional_fixture_and_drops_beyond_radius(self):
+        decoded = p._craigslist_listings(_CRAIGSLIST_JSON)
+
+        self.assertEqual(len(decoded), 2)
+        ping = decoded[0]
+        self.assertEqual(ping["posting_id"], 7956615590)
+        self.assertEqual(ping["price"], 125)
+        self.assertEqual(ping["location_name"], "Aiken, SC")
+        self.assertAlmostEqual(ping["miles"], 54.0, delta=0.1)
+        self.assertEqual(
+            ping["url"],
+            "https://augusta.craigslist.org/spo/d/"
+            "aiken-ping-eye-golf-club-irons/7956615590.html",
+        )
+        self.assertEqual(
+            ping["image_urls"][0],
+            "https://images.craigslist.org/"
+            "00Z0Z_lrgnk9NpSzW_07K0ak_600x450.jpg",
+        )
+        self.assertNotIn(
+            "Complete Taylor Made golf club set",
+            {item["title"] for item in decoded},
+        )
+
+    def test_search_normalizes_pickup_shipping_and_location(self):
+        with mock.patch.object(
+            p, "_fetch_craigslist_json", return_value=_CRAIGSLIST_JSON
+        ):
+            result = p.search_craigslist([{"query": "golf irons"}])
+
+        listing = result["golf irons"][0]
+        self.assertEqual(listing["platform"], "craigslist")
+        self.assertEqual(listing["price"]["value"], 125.0)
+        self.assertNotIn("shippingOptions", listing)
+        self.assertEqual(listing["local_pickup_miles"], 54.0)
+        self.assertEqual(listing["description"], "Location: Aiken, SC (~54 mi)")
+
+
 class HtmlBatchHealthContext(unittest.TestCase):
     def test_parser_warnings_carry_platform_across_inner_thread(self):
         cases = (
-            ("offerup", p.search_offerup, "<html></html>", "__NEXT_DATA__"),
-            ("depop", p.search_depop, "<html></html>", "no flight rows"),
+            (
+                "offerup", p.search_offerup, "_fetch_offerup_graphql",
+                {"data": {}}, "data.modularFeed.looseTiles",
+            ),
+            (
+                "depop", p.search_depop, "_fetch_page",
+                "<html></html>", "no flight rows",
+            ),
         )
-        for platform, search, html, expected_warning in cases:
+        for platform, search, fetch_name, response, expected_warning in cases:
             with self.subTest(platform=platform):
                 records = []
 
@@ -1531,7 +1605,7 @@ class HtmlBatchHealthContext(unittest.TestCase):
                 handler = Capture(level=logging.WARNING)
                 p.logger.addHandler(handler)
                 try:
-                    with mock.patch.object(p, "_fetch_page", return_value=html):
+                    with mock.patch.object(p, fetch_name, return_value=response):
                         self.assertEqual(search([{"query": "rolex watch"}]), {})
                 finally:
                     p.logger.removeHandler(handler)

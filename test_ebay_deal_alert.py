@@ -212,6 +212,10 @@ class RuntimeSearchFocus(unittest.TestCase):
         "golf-cobra-f8-irons",
         "golf-and-bag",
         "golf-full",
+        "golf-local-golf-clubs",
+        "golf-local-golf-irons",
+        "golf-local-golf-club-set",
+        "golf-local-iron-set",
     ]
 
     @staticmethod
@@ -223,9 +227,9 @@ class RuntimeSearchFocus(unittest.TestCase):
             if search.get("enabled", True)
         ]
 
-    def test_shipped_focus_selects_33_real_enabled_searches(self):
+    def test_shipped_focus_selects_37_real_enabled_searches(self):
         config, enabled = self._shipped_enabled_searches()
-        self.assertEqual(len(enabled), 113)
+        self.assertEqual(len(enabled), 117)
         self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
         enabled_by_id = {search["id"]: search for search in enabled}
         self.assertEqual(
@@ -234,10 +238,10 @@ class RuntimeSearchFocus(unittest.TestCase):
         )
         with mock.patch.object(m, "FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"]):
             focused = m._focus_filter(enabled)
-        self.assertEqual(len(focused), 33)
+        self.assertEqual(len(focused), 37)
         self.assertEqual({search["id"] for search in focused}, set(self.EXPECTED_IDS))
 
-    def test_empty_focus_restores_all_113_enabled_searches(self):
+    def test_empty_focus_restores_all_117_enabled_searches(self):
         _config, enabled = self._shipped_enabled_searches()
         with mock.patch.object(m, "FOCUS_SEARCH_IDS", []):
             self.assertEqual(m._focus_filter(enabled), enabled)
@@ -322,6 +326,48 @@ class EbayRotationCapacity(unittest.TestCase):
                 for index, run in enumerate(appearances)
             ]
             self.assertLessEqual(max(cyclic_gaps), 2)
+
+    def test_four_local_searches_never_enter_ebay_and_legacy_cadence_is_unchanged(self):
+        config = m.load_config()
+        enabled = [
+            search for search in config["SAVED_SEARCHES"]
+            if search.get("enabled", True)
+        ]
+        with mock.patch.object(m, "FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"]):
+            focused = m._focus_filter(enabled)
+        eligible = m._ebay_eligible_searches(focused)
+        local_ids = {
+            search["id"] for search in focused if search.get("ebay") is False
+        }
+
+        self.assertEqual(local_ids, {
+            "golf-local-golf-clubs",
+            "golf-local-golf-irons",
+            "golf-local-golf-club-set",
+            "golf-local-iron-set",
+        })
+        self.assertEqual(
+            {search["id"] for search in eligible},
+            set(RuntimeSearchFocus.EXPECTED_IDS[:33]),
+        )
+        cycle = [
+            m._rotating_ebay_batch(eligible, 14, run_number)
+            for run_number in range(33)
+        ]
+        for search in eligible:
+            appearances = [
+                run_number
+                for run_number, batch in enumerate(cycle)
+                if search["query"] in batch
+            ]
+            self.assertEqual(len(appearances), 14)
+            cyclic_gaps = [
+                (
+                    appearances[(index + 1) % len(appearances)] - run_number
+                ) % len(cycle)
+                for index, run_number in enumerate(appearances)
+            ]
+            self.assertLessEqual(max(cyclic_gaps), 3)
 
 
 class FunnelAuditConfiguration(unittest.TestCase):
@@ -464,6 +510,21 @@ class FunnelAuditConfiguration(unittest.TestCase):
 
 
 class ConfigPreflight(unittest.TestCase):
+    def test_ebay_opt_out_must_be_boolean(self):
+        safe, warnings = m.validate_config({"SAVED_SEARCHES": [{
+            "id": "local-bad-ebay",
+            "query": "iron set",
+            "category": "golf-equipment",
+            "profile": "fast",
+            "max_price": 400,
+            "platforms": ["craigslist"],
+            "ebay": "false",
+            "enabled": True,
+        }]})
+
+        self.assertFalse(safe[0]["enabled"])
+        self.assertIn("ebay must be true/false", "\n".join(warnings))
+
     def test_bad_rows_are_disabled_and_recoverable_errors_are_reported(self):
         searches = [
             {
@@ -2845,8 +2906,8 @@ class GolfRampConfiguration(unittest.TestCase):
             search for search in m.SAVED_SEARCHES
             if search.get("category") == "golf-equipment"
         ]
-        # 46 existing searches plus 16 premium-model hunts.
-        self.assertEqual(len(searches), 62)
+        # 46 existing searches plus 16 premium-model hunts and 4 local lanes.
+        self.assertEqual(len(searches), 66)
         bag_search_ids = {
             "golf-stand-bag",
             "golf-sun-mountain-or-ogio-stand-bag",
@@ -6708,6 +6769,14 @@ class SendAlertFacebookLocationLine(unittest.TestCase):
         message = self._send_and_capture(self._fb_result("Location: Austin, TX"))
         self.assertIn("Austin, TX", message)
 
+    def test_location_pin_shown_for_offerup_and_craigslist(self):
+        for platform in ("offerup", "craigslist"):
+            with self.subTest(platform=platform):
+                result = self._fb_result("Location: Columbia, SC (~4 mi)")
+                result["listing"]["platform"] = platform
+                message = self._send_and_capture(result)
+                self.assertIn("\U0001f4cd Columbia, SC (~4 mi)", message)
+
     def test_no_location_line_when_description_empty(self):
         message = self._send_and_capture(self._fb_result(""))
         self.assertNotIn("\U0001f4cd", message)
@@ -9189,12 +9258,18 @@ class RunIntegration(unittest.TestCase):
 
         m.run()
 
-        self.assertEqual(set(official_calls), set(config["FOCUS_SEARCH_IDS"]))
+        ebay_focus_ids = {
+            search["id"] for search in config["SAVED_SEARCHES"]
+            if search.get("id") in config["FOCUS_SEARCH_IDS"]
+            and search.get("ebay", True)
+        }
+        self.assertEqual(set(official_calls), ebay_focus_ids)
         self.assertIn(focus_search["id"], official_calls)
         self.assertNotIn(non_focus_search["id"], official_calls)
         focused_queries = {
             search["query"] for search in config["SAVED_SEARCHES"]
             if search.get("id") in config["FOCUS_SEARCH_IDS"]
+            and search.get("ebay", True)
         }
         self.assertEqual(set(scrape_calls), focused_queries)
         self.assertNotIn(non_focus_search["query"], scrape_calls)
@@ -12275,6 +12350,46 @@ class RunIntegration(unittest.TestCase):
             "enabled": True,
             "profile": "fast",
         }
+
+    def test_craigslist_apex_pickup_flows_through_catalog_steal_path(self):
+        self._patch("_configured_gemini_api_keys", lambda: [])
+        self.ai_result = self._catalog_golf_ai("Callaway", "Apex", 2014, resale=300)
+        search = {
+            "id": "golf-local-iron-set",
+            "query": "iron set -junior -ladies -lefty",
+            "category": "golf-equipment",
+            "category_id": "115280",
+            "max_price": 400,
+            "enabled": True,
+            "profile": "fast",
+            "platforms": ["offerup", "craigslist"],
+            "ebay": False,
+        }
+        listing = p.make_listing(
+            "craigslist",
+            "7957000000",
+            "Callaway Apex iron set 5-PW",
+            120,
+            "https://columbia.craigslist.org/spo/d/apex-set/7957000000.html",
+            image_url="https://images.craigslist.org/apex_600x450.jpg",
+            description="Location: Columbia, SC (~3 mi)",
+        )
+        self._patch("SAVED_SEARCHES", [search])
+        self._patch("FOCUS_SEARCH_IDS", [search["id"]])
+        self._patch("EBAY_SCRAPE_ENABLED", False)
+        ebay_search = self._patch("search_ebay", mock.Mock())
+        self._patch(
+            "prefetch_marketplaces",
+            lambda _now, _conn, **_kwargs: {search["query"]: [listing]},
+        )
+
+        m.run()
+
+        ebay_search.assert_not_called()
+        self.assertEqual(len(self.alerts), 1)
+        self.assertEqual(self.alerts[0]["listing"]["platform"], "craigslist")
+        self.assertEqual(self.alerts[0]["golf_delivery_path"], "catalog-steal")
+        self.assertTrue(self.alerts[0]["shipping_cost_known"])
 
     def test_catalog_p790_at_330_landed_delivers_and_420_does_not(self):
         self._patch("_configured_gemini_api_keys", lambda: [])

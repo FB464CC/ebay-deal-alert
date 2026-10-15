@@ -1,6 +1,9 @@
 {
   "OWNER_TIMEZONE": "America/New_York",
   "GOLF_ALLOW_IRON_SETS": true,
+  "LOCAL_SEARCH_LAT": 33.998,
+  "LOCAL_SEARCH_LON": -81.03,
+  "LOCAL_PICKUP_MAX_MILES": 90,
   "FOCUS_SEARCH_IDS": [
     "golf-golf-club-set",
     "golf-complete-iron",
@@ -34,7 +37,11 @@
     "golf-ping-g400-irons",
     "golf-cobra-f8-irons",
     "golf-and-bag",
-    "golf-full"
+    "golf-full",
+    "golf-local-golf-clubs",
+    "golf-local-golf-irons",
+    "golf-local-golf-club-set",
+    "golf-local-iron-set"
   ],
   "QUIET_HOURS_START": "23:00",
   "QUIET_HOURS_END": "07:00",
@@ -1142,6 +1149,66 @@
       "profile": "slow",
       "id": "other-hilditch-key-shirt",
       "category": "other"
+    },
+    {
+      "query": "golf clubs -youth -junior -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "offerup",
+        "craigslist"
+      ],
+      "ebay": false,
+      "category_id": "115280",
+      "id": "golf-local-golf-clubs",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "golf irons -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf -curling -beachwaver -crimper -waver -\"flat iron\" -\"hair iron\" -\"curling iron\"",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "offerup",
+        "craigslist"
+      ],
+      "ebay": false,
+      "category_id": "115280",
+      "id": "golf-local-golf-irons",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "golf club set -youth -junior -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "offerup",
+        "craigslist"
+      ],
+      "ebay": false,
+      "category_id": "115280",
+      "id": "golf-local-golf-club-set",
+      "category": "golf-equipment"
+    },
+    {
+      "query": "iron set -junior -youth -kids -ladies -womens -\"left hand\" -lefty -\"left handed\" -scarf -curling -beachwaver -crimper -waver -\"flat iron\" -\"hair iron\" -\"curling iron\"",
+      "size": null,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "offerup",
+        "craigslist"
+      ],
+      "ebay": false,
+      "category_id": "115280",
+      "id": "golf-local-iron-set",
+      "category": "golf-equipment"
     },
     {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -3422,6 +3489,7 @@
     "shopgoodwill",
     "vinted",
     "offerup",
+    "craigslist",
     "depop"
   ],
   "EBAY_SCRAPE_ENABLED": true,

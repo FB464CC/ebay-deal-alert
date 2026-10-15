@@ -1,0 +1,36 @@
+{
+  "data": {
+    "modularFeed": {
+      "looseTiles": [
+        {
+          "__typename": "ModularFeedTileListing",
+          "listing": {
+            "listingId": "16b20d3b-9138-357e-a11e-132bec10890e",
+            "title": "Golf Clubs | PING iron Set + Brand New Driver",
+            "price": "175",
+            "locationName": "Columbia, SC",
+            "flags": ["LOCAL_PICKUP"],
+            "isFirmPrice": null,
+            "conditionText": null,
+            "image": {"url": "https://images.offerup.com/ping-set.jpg"}
+          }
+        },
+        {
+          "__typename": "ModularFeedTileListing",
+          "listing": {
+            "listingId": "shipped-only-fixture",
+            "title": "Shipped Golf Iron Set",
+            "price": "99",
+            "locationName": "Columbia, SC",
+            "flags": ["SHIPPING_ENABLED"],
+            "isFirmPrice": false,
+            "conditionText": "Used",
+            "image": {"url": "https://images.offerup.com/shipped.jpg"}
+          }
+        },
+        {"__typename": "ModularFeedTileGoogleDisplayAd"}
+      ],
+      "pageCursor": "trimmed-live-fixture"
+    }
+  }
+}

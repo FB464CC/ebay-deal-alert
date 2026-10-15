@@ -1,0 +1,80 @@
+LOCAL GOLF LANES WORK LOG / FINAL REPORT
+Date: 2026-10-15
+
+PROGRESS
+- Read STEAL_ENGINE.txt first, then the requested platforms.py paths: make_listing, shared pacing/backoff, ShopGoodwill proxy and persistent breaker behavior, _fetch_page, _run_html_batch, search_offerup, and the SSR __NEXT_DATA__ parser.
+- Read the requested ebay_deal_alert.py paths: search validation, FOCUS_SEARCH_IDS/_focus_filter, is_shipping_cost_known, Facebook location alert rendering, marketplace prefetch/batch_worker, and the fast/slow eBay rotation.
+- Design checkpoint: implement OfferUp and Craigslist as deadline-aware batch adapters, preserve OfferUp SSR parsing only as a cheap fallback, mark pickup shipping as known through the existing normalized non-eBay contract, generalize the existing location alert branch, and exclude only per-search `ebay: false` rows from eBay rotation.
+- Untouched baseline validation: 883 passed, 3 warnings, 805 subtests passed in 55.00s.
+- Initial worktree had unrelated untracked files .golf_history_2026_10_04.jsonl, golf_models_starter.json, and task.txt; they will not be modified.
+- Live OfferUp probes (five requests total): the supplied GraphQL call returned 49 tiles; adding radius=5 returned 37 Columbia-area tiles, confirming `radius`; radius=90 plus sort=newest changed order but exposed no timestamp proving newest semantics, so no sort parameter was added; introspection was disabled and a location-coordinate field probe returned 400, so distance display uses known Columbia-area city centers without extra per-listing calls.
+- Live Craigslist comparison: searchPath=sga returned 60 sporting-goods rows; searchPath=sss returned unrelated box trucks for the same golf query, so the adapter uses sga. A live far-row probe confirmed Craigslist ignored the requested 60-mile radius (Greenville row at ~95.0 miles), so code enforces haversine distance itself.
+- Implemented the OfferUp GraphQL batch lane with LOCAL_PICKUP-only filtering, configured radius/coordinates, shared proxy/pacing/deadline metadata, adaptive 429 handling, and a persistent 403/429 circuit breaker. The SSR parser remains only as a zero-extra-request fallback.
+- Implemented the Craigslist positional JSON decoder, real posting/image URLs, price/date/location normalization, title+price repost dedupe, and hard haversine cutoff. Added trimmed real OfferUp and Craigslist fixtures.
+- Added four focused local-only golf searches and `ebay: false`; eBay validation now requires that switch to be boolean, and rotation filters it before both Browse and scrape membership. The 33 legacy eligible searches remain the complete eBay rotation.
+- Generalized the existing location-pin alert renderer to Facebook, OfferUp, and Craigslist. Pickup rows carry zero shipping through the existing known non-eBay landed-price contract.
+- Targeted adapter/config/rotation/integration checks pass, including a Craigslist Callaway Apex 5-PW pickup flowing through the real catalog-steal delivery path without any eBay call.
+
+LIVE SMOKE OUTPUT (one adapter call / one query each)
+- OfferUp `golf clubs`: HTTP 200, 49 normalized LOCAL_PICKUP rows, coverage 1/1 requests complete.
+  1. Golden Bear Golf Clubs | $100 | 11.9 mi
+  2. Golf clubs | $120 | 0.0 mi
+  3. QI4D 2 Hybrid | $275 | 2.5 mi
+  4. Golf Clubs ($10 per club) | $10 | 0.0 mi
+  5. Golf Club Bags | $35 | 0.0 mi
+  6. Misc golf clubs and bag | $75 | 0.0 mi
+  7. Top Flite Golf Bag & Clubs | $50 | 21.6 mi
+  8. Perfect beginner golf clubs. P wedge - 5iron | $200 | 25.1 mi
+  9. Golf Club | $25 | 0.0 mi
+  10. Golf Clubs- $15 per or $40 all three | $40 | 0.0 mi
+- Craigslist `golf irons`: HTTP 200, 10 normalized rows after the 90-mile cutoff, coverage 1/1 requests complete.
+  1. Ping Eye 2 Golf Club Irons | $125 | 54.0 mi
+  2. JUNIOR GOLF CLUBS | $115 | 74.0 mi
+  3. Nike Vapor Pro Combo golf clubs set--Titleist woods/wedges! | $1200 | 85.9 mi
+  4. RAM GOLF CLUBS, BEN HOGAN BAG, ETC | $200 | 51.1 mi
+  5. Golf Clubs | $75 | 75.8 mi
+  6. COMPLETE GOLF SET | $550 | 82.2 mi
+  7. Vintage Palm Springs Golf Club Irons 3-9, PW | $120 | 71.9 mi
+  8. Women's Golf Clubs with Bag | $100 | 15.0 mi
+  9. Mixed used golf clubs bundle | $150 | 45.9 mi
+  10. Mixed Iron Golf Clubs Bundle | $150 | 45.9 mi
+- The smoke output is adapter-normalized supply, before the existing query negatives, $400 search cap, title gates, Jev, catalog/photo checks, and strong second look; those downstream filters remain authoritative.
+
+EBAY QUOTA PROOF
+- FOCUS_SEARCH_IDS now has 37 rows: the original 33 plus four local-only rows.
+- All four new rows have validated boolean `ebay: false`. `_ebay_eligible_searches()` removes them before both fast/slow Browse rotation and the scrape lane's `ebay_this_run` membership.
+- The exact legacy eligible id set remains 33. The regression test runs a full 33-slot cycle at EBAY_FAST_SEARCHES_PER_RUN=14: every legacy query appears exactly 14 times, with a maximum cyclic gap of 3 runs (10-15 minutes). The four local ids appear zero times.
+- Quota capacity is unchanged at 14 fast Browse searches/run; the local lanes make 8 public marketplace requests/run (4 queries x 2 sites), in two parallel sequential batches. One-query live timings were ~2.1s OfferUp and ~1.5s Craigslist, leaving ample room inside the existing 90-second marketplace budget.
+
+WHAT CHANGED
+- platforms.py: OfferUp full-feed GraphQL POST, local-only filter, configured location/radius, normalized pickup location/distance, zero-cost pickup landed price, shared proxy, deadline/pacing/backoff, and persistent 403/429 stop-for-run breaker; legacy SSR parser retained as a no-extra-request fallback.
+- platforms.py: new Craigslist sga JSON batch adapter, positional decoder, canonical posting/image URLs, dates/prices, haversine cutoff, location note, repost dedupe, shared proxy/deadline/pacing/backoff/breaker.
+- ebay_deal_alert.py: craigslist platform validation; validated per-search eBay opt-out; opt-out applied only to eBay rotation; Craigslist included in truthful sequential-batch health accounting; shared Facebook/OfferUp/Craigslist location-pin alert branch; OfferUp detail enrichment preserves the location first line and placeholder-price reconciliation.
+- config.json: LOCAL_SEARCH_LAT=33.998, LOCAL_SEARCH_LON=-81.03, LOCAL_PICKUP_MAX_MILES=90; craigslist added to MARKETPLACES_ENABLED; four fast $400 golf-equipment searches added with the established negatives, platforms [offerup,craigslist], ebay=false, and focus ids. Parsed HEAD comparison: 4 additions, 0 removals, 0 changes to the 228 pre-existing rows.
+- Fixtures: tests/fixtures/offerup_graphql.json and tests/fixtures/craigslist_search.json (trimmed live response shapes).
+
+NEW TEST COVERAGE
+- OfferUp GraphQL fixture parse, LOCAL_PICKUP-only filter, and zero-request SSR fallback.
+- Craigslist live-fixture positional decode, posting/image URL construction, normalized zero-shipping pickup listing, and >90-mile cutoff.
+- Boolean validation for `ebay`; full-cycle proof that all four local ids spend zero eBay quota while the legacy 33 retain cadence.
+- Location pin line for OfferUp and Craigslist.
+- RunIntegration: `Callaway Apex iron set 5-PW` at $120 Craigslist pickup reaches the real catalog-steal alert path with shipping known and no eBay call.
+
+EXISTING TESTS EDITED (and why)
+- OfferUpAdapter extraction/missing-feed/query-cleaning/multi-query/deadline/pacing tests: changed only from the obsolete SSR search transport to the GraphQL transport; placeholder-price helper tests were retained unchanged.
+- HtmlBatchHealthContext OfferUp case: changed its mocked fetch seam and expected parser warning from SSR `__NEXT_DATA__` to GraphQL `data.modularFeed.looseTiles`.
+- RuntimeSearchFocus exact shipped ids/count: 113 -> 117 enabled and 33 -> 37 focused because the task explicitly requires four new enabled focus ids. Its ShopGoodwill-scoped 113 -> 33 request-count assertion remains unchanged because local rows do not target ShopGoodwill.
+- GolfRampConfiguration exact golf-search count: 62 -> 66 for the four required golf-equipment rows.
+- RunIntegration runtime-focus expectation: official Browse and scrape calls now compare against focused rows where `ebay` is true, proving the required opt-out instead of expecting all 37 focus rows to call eBay.
+- The three non-OfferUp assertion edits above are unavoidable consequences of simultaneously adding four enabled focused searches and requiring a green full suite; no behavioral expectation was weakened.
+
+FINAL VALIDATION
+- `python -m pytest -q`: 891 passed, 3 existing lxml deprecation warnings, 812 subtests passed in 28.89s (baseline: 883 passed, 3 warnings, 805 subtests).
+- ast.parse(platforms.py): pass; ast.parse(ebay_deal_alert.py): pass.
+- json.load(config.json and both fixtures): pass; validate_config: four local rows enabled, zero local warnings, zero ERROR warnings.
+- config.json: 3,604 CRLF line endings, zero bare LF (100% CRLF).
+- git diff --check: pass.
+- AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE, AI_PHOTO_PROVIDER, all GOLF_STRONG_VISION_*, JEV_*, and GOLF_STEAL_* config values: unchanged from HEAD.
+- golf_models.json, category_profiles.json, chrome-extension/*, web/*, and .github/*: unchanged.
+- No git fetch, pull, push, commit, destructive git command, CAPTCHA/login/stealth browser, or anti-bot evasion was used.
+

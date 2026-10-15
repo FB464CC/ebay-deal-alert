@@ -865,7 +865,7 @@ def _ebay_rotation_run_number(now):
 VALID_SEARCH_PROFILES = {"fast", "slow"}
 SUPPORTED_SEARCH_PLATFORMS = {
     "ebay", "grailed", "poshmark", "shopgoodwill", "vinted", "offerup",
-    "depop", "facebook",
+    "craigslist", "depop", "facebook",
 }
 SUPPORTED_SEARCH_CATEGORIES = {
     "school-gear", "watches", "knitwear", "tailoring", "outerwear",
@@ -913,6 +913,11 @@ def validate_config(config=None):
             warnings.append(
                 f"ERROR {label}: invalid profile {profile!r}; expected fast/slow; disabled"
             )
+            search["enabled"] = False
+
+        ebay_enabled = search.get("ebay", True)
+        if not isinstance(ebay_enabled, bool):
+            warnings.append(f"ERROR {label}: ebay must be true/false; disabled")
             search["enabled"] = False
 
         raw_platforms = search.get("platforms")
@@ -974,6 +979,11 @@ def validate_config(config=None):
                     active_ids[search_id] = label
         safe_searches.append(search)
     return safe_searches, warnings
+
+
+def _ebay_eligible_searches(searches):
+    """Rows that may spend Browse quota; local-only rows opt out explicitly."""
+    return [search for search in searches if search.get("ebay", True)]
 
 
 # ---------------------------------------------------------------------------
@@ -8805,12 +8815,12 @@ def send_alert(result):
         # currentPrice on a live auction is a floor that climbs until close,
         # not a purchase price - do not read it as the eBay-style fixed price.
         message += "\n(auction - price climbs until close)"
-    if listing.get("platform") == "facebook":
-        # Marketplace is local pickup only, so distance decides whether an
-        # alert is even actionable. The extension already extracts
-        # "Location: city, state" into description - surface it on the lock
-        # screen instead of making the user open the listing to find out.
-        location_note = (listing.get("description") or "").strip()
+    if listing.get("platform") in {"facebook", "offerup", "craigslist"}:
+        # Local pickup distance decides whether an alert is actionable. These
+        # lanes normalize the first description line as "Location: ...";
+        # reuse one renderer so the lock-screen pin stays byte-identical.
+        location_lines = (listing.get("description") or "").strip().splitlines()
+        location_note = location_lines[0] if location_lines else ""
         if location_note.startswith("Location:"):
             where = location_note[len("Location:"):].strip()
             if where:
@@ -10097,7 +10107,9 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     }
     for platform_name, relevant in batch_relevant.items():
         health[platform_name]["scheduled_requests"] += (
-            len(relevant) if platform_name in {"offerup", "depop"} else bool(relevant)
+            len(relevant)
+            if platform_name in {"offerup", "craigslist", "depop"}
+            else bool(relevant)
         )
     results_lock = threading.Lock()
     health_context = threading.local()
@@ -10250,14 +10262,16 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
         if time.monotonic() >= deadline:
             return
         logical_request_count = (
-            len(relevant) if platform_name in {"offerup", "depop"} else 1
+            len(relevant)
+            if platform_name in {"offerup", "craigslist", "depop"}
+            else 1
         )
         # Grailed really does combine its searches into a few Algolia
         # multi-query calls, so its established wrapper-level count is known
         # at call start. OfferUp/Depop run one request per query inside their
         # wrapper; their exact started/completed counts arrive as metadata on
         # the result instead of assuming every scheduled query actually ran.
-        if platform_name not in {"offerup", "depop"}:
+        if platform_name not in {"offerup", "craigslist", "depop"}:
             with results_lock:
                 if time.monotonic() >= deadline:
                     return
@@ -10281,7 +10295,7 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
                             health[platform_name]["adapter_exception_message"] = (
                                 lines[0] if lines else "(no message)"
                             )
-                        if platform_name not in {"offerup", "depop"}:
+                        if platform_name not in {"offerup", "craigslist", "depop"}:
                             # Grailed's wrapper itself is its one logical
                             # request, so a prompt exception completes it.
                             health[platform_name]["completed_requests"] += logical_request_count
@@ -10308,7 +10322,7 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
             completed_request_count = getattr(
                 results, "completed_requests", logical_request_count
             )
-            if platform_name in {"offerup", "depop"}:
+            if platform_name in {"offerup", "craigslist", "depop"}:
                 health[platform_name]["requests"] += min(
                     logical_request_count,
                     max(0, int(started_request_count)),
@@ -11128,12 +11142,13 @@ def run():
                 ebay_circuit_closed = False
     if ebay_circuit_closed:
         # Two independent rotation lanes, not one pool. With the current
-        # all-fast 23-search golf focus, the 14-call circular slice revisits a
-        # query every 8.21 minutes on average and never leaves one uncovered
-        # for more than two five-minute runs. Slow searches retain their own
-        # two-call slice whenever a future focus contains any.
-        fast_searches = [s for s in stable_searches if s.get("profile") == "fast"]
-        slow_searches = [s for s in stable_searches if s.get("profile") != "fast"]
+        # 33 eligible fast searches, the 14-call circular slice preserves the
+        # established cadence. Local-only saved searches remain in
+        # enabled_searches so marketplace results flow through PASS 1, but an
+        # explicit `ebay: false` keeps them out of Browse and scrape rotation.
+        ebay_eligible = _ebay_eligible_searches(stable_searches)
+        fast_searches = [s for s in ebay_eligible if s.get("profile") == "fast"]
+        slow_searches = [s for s in ebay_eligible if s.get("profile") != "fast"]
         ebay_this_run = (
             _ebay_batch(fast_searches, EBAY_FAST_SEARCHES_PER_RUN)
             | _ebay_batch(slow_searches, EBAY_SLOW_SEARCHES_PER_RUN)
@@ -11415,10 +11430,18 @@ def run():
             # detail-page text for each genuinely new candidate before price,
             # fingerprint, max-price, gender, or condition decisions. A $0/$1
             # card price may be a placeholder whose real ask is only here.
-            if listing.get("platform") == "offerup" and not listing.get("description"):
+            offerup_description = (listing.get("description") or "").strip()
+            if listing.get("platform") == "offerup" and (
+                not offerup_description
+                or offerup_description.startswith("Location:")
+            ):
                 description = fetch_offerup_item_description(listing.get("itemWebUrl"))
                 if description:
-                    listing["description"] = description
+                    listing["description"] = (
+                        f"{offerup_description}\n{description}"
+                        if offerup_description
+                        else description
+                    )
             if listing.get("platform") == "offerup":
                 marketplaces.reconcile_offerup_placeholder_price(listing)
 
