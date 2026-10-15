@@ -118,7 +118,7 @@ LOCAL_SEARCH_LAT, LOCAL_SEARCH_LON, LOCAL_PICKUP_MAX_MILES = (
 _MIN_INTERVAL = {
     "grailed": 0.35,
     "depop": 0.35,
-    "offerup": 0.50,
+    "offerup": 4.0,  # 3rd request 0.2s after the 2nd drew a 403 from Actions (2026-10-15)
     "craigslist": 0.50,
     # Tightened again from 0.35, live-tested this time rather than
     # inherited from Grailed's number: 55 real back-to-back requests

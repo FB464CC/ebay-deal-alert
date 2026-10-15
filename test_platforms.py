@@ -636,7 +636,7 @@ class PersistedBackoffState(unittest.TestCase):
             p._pace("offerup")
         # 0.5s base * 16x persisted multiplier, not a cold-start 0.5s.
         sleep_mock.assert_called_once()
-        self.assertAlmostEqual(sleep_mock.call_args[0][0], 0.5 * 16, places=3)
+        self.assertAlmostEqual(sleep_mock.call_args[0][0], p._MIN_INTERVAL["offerup"] * 16, places=3)
 
     def test_stale_multiplier_decays_instead_of_loading(self):
         # Real design intent: a platform must not stay artificially
@@ -651,7 +651,7 @@ class PersistedBackoffState(unittest.TestCase):
                 mock.patch("platforms.time.sleep") as sleep_mock:
             p._pace("offerup")
         sleep_mock.assert_called_once()
-        self.assertAlmostEqual(sleep_mock.call_args[0][0], 0.5, places=3)
+        self.assertAlmostEqual(sleep_mock.call_args[0][0], p._MIN_INTERVAL["offerup"], places=3)
 
     def test_corrupt_state_file_is_ignored_not_a_crash(self):
         self.path.write_text("not json")
@@ -662,7 +662,7 @@ class PersistedBackoffState(unittest.TestCase):
                 mock.patch("platforms.time.sleep") as sleep_mock:
             p._pace("offerup")
         sleep_mock.assert_called_once()
-        self.assertAlmostEqual(sleep_mock.call_args[0][0], 0.5, places=3)
+        self.assertAlmostEqual(sleep_mock.call_args[0][0], p._MIN_INTERVAL["offerup"], places=3)
 
     def test_invalid_numeric_state_entries_are_ignored(self):
         # Python's JSON decoder accepts NaN/Infinity even though they are not
