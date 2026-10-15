@@ -2319,7 +2319,8 @@ def _fetch_offerup_graphql(
             json=payload,
             headers=OFFERUP_GRAPHQL_HEADERS,
             timeout=timeout,
-            proxy=os.environ.get("SHOPGOODWILL_PROXY_URL"),
+            # Direct: the shared ShopGoodwill proxy timed out in production
+            # (2026-10-15) and both sites answer plain requests.
         )
     except Exception as exc:
         logger.warning("offerup request failed: %s", exc)
@@ -2741,7 +2742,8 @@ def _fetch_craigslist_json(
             url,
             headers=CRAIGSLIST_HEADERS,
             timeout=timeout,
-            proxy=os.environ.get("SHOPGOODWILL_PROXY_URL"),
+            # Direct: the shared ShopGoodwill proxy timed out in production
+            # (2026-10-15) and both sites answer plain requests.
         )
     except Exception as exc:
         logger.warning("craigslist request failed: %s", exc)
