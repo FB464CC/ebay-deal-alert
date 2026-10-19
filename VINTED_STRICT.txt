@@ -1,0 +1,105 @@
+VINTED STRICT MENSWEAR BAR WORK LOG
+===================================
+
+2026-10-18 - required reading and baseline checkpoint
+-----------------------------------------------------
+- Read VINTED_FAST.txt and STRONG_SECOND_LOOK.txt in full before inspecting or
+  editing implementation code, as requested.
+- Confirmed the starting tracked worktree is clean. Pre-existing untracked
+  files .golf_history_2026_10_04.jsonl, golf_models_starter.json, and task.txt
+  are unrelated and will remain untouched.
+- No fetch, pull, commit, or push was run.
+- Untouched baseline: `python -m pytest -q` -> 921 passed, 4 existing lxml
+  deprecation warnings, 841 subtests passed in 26.05s.
+
+2026-10-18 - implementation checkpoint
+--------------------------------------
+- Added a Vinted-only apparel gate covering golf, other, knitwear, outerwear,
+  tailoring, footwear, neckwear, and leather-goods. Poker chips remain outside
+  it; Gamecocks retains its existing category gate and now also takes the
+  mandatory strong second-look path.
+- Added case-insensitive longest-match brand floors and a $60 default. The
+  first photo result must be real, explicitly clear counterfeit and damage,
+  have medium/high price confidence, meet its brand floor, and rate Steal.
+- Added a focused up-to-four-photo Gemini second look using the configured
+  golf strong timeout/fallback constants without changing any GOLF_STRONG_* or
+  golf behavior. It fails closed on missing credentials, caps, provider/JSON
+  failure, image failure, deadline, or paid-ledger refusal and logs the exact
+  STRONG_LOOK_UNAVAILABLE marker.
+- The strong veto requires a visible/consistent permanent label, an explicit
+  no-counterfeit verdict, nwt/excellent condition, a premium/desirable piece,
+  second-look resale at or above the same brand floor, and landed cost no more
+  than 30% of the lower first/second resale estimate.
+- Every actual primary or fallback strong-model request reserves the existing
+  paid-vision ledger amount. A strong look consumes the shared lane AI-call
+  cap and the new 10-per-run strong-look cap.
+- Vinted knitwear alone skips the coarse grab_on_sight tier test after entering
+  the stricter lane. The main-poll knitwear path is unchanged.
+- Added the requested strict apparel alert lead line plus strong condition,
+  readable tagged size, and one-line premium reason. Added strong-look evidence
+  fields to the durable lane log.
+- Focused `python -m pytest -q test_vinted_fast.py` -> 23 passed in 1.74s.
+
+2026-10-18 - requested live strong-look check
+------------------------------------------------
+- GEMINI_API_KEY was available locally; TYPESAFE_API_KEY was absent. Ran the
+  strong second look directly on three current rows fetched through the lane's
+  real catalog call, with alerts disabled. The rows were Vinted 10438760022
+  (Peter Millar Comfort striped polo), 10420952107 (John W Nordstrom blazer
+  mentioning Loro Piana), and 10438451239 (Ermenegildo Zegna men's white
+  shirt). No alert was sent.
+- All three strong requests reached Google's endpoint but timed out at the
+  unchanged 35-second GOLF_STRONG_VISION_TIMEOUT_SECONDS. A timeout is not a
+  429/5xx, so the deliberately scoped golf-style fallback rule did not retry;
+  every result was unavailable and would fail closed in the real lane. Each
+  attempted request exercised the paid monthly-ledger reservation path as
+  required. After recording the check, restored the tracked ai_spend.db and
+  seen_items.db to their verified clean pre-run bytes so a diagnostic did not
+  leave generated database changes in the source diff.
+- The live catalog returned one usable photo for each of these three rows; the
+  implementation sends up to four whenever the listing exposes them.
+- Left the negative-only Jev text fallback unchanged. TypeSafe image Jev remains
+  key-gated, and three uncontrolled live titles (including a fabric-credit
+  search mismatch) cannot demonstrate that a new premium/basic text question
+  would preserve all premium pieces. The strong label/premium gate is the safe
+  place to make that decision from photos.
+
+2026-10-18 - final validation and handoff
+-----------------------------------------
+- Worst-case local paid-AI reservation is $0.52/run: with the shared 40-call
+  lane cap and 10-look strong cap, at most 30 first looks reserve $0.30, ten
+  strong looks whose 429/5xx fallbacks all fire reserve $0.20, and ten final
+  text sanity checks reserve $0.02. Without strong fallbacks the bound is
+  $0.42/run. The unchanged $10 UTC-month ledger remains the harder aggregate
+  limit. Reservations are conservative and failed requests stay charged.
+- Tests added cover the requested $12 basic Peter Millar floor reject; passing
+  Peter Millar Crown Crafted cashmere quarter zip; condition-good veto; label-
+  missing veto; unavailable fail-closed marker; passing Loro Piana; counterfeit
+  veto; Vinted-only knitwear tier replacement; unchanged main-poll knitwear;
+  unaffected poker chips; shared/separate cost caps; paid-ledger accounting;
+  503 fallback; Gamecocks strong-look delivery; and exact alert lead text.
+- Existing test edits are confined to test_vinted_fast.py: its pipeline helper
+  now supplies/mocks mandatory strong evidence, and the three old pipeline
+  assertions (low Jev, successful AI delivery, and lane AI cap) also assert
+  whether the strong look is or is not called. No existing test file besides
+  test_vinted_fast.py was edited.
+- Focused final: `python -m pytest -q test_vinted_fast.py` -> 24 passed in
+  1.30s. Full final: `python -m pytest -q` -> 933 passed, 4 existing lxml
+  deprecation warnings, 841 subtests passed in 37.46s.
+- ast.parse passed for vinted_fast.py, ebay_deal_alert.py, and
+  test_vinted_fast.py. json.load passed for config.json. git diff --check
+  passed. config.json is 100% CRLF: 3,839 LF bytes, zero bare LF bytes, and a
+  final CRLF.
+- Protected config comparison against HEAD found no changes to
+  AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE,
+  AI_PHOTO_PROVIDER, any GOLF_STRONG_VISION_* value, or any existing JEV_*
+  value. Golf behavior and main-poll knitwear behavior are unchanged. No
+  decorator was moved or separated from a function.
+- Modified tracked source files are config.json, ebay_deal_alert.py,
+  test_vinted_fast.py, and vinted_fast.py. VINTED_STRICT.txt is this task's
+  report. Pre-existing untracked files .golf_history_2026_10_04.jsonl,
+  golf_models_starter.json, and task.txt remain untouched.
+- Skipped intentionally: no Jev fallback tightening (insufficient evidence it
+  would preserve premium listings), no TypeSafe live call (key absent), and no
+  alert delivery. No fetch, pull, push, commit, login, or CAPTCHA work was run.
+

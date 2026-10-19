@@ -68,7 +68,53 @@ def _lane(tmp_path):
     )
 
 
-def _run_one_pipeline(tmp_path, *, jev_score=0.9, ai_result=None, cap=40):
+def _passing_strong_result(resale=100, **overrides):
+    result = {
+        "brand_label_visible_and_consistent": True,
+        "brand_label_reason": "Permanent maker label is clear and consistent",
+        "counterfeit_indicators": False,
+        "counterfeit_reason": "",
+        "condition_grade": "excellent",
+        "flaws_found": [],
+        "premium_desirable_piece": True,
+        "premium_reason": "Premium line and fabric are visible on the tags",
+        "estimated_resale_value": resale,
+        "size_on_tag": "M",
+    }
+    result.update(overrides)
+    return result
+
+
+def _record_mock_strong(lane, result, strong_result):
+    result["vinted_strong_checked"] = True
+    result["vinted_strong_brand_label_visible_and_consistent"] = strong_result.get(
+        "brand_label_visible_and_consistent"
+    )
+    result["vinted_strong_brand_label_reason"] = strong_result.get(
+        "brand_label_reason"
+    )
+    result["vinted_strong_counterfeit_indicators"] = strong_result.get(
+        "counterfeit_indicators"
+    )
+    result["vinted_strong_counterfeit_reason"] = strong_result.get(
+        "counterfeit_reason"
+    )
+    result["vinted_strong_condition_grade"] = strong_result.get("condition_grade")
+    result["vinted_strong_flaws_found"] = strong_result.get("flaws_found")
+    result["vinted_strong_premium"] = strong_result.get("premium_desirable_piece")
+    result["vinted_strong_premium_reason"] = strong_result.get("premium_reason")
+    result["vinted_strong_estimated_resale_value"] = strong_result.get(
+        "estimated_resale_value"
+    )
+    result["vinted_strong_size_on_tag"] = strong_result.get("size_on_tag")
+    lane.strong_look_calls += 1
+    lane.ai_calls += 1
+    return strong_result
+
+
+def _run_one_pipeline(
+    tmp_path, *, jev_score=0.9, ai_result=None, strong_result=None, cap=40
+):
     lane = _lane(tmp_path)
     listing, result = _listing_and_result()
     lane._cheap_result = mock.Mock(return_value=(listing, result, None))
@@ -80,6 +126,7 @@ def _run_one_pipeline(tmp_path, *, jev_score=0.9, ai_result=None, cap=40):
             "looks_good": True,
             "counterfeit_suspected": False,
             "summary": "Peter Millar Gamecocks polo in clean condition",
+            "visible_brand_evidence": "Peter Millar neck label",
             "estimated_retail_price": 110,
             "estimated_resale_value": 100,
             "price_confidence": "high",
@@ -99,11 +146,129 @@ def _run_one_pipeline(tmp_path, *, jev_score=0.9, ai_result=None, cap=40):
         ),
         mock.patch.object(engine, "send_alert") as send,
         mock.patch.object(fast, "VINTED_FAST_MAX_AI_CALLS_PER_RUN", cap),
+        mock.patch.object(
+            lane,
+            "_run_vinted_strong_vision",
+            side_effect=lambda merged, _hard_stop: _record_mock_strong(
+                lane,
+                merged,
+                strong_result or _passing_strong_result(),
+            ),
+        ) as strong,
     ):
         lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
     seen = not engine.is_new(conn, listing["itemId"])
     conn.close()
-    return lane, photo, send, seen
+    return lane, photo, strong, send, seen
+
+
+def _apparel_listing_result(
+    title,
+    item_price,
+    category,
+    search_query,
+    *,
+    search_id="vinted-test-apparel",
+):
+    listing = marketplaces.make_listing(
+        "vinted",
+        search_id,
+        title,
+        item_price,
+        f"https://www.vinted.com/items/{search_id}",
+        image_url="https://images.example/main.jpg",
+        shipping=0,
+        size="M",
+    )
+    result = engine.score_listing(
+        listing, None, shipping_cost=0, category=category
+    )
+    result.update(
+        {
+            "item_price": float(item_price),
+            "shipping_cost": 0.0,
+            "search_query": search_query,
+            "search_id": search_id,
+            "category": category,
+            "profile": "fast",
+            "vinted_fast_lane": True,
+        }
+    )
+    return listing, result
+
+
+def _run_custom_pipeline(
+    tmp_path,
+    listing,
+    result,
+    ai_result,
+    *,
+    strong_result=None,
+    strong_unavailable=None,
+    cap=40,
+):
+    lane = _lane(tmp_path)
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+
+    def strong_side_effect(merged, _hard_stop):
+        if strong_unavailable:
+            merged["vinted_strong_checked"] = False
+            merged["vinted_strong_unavailable_reason"] = strong_unavailable
+            return None
+        return _record_mock_strong(
+            lane,
+            merged,
+            strong_result or _passing_strong_result(),
+        )
+
+    with (
+        mock.patch.object(engine, "jev_vinted_score", return_value=0.9),
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=ai_result),
+        mock.patch.object(
+            engine,
+            "_deepseek_alert_sanity_check",
+            return_value={
+                "is_complete_item": True,
+                "is_part_or_accessory": False,
+                "reason": "",
+            },
+        ),
+        mock.patch.object(engine, "send_alert") as send,
+        mock.patch.object(fast, "VINTED_FAST_MAX_AI_CALLS_PER_RUN", cap),
+        mock.patch.object(
+            lane, "_run_vinted_strong_vision", side_effect=strong_side_effect
+        ) as strong,
+    ):
+        lane._process_item(
+            conn,
+            None,
+            {},
+            {"query": result["search_query"]},
+            None,
+        )
+    row = json.loads(lane.log_path.read_text(encoding="utf-8"))
+    conn.close()
+    return lane, strong, send, row
+
+
+def _apparel_ai(resale, **overrides):
+    result = {
+        "damage_found": False,
+        "weird_logo_found": False,
+        "looks_good": True,
+        "counterfeit_suspected": False,
+        "counterfeit_reason": "",
+        "summary": "Clean premium menswear item",
+        "visible_brand_evidence": "Permanent maker label is visible",
+        "peter_millar_back_crown_visible": True,
+        "estimated_retail_price": resale * 3,
+        "estimated_resale_value": resale,
+        "price_confidence": "high",
+        "liquidity": "fast",
+    }
+    result.update(overrides)
+    return result
 
 
 def test_only_items_newer_than_high_water_enter_pipeline():
@@ -230,15 +395,19 @@ def test_missing_typesafe_key_uses_openrouter_text_jev(monkeypatch):
 
 
 def test_low_jev_score_skips_real_ai(tmp_path):
-    _lane_obj, photo, send, seen = _run_one_pipeline(tmp_path, jev_score=0.05)
+    _lane_obj, photo, strong, send, seen = _run_one_pipeline(
+        tmp_path, jev_score=0.05
+    )
     photo.assert_not_called()
+    strong.assert_not_called()
     send.assert_not_called()
     assert seen
 
 
 def test_ai_pass_sends_alert(tmp_path):
-    _lane_obj, photo, send, seen = _run_one_pipeline(tmp_path)
+    _lane_obj, photo, strong, send, seen = _run_one_pipeline(tmp_path)
     photo.assert_called_once()
+    strong.assert_called_once()
     send.assert_called_once()
     assert seen
 
@@ -260,8 +429,9 @@ def test_ai_failure_never_sends_alert(tmp_path):
 
 
 def test_lane_ai_cap_logs_and_marks_seen_without_call(tmp_path):
-    lane, photo, send, seen = _run_one_pipeline(tmp_path, cap=0)
+    lane, photo, strong, send, seen = _run_one_pipeline(tmp_path, cap=0)
     photo.assert_not_called()
+    strong.assert_not_called()
     send.assert_not_called()
     assert seen
     row = json.loads(lane.log_path.read_text(encoding="utf-8"))
@@ -318,3 +488,328 @@ def test_golf_shadow_records_probability_without_skipping(tmp_path):
     engine.append_alert_log(result, log_path=log_path)
     row = json.loads(log_path.read_text(encoding="utf-8"))
     assert row["jev_image_iron_set"] == 0.01
+
+
+def test_generic_peter_millar_polo_below_resale_floor_never_alerts(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Basic Golf Polo Size M",
+        12,
+        "golf",
+        "peter millar polo -women",
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _apparel_ai(25)
+    )
+    strong.assert_not_called()
+    send.assert_not_called()
+    assert "below $45 brand floor" in row["reason"]
+
+
+def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Crown Crafted Cashmere Quarter Zip Size M",
+        18,
+        "knitwear",
+        "peter millar crown crafted quarter zip",
+        search_id="vinted-pm-crown-cashmere",
+    )
+    lane, strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(120),
+        strong_result=_passing_strong_result(
+            110,
+            premium_reason="Crown Crafted cashmere tag is clearly visible",
+            size_on_tag="L",
+        ),
+    )
+    strong.assert_called_once()
+    send.assert_called_once()
+    assert row["delivered"] is True
+    assert lane.ai_calls == 2
+    assert row["vinted_conservative_resale_value"] == 110
+
+
+def test_vinted_strong_condition_good_vetoes(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Crown Crafted Cashmere Quarter Zip",
+        18,
+        "knitwear",
+        "peter millar crown crafted quarter zip",
+        search_id="vinted-pm-good-condition",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(120),
+        strong_result=_passing_strong_result(
+            120, condition_grade="good", flaws_found=["light pilling"]
+        ),
+    )
+    send.assert_not_called()
+    assert "condition grade good not nwt/excellent" in row["reason"]
+
+
+def test_vinted_strong_label_not_visible_vetoes(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Crown Crafted Cashmere Quarter Zip",
+        18,
+        "knitwear",
+        "peter millar crown crafted quarter zip",
+        search_id="vinted-pm-no-label",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(120),
+        strong_result=_passing_strong_result(
+            120,
+            brand_label_visible_and_consistent=False,
+            brand_label_reason="No readable permanent label photo",
+        ),
+    )
+    send.assert_not_called()
+    assert "brand label/tag not visibly consistent" in row["reason"]
+
+
+def test_vinted_strong_unavailable_fails_closed_and_logs_code(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Crown Crafted Cashmere Quarter Zip",
+        18,
+        "knitwear",
+        "peter millar crown crafted quarter zip",
+        search_id="vinted-pm-unavailable",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(120),
+        strong_unavailable="HTTP 503 after primary/fallback",
+    )
+    send.assert_not_called()
+    assert row["verdict"] == "STRONG_LOOK_UNAVAILABLE"
+    assert "STRONG_LOOK_UNAVAILABLE" in row["reason"]
+
+
+def test_loro_piana_passing_strong_look_alerts(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Loro Piana Mens Cashmere Sweater Size 52",
+        40,
+        "other",
+        '"loro piana" -women',
+        search_id="vinted-loro-piana-pass",
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(400, visible_brand_evidence="Loro Piana permanent label"),
+        strong_result=_passing_strong_result(360, size_on_tag="52"),
+    )
+    strong.assert_called_once()
+    send.assert_called_once()
+    assert row["delivered"] is True
+    assert row["vinted_min_resale_floor"] == 150
+
+
+def test_vinted_strong_counterfeit_indicators_veto(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Loro Piana Mens Cashmere Sweater Size 52",
+        40,
+        "other",
+        '"loro piana" -women',
+        search_id="vinted-loro-piana-fake",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(400),
+        strong_result=_passing_strong_result(
+            400,
+            counterfeit_indicators=True,
+            counterfeit_reason="Label font and stitching are inconsistent",
+        ),
+    )
+    send.assert_not_called()
+    assert "counterfeit indicators" in row["reason"]
+
+
+def test_vinted_knitwear_replaces_only_grab_on_sight_tier_rule():
+    base = {
+        "listing": {"title": "Peter Millar Merino Quarter Zip"},
+        "vinted_fast_lane": True,
+        "search_query": "peter millar quarter zip",
+        "brand_tier": "standard",
+        "peter_millar_back_crown_visible": True,
+        "deal_rating": "Steal",
+        "discount_pct": 80,
+        "price_confidence": "high",
+        "counterfeit_suspected": False,
+    }
+    assert engine.is_blocked_by_steal_quality_gate(base, category="knitwear") is None
+    main_poll = dict(base)
+    main_poll.pop("vinted_fast_lane")
+    assert "brand not grab_on_sight-tier" in engine.is_blocked_by_steal_quality_gate(
+        main_poll, category="knitwear"
+    )
+
+
+def test_poker_chips_pipeline_is_unchanged_and_skips_strong_look(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Paulson Casino Poker Chips Complete 300 Chip Set",
+        20,
+        "poker-chips",
+        "paulson poker chips",
+        search_id="vinted-poker-unaffected",
+    )
+    poker_ai = {
+        "chip_type": "compression-molded clay",
+        "is_genuine_clay": True,
+        "is_genuine_ceramic": False,
+        "has_inlay_not_sticker": True,
+        "has_hot_stamp_not_sticker": False,
+        "ceramic_design_embedded_not_sticker": False,
+        "edge_spots_consistent": True,
+        "recolor_suspected": False,
+        "recolor_reason": "",
+        "identified_casino_or_maker": "Paulson",
+        "estimated_chip_count": 300,
+        "chip_count_visually_supported": True,
+        "is_complete_usable_set": True,
+        "set_completeness_reason": "Six full racks are visible",
+        "summary": "Genuine coherent Paulson set",
+    }
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, poker_ai
+    )
+    strong.assert_not_called()
+    send.assert_called_once()
+    assert row["delivered"] is True
+
+
+def test_strong_look_counts_toward_shared_and_separate_cost_caps(tmp_path):
+    lane = _lane(tmp_path)
+    listing, result = _apparel_listing_result(
+        "Loro Piana Cashmere Sweater",
+        40,
+        "other",
+        '"loro piana"',
+        search_id="vinted-cost-cap",
+    )
+    result["visible_brand_evidence"] = "Loro Piana label"
+    lane.ai_calls = 1
+    with (
+        mock.patch.object(fast, "VINTED_FAST_MAX_AI_CALLS_PER_RUN", 1),
+        mock.patch.object(engine, "_call_gemini_json") as call,
+    ):
+        assert lane._run_vinted_strong_vision(result, None) is None
+    call.assert_not_called()
+    assert "shared per-run AI cap" in result["vinted_strong_unavailable_reason"]
+
+    lane.ai_calls = 1
+    with (
+        mock.patch.object(fast, "VINTED_FAST_MAX_AI_CALLS_PER_RUN", 2),
+        mock.patch.object(fast, "VINTED_STRONG_LOOK_MAX_PER_RUN", 10),
+        mock.patch.object(engine, "_configured_gemini_api_keys", return_value=["key"]),
+        mock.patch.object(
+            engine,
+            "_download_listing_image",
+            return_value=(b"jpeg", "image/jpeg"),
+        ),
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True) as reserve,
+        mock.patch.object(
+            engine, "_call_gemini_json", return_value=_passing_strong_result(400)
+        ) as call,
+    ):
+        assert lane._run_vinted_strong_vision(result, None)
+    assert lane.ai_calls == 2
+    assert lane.strong_look_calls == 1
+    reserve.assert_called_once_with(
+        engine.AI_PAID_VISION_RESERVATION_USD, kind="vision"
+    )
+    call.assert_called_once()
+
+    capped = _lane(tmp_path)
+    with (
+        mock.patch.object(fast, "VINTED_STRONG_LOOK_MAX_PER_RUN", 0),
+        mock.patch.object(engine, "_call_gemini_json") as call,
+    ):
+        assert capped._run_vinted_strong_vision(result, None) is None
+    call.assert_not_called()
+    assert "strong-look cap" in result["vinted_strong_unavailable_reason"]
+
+
+def test_strong_look_uses_golf_fallback_on_503_and_ledgers_both_attempts(tmp_path):
+    lane = _lane(tmp_path)
+    _listing, result = _apparel_listing_result(
+        "Loro Piana Cashmere Sweater",
+        40,
+        "other",
+        '"loro piana"',
+        search_id="vinted-fallback",
+    )
+    response = mock.Mock(status_code=503)
+    primary_error = requests.exceptions.HTTPError("busy", response=response)
+    with (
+        mock.patch.object(engine, "_configured_gemini_api_keys", return_value=["key"]),
+        mock.patch.object(
+            engine,
+            "_download_listing_image",
+            return_value=(b"jpeg", "image/jpeg"),
+        ),
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True) as reserve,
+        mock.patch.object(
+            engine,
+            "_call_gemini_json",
+            side_effect=[primary_error, _passing_strong_result(400)],
+        ) as call,
+    ):
+        assert lane._run_vinted_strong_vision(result, None)
+    assert [entry.kwargs["model"] for entry in call.call_args_list] == [
+        fast.VINTED_STRONG_VISION_MODEL,
+        engine.GOLF_STRONG_VISION_FALLBACK_MODEL,
+    ]
+    assert reserve.call_count == 2
+    assert result["vinted_strong_model"] == engine.GOLF_STRONG_VISION_FALLBACK_MODEL
+
+
+def test_vinted_apparel_alert_starts_with_required_strict_summary(monkeypatch):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Crown Crafted Cashmere Quarter Zip",
+        18,
+        "knitwear",
+        "peter millar crown crafted quarter zip",
+        search_id="vinted-alert-text",
+    )
+    result.update(
+        {
+            "vinted_strict_apparel": True,
+            "vinted_brand": "Peter Millar",
+            "vinted_alert_item": "Crown Crafted Cashmere Quarter Zip",
+            "vinted_conservative_resale_value": 110,
+            "vinted_conservative_discount_pct": 83,
+            "vinted_strong_condition_grade": "excellent",
+            "vinted_strong_size_on_tag": "L",
+            "vinted_strong_premium_reason": "Crown Crafted cashmere tag is visible",
+            "deal_rating": "Steal",
+            "discount_pct": 83,
+            "estimated_resale_value": 110,
+        }
+    )
+    response = mock.Mock(status_code=200)
+    response.raise_for_status.return_value = None
+    monkeypatch.setenv("NTFY_TOPIC", "test-topic")
+    with mock.patch.object(engine.requests, "post", return_value=response) as post:
+        engine.send_alert(result)
+    message = post.call_args.kwargs["data"].decode("utf-8")
+    assert message.startswith(
+        "STEAL: Peter Millar Crown Crafted Cashmere Quarter Zip - "
+        "$19.08 vs ~$110 resale (83% off)"
+    )
+    assert "condition: excellent | size on tag: L" in message
+    assert "premium: Crown Crafted cashmere tag is visible" in message

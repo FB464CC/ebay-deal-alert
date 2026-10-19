@@ -8759,7 +8759,13 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         return None
 
     if category == "knitwear":
-        if brand_tier != "grab_on_sight":
+        # The Vinted fast lane has its own stricter menswear bar: a real
+        # photo result, Steal-only economics, a per-brand resale floor, and a
+        # mandatory fail-closed strong second look. For that lane only, those
+        # item-level checks replace the coarse grab_on_sight membership test
+        # so premium Peter Millar quarter-zips can qualify. Every main-poll
+        # caller retains the established tier requirement below.
+        if brand_tier != "grab_on_sight" and not result.get("vinted_fast_lane"):
             return "knitwear bar: brand not grab_on_sight-tier (already own plenty of standard-tier sweaters)"
         # Same pre-AI-state distinction as the loro piana/cucinelli bar
         # above - None means "not checked yet" (retry), not "checked and
@@ -9287,6 +9293,26 @@ def append_alert_log(
         "jev_image_iron_set",
         "jev_vinted_score",
         "vinted_fast_lane",
+        "vinted_photo_ai_checked",
+        "vinted_strict_apparel",
+        "vinted_brand",
+        "vinted_brand_key",
+        "vinted_min_resale_floor",
+        "vinted_strong_checked",
+        "vinted_strong_unavailable_reason",
+        "vinted_strong_model",
+        "vinted_strong_brand_label_visible_and_consistent",
+        "vinted_strong_brand_label_reason",
+        "vinted_strong_counterfeit_indicators",
+        "vinted_strong_counterfeit_reason",
+        "vinted_strong_condition_grade",
+        "vinted_strong_flaws_found",
+        "vinted_strong_premium",
+        "vinted_strong_premium_reason",
+        "vinted_strong_estimated_resale_value",
+        "vinted_strong_size_on_tag",
+        "vinted_conservative_resale_value",
+        "vinted_conservative_discount_pct",
         "jev_would_skip",
         "golf_cleared_all_gates",
         "golf_strong_checked",
@@ -9745,6 +9771,27 @@ def send_alert(result):
         price_line = f"${price}{profile_note}"
     source = (listing.get("platform") or "ebay").upper()
     message = f"[{source}] {price_line} - {title}"
+    if result.get("vinted_strict_apparel"):
+        vinted_brand = result.get("vinted_brand") or "Unknown brand"
+        vinted_item = result.get("vinted_alert_item") or title or "item"
+        vinted_resale = result.get("vinted_conservative_resale_value")
+        vinted_pct = result.get("vinted_conservative_discount_pct")
+        message = (
+            f"STEAL: {vinted_brand} {vinted_item} - "
+            f"${_money_without_noise(price)} vs "
+            f"~${_money_without_noise(vinted_resale)} resale "
+            f"({vinted_pct}% off)\n{message}"
+        )
+        condition = result.get("vinted_strong_condition_grade") or "unknown"
+        size_on_tag = result.get("vinted_strong_size_on_tag") or "not readable"
+        premium_reason = (
+            result.get("vinted_strong_premium_reason")
+            or "premium evidence confirmed"
+        )
+        message += (
+            f"\ncondition: {condition} | size on tag: {size_on_tag}"
+            f"\npremium: {premium_reason}"
+        )
     if result.get("golf_delivery_path") == "catalog-steal":
         ratio = result.get("golf_steal_ratio")
         off_pct = round((1 - float(ratio)) * 100) if _finite_number(ratio) else 0
