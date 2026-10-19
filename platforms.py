@@ -1733,7 +1733,11 @@ VINTED_ASSUMED_SHIPPING = 0.99
 VINTED_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("vinted_rate_limit_state.json")
 VINTED_BACKOFF_INITIAL_MINUTES = 30
 VINTED_BACKOFF_MAX_MINUTES = 120
-VINTED_CATALOG_URL = "https://www.vinted.com/api/v2/catalog/items"
+VINTED_WEB_URL = "https://www.vinted.com"
+# Vinted retired /api/v2/catalog/items in September 2026. The replacement
+# web catalogue service uses the anonymous homepage access token and anon id
+# issued by the existing bootstrap; no account or login is involved.
+VINTED_CATALOG_URL = "https://api.vinted.com/svc-catalogue/items"
 # Both are issued by a healthy anonymous homepage bootstrap and are required
 # for catalog calls.  A Cloudflare cookie alone can also be present on a
 # challenge page, so it is deliberately not enough to accept a session.
@@ -1849,6 +1853,7 @@ def _clear_vinted_circuit_breaker_if_tripped():
 def _discard_vinted_session(session):
     if getattr(_vinted_thread_state, "session", None) is session:
         _vinted_thread_state.session = None
+        _vinted_thread_state.catalog_headers = None
         manager = getattr(_vinted_thread_state, "session_manager", None)
         _vinted_thread_state.session_manager = None
         if manager is not None:
@@ -1882,7 +1887,7 @@ def _get_vinted_session():
             session = manager.__enter__()
             _vinted_thread_state.session = session
             _vinted_thread_state.session_manager = manager
-            resp = session.get("https://www.vinted.com/", timeout=HTTP_TIMEOUT)
+            resp = session.get(f"{VINTED_WEB_URL}/", timeout=HTTP_TIMEOUT)
         except Exception as exc:
             logger.warning("vinted session bootstrap failed: %s", exc)
             if session is not None:
@@ -1901,7 +1906,27 @@ def _get_vinted_session():
             )
             _discard_vinted_session(session)
             return None
+        _vinted_thread_state.catalog_headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Platform": "web",
+            "x-next-app": "marketplace-web",
+            "Origin": VINTED_WEB_URL,
+            "Referer": f"{VINTED_WEB_URL}/",
+            "Locale": "en-US",
+            "X-Anon-Id": str(resp.cookies.get("anon_id")),
+            "Authorization": f"Bearer {resp.cookies.get('access_token_web')}",
+        }
         return session
+
+
+def _vinted_catalog_headers():
+    # The small fallback preserves compatibility for injected sessions in
+    # tests/extensions. A production bootstrap always installs the complete
+    # anonymous web-catalogue header set above.
+    return getattr(_vinted_thread_state, "catalog_headers", None) or {
+        "Accept": "application/json"
+    }
 
 
 def _get_vinted_catalog_page(session, params):
@@ -1923,14 +1948,14 @@ def _get_vinted_catalog_page(session, params):
             resp = session.get(
                 VINTED_CATALOG_URL,
                 params=params,
-                headers={"Accept": "application/json"},
+                headers=_vinted_catalog_headers(),
                 timeout=HTTP_TIMEOUT,
             )
         except Exception as exc:
             logger.warning("vinted request failed: %s", exc)
             return None, session
         status = resp.status
-        if status not in (403, 429):
+        if status not in (401, 403, 429):
             if not 200 <= status < 300:
                 logger.warning("vinted returned HTTP %s", status)
                 return None, session
@@ -1944,7 +1969,7 @@ def _get_vinted_catalog_page(session, params):
             return body, session
 
         multiplier = _register_rate_limit("vinted") if status == 429 else None
-        if status == 403:
+        if status in (401, 403):
             _discard_vinted_session(session)
         if attempt == 0:
             delay = _retry_after_seconds(getattr(resp, "headers", None))
@@ -1954,7 +1979,7 @@ def _get_vinted_catalog_page(session, params):
                 status, delay, f" and pacing {multiplier}x slower" if multiplier else "",
             )
             time.sleep(delay)
-            if status == 403:
+            if status in (401, 403):
                 session = _get_vinted_session()
                 if session is None:
                     return None, None
@@ -1967,12 +1992,10 @@ def _get_vinted_catalog_page(session, params):
 def _vinted_item_creation_date(item):
     """Return the earliest trustworthy item-photo upload time as UTC ISO.
 
-    Vinted's catalog rows do not expose a top-level created_at value, but the
-    exact item's photo objects carry high_resolution.timestamp. Checked live
-    against the public page's own ``Uploaded`` label: fresh, six-week-old and
-    year-old items all agreed with these epochs, and all photos belonging to
-    each exact item shared the same value. Earliest is conservative if a
-    seller later adds a photo. Missing/malformed data fails open.
+    Older catalog rows did not expose a top-level created_at value, but their
+    photo objects carried high_resolution.timestamp. The current public
+    svc-catalogue shape may omit that timestamp, so missing/malformed data
+    fails open and the fast lane falls back to Vinted's monotonic numeric id.
     """
     timestamps = []
     photos = item.get("photos") if isinstance(item, dict) else None
@@ -2001,7 +2024,16 @@ def _vinted_item_to_listing(item):
     # was only ever seeing one angle per Vinted listing, which is
     # exactly how a real hole/damage on a different angle got past it.
     all_photos = item.get("photos") or []
-    extra_images = [p.get("url") for p in all_photos if not p.get("is_main") and p.get("url")]
+    def photo_url(photo):
+        if not isinstance(photo, dict):
+            return None
+        return photo.get("url") or photo.get("full_size_url")
+
+    extra_images = [
+        photo_url(photo)
+        for photo in all_photos
+        if not photo.get("is_main") and photo_url(photo)
+    ]
     # The exact shipping cost is absent from the catalog item and resolved
     # later from buyer/seller location and provider. "total_item_price" IS
     # present and real (confirmed live): it is price + Vinted's mandatory
@@ -2010,15 +2042,30 @@ def _vinted_item_to_listing(item):
     item_price = _to_float(_dget(_dget(item, "price"), "amount")) or 0.0
     total_price = _to_float(_dget(_dget(item, "total_item_price"), "amount"))
     service_fee = (total_price - item_price) if total_price is not None else 0.0
+    item_box = item.get("item_box") if isinstance(item.get("item_box"), dict) else {}
+    accessibility = str(item_box.get("accessibility_label") or "")
+    size_match = re.search(r"(?:^|,\s*)Size:\s*([^,]+)", accessibility, re.IGNORECASE)
+    condition_match = re.search(
+        r"(?:^|,\s*)Condition:\s*([^,]+)", accessibility, re.IGNORECASE
+    )
+    size = item.get("size_title") or (size_match.group(1).strip() if size_match else None)
+    condition = item.get("status") or (
+        condition_match.group(1).strip() if condition_match else None
+    )
     return make_listing(
         "vinted",
         item.get("id"),
         item.get("title"),
         _dget(_dget(item, "price"), "amount"),
-        item.get("url"),
-        image_url=_dget(_dget(item, "photo"), "url"),
+        (
+            f"{VINTED_WEB_URL}{item.get('url')}"
+            if str(item.get("url") or "").startswith("/")
+            else item.get("url")
+        ),
+        image_url=photo_url(_dget(item, "photo")),
         extra_images=extra_images,
-        size=item.get("size_title"),
+        size=size,
+        condition=condition,
         seller=_dget(_dget(item, "user"), "login"),
         shipping=service_fee + VINTED_ASSUMED_SHIPPING,
         item_creation_date=_vinted_item_creation_date(item),

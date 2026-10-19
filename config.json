@@ -549,7 +549,6 @@
         "grailed",
         "poshmark",
         "shopgoodwill",
-        "vinted",
         "facebook"
       ],
       "id": "watch-rolex",
@@ -566,7 +565,6 @@
         "grailed",
         "poshmark",
         "shopgoodwill",
-        "vinted",
         "facebook"
       ],
       "id": "watch-omega",
@@ -629,7 +627,6 @@
         "grailed",
         "poshmark",
         "shopgoodwill",
-        "vinted",
         "facebook"
       ],
       "id": "watch-tudor",
@@ -864,7 +861,6 @@
         "grailed",
         "poshmark",
         "shopgoodwill",
-        "vinted",
         "facebook"
       ],
       "id": "watch-cartier",
@@ -1207,6 +1203,207 @@
       "category_id": "115280",
       "id": "golf-local-iron-set",
       "category": "golf-equipment"
+    },
+    {
+      "query": "peter millar polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L"
+      ],
+      "max_price": 20,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-peter-millar-polo",
+      "category": "golf"
+    },
+    {
+      "query": "peter millar quarter zip -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 30,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-peter-millar-quarter-zip",
+      "category": "knitwear"
+    },
+    {
+      "query": "peter millar jacket -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 45,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-peter-millar-jacket",
+      "category": "outerwear"
+    },
+    {
+      "query": "\"peter millar\" -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 20,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-peter-millar",
+      "category": "other"
+    },
+    {
+      "query": "\"brunello cucinelli\" -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-brunello-cucinelli",
+      "category": "other"
+    },
+    {
+      "query": "\"loro piana\" -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-loro-piana",
+      "category": "other"
+    },
+    {
+      "query": "zegna -\"z zegna\" -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-zegna",
+      "category": "other"
+    },
+    {
+      "query": "kiton -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-kiton",
+      "category": "other"
+    },
+    {
+      "query": "brioni -bianco -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-brioni",
+      "category": "other"
+    },
+    {
+      "query": "isaia -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-isaia",
+      "category": "other"
+    },
+    {
+      "query": "ralph lauren \"purple label\" -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-purple-label",
+      "category": "other"
+    },
+    {
+      "query": "\"tom ford\" -perfume -cologne -fragrance -eau -parfum -lipstick -makeup -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tom-ford",
+      "category": "other"
+    },
+    {
+      "query": "g/fore polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L"
+      ],
+      "max_price": 20,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-g-fore",
+      "category": "golf"
+    },
+    {
+      "query": "\"holderness & bourne\" -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L"
+      ],
+      "max_price": 15,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-holderness-bourne",
+      "category": "golf"
     },
     {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
@@ -3562,6 +3759,11 @@
   "JEV_MODEL": "typesafe/jev-1.13",
   "JEV_TIMEOUT_SECONDS": 4,
   "JEV_MAX_CALLS_PER_RUN": 80,
+  "JEV_VINTED_SKIP_THRESHOLD": 0.05,
+  "JEV_IMAGE_GOLF_MODE": "shadow",
+  "VINTED_FAST_ENABLED": true,
+  "VINTED_FAST_RUN_MINUTES": 70,
+  "VINTED_FAST_MAX_AI_CALLS_PER_RUN": 40,
   "DEEPSEEK_VISION_TIMEOUT_SECONDS": 30,
   "AI_PAID_MONTHLY_BUDGET_USD": 10,
   "AI_PAID_VISION_RESERVATION_USD": 0.01,

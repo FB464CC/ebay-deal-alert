@@ -31,6 +31,7 @@ import requests
 from collections import Counter
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from statistics import median
 from urllib.parse import quote_plus
@@ -413,6 +414,7 @@ EBAY_REGULAR_FALLBACK_SEARCH_IDS = frozenset(
 BRAND_TITLE_WINDOW_CHARS = int(_CONFIG.get("BRAND_TITLE_WINDOW_CHARS", 60))
 # Non-eBay marketplaces to poll. eBay is always polled and is not listed here.
 MARKETPLACES_ENABLED = _CONFIG.get("MARKETPLACES_ENABLED", [])
+VINTED_FAST_ENABLED = bool(_CONFIG.get("VINTED_FAST_ENABLED", True))
 # Supplementary, quota-free eBay lane via ebay_scrape.py (HTML scraping, no
 # Browse API call spent) - see that module's docstring. Additive only: runs
 # for the SAME queries the official search_ebay() already covers this run
@@ -636,6 +638,15 @@ JEV_MAX_CALLS_PER_RUN = max(
     0, int(_CONFIG.get("JEV_MAX_CALLS_PER_RUN", 80))
 )
 JEV_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
+TYPESAFE_SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_VINTED_SKIP_THRESHOLD = float(
+    _CONFIG.get("JEV_VINTED_SKIP_THRESHOLD", 0.05)
+)
+JEV_IMAGE_GOLF_MODE = str(
+    _CONFIG.get("JEV_IMAGE_GOLF_MODE", "shadow")
+).strip().lower()
+if JEV_IMAGE_GOLF_MODE not in {"off", "shadow", "skip"}:
+    JEV_IMAGE_GOLF_MODE = "shadow"
 DEEPSEEK_VISION_TIMEOUT_SECONDS = float(
     _CONFIG.get("DEEPSEEK_VISION_TIMEOUT_SECONDS", 30)
 )
@@ -2025,6 +2036,59 @@ def fetch_ebay_item_description(token, item_id):
     return details.get("description") if details else None
 
 
+def fetch_vinted_item_page_details(item_url):
+    """GET public Vinted description and full-size gallery preload URLs.
+
+    The current ``svc-catalogue`` response includes only the cover photo.
+    The public item page preloads its gallery at ``/f800/`` before any
+    recommendation images, so the same request already needed for seller text
+    can supply the fast lane's image-first checks with up to three real listing
+    photos. Any parse or request failure returns an empty mapping.
+    """
+    try:
+        resp = requests.get(
+            item_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=10,
+        )
+    except requests.exceptions.RequestException as exc:
+        logger.info("Could not fetch Vinted item page for %s: %s", item_url, exc)
+        return {}
+    status = getattr(resp, "status_code", None)
+    try:
+        resp.raise_for_status()
+    except requests.exceptions.RequestException:
+        logger.info(
+            "Could not fetch Vinted item page for %s: HTTP %s",
+            item_url,
+            status if isinstance(status, int) else "unknown",
+        )
+        return {"_http_status": status} if isinstance(status, int) else {}
+    details = {"_http_status": status} if isinstance(status, int) else {}
+    match = re.search(r'<meta property="og:description" content="([^"]*)"', resp.text)
+    if match:
+        description = html.unescape(match.group(1)).strip()
+        if description:
+            details["description"] = description
+    gallery_urls = []
+    for tag in re.findall(r"<link\b[^>]*>", resp.text, re.IGNORECASE):
+        if not re.search(r'\brel="preload"', tag, re.IGNORECASE):
+            continue
+        if not re.search(r'\bas="image"', tag, re.IGNORECASE):
+            continue
+        href = re.search(r'\bhref="([^"]+)"', tag, re.IGNORECASE)
+        if not href:
+            continue
+        image_url = html.unescape(href.group(1))
+        if "images1.vinted.net/" not in image_url or "/f800/" not in image_url:
+            continue
+        if image_url not in gallery_urls:
+            gallery_urls.append(image_url)
+    if gallery_urls:
+        details["image_urls"] = gallery_urls
+    return details
+
+
 def fetch_vinted_item_description(item_url):
     """GET a Vinted item's public page for its og:description meta tag -
     search_vinted()'s catalog API never returns a description, only
@@ -2048,20 +2112,7 @@ def fetch_vinted_item_description(item_url):
 
     Returns plain text or None on any failure - never worth failing or
     slowing down a run over."""
-    try:
-        resp = requests.get(
-            item_url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-    except requests.exceptions.RequestException as exc:
-        logger.info("Could not fetch Vinted item description for %s: %s", item_url, exc)
-        return None
-    match = re.search(r'<meta property="og:description" content="([^"]*)"', resp.text)
-    if not match:
-        return None
-    return html.unescape(match.group(1)).strip() or None
+    return fetch_vinted_item_page_details(item_url).get("description")
 
 
 def fetch_offerup_item_description(item_url):
@@ -2073,8 +2124,13 @@ def fetch_offerup_item_description(item_url):
 # SEEN-ITEM DEDUPE (SQLite — swap for a Wardrobe OS sheet tab if preferred)
 # ---------------------------------------------------------------------------
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
+def init_db(path=None):
+    """Open and migrate a seen-state database.
+
+    ``path`` lets bounded side lanes use the exact same dedupe schema without
+    writing the main poller's cached SQLite file.
+    """
+    conn = sqlite3.connect(DB_PATH if path is None else path)
     conn.execute("CREATE TABLE IF NOT EXISTS seen (item_id TEXT PRIMARY KEY, seen_at TEXT)")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS fingerprints "
@@ -5696,6 +5752,295 @@ def _jev_iron_set_score(conn, listing, hard_stop=None):
         return _jev_fail_open(str(exc), http_status=status)
 
 
+_JEV_VINTED_QUESTIONS = {
+    "watches": (
+        "Do these photos show a genuine, undamaged wristwatch of the brand "
+        "named in the title, not a fake/replica, empty box, strap, or parts?"
+    ),
+    "poker-chips": (
+        "Do these photos show a real, complete poker chip set or lot as titled, "
+        "not an empty case, unrelated accessories, novelty tokens, or a misleading listing?"
+    ),
+    "school-gear": (
+        "Do these photos show the titled Peter Millar South Carolina Gamecocks "
+        "garment, complete and undamaged, not an unrelated item or empty packaging?"
+    ),
+}
+_JEV_GOLF_IMAGE_QUESTION = (
+    "Do these photos show five or more golf irons of the same model sold together "
+    "(a matched iron set), not a single club, driver, cart, bag only, or mixed assortment?"
+)
+
+
+def _jev_vinted_question(category):
+    return _JEV_VINTED_QUESTIONS.get(
+        category,
+        "Do these photos show the genuine, complete, undamaged item named in the title?",
+    )
+
+
+def _prepare_jev_image(content):
+    """Return a baseline JPEG satisfying TypeSafe's inclusive image bounds.
+
+    TypeSafe rejects rather than resizes an invalid asset, and one bad asset
+    rejects the whole request. Rotate pixels upright, bound the longest side,
+    upscale ordinary small images, and skip pathological narrow images that
+    cannot satisfy both bounds without distortion.
+    """
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(content)) as original:
+            image = ImageOps.exif_transpose(original).convert("RGB")
+    except (OSError, ValueError, UnidentifiedImageError):
+        return None
+
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        return None
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    if max(width, height) > 1568:
+        scale = 1568.0 / max(width, height)
+        image = image.resize(
+            (max(1, round(width * scale)), max(1, round(height * scale))),
+            resampling,
+        )
+    width, height = image.size
+    if min(width, height) < 280:
+        scale = 280.0 / min(width, height)
+        if max(width, height) * scale <= 1568:
+            image = image.resize(
+                (max(280, round(width * scale)), max(280, round(height * scale))),
+                resampling,
+            )
+        else:
+            return None
+    width, height = image.size
+    if not (280 <= width <= 1568 and 280 <= height <= 1568):
+        return None
+    output = BytesIO()
+    image.save(
+        output,
+        format="JPEG",
+        quality=88,
+        optimize=True,
+        progressive=False,
+    )
+    return output.getvalue(), width, height
+
+
+def _download_jev_listing_images(listing, hard_stop=None, max_images=3):
+    prepared = []
+    for image_url in _collect_listing_image_urls(listing)[:max_images]:
+        if _deadline_timeout(hard_stop, 1) is None:
+            break
+        downloaded = _download_listing_image(image_url, hard_stop=hard_stop)
+        if downloaded is None:
+            continue
+        ready = _prepare_jev_image(downloaded[0])
+        if ready is not None:
+            prepared.append(ready[0])
+    return prepared
+
+
+def _direct_jev_model_name():
+    model = str(JEV_MODEL or "").strip()
+    if model.startswith("typesafe/"):
+        model = model.split("/", 1)[1]
+    return model if model in {"jev-1.13", "jev-1.14"} else "jev-1.13"
+
+
+def _claim_shared_jev_call_slot():
+    """Share the established per-process Jev ceiling with image/text lanes."""
+    global _JEV_CALLS_THIS_RUN
+    if _JEV_CALLS_THIS_RUN >= JEV_MAX_CALLS_PER_RUN:
+        return False
+    _JEV_CALLS_THIS_RUN += 1
+    return True
+
+
+def _jev_image_score(listing, question, hard_stop=None, max_images=3):
+    """Return a direct-TypeSafe Noul probability, failing open on any error."""
+    api_key = str(os.environ.get("TYPESAFE_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    timeout = _deadline_timeout(hard_stop, JEV_TIMEOUT_SECONDS)
+    if timeout is None:
+        return None
+    images = _download_jev_listing_images(
+        listing, hard_stop=hard_stop, max_images=max_images
+    )
+    if not images:
+        return None
+    if not _claim_shared_jev_call_slot():
+        logger.info(
+            "Image Jev skipped: shared per-run cap of %s exhausted",
+            JEV_MAX_CALLS_PER_RUN,
+        )
+        return None
+    assets = {}
+    refs = []
+    for index, content in enumerate(images):
+        digest = hashlib.sha256(content).hexdigest()[:16]
+        ref = f"jev-photo-{index + 1}-{digest}"
+        refs.append(ref)
+        assets[ref] = {
+            "type": "image",
+            "data_base64": base64.b64encode(content).decode("ascii"),
+            "format": "jpeg",
+        }
+    payload = {
+        "model": _direct_jev_model_name(),
+        "state": {
+            "listing_title": str(listing.get("title") or ""),
+            "listing_description": str(listing.get("description") or "")[:1500],
+            "photos": refs,
+        },
+        "assets": assets,
+        "questions": {
+            "matches_listing": {
+                "type": "noul",
+                "instructions": question,
+                "criteria": {
+                    "true": "Yes, the photos affirm the requested complete item.",
+                    "false": "No, the photos show an excluded, misleading, fake, damaged, or incomplete item.",
+                },
+            }
+        },
+    }
+    response = None
+    try:
+        response = requests.post(
+            TYPESAFE_SYSTEMONE_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "TypeSafe-Danger-Zone-Images": "true",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        score = response.json()["answers"]["matches_listing"]["noul"]
+        if (
+            not isinstance(score, (int, float))
+            or isinstance(score, bool)
+            or not math.isfinite(score)
+            or not 0 <= score <= 1
+        ):
+            raise ValueError(f"invalid image Jev probability {score!r}")
+        return float(score)
+    except (
+        requests.exceptions.RequestException,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        status = getattr(response, "status_code", None)
+        logger.warning(
+            "Direct TypeSafe image Jev failed open (HTTP %s): %s",
+            status if status is not None else "not available",
+            exc,
+        )
+        return None
+
+
+def _jev_vinted_text_score(listing, category, hard_stop=None):
+    """Text-only OpenRouter fallback used only when the TypeSafe key is absent."""
+    api_key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    timeout = _deadline_timeout(hard_stop, JEV_TIMEOUT_SECONDS)
+    if timeout is None:
+        return None
+    if not _claim_shared_jev_call_slot():
+        logger.info(
+            "Text Jev skipped: shared per-run cap of %s exhausted",
+            JEV_MAX_CALLS_PER_RUN,
+        )
+        return None
+    payload = {
+        "model": JEV_MODEL,
+        "state": {
+            "title": str(listing.get("title") or ""),
+            "description": str(listing.get("description") or "")[:1500],
+        },
+        "questions": {
+            "matches_listing": {
+                "type": "noul",
+                "instructions": _jev_vinted_question(category),
+            }
+        },
+    }
+    try:
+        response = requests.post(
+            JEV_DECISIONS_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        score = response.json()["answers"]["matches_listing"]["noul"]
+        if (
+            not isinstance(score, (int, float))
+            or isinstance(score, bool)
+            or not math.isfinite(score)
+            or not 0 <= score <= 1
+        ):
+            raise ValueError(f"invalid text Jev probability {score!r}")
+        return float(score)
+    except (
+        requests.exceptions.RequestException,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        logger.warning("OpenRouter text Jev fallback failed open: %s", exc)
+        return None
+
+
+def jev_vinted_score(listing, category, hard_stop=None):
+    """Image-first Vinted screen; absent TypeSafe credentials use text Jev."""
+    if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
+        return _jev_image_score(
+            listing,
+            _jev_vinted_question(category),
+            hard_stop=hard_stop,
+            max_images=3,
+        )
+    return _jev_vinted_text_score(listing, category, hard_stop=hard_stop)
+
+
+def _golf_image_jev_score(listing, hard_stop=None):
+    if JEV_IMAGE_GOLF_MODE == "off":
+        return None
+    if not str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
+        return None
+    return _jev_image_score(
+        listing,
+        _JEV_GOLF_IMAGE_QUESTION,
+        hard_stop=hard_stop,
+        max_images=3,
+    )
+
+
+def _apply_golf_image_jev_screen(result, listing, hard_stop=None):
+    """Record golf image-Jev telemetry and return whether skip mode rejects."""
+    score = _golf_image_jev_score(listing, hard_stop=hard_stop)
+    if score is None:
+        return False
+    result["jev_image_iron_set"] = score
+    return bool(
+        JEV_IMAGE_GOLF_MODE == "skip"
+        and score <= JEV_VINTED_SKIP_THRESHOLD
+    )
+
+
 def _download_listing_image(image_url, hard_stop=None):
     # Try the largest available size first, then fall back to the original
     # URL if eBay doesn't have a bigger one (some old listings only store a
@@ -8802,7 +9147,9 @@ def _alert_search_metadata(result):
     return search_id, category
 
 
-def append_alert_log(result, delivered=False, delivery_error=None):
+def append_alert_log(
+    result, delivered=False, delivery_error=None, log_path=None
+):
     """Returns True on a successful append, False if the write itself
     failed. Callers that log a real delivery (verdict already sent) must
     check this - a swallowed disk-full/read-only/path error there used to
@@ -8937,6 +9284,9 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_best_offer_target_price",
         "golf_best_offer_steal_line",
         "jev_iron_set",
+        "jev_image_iron_set",
+        "jev_vinted_score",
+        "vinted_fast_lane",
         "jev_would_skip",
         "golf_cleared_all_gates",
         "golf_strong_checked",
@@ -9008,7 +9358,8 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         # JSONL remains byte-stable across platforms. Mode "a" maps to an
         # append-only file descriptor: a kill or write error can lose only
         # this new tail, never truncate or rewrite the existing history.
-        with ALERTS_LOG_PATH.open("a", encoding="utf-8", newline="") as log_file:
+        target_log_path = Path(log_path) if log_path is not None else ALERTS_LOG_PATH
+        with target_log_path.open("a", encoding="utf-8", newline="") as log_file:
             log_file.write(json.dumps(record, separators=(",", ":")) + "\n")
     except OSError as exc:
         # Don't let a disk error here abort the whole run() batch - logging
@@ -10625,7 +10976,7 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
     conn.commit()
 
 
-def prefetch_marketplaces(now, conn, run_hard_stop=None):
+def prefetch_marketplaces(now, conn, run_hard_stop=None, include_vinted=True):
     """Fetch every enabled non-eBay marketplace for every enabled saved search,
     in parallel, inside a fixed wall-clock budget. Returns {query: [listings]}.
 
@@ -10649,7 +11000,11 @@ def prefetch_marketplaces(now, conn, run_hard_stop=None):
     # OfferUp/Depop batch computed relevant=[] and fetched nothing, every
     # run, forever - invisible because health[] still reported 0/0 (looks
     # healthy) and counts[] never got a key for them at all.
-    active = [p for p in MARKETPLACES_ENABLED if p in marketplaces.available_platforms()]
+    active = [
+        p for p in MARKETPLACES_ENABLED
+        if p in marketplaces.available_platforms()
+        and (include_vinted or p != "vinted")
+    ]
     # Rotate the starting point each run so that when the budget truncates the
     # tail, it is a different tail every time and every search gets covered.
     offset = ((now.hour * 60 + now.minute) // 20) % len(searches)
@@ -11674,7 +12029,12 @@ def run():
     current_month = current_utc.month
     current_month_name = current_utc.strftime("%B")
 
-    marketplace_listings = prefetch_marketplaces(current_utc, conn, run_hard_stop=hard_stop)
+    marketplace_listings = prefetch_marketplaces(
+        current_utc,
+        conn,
+        run_hard_stop=hard_stop,
+        include_vinted=not VINTED_FAST_ENABLED,
+    )
 
     # Build the saved-search and always-on auction lanes together before
     # applying focus. Existing generic auction rows intentionally have no
@@ -12913,6 +13273,25 @@ def run():
             append_alert_log(result)
             mark_seen(conn, item_id, fingerprint, total_price)
             continue
+
+        # TypeSafe image support is explicitly pre-production. Measure it on
+        # the existing golf flow first; only the opt-in "skip" mode may act on
+        # the same negative-only <=5% rule used by the Vinted lane.
+        if category == "golf-equipment":
+            image_jev_skips = _apply_golf_image_jev_screen(
+                result, listing, hard_stop=hard_stop
+            )
+            if image_jev_skips:
+                image_jev_score = result["jev_image_iron_set"]
+                result["verdict"] = "PASS"
+                result["reason"] = (
+                    "Jev image pre-photo screen: not a matched iron set "
+                    f"(iron_set={image_jev_score:.6f} <= "
+                    f"{JEV_VINTED_SKIP_THRESHOLD:.6f})"
+                )
+                append_alert_log(result)
+                mark_seen(conn, item_id, fingerprint, total_price)
+                continue
 
         ai_result = None
         is_scrape_lane = bool(listing.get("_from_scrape_lane"))

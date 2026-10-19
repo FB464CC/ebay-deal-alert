@@ -1,0 +1,92 @@
+name: Vinted Fast Lane
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: vinted-fast
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  vinted-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Restore Vinted fast-lane state
+        id: vinted-fast-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            vinted_fast_seen.db
+            vinted_fast_state.json
+            vinted_fast_log.jsonl
+          key: vinted-fast-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vinted-fast-state-v1-
+
+      - name: Restore latest main seen DB (read-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: seen_items.db
+          key: seen-items-db-readonly-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            seen-items-db-v1-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Vinted fast lane
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          WARDROBE_OS_URL: ${{ secrets.WARDROBE_OS_URL }}
+          WARDROBE_OS_SECRET: ${{ secrets.WARDROBE_OS_SECRET }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          FACEBOOK_PROXY_URL: ${{ secrets.FACEBOOK_PROXY_URL }}
+          EBAY_SCRAPE_PROXY_URL: ${{ secrets.EBAY_SCRAPE_PROXY_URL }}
+          SHOPGOODWILL_PROXY_URL: ${{ secrets.SHOPGOODWILL_PROXY_URL }}
+        run: python vinted_fast.py
+
+      - name: Save Vinted fast-lane state
+        id: vinted-fast-cache-save
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            vinted_fast_seen.db
+            vinted_fast_state.json
+            vinted_fast_log.jsonl
+          key: vinted-fast-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Prune superseded Vinted fast-lane caches
+        if: always() && steps.vinted-fast-cache-save.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_KEY: vinted-fast-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          gh cache list --limit 100 --order asc --sort created_at --json id,key \
+            --jq ".[] | select(.key | startswith(\"vinted-fast-state-v1-\")) | select(.key != env.CURRENT_KEY) | .id" \
+            | while read -r cache_id; do
+                [ -n "$cache_id" ] && gh cache delete "$cache_id" || true
+              done

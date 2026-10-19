@@ -1,0 +1,122 @@
+VINTED FAST LANE WORK LOG
+=========================
+
+2026-10-18 - baseline and design checkpoint
+-------------------------------------------
+- Read JEV_PREFILTER.txt, STEAL_ENGINE.txt, EBAY_STEAL_LANES.txt,
+  .github/workflows/poll.yml, the full Vinted adapter/session/circuit-breaker
+  path in platforms.py, and the requested scoring, category-profile, AI photo,
+  quality-gate, alert, seen-state, logging, focus, Jev, and AI-budget paths in
+  ebay_deal_alert.py before editing.
+- Verified the saved-search inventory: 27 searches explicitly include Vinted;
+  22 are enabled (2 Peter Millar/Gamecocks, 3 watches, 17 poker-chip searches).
+- Confirmed the TypeSafe image request contract directly from
+  https://docs.typesafe.ai/images: POST /v1/systemone with bearer auth,
+  TypeSafe-Danger-Zone-Images: true, a top-level assets map, and every asset
+  reference present in state/instructions/criteria. PNG/JPEG only; both sides
+  must be 280..1568 px; one invalid image rejects the whole request. Jev 1.13
+  and 1.14 accept images, and TypeSafe labels image support pre-production.
+- Untouched baseline: `python -m pytest -q` -> 909 passed, 4 existing lxml
+  deprecation warnings, 841 subtests passed in 28.15s.
+- Initial tracked worktree was clean. Pre-existing untracked files
+  .golf_history_2026_10_04.jsonl, golf_models_starter.json, and task.txt are
+  unrelated and will remain untouched. No fetch, pull, commit, or push was run.
+
+2026-10-18 - implementation and verification
+----------------------------------------------
+- Added vinted_fast.py: a bounded 70-minute, 22-search round-robin lane with a
+  hardcoded four-second request floor, 24-row newest-first pages, durable
+  per-search high-water markers, its own seen DB/log, main-seen-DB checks,
+  first-run baselining, compact minute summaries, 401 session refresh, and
+  60/120/240/480/900-second 403/429 backoff (capped at 15 minutes and reset by
+  a successful catalog response). It ignores FOCUS_SEARCH_IDS by design.
+- The pipeline is ordered cheap saved-search/scoring gates -> Jev -> the
+  existing category-aware photo check -> the existing steal-quality gate ->
+  the existing final sanity check -> send_alert. All finalized lane outcomes
+  use the compatible alerts-log schema in vinted_fast_log.jsonl and the lane
+  seen DB. A first observation only records a baseline, preventing deployment
+  from treating the existing catalog as new inventory.
+- NO_AI_BUDGET policy: when the 40-call lane cap or an existing provider/monthly
+  guard refuses a photo result, the row is logged with NO_AI_BUDGET and marked
+  seen. It is not retried next run. This deliberately protects the next run's
+  fresh listings from a growing stale backlog and makes every deferral visible.
+- Added direct TypeSafe image Jev with up to three resized baseline-JPEG assets,
+  reference strings in state, the required danger-zone header, category-specific
+  negative-only questions, and a <=0.05 skip threshold. Invalid/too-narrow
+  images are skipped; both dimensions of every submitted image are 280..1568.
+  Direct errors fail open. With no TYPESAFE_API_KEY, the existing OpenRouter
+  decision endpoint receives title/description only and also fails open.
+- Added golf image Jev in configurable off/shadow/skip modes, defaulting to
+  shadow. Its probability is retained as jev_image_iron_set on the normal alert
+  log row; shadow never changes the golf decision.
+- The main poll now excludes Vinted only when VINTED_FAST_ENABLED is true, so
+  its existing golf focus and all other marketplace behavior remain unchanged.
+- Added .github/workflows/vinted-fast.yml (hourly at :07, non-canceling
+  vinted-fast concurrency, 80-minute timeout, matching Python/dependency and
+  secret setup plus TYPESAFE_API_KEY). Only vinted_fast_seen.db,
+  vinted_fast_state.json, and vinted_fast_log.jsonl are saved/pruned under a
+  dedicated Actions-cache prefix. It also restores the latest main-poll seen
+  cache read-only for cross-lane dedupe, but never saves or commits that file,
+  so it does not conflict with poll.yml state.
+- The existing paid-provider ledger mirror is redirected to the cached lane
+  seen DB only for the lane process, so its unchanged monthly budget guard is
+  durable across hourly runs even though this workflow never commits poll
+  state. The original engine DB path is restored when the bounded run exits.
+- Live discovery: Vinted retired /api/v2/catalog/items. The anonymous adapter
+  now uses https://api.vinted.com/svc-catalogue/items with the homepage-issued
+  anon/access token headers (no account/login), current relative item URLs,
+  full_size_url photos, and item_box size/condition fields. The same public
+  item-page request used for seller descriptions now exposes gallery preload
+  images so Jev can see up to three listing photos.
+
+LIVE SMOKE (AI and alerts disabled)
+----------------------------------
+- Command mode: vinted_fast.py --dry-run --run-seconds 60, with temporary
+  state/seen/log paths. Dry-run bypassed the entire processing pipeline, made
+  no AI calls, sent no alerts, and persisted no high-water state.
+- Final result: 16 catalog requests; HTTP 200 x16; 0 HTTP 403; 0 HTTP 429;
+  0 backoffs; 0 new items. Zero new is expected because the initial pass
+  establishes each visited search's high-water baseline.
+- Five observed samples:
+    $45.00 - Peter Millar Polo
+    $2.00  - Red Polo Club Modern Fit-Small
+    $40.00 - Hog breath poli
+    $29.99 - Peter Millar Black and Pink Striped Polo
+    $21.00 - Peter Millar Summer Comfort Shirt Golf Polo Mens XL Pink Short Sleeve
+  These are raw catalog samples, not accepted candidates; the saved-search
+  relevance, size, exclusion, scoring, Jev, and AI gates run only for genuinely
+  new items outside dry-run mode.
+
+REQUEST AND COST BOUNDS
+-----------------------
+- The four-second floor permits at most 15 paced Vinted catalog/item-page
+  requests per minute: 900/hour or 1,050 in a full 70-minute run. With no new
+  candidates, 22 searches are revisited about every 88 seconds (~41 times/hour
+  each). A title-relevant new item can consume one paced public-page slot, so it
+  displaces rather than adds to that 900/hour Vinted request ceiling. Image-CDN
+  downloads and TypeSafe/AI provider calls are separate from this API/page rate.
+- At most 40 real photo checks are attempted per lane run. With the configured
+  paid-provider reservation bounds, the worst local paid-AI reservation is
+  40 x $0.01 vision plus up to 40 x $0.002 final text sanity = $0.48/run. The
+  unchanged $10 monthly ledger remains the harder aggregate cap. TypeSafe/OpenRouter
+  Jev provider billing is external to that local ledger.
+
+TESTS AND STATIC VALIDATION
+---------------------------
+- Added test_vinted_fast.py with 12 mocked tests covering newer-than-watermark
+  selection, 429 backoff, four-second pacing, Jev asset/header/reference and
+  resize/skip rules, missing/error fail-open, text fallback, low-score skip,
+  AI-pass alerting, AI-fail suppression, lane AI cap, main-poll Vinted exclusion,
+  and golf shadow logging. No existing test file was edited.
+- Final full suite: 921 passed, 4 existing lxml deprecation warnings, 841
+  subtests passed in 32.80s.
+- ast.parse passed for all touched Python files; json.load passed for config;
+  config.json remains 100% CRLF (3,626 LF bytes, all 3,626 preceded by CR);
+  git diff --check passed. PyYAML safe_load and structural workflow assertions
+  passed. The actionlint executable was not installed, so no binary actionlint
+  run was possible.
+- Skipped by design: no real ntfy alert, no real category AI call, and no live
+  TypeSafe request (the machine had no development key and the smoke explicitly
+  required AI disabled). No login, CAPTCHA, proxy rotation, commit, push, pull,
+  or fetch was attempted.
+
