@@ -369,6 +369,184 @@ class EbayRotationCapacity(unittest.TestCase):
             ]
             self.assertLessEqual(max(cyclic_gaps), 3)
 
+    def test_full_official_lane_cycle_never_exceeds_sixteen_search_calls(self):
+        config = m.load_config()
+        enabled = [
+            search
+            for search in config["SAVED_SEARCHES"]
+            if search.get("enabled", True)
+        ]
+        with mock.patch.object(m, "FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"]):
+            focused = m._focus_filter(enabled)
+        eligible = m._ebay_eligible_searches(focused)
+        fast = [search for search in eligible if search.get("profile") == "fast"]
+        slow = [search for search in eligible if search.get("profile") != "fast"]
+        auction = [{**m.GOLF_EBAY_AUCTION_SEARCH, "is_auction_search": True}]
+        expected_models = {
+            search["id"]
+            for search in eligible
+            if search["id"] not in m.EBAY_REGULAR_FALLBACK_SEARCH_IDS
+        }
+        appearances = {search_id: [] for search_id in expected_models}
+
+        # LCM(21 model searches, 3 fresh, 2 pickup, 11 hidden) is 462.
+        for run_number in range(462):
+            plan = m._build_ebay_search_plan(
+                fast,
+                slow,
+                auction,
+                run_number,
+                include_golf_lanes=True,
+            )
+            self.assertLessEqual(
+                plan["search_call_count"], m.EBAY_SEARCH_CALLS_PER_RUN_CAP
+            )
+            self.assertEqual(plan["search_call_count"], 16)
+            self.assertEqual(len(plan["regular"]), 11)
+            self.assertEqual(len(plan["special"]), 4)
+            self.assertEqual(len(plan["auctions"]), 1)
+            for search in plan["regular"]:
+                appearances[search["id"]].append(run_number)
+
+        self.assertEqual(len(expected_models), 21)
+        self.assertTrue(all(appearances.values()))
+        for search_id, runs in appearances.items():
+            with self.subTest(search_id=search_id):
+                cyclic_gaps = [
+                    (runs[(index + 1) % len(runs)] - run_number) % 462
+                    for index, run_number in enumerate(runs)
+                ]
+                self.assertLessEqual(max(cyclic_gaps), 2)
+
+    def test_golf_auction_count_does_not_rotate_away_legacy_auction_lanes(self):
+        regular = [
+            {"id": f"regular-{index}", "query": f"query {index}", "profile": "fast"}
+            for index in range(20)
+        ]
+        legacy = [
+            {"query": "watch", "category_id": "31387"},
+            {"query": "cardholder", "category_id": "260012"},
+            {"query": "suit", "category_id": "3001"},
+        ]
+        golf = [{**m.GOLF_EBAY_AUCTION_SEARCH, "is_auction_search": True}]
+
+        plan = m._build_ebay_search_plan(
+            regular,
+            [],
+            legacy + golf,
+            0,
+            include_golf_lanes=True,
+        )
+
+        self.assertEqual(plan["auctions"], legacy + golf)
+        self.assertEqual(plan["search_call_count"], 16)
+
+
+class EbayOfficialGolfLaneRequests(unittest.TestCase):
+    FIXED_NOW = datetime(2026, 10, 15, 12, 34, 56, tzinfo=timezone.utc)
+
+    def _call(self, search, items=None):
+        response = mock.Mock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "itemSummaries": list(items or []),
+            "total": len(items or []),
+        }
+        with mock.patch("requests.get", return_value=response) as get:
+            listings, total = m.search_ebay_official_golf_lane(
+                "fake-token", search, now=self.FIXED_NOW
+            )
+        return listings, total, get.call_args.kwargs["params"]
+
+    def test_fresh_bin_uses_exact_one_hour_fixed_price_filter(self):
+        _listings, total, params = self._call(m.EBAY_FRESH_BIN_SEARCHES[0])
+
+        self.assertEqual(total, 0)
+        self.assertEqual(params["q"], "irons")
+        self.assertEqual(params["category_ids"], "115280")
+        self.assertEqual(params["sort"], "newlyListed")
+        self.assertEqual(
+            params["filter"],
+            "buyingOptions:{FIXED_PRICE},"
+            "itemStartDate:[2026-10-15T11:34:56.000Z..2026-10-15T12:34:56.000Z],"
+            "price:[0..400],priceCurrency:USD,deliveryCountry:US,"
+            "deliveryPostalCode:29201",
+        )
+
+    def test_local_pickup_uses_best_match_default_and_exact_radius_filter(self):
+        _listings, _total, params = self._call(m.EBAY_LOCAL_PICKUP_SEARCHES[0])
+
+        self.assertEqual(params["q"], "golf clubs")
+        self.assertEqual(params["category_ids"], "115280")
+        self.assertEqual(params["fieldgroups"], "EXTENDED")
+        self.assertNotIn("sort", params, "omitted sort is Browse Best Match")
+        self.assertEqual(
+            params["filter"],
+            "deliveryOptions:{SELLER_ARRANGED_LOCAL_PICKUP},pickupCountry:US,"
+            "pickupPostalCode:29201,pickupRadius:90,pickupRadiusUnit:mi,"
+            "price:[0..400],priceCurrency:USD",
+        )
+
+    def test_hidden_typo_query_disables_autocorrect_and_keeps_golf_category(self):
+        _listings, _total, params = self._call(m.EBAY_HIDDEN_INVENTORY_SEARCHES[0])
+
+        self.assertEqual(params["q"], "(calloway,callway) irons")
+        self.assertEqual(params["category_ids"], "115280")
+        self.assertNotIn("auto_correct", params)
+        self.assertEqual(
+            params["filter"],
+            "price:[0..400],priceCurrency:USD,deliveryCountry:US,"
+            "deliveryPostalCode:29201",
+        )
+
+    def test_hidden_broad_query_is_intentionally_uncategorized(self):
+        broad = next(
+            search
+            for search in m.EBAY_HIDDEN_INVENTORY_SEARCHES
+            if search["query"] == "golf bag with clubs"
+        )
+        _listings, _total, params = self._call(broad)
+
+        self.assertNotIn("category_ids", params)
+        self.assertNotIn("auto_correct", params)
+
+    def test_pickup_shipping_is_zero_only_when_no_shippable_option_exists(self):
+        pickup_only = {
+            "itemId": "v1|pickup-only|0",
+            "title": "Callaway Rogue Iron Set 5-PW Right Handed",
+            "price": {"value": "100.00", "currency": "USD"},
+            "itemLocation": {"city": "Columbia", "stateOrProvince": "SC"},
+        }
+        listings, _total, _params = self._call(
+            m.EBAY_LOCAL_PICKUP_SEARCHES[0], [pickup_only]
+        )
+        listing = listings[0]
+        result = {}
+        m._refresh_result_shipping(result, listing, 100.0)
+        self.assertTrue(listing["is_pickup_only"])
+        self.assertTrue(result["shipping_cost_known"])
+        self.assertEqual(result["shipping_cost"], 0.0)
+        self.assertAlmostEqual(result["price"], 106.0)
+
+        shippable = {
+            **pickup_only,
+            "itemId": "v1|pickup-and-ship|0",
+            "shippingOptions": [
+                {"shippingCost": {"value": "25.00", "currency": "USD"}}
+            ],
+        }
+        listings, _total, _params = self._call(
+            m.EBAY_LOCAL_PICKUP_SEARCHES[0], [shippable]
+        )
+        listing = listings[0]
+        result = {}
+        m._refresh_result_shipping(result, listing, 100.0)
+        self.assertFalse(listing["is_pickup_only"])
+        self.assertTrue(result["shipping_cost_known"])
+        self.assertEqual(result["shipping_cost"], 25.0)
+        self.assertAlmostEqual(result["price"], 132.5)
+
 
 class FunnelAuditConfiguration(unittest.TestCase):
     @staticmethod
@@ -1144,6 +1322,32 @@ class GolfCatalogModels(unittest.TestCase):
                 match = m.golf_catalog_title_match(title)
                 self.assertEqual(match["key"] if match else None, expected)
 
+    def test_unambiguous_typo_brands_map_to_real_catalog_models(self):
+        cases = (
+            ("Calloway Rogue iron set 5-PW RH", "callaway rogue"),
+            ("Taylormaid P790 irons 4-PW right handed", "taylormade p790"),
+            ("Titliest T200 iron set 5-PW RH", "titleist t200"),
+            ("Mizunno JPX 923 Hot Metal irons 5-GW", "mizuno jpx 923"),
+            ("Pings G425 iron set 4-PW right hand", "ping g425"),
+            ("Clevland Launcher iron set 5-PW RH", "cleveland launcher"),
+            ("Srixen ZX5 forged irons 5-PW", "srixon zx"),
+            (
+                "Cobera LTDx iron set 5-PW right handed",
+                "cobra radspeed/ltdx/aerojet/darkspeed",
+            ),
+        )
+        for title, expected in cases:
+            with self.subTest(title=title):
+                match = m.golf_catalog_title_match(title)
+                self.assertIsNotNone(match)
+                self.assertEqual(match["key"], expected)
+
+    def test_catalog_typo_normalization_does_not_change_the_listing_title(self):
+        title = "Calloway Rogue iron set 5-PW RH"
+        listing = {"title": title}
+        m.golf_catalog_value({"listing": listing, "price": 150.0})
+        self.assertEqual(listing["title"], title)
+
     def test_piece_count_scales_down_and_conflicting_ai_model_uses_lower_value(self):
         result = {
             "listing": {"title": "TaylorMade P790 Iron Set 5-PW Right Handed"},
@@ -1167,6 +1371,146 @@ class GolfCatalogModels(unittest.TestCase):
                 self.assertEqual(m._load_golf_models(missing), [])
             with self.assertLogs("ebay_deal_alert", level="WARNING"):
                 self.assertEqual(m._load_golf_models(corrupt), [])
+
+
+class GolfStealLaneObservers(unittest.TestCase):
+    @staticmethod
+    def _candidate(item_id, ratio=None, *, fresh=False, category="golf-equipment",
+                   auction=False):
+        result = {
+            "listing": {"itemId": item_id},
+            "is_fresh_bin": fresh,
+            "is_ending_soon_auction": auction,
+        }
+        if ratio is not None:
+            result["golf_catalog_key"] = "test model"
+            result["golf_steal_ratio"] = ratio
+        return {"category": category, "result": result}
+
+    def test_fresh_catalog_candidate_at_seventy_percent_jumps_ratio_order(self):
+        candidates = [
+            self._candidate("auction", 0.20, auction=True),
+            self._candidate("ratio-40", 0.40),
+            self._candidate("watch", category="watches"),
+            self._candidate("fresh-69", 0.69, fresh=True),
+            self._candidate("fresh-72", 0.72, fresh=True),
+            self._candidate("unmatched"),
+        ]
+
+        ordered = m._prioritize_golf_photo_candidates(candidates)
+        ordered_ids = [row["result"]["listing"]["itemId"] for row in ordered]
+
+        self.assertEqual(
+            ordered_ids,
+            [
+                "auction",
+                "fresh-69",
+                "watch",
+                "ratio-40",
+                "fresh-72",
+                "unmatched",
+            ],
+        )
+
+    @staticmethod
+    def _p790_listing(item_id, landed):
+        return {
+            "itemId": item_id,
+            "title": "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+            "price": {"value": str(landed / 1.06), "currency": "USD"},
+            "shippingOptions": [
+                {"shippingCost": {"value": "0.00", "currency": "USD"}}
+            ],
+            "buyingOptions": ["FIXED_PRICE"],
+        }
+
+    def test_ten_percent_price_drop_recheck_records_new_steal_crossing(self):
+        state = {"schema_version": 1, "items": {}}
+        first = self._p790_listing("v1|price-drop|0", 300.0)
+        dropped = self._p790_listing("v1|price-drop|0", 270.0)
+
+        self.assertIsNone(
+            m.observe_golf_item_price(
+                state, first, now=datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+            )
+        )
+        recheck = m.observe_golf_item_price(
+            state, dropped, now=datetime(2026, 10, 15, 12, 5, tzinfo=timezone.utc)
+        )
+
+        self.assertAlmostEqual(recheck["previous_landed_price"], 300.0)
+        self.assertAlmostEqual(recheck["current_landed_price"], 270.0)
+        self.assertAlmostEqual(recheck["drop_fraction"], 0.10)
+        self.assertEqual(recheck["steal_line"], 275.0)
+        self.assertTrue(recheck["crossed_steal_line"])
+
+    def test_price_observer_persists_only_small_bounded_json_state(self):
+        state = {"schema_version": 1, "items": {}}
+        m.observe_golf_item_price(
+            state,
+            self._p790_listing("v1|persisted-price|0", 300.0),
+            now=datetime(2026, 10, 15, 12, tzinfo=timezone.utc),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "golf_price_state.json"
+            self.assertTrue(m.save_golf_price_state(state, path))
+            loaded = m.load_golf_price_state(path)
+        self.assertEqual(loaded, state)
+
+    @staticmethod
+    def _best_offer_result():
+        return {
+            "listing": {
+                "itemId": "v1|best-offer|0",
+                "title": "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+                "itemWebUrl": "https://www.ebay.com/itm/best-offer",
+                "platform": "ebay",
+                "buyingOptions": ["FIXED_PRICE", "BEST_OFFER"],
+            },
+            "category": "golf-equipment",
+            "profile": "fast",
+            "price": 300.0,
+            "item_price": 300 / 1.06,
+            "shipping_cost": 0.0,
+            "shipping_cost_known": True,
+            "golf_ai_checked": True,
+            "golf_handedness_confirmed": True,
+            "golf_brand_claims_present": True,
+            "golf_brand_claims_confirmed": True,
+            "golf_is_left_handed": False,
+            "golf_counterfeit_suspected": False,
+            "damage_found": False,
+        }
+
+    def test_best_offer_target_is_advisory_and_never_clears_price_gate(self):
+        result = self._best_offer_result()
+
+        target = m.annotate_golf_best_offer_target(result)
+
+        self.assertEqual(target, 259.43)
+        self.assertEqual(result["golf_best_offer_steal_line"], 275.0)
+        self.assertEqual(result["price"], 300.0)
+        self.assertNotIn("golf_delivery_path", result)
+        self.assertFalse(m.golf_catalog_steal_price_path_applies(result, 300.0))
+
+    def test_best_offer_alert_line_states_the_actual_offer_target(self):
+        result = self._best_offer_result()
+        m.annotate_golf_best_offer_target(result)
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        captured = {}
+
+        def capture_post(_url, data=None, **_kwargs):
+            captured["message"] = data.decode("utf-8")
+            return response
+
+        with mock.patch("requests.post", side_effect=capture_post):
+            m.send_alert(result)
+
+        self.assertIn(
+            "Best Offer: an offer of $259.43 (=55% line) would make this a steal",
+            captured["message"],
+        )
 
 
 class GolfEquipmentGate(unittest.TestCase):
@@ -6373,6 +6717,32 @@ class EbayEndingSoonAuctions(unittest.TestCase):
         self.assertIn("buyingOptions:{AUCTION}", sent_filter)
         self.assertIn("itemEndDate:[", sent_filter)
 
+    def test_low_bid_golf_lane_uses_exact_two_hour_server_filter_and_sort(self):
+        response = mock.Mock()
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"itemSummaries": [], "total": 0}
+        now = datetime(2026, 10, 15, 12, 34, 56, tzinfo=timezone.utc)
+
+        with mock.patch("requests.get", return_value=response) as get:
+            listings, total = m.search_ebay_ending_soon_auctions(
+                "fake-token", m.GOLF_EBAY_AUCTION_SEARCH, now=now
+            )
+
+        self.assertEqual(listings, [])
+        self.assertEqual(total, 0)
+        params = get.call_args.kwargs["params"]
+        self.assertEqual(params["q"], "golf irons")
+        self.assertEqual(params["category_ids"], "115280")
+        self.assertEqual(params["sort"], "endingSoonest")
+        self.assertEqual(
+            params["filter"],
+            f"{m.EBAY_SECONDHAND_CONDITION_FILTER},itemLocationCountry:US,"
+            "price:[0..400],priceCurrency:USD,buyingOptions:{AUCTION},"
+            "bidCount:[..1],"
+            "itemEndDate:[2026-10-15T12:34:56.000Z..2026-10-15T14:34:56.000Z]",
+        )
+
     def test_already_ended_excluded(self):
         listings, _ = self._search([self._item(-5)])
         self.assertEqual(listings, [])
@@ -6776,6 +7146,27 @@ class SendAlertFacebookLocationLine(unittest.TestCase):
                 result["listing"]["platform"] = platform
                 message = self._send_and_capture(result)
                 self.assertIn("\U0001f4cd Columbia, SC (~4 mi)", message)
+
+    def test_ebay_pickup_uses_structured_city_state_and_pickup_suffix(self):
+        result = {
+            "listing": {
+                "title": "Callaway Rogue Iron Set 5-PW Right Handed",
+                "itemWebUrl": "https://www.ebay.com/itm/pickup",
+                "platform": "ebay",
+                "is_local_pickup": True,
+                "is_pickup_only": True,
+                "itemLocation": {
+                    "city": "Columbia",
+                    "stateOrProvince": "South Carolina",
+                },
+            },
+            "price": 180.0,
+            "category": "golf-equipment",
+        }
+
+        message = self._send_and_capture(result)
+
+        self.assertIn("\U0001f4cd Columbia, SC pickup", message)
 
     def test_no_location_line_when_description_empty(self):
         message = self._send_and_capture(self._fb_result(""))
@@ -9234,6 +9625,7 @@ class RunIntegration(unittest.TestCase):
         ])
         self._patch("FOCUS_SEARCH_IDS", config["FOCUS_SEARCH_IDS"])
         self._patch("EBAY_FAST_SEARCHES_PER_RUN", 100)
+        self._patch("EBAY_SEARCH_CALLS_PER_RUN_CAP", 100)
         self._patch("EBAY_SCRAPE_ENABLED", True)
         self._patch("EBAY_AUCTION_SEARCHES", [{
             "query": "watch -pocket",
@@ -12413,6 +12805,96 @@ class RunIntegration(unittest.TestCase):
         self._serve(self._catalog_golf_search(), [over])
         m.run()
         self.assertEqual(len(self.alerts), 1)
+
+    def test_seen_catalog_item_is_rechecked_after_drop_and_alerts_on_crossing(self):
+        self._patch("_configured_gemini_api_keys", lambda: [])
+        self.ai_result = self._catalog_golf_ai("TaylorMade", "P790", 2017)
+        item_id = "v1|catalog-price-drop|0"
+        dropped = self._ebay_item(
+            item_id,
+            "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+            270 / 1.06,
+        )
+        self._serve(self._catalog_golf_search(), [dropped])
+
+        conn = m.init_db()
+        try:
+            m.mark_seen(
+                conn,
+                item_id,
+                m.listing_fingerprint(dropped),
+                300 / 1.06,
+            )
+        finally:
+            conn.close()
+        state = {
+            "schema_version": 1,
+            "items": {
+                item_id: {
+                    "landed_price": 300.0,
+                    "observed_at": "2026-10-15T11:00:00+00:00",
+                    "catalog_key": "taylormade p790",
+                }
+            },
+        }
+        self.assertTrue(m.save_golf_price_state(state))
+
+        m.run()
+
+        self.assertEqual(len(self.alerts), 1)
+        alerted = self.alerts[0]
+        self.assertEqual(alerted["listing"]["itemId"], item_id)
+        self.assertTrue(alerted["golf_price_drop_recheck"])
+        self.assertTrue(alerted["golf_price_drop_crossed_steal_line"])
+        self.assertEqual(alerted["golf_delivery_path"], "catalog-steal")
+        persisted = m.load_golf_price_state()
+        self.assertEqual(persisted["items"][item_id]["landed_price"], 270.0)
+
+    def test_seen_price_drop_does_not_alert_until_it_crosses_catalog_line(self):
+        self._patch("_configured_gemini_api_keys", lambda: [])
+        self.ai_result = self._catalog_golf_ai(
+            "TaylorMade", "P790", 2017, resale=1000
+        )
+        item_id = "v1|catalog-price-drop-above-line|0"
+        dropped = self._ebay_item(
+            item_id,
+            "TaylorMade P790 Iron Set 4-PW 7pc Right Handed",
+            288 / 1.06,
+        )
+        self._serve(self._catalog_golf_search(), [dropped])
+        conn = m.init_db()
+        try:
+            m.mark_seen(
+                conn,
+                item_id,
+                m.listing_fingerprint(dropped),
+                320 / 1.06,
+            )
+        finally:
+            conn.close()
+        self.assertTrue(m.save_golf_price_state({
+            "schema_version": 1,
+            "items": {
+                item_id: {
+                    "landed_price": 320.0,
+                    "observed_at": "2026-10-15T11:00:00+00:00",
+                    "catalog_key": "taylormade p790",
+                }
+            },
+        }))
+
+        m.run()
+
+        self.assertEqual(self.alerts, [])
+        self.assertEqual(
+            self.ai_calls,
+            [item_id],
+            "a qualifying markdown gets one real re-check even above the line",
+        )
+        (record,) = self._alert_log_records()
+        self.assertTrue(record["golf_price_drop_recheck"])
+        self.assertFalse(record["golf_price_drop_crossed_steal_line"])
+        self.assertEqual(record["disposition_code"], "BELOW_MARGIN")
 
     def test_catalog_amp_mid_price_does_not_deliver(self):
         self.ai_result = self._catalog_golf_ai("Cobra", "AMP", 2012, resale=160)

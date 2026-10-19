@@ -1,0 +1,100 @@
+EBAY OFFICIAL-BROWSE STEAL LANES WORK LOG / FINAL REPORT
+Date: 2026-10-15
+
+PROGRESS
+- Read STEAL_ENGINE.txt, LOCAL_LANES.txt, and the RANKED ACTION LIST in C:\tmp\claude\steal\STEAL_SOURCES_RESEARCH.txt before implementation.
+- Confirmed the initial worktree contains three unrelated untracked files: .golf_history_2026_10_04.jsonl, golf_models_starter.json, and task.txt. They will not be modified.
+- Began tracing the existing official Browse search/rotation, ending-soon golf auction, quota breaker, seen/fingerprint dedupe, catalog-steal, photo priority, pickup location rendering, alert, and workflow state-file paths.
+- Constraints recorded: no fetch/pull/push/commit; official Browse API only; preserve protected AI/golf config and all non-golf behavior; keep config.json 100% CRLF with surgical edits.
+- Untouched baseline validation: 891 passed, 4 existing lxml deprecation warnings, 812 subtests passed in 26.09s.
+
+- Re-read all three required design/research sources in this session and verified the requested lanes align with the ranked official-API recommendations. The existing report and worktree are being continued in place; no pre-existing files have been discarded.
+
+- Verified against current official eBay documentation that Browse supports `bidCount:[..1]`, `sort=endingSoonest`, pickup-radius filters, and millisecond UTC date ranges (`yyyy-MM-ddTHH:mm:ss.sssZ`). The implementation will use `.000Z`, omit `auto_correct`, and request `fieldgroups=EXTENDED` only where pickup city data is needed.
+- Quota design checkpoint: reserve 2 fresh-BIN + 1 local-pickup + 1 hidden-inventory + 1 existing golf-auction call per run, reduce the regular focused rotation to 11 model calls, and enforce a 16-search hard planner cap. Broad regular duplicates become fallback-only while all 21 model searches stay in the active rotation.
+- Photo-priority decision: ending auctions remain first globally; among non-auction golf, a fresh-BIN catalog match at landed/catalog <= 0.70 precedes the normal lowest-ratio ordering. This spends scarce photo checks on time-sensitive plausible mistakes without letting fresh but obviously market-priced rows outrank materially better catalog ratios.
+- Live-check prerequisite audit: neither EBAY_CLIENT_ID nor EBAY_CLIENT_SECRET is present in the environment and no token cache exists. No live Browse calls can be run from this workspace; no secret values were printed.
+
+- Implemented the four official Browse discovery lanes under one shared planner cap, added catalog-only typo aliases, pickup-only shipping semantics/location rendering, fresh-photo priority, price observation/re-check state, and advisory-only Best Offer text. No getItem calls were added.
+- Added golf_price_state.json and changed poll.yml only in its three state-file commit/conflict lists so the observer survives GitHub Actions runs. Added the requested per-lane configuration keys and reduced regular Browse rotation to 11 calls; config.json remains valid and 100% CRLF after the surgical edit.
+
+- Added focused coverage for every lane's exact Browse parameters, the 462-run least-common-multiple rotation cycle and 16-call cap, pickup-only versus pickup-plus-shipping landed math, structured pickup alert location, typo aliases, fresh-first photo ordering, low-bid auction filtering, JSON price-state persistence, seen-item price-drop reopening/crossing behavior, and Best Offer advisory text/non-delivery.
+- Existing-test edit checkpoint: only test_runtime_focus_executes_only_focus_searches_across_ebay_lanes was adjusted, adding a test-local EBAY_SEARCH_CALLS_PER_RUN_CAP=100 override alongside its existing EBAY_FAST_SEARCHES_PER_RUN=100 override. This preserves that test's deliberate "run every focused search" setup despite the new production cap; no behavioral assertion was weakened.
+
+FINAL REPORT
+
+WHAT CHANGED
+
+A. FRESH BIN
+- Added three official Browse descriptors: "irons", "iron set", and "golf clubs set". Two rotate per run.
+- Requests use category_ids=115280, sort=newlyListed, and the exact filter shape buyingOptions:{FIXED_PRICE},itemStartDate:[NOW-1H.000Z..NOW.000Z],price:[0..400],priceCurrency:USD,deliveryCountry:US,deliveryPostalCode:29201.
+- 115280 is the current eBay-US Golf Clubs leaf already verified by this repository's taxonomy tests; iron-set identity is an aspect inside that leaf, so there is no narrower iron-set child to add.
+- Ending auctions retain absolute first priority. Within non-auction golf and the existing fresh/stale partitions, fresh-BIN catalog matches at landed/catalog <= 0.70 go first, then normal catalog-ratio ordering resumes. This gives a plausible first-hour seller mistake its latency advantage without letting newly listed market-priced inventory outrank a materially stronger steal.
+
+B. LOCAL PICKUP
+- Added "golf clubs" and "iron set" descriptors, one per run, with category_ids=115280 and fieldgroups=EXTENDED so itemLocation.city is available without getItem.
+- Exact filter: deliveryOptions:{SELLER_ARRANGED_LOCAL_PICKUP},pickupCountry:US,pickupPostalCode:29201,pickupRadius:90,pickupRadiusUnit:mi,price:[0..400],priceCurrency:USD.
+- sort is intentionally omitted: Browse's default is Best Match, and eBay documents pickup-radius filtering as Best-Match-only.
+- A result gets known $0 shipping only when the pickup lane exposes no shippable shippingOptions. If a listing offers pickup plus shipping, the real shipping option is retained and charged. Tax remains applied to item plus shipping.
+- Alerts reuse the existing pin renderer and show, for example, "📍 Columbia, SC pickup" from structured itemLocation data.
+
+C. HIDDEN INVENTORY
+- Added an 11-entry rotating bank: eight grouped typo searches plus three uncategorized broad searches. One runs per poll, so every entry is revisited every 55 minutes.
+- Typo groups cover calloway/callway, taylor made/taylormaid, titelist/titliest, mizunno/mizino/misuno, pings/pingg, clevland/clevelnd, srixen/srixion, and cobera/corba/cobraa. auto_correct is never sent.
+- Broad "golf clubs", "set of irons", and "golf bag with clubs" requests deliberately omit category_ids. All results still enter the existing golf title, wrong-item, left-handed, accessory, condition, photo, and delivery gates.
+- Added a small brand-alias normalizer used only inside catalog matching. It maps real-looking misspelled titles to the existing catalog keys without changing listing text, search relevance, configuration, or golf_models.json.
+
+D. LOW-BID AUCTION
+- Extended the existing golf auction lane rather than adding a duplicate: buyingOptions:{AUCTION}, bidCount:[..1], itemEndDate:[NOW.000Z..NOW+2H.000Z], sort=endingSoonest, and price:[0..400],priceCurrency:USD.
+- The server-side bid filter is supported by current Browse documentation. Current price remains the steal input; the existing urgent alert line continues to state minutes left and bid count.
+- The golf-auction count key applies only to golf. Existing non-golf auction lanes remain always-on if a future focus includes them, while the shared hard cap still limits the total.
+
+E. PRICE DROP / BEST OFFER
+- Added golf_price_state.json, atomically written and capped at the newest 5,000 catalog-matched eBay items. poll.yml was changed only in its three state-file status/stage/conflict lists.
+- A known-shipping non-auction catalog item is reopened despite seen-item dedupe when landed price is at least 10% below its previous observation. It can alert only when that observation newly crosses the 55% catalog line; an above-line markdown receives one real evaluation but no push.
+- BEST_OFFER listings within 15% above the steal line receive a tax- and shipping-aware advisory: "Best Offer: an offer of $X (=55% line) would make this a steal". The hypothetical price never changes the scored landed price or grants a delivery path. No offer, bid, login, or purchase automation was added.
+
+QUOTA AND ROTATION MATH
+- Shipped-focus allocation per run: 11 model searches + 2 fresh BIN + 1 local pickup + 1 hidden inventory + 1 golf auction = 16 Browse search calls.
+- Daily search maximum: 16 * 288 five-minute runs = 4,608 calls/day.
+- New getItem calls: 0. Therefore the planned search total plus newly added getItem calls is 4,608/day, below the requested 4,700/day ceiling. Existing detail-enrichment behavior was not expanded, and the pre-call quota guard still budgets its existing possible detail calls before starting a run.
+- A single planner owns regular, special, and auction allocation and hard-caps all scheduled searches at 16 even if lane configuration is raised. A test covers the full 462-run least-common-multiple cycle and every run is <=16 (the shipped plan is exactly 16).
+- The 12 broad/generic regular searches that overlap the new discovery lanes are fallback-only for official Browse; they remain available to existing free marketplace adapters and were not removed from config.
+- All 21 focused model searches remain in the official rotation: Callaway Rogue, Mavrik, Rogue ST, Apex, Paradym; Ping G30, G400, G425, G410, i210, i500; TaylorMade P790, Stealth, SIM2; Titleist T200, T100; Mizuno JPX 921, JPX 923; Srixon ZX5; Cobra LTDx, F8.
+- Model cadence: 11 of 21 per run. Every model reappears within 1-2 runs (5-10 minutes), averaging 21/11 * 5 = 9.55 minutes. Fresh queries revisit in 5-10 minutes, local queries every 10 minutes, hidden entries every 55 minutes, and the auction lane every 5 minutes.
+- EBAY_SLOW_SEARCHES_PER_RUN remains 2 for non-golf/backward-compatible fallback behavior. In the shipped all-fast focus it receives no extra capacity after the exact 16-call allocation, so it does not change the 4,608/day math.
+
+RATE LIMITS, SEEN STATE, AND NON-GOLF SCOPE
+- New official lanes use the same OAuth token, HTTP error handling, 429 retry, circuit-breaker trip/clear logic, and direct quota preflight as existing Browse searches.
+- Existing seen/fingerprint dedupe remains authoritative. Only a persisted >=10% catalog price drop can reopen an already-seen fixed-price golf item; ending-auction handling remains separate.
+- Protected AI budget/provider/batch settings, GOLF_STRONG_VISION_*, JEV_*, GOLF_STEAL_FRACTION, GOLF_STEAL_MAX_LANDED_PRICE, golf_models.json, category_profiles.json, chrome-extension/*, web/*, and non-golf scoring/delivery behavior were not changed.
+
+LIVE CHECK
+- Skipped. EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are absent from both the environment and config, and no local token cache exists. No live Browse request could be authenticated, so there are no honest result counts or sample titles/prices to report. Secret values were never printed.
+
+TESTS
+- Untouched baseline: 891 passed, 4 warnings, 812 subtests passed in 26.09s.
+- Final: 909 passed, 3 existing lxml deprecation warnings, 841 subtests passed in 33.07s.
+- Added 18 tests covering exact request filters/params for fresh, pickup, typo, uncategorized, and auction lanes; full-cycle quota/cadence; legacy auction preservation; pickup-only landed math; structured pickup alert text; typo catalog aliases; fresh-first photo ordering; state persistence; seen-item price-drop rechecks both above and across the line; and advisory-only Best Offer math/text.
+- Existing tests edited: only test_runtime_focus_executes_only_focus_searches_across_ebay_lanes. It already forced EBAY_FAST_SEARCHES_PER_RUN=100 to execute the whole focus; it now also forces EBAY_SEARCH_CALLS_PER_RUN_CAP=100 so that deliberate all-search fixture is not constrained by the new production cap.
+
+VALIDATION
+- ast.parse succeeded for ebay_deal_alert.py and test_ebay_deal_alert.py.
+- json.load succeeded for config.json and golf_price_state.json.
+- config.json contains 3,623 LF bytes, all 3,623 paired as CRLF; bare LF count is 0 (100% CRLF).
+- Protected config values compare equal to origin/main; protected paths have no diff.
+- git diff --check is clean.
+- No fetch, pull, push, commit, login, scraping, bid, offer, or purchase action was performed.
+
+OFFICIAL REFERENCES CHECKED
+- Browse field filters: https://www.developer.ebay.com/api-docs/buy/static/ref-buy-browse-filters.html
+- Browse inventory discovery/sort guidance: https://www.developer.ebay.com/develop/guides/buy/inventory-discovery-and-refresh-guide
+- Browse release notes (endingSoonest): https://www.developer.ebay.com/develop/api/browse-api/release-notes
+- Buy taxonomy overview: https://developer.ebay.com/api-docs/buy/buy-categories.html
+
+SKIPPED / NOT ADDED
+- No live samples, solely because credentials are unavailable.
+- No narrower iron-set category, because 115280 is already the Golf Clubs leaf and iron-set specificity belongs in query/title/aspect gates.
+- No getItem calls, scraping fallback, login flow, bid automation, offer automation, or hypothetical-offer alert delivery.
+- The owner's unrelated untracked .golf_history_2026_10_04.jsonl, golf_models_starter.json, and task.txt were left untouched. The worktree remains uncommitted and unpushed.
+

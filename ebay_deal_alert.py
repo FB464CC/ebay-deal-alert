@@ -368,21 +368,44 @@ MARKETPLACE_QUERY_STOPWORDS = set(_CONFIG.get("MARKETPLACE_QUERY_STOPWORDS", [])
 # it moves more listings.
 #
 # eBay's Browse API default limit is a hard 5,000 calls/day. The focused
-# catalog currently contains 23 fast searches and zero slow searches. A
-# measured provider day used 3,579 calls and ended with 1,420 unused; filling
-# the circular rotation at 14 fast calls/run projects to 4,299/day including
-# the observed detail-call load (86%), leaving about 701 calls of real margin.
-# The configured two-call slow slice is dormant while focus contains no slow
-# searches, but remains available if the focus is broadened later. Sitting at
-# the edge of quota is deliberately avoided: a tripped breaker blocks ALL
-# eBay calls for 30-120 minutes, the exact shape of the prior Aug 9 outage.
+# catalog contains 21 model-specific searches after broad overlaps move to
+# fallback status. Eleven regular calls plus the five official golf discovery
+# calls below total 16 searches/run = 4,608/day at a five-minute cadence.
+# Sitting at the edge of quota is deliberately avoided: a tripped breaker
+# blocks ALL eBay calls for 30-120 minutes, the exact shape of the prior Aug 9
+# outage.
 #
 # A free, legitimate path to a much higher limit exists (eBay's
 # "Application Growth Check" - filed, pending as of this writing) if this
 # ever needs to be less conservative; that's a quota increase, not a
 # workaround, and doesn't require any of the above trade-offs.
 EBAY_FAST_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_FAST_SEARCHES_PER_RUN", 11))
-EBAY_SLOW_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_SLOW_SEARCHES_PER_RUN", 4))
+EBAY_SLOW_SEARCHES_PER_RUN = int(_CONFIG.get("EBAY_SLOW_SEARCHES_PER_RUN", 2))
+EBAY_SEARCH_CALLS_PER_RUN_CAP = max(
+    0, int(_CONFIG.get("EBAY_SEARCH_CALLS_PER_RUN_CAP", 16))
+)
+EBAY_FRESH_BIN_SEARCHES_PER_RUN = max(
+    0, int(_CONFIG.get("EBAY_FRESH_BIN_SEARCHES_PER_RUN", 2))
+)
+EBAY_LOCAL_PICKUP_SEARCHES_PER_RUN = max(
+    0, int(_CONFIG.get("EBAY_LOCAL_PICKUP_SEARCHES_PER_RUN", 1))
+)
+EBAY_HIDDEN_SEARCHES_PER_RUN = max(
+    0, int(_CONFIG.get("EBAY_HIDDEN_SEARCHES_PER_RUN", 1))
+)
+EBAY_GOLF_AUCTION_SEARCHES_PER_RUN = max(
+    0, int(_CONFIG.get("EBAY_GOLF_AUCTION_SEARCHES_PER_RUN", 1))
+)
+# Broad saved-search queries remain available to free marketplace adapters,
+# but official Browse uses them only as spare-capacity fallbacks. The new
+# broad official lanes below cover their discovery job every run; keeping the
+# model-specific rows in the primary pool shortens the revisit interval for
+# the inventory whose exact identity is already known.
+EBAY_REGULAR_FALLBACK_SEARCH_IDS = frozenset(
+    str(search_id).strip()
+    for search_id in _CONFIG.get("EBAY_REGULAR_FALLBACK_SEARCH_IDS", [])
+    if str(search_id).strip()
+)
 # How many leading characters of a (lowercased) title count for
 # grab_on_sight/standard brand-tier matching - see score_listing(). 60 chars
 # comfortably covers a multi-word brand name plus a common seller prefix
@@ -506,6 +529,7 @@ ALERTS_LOG_EMERGENCY_MB = 0.95
 # maintenance must be a separate atomic operation; append_alert_log() must
 # never risk old records while recording one new result.
 EBAY_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("ebay_rate_limit_state.json")
+GOLF_PRICE_STATE_PATH = Path(__file__).resolve().with_name("golf_price_state.json")
 # Confirmed live: an eBay 429 lockout persisted for 5+ hours straight
 # through continuous every-5-min hammering (up to 15 calls/run) with no
 # sign of clearing on its own. Rather than keep wastefully hitting a dead
@@ -838,8 +862,19 @@ def _focus_filter(searches):
     return focused
 
 
+def _rotating_ebay_search_batch(searches, per_run_limit, run_number):
+    """Return an ordered full circular slice of an eBay search rotation."""
+    searches = list(searches)
+    if not searches or per_run_limit <= 0:
+        return []
+    batch_size = min(len(searches), per_run_limit)
+    batch_start = (run_number * batch_size) % len(searches)
+    ordered = searches[batch_start:] + searches[:batch_start]
+    return ordered[:batch_size]
+
+
 def _rotating_ebay_batch(searches, per_run_limit, run_number):
-    """Return a full circular slice of the stable eBay search rotation.
+    """Return a full circular query slice of the stable eBay rotation.
 
     The old ceil-divided batches left the final batch short. With the current
     23 all-fast golf searches and a 13-search limit, production alternated 13
@@ -848,18 +883,115 @@ def _rotating_ebay_batch(searches, per_run_limit, run_number):
     preserves the two-run full-coverage guarantee while using the configured
     per-run capacity on every run.
     """
-    searches = list(searches)
-    if not searches or per_run_limit <= 0:
-        return set()
-    batch_size = min(len(searches), per_run_limit)
-    batch_start = (run_number * batch_size) % len(searches)
-    ordered = searches[batch_start:] + searches[:batch_start]
-    return {search["query"] for search in ordered[:batch_size]}
+    return {
+        search["query"]
+        for search in _rotating_ebay_search_batch(
+            searches, per_run_limit, run_number
+        )
+    }
 
 
 def _ebay_rotation_run_number(now):
     """Return a five-minute epoch slot that stays continuous across UTC days."""
     return int(now.timestamp() // (5 * 60))
+
+
+def _primary_ebay_rotation_searches(searches, per_run_limit):
+    """Prefer model hunts; use overlapping broad rows only as spare capacity."""
+    searches = list(searches)
+    primary = [
+        search
+        for search in searches
+        if search.get("id") not in EBAY_REGULAR_FALLBACK_SEARCH_IDS
+    ]
+    fallback = [
+        search
+        for search in searches
+        if search.get("id") in EBAY_REGULAR_FALLBACK_SEARCH_IDS
+    ]
+    if not primary:
+        return searches
+    if per_run_limit <= len(primary):
+        return primary
+    return primary + fallback
+
+
+def _official_golf_lanes_active(searches):
+    """Keep synthetic Browse lanes scoped to the shipped golf-focused run."""
+    return any(
+        search.get("id") == "golf-irons" and search.get("ebay", True)
+        for search in searches
+    )
+
+
+def _build_ebay_search_plan(
+    fast_searches,
+    slow_searches,
+    auction_searches,
+    run_number,
+    *,
+    include_golf_lanes,
+):
+    """Allocate every official Browse search inside one hard per-run cap."""
+    capacity = EBAY_SEARCH_CALLS_PER_RUN_CAP
+
+    def take(searches, requested):
+        nonlocal capacity
+        selected = _rotating_ebay_search_batch(
+            searches, min(max(0, requested), capacity), run_number
+        )
+        capacity -= len(selected)
+        return selected
+
+    golf_auction_searches = [
+        search
+        for search in auction_searches
+        if search.get("category") == "golf-equipment"
+        or str(search.get("category_id")) == "115280"
+    ]
+    existing_non_golf_auctions = [
+        search for search in auction_searches if search not in golf_auction_searches
+    ]
+    # The new per-run key controls only the golf lane. Existing watch/suit/
+    # cardholder auction behavior remains always-on whenever those searches
+    # survive focus, while the shared capacity still makes 16 an absolute cap.
+    selected_auctions = take(
+        existing_non_golf_auctions, len(existing_non_golf_auctions)
+    )
+    selected_auctions += take(
+        golf_auction_searches, EBAY_GOLF_AUCTION_SEARCHES_PER_RUN
+    )
+    fresh_searches = []
+    local_searches = []
+    hidden_searches = []
+    if include_golf_lanes:
+        fresh_searches = take(
+            EBAY_FRESH_BIN_SEARCHES, EBAY_FRESH_BIN_SEARCHES_PER_RUN
+        )
+        local_searches = take(
+            EBAY_LOCAL_PICKUP_SEARCHES, EBAY_LOCAL_PICKUP_SEARCHES_PER_RUN
+        )
+        hidden_searches = take(
+            EBAY_HIDDEN_INVENTORY_SEARCHES, EBAY_HIDDEN_SEARCHES_PER_RUN
+        )
+
+    fast_pool = _primary_ebay_rotation_searches(
+        fast_searches, EBAY_FAST_SEARCHES_PER_RUN
+    )
+    regular_fast = take(fast_pool, EBAY_FAST_SEARCHES_PER_RUN)
+    slow_pool = _primary_ebay_rotation_searches(
+        slow_searches, EBAY_SLOW_SEARCHES_PER_RUN
+    )
+    regular_slow = take(slow_pool, EBAY_SLOW_SEARCHES_PER_RUN)
+    special = fresh_searches + local_searches + hidden_searches
+    regular = regular_fast + regular_slow
+    return {
+        "regular": regular,
+        "regular_queries": {search["query"] for search in regular},
+        "special": special,
+        "auctions": selected_auctions,
+        "search_call_count": len(regular) + len(special) + len(selected_auctions),
+    }
 
 
 VALID_SEARCH_PROFILES = {"fast", "slow"}
@@ -1193,8 +1325,108 @@ def _ebay_items_from_body(body, query, context):
     return items
 
 
+def _ebay_filter_timestamp(value):
+    """Browse date-filter timestamp in eBay's documented millisecond UTC form."""
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def search_ebay_official_golf_lane(token, lane_search, now=None):
+    """Run one fresh, pickup, or hidden-inventory official Browse search."""
+    lane = lane_search.get("ebay_official_lane")
+    if lane not in {"fresh-bin", "local-pickup", "hidden-inventory"}:
+        raise ValueError(f"unknown official golf lane: {lane!r}")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        "X-EBAY-C-ENDUSERCTX": "contextualLocation=country=US,zip=29201",
+    }
+    query = lane_search["query"]
+    params = {
+        "q": query,
+        "limit": "200",
+    }
+    category_id = lane_search.get("category_id")
+    if category_id:
+        params["category_ids"] = str(category_id)
+
+    if lane == "fresh-bin":
+        end = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        start = end - timedelta(hours=1)
+        params["filter"] = (
+            "buyingOptions:{FIXED_PRICE},"
+            f"itemStartDate:[{_ebay_filter_timestamp(start)}..{_ebay_filter_timestamp(end)}],"
+            "price:[0..400],priceCurrency:USD,deliveryCountry:US,"
+            "deliveryPostalCode:29201"
+        )
+        params["sort"] = "newlyListed"
+    elif lane == "local-pickup":
+        params["filter"] = (
+            "deliveryOptions:{SELLER_ARRANGED_LOCAL_PICKUP},pickupCountry:US,"
+            "pickupPostalCode:29201,pickupRadius:90,pickupRadiusUnit:mi,"
+            "price:[0..400],priceCurrency:USD"
+        )
+        # eBay documents that pickup-radius filtering works only with Best
+        # Match. Omitting sort requests that default explicitly; EXTENDED adds
+        # itemLocation.city without a getItem call.
+        params["fieldgroups"] = "EXTENDED"
+    else:
+        params["filter"] = (
+            "price:[0..400],priceCurrency:USD,deliveryCountry:US,"
+            "deliveryPostalCode:29201"
+        )
+        # Deliberately no auto_correct parameter: typo searches must remain
+        # typo searches instead of silently collapsing back to market-priced
+        # correctly-spelled inventory.
+
+    for attempt in range(2):
+        resp = requests.get(
+            "https://api.ebay.com/buy/browse/v1/item_summary/search",
+            headers=headers,
+            params=params,
+            timeout=15,
+        )
+        if resp.status_code == 429 and attempt == 0:
+            time.sleep(2)
+            continue
+        break
+    if resp.status_code == 429:
+        rate_headers = {
+            key: value
+            for key, value in resp.headers.items()
+            if any(token in key.lower() for token in ("rate", "retry", "limit"))
+        }
+        logger.warning(
+            "eBay %s lane 429 headers for %r: %s | body: %s",
+            lane,
+            query,
+            rate_headers,
+            resp.text[:300],
+        )
+    resp.raise_for_status()
+    body = resp.json()
+    items = _ebay_items_from_body(body, query, f"{lane} search")
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        _attach_seller_feedback(item)
+        item["ebay_official_lane"] = lane
+        if lane == "fresh-bin":
+            item["is_fresh_bin"] = True
+        elif lane == "local-pickup":
+            item["is_local_pickup"] = True
+            shipping_options = item.get("shippingOptions")
+            item["is_pickup_only"] = not (
+                isinstance(shipping_options, list) and shipping_options
+            )
+        else:
+            item["is_hidden_inventory"] = True
+    return items, body.get("total")
+
+
 def search_ebay(token, saved_search):
     """One call to the Browse API for a saved search config."""
+    if saved_search.get("ebay_official_lane"):
+        return search_ebay_official_golf_lane(token, saved_search)
     headers = {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
@@ -1322,7 +1554,7 @@ EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES = int(_CONFIG.get("EBAY_AUCTION_CONT
 EBAY_AUCTION_SEARCHES = _CONFIG.get("EBAY_AUCTION_SEARCHES", [])
 
 
-def search_ebay_ending_soon_auctions(token, auction_search):
+def search_ebay_ending_soon_auctions(token, auction_search, now=None):
     """One call to the Browse API for an always-on auction-snipe search -
     live AUCTION-format listings only, sorted soonest-ending-first,
     filtered client-side to ones actually closing soon (see
@@ -1347,24 +1579,9 @@ def search_ebay_ending_soon_auctions(token, auction_search):
         "X-EBAY-C-ENDUSERCTX": "contextualLocation=country=US,zip=29201",
     }
     query = auction_search.get("query") or ""
-    # Filter the closing window SERVER-side rather than sorting and hoping.
-    # Real live bug: this used sort=endingSoonest, which is NOT a valid
-    # sort value for Browse API item_summary/search (the documented set is
-    # price / -price / distance / newlyListed). eBay silently ignores an
-    # unrecognized sort and falls back to Best Match, so end dates came
-    # back effectively random - measured across many consecutive runs,
-    # ~100% of results were rejected as "too far from closing" (180
-    # watches, 195 suits, 100 cardholders per run, never a single one
-    # inside the window). That is statistically impossible under a real
-    # soonest-first sort, where the top hits would be ending in seconds.
-    # Net effect: the auction lane fetched thousands of listings a day and
-    # could essentially never alert. User report: "havent got a single
-    # one" bidding alert.
-    #
-    # itemEndDate:[start..end] constrains it properly - every item that
-    # comes back is already inside the window, no sort needed. Uses the
-    # WIDER uncontested window; the client-side pass below still applies
-    # the tighter contested threshold per-item.
+    # Filter the closing window SERVER-side. Current Browse documentation
+    # supports endingSoonest (added in v1.8.0), but the date bound remains
+    # authoritative even if ranking behavior changes.
     closing_soon_minutes = int(
         auction_search.get("closing_soon_minutes")
         or EBAY_AUCTION_CLOSING_SOON_MINUTES
@@ -1373,23 +1590,51 @@ def search_ebay_ending_soon_auctions(token, auction_search):
         auction_search.get("contested_closing_soon_minutes")
         or EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES
     )
-    now_utc_for_filter = datetime.now(timezone.utc)
-    window_end = now_utc_for_filter + timedelta(minutes=closing_soon_minutes)
-    end_date_filter = (
-        f"itemEndDate:[{now_utc_for_filter.strftime('%Y-%m-%dT%H:%M:%SZ')}"
-        f"..{window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}]"
+    search_window_minutes = int(
+        auction_search.get("search_window_minutes") or closing_soon_minutes
     )
+    bid_count_max = auction_search.get("bid_count_max")
+    if isinstance(bid_count_max, bool) or not isinstance(bid_count_max, int):
+        bid_count_max = None
+    # The golf lane is explicitly a low-attention two-hour observer. Its
+    # server-side <=1-bid filter replaces the generic contested/uncontested
+    # timing split; the older 30-minute values remain as the established
+    # fallback if this lane's special settings are removed.
+    if bid_count_max is not None:
+        closing_soon_minutes = search_window_minutes
+        contested_closing_soon_minutes = search_window_minutes
+    now_utc_for_filter = (now or datetime.now(timezone.utc)).astimezone(
+        timezone.utc
+    )
+    window_end = now_utc_for_filter + timedelta(minutes=search_window_minutes)
+    end_date_filter = (
+        f"itemEndDate:[{_ebay_filter_timestamp(now_utc_for_filter)}"
+        f"..{_ebay_filter_timestamp(window_end)}]"
+    )
+    price_filter = (
+        f"price:[0..{auction_search['max_price']}]"
+        if bid_count_max is not None
+        else f"price:[..{auction_search['max_price']}]"
+    )
+    filter_parts = [
+        EBAY_SECONDHAND_CONDITION_FILTER,
+        "itemLocationCountry:US",
+        price_filter,
+        "priceCurrency:USD",
+        "buyingOptions:{AUCTION}",
+    ]
+    if bid_count_max is not None:
+        filter_parts.append(f"bidCount:[..{bid_count_max}]")
+    filter_parts.append(end_date_filter)
     params = {
         "category_ids": auction_search.get("category_id", WATCH_CATEGORY_ID),
-        "filter": (
-            f"{EBAY_SECONDHAND_CONDITION_FILTER},itemLocationCountry:US,"
-            f"price:[..{auction_search['max_price']}],priceCurrency:USD,"
-            f"buyingOptions:{{AUCTION}},{end_date_filter}"
-        ),
+        "filter": ",".join(filter_parts),
         "limit": "200",
     }
     if query:
         params["q"] = query
+    if auction_search.get("sort"):
+        params["sort"] = auction_search["sort"]
     for attempt in range(2):
         resp = requests.get(
             "https://api.ebay.com/buy/browse/v1/item_summary/search",
@@ -1411,7 +1656,7 @@ def search_ebay_ending_soon_auctions(token, auction_search):
     body = resp.json()
     items = _ebay_items_from_body(body, query, "auction search")
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = now_utc_for_filter
     listings = []
     skipped_too_early = 0
     skipped_unparseable = 0
@@ -1428,7 +1673,10 @@ def search_ebay_ending_soon_auctions(token, auction_search):
         minutes_remaining = (end_date - now_utc).total_seconds() / 60
         if minutes_remaining < 0:
             continue  # already ended, listing search just hasn't caught up yet
-        bid_count = item.get("bidCount") or 0
+        try:
+            bid_count = int(item.get("bidCount") or 0)
+        except (TypeError, ValueError):
+            bid_count = 0
         threshold = (
             contested_closing_soon_minutes if bid_count > 0
             else closing_soon_minutes
@@ -1441,6 +1689,8 @@ def search_ebay_ending_soon_auctions(token, auction_search):
         item["is_ending_soon_auction"] = True
         item["auction_minutes_remaining"] = minutes_remaining
         item["bid_count"] = bid_count
+        if bid_count_max is not None:
+            item["is_low_bid_auction"] = True
         listings.append(item)
 
     if skipped_too_early or skipped_unparseable:
@@ -2441,6 +2691,115 @@ GOLF_STEAL_FRACTION = float(_CONFIG.get("GOLF_STEAL_FRACTION", 0.55))
 GOLF_ABSOLUTE_PATH_DELIVERS = bool(
     _CONFIG.get("GOLF_ABSOLUTE_PATH_DELIVERS", False)
 )
+# Official Browse-only discovery lanes. Golf Clubs (115280) is already the
+# current eBay-US leaf used by every verified club search in this repository;
+# iron-set identity is an item aspect within that leaf, not a narrower child
+# category. Hidden broad searches intentionally omit category_ids so a seller
+# mistake in the wrong category remains discoverable.
+EBAY_FRESH_BIN_SEARCHES = (
+    {
+        "id": "golf-irons",
+        "query": "irons",
+        "category_id": "115280",
+        "category": "golf-equipment",
+        "max_price": GOLF_EQUIPMENT_MAX_PRICE,
+        "profile": "fast",
+        "ebay_official_lane": "fresh-bin",
+    },
+    {
+        "id": "golf-complete-iron",
+        "query": "iron set",
+        "category_id": "115280",
+        "category": "golf-equipment",
+        "max_price": GOLF_EQUIPMENT_MAX_PRICE,
+        "profile": "fast",
+        "ebay_official_lane": "fresh-bin",
+    },
+    {
+        "id": "golf-golf-club-set",
+        "query": "golf clubs set",
+        "category_id": "115280",
+        "category": "golf-equipment",
+        "max_price": GOLF_EQUIPMENT_MAX_PRICE,
+        "profile": "fast",
+        "ebay_official_lane": "fresh-bin",
+    },
+)
+EBAY_LOCAL_PICKUP_SEARCHES = (
+    {
+        "id": "golf-golf-clubs",
+        "query": "golf clubs",
+        "category_id": "115280",
+        "category": "golf-equipment",
+        "max_price": GOLF_EQUIPMENT_MAX_PRICE,
+        "profile": "fast",
+        "ebay_official_lane": "local-pickup",
+    },
+    {
+        "id": "golf-irons",
+        "query": "iron set",
+        "category_id": "115280",
+        "category": "golf-equipment",
+        "max_price": GOLF_EQUIPMENT_MAX_PRICE,
+        "profile": "fast",
+        "ebay_official_lane": "local-pickup",
+    },
+)
+EBAY_HIDDEN_INVENTORY_SEARCHES = (
+    {
+        "id": "golf-callaway",
+        "query": "(calloway,callway) irons",
+        "category_id": "115280",
+    },
+    {
+        "id": "golf-taylormade",
+        "query": '(taylormaid,"taylor made") irons',
+        "category_id": "115280",
+    },
+    {
+        "id": "golf-titleist-t200-irons",
+        "query": "(titelist,titliest) irons",
+        "category_id": "115280",
+    },
+    {
+        "id": "golf-mizuno-jpx-921-irons",
+        "query": "(mizunno,mizino,misuno) irons",
+        "category_id": "115280",
+    },
+    {
+        "id": "golf-ping",
+        "query": "(pings,pingg) irons",
+        "category_id": "115280",
+    },
+    {
+        "id": "golf-complete-iron",
+        "query": "(clevland,clevelnd) irons",
+        "category_id": "115280",
+    },
+    {
+        "id": "golf-srixon-zx5-irons",
+        "query": "(srixen,srixion) irons",
+        "category_id": "115280",
+    },
+    {
+        "id": "golf-cobra",
+        "query": "(cobera,corba,cobraa) irons",
+        "category_id": "115280",
+    },
+    {"id": "golf-golf-clubs", "query": "golf clubs"},
+    {"id": "golf-complete-iron", "query": "set of irons"},
+    {"id": "golf-and-bag", "query": "golf bag with clubs"},
+)
+EBAY_HIDDEN_INVENTORY_SEARCHES = tuple(
+    {
+        **search,
+        "category": "golf-equipment",
+        "max_price": GOLF_EQUIPMENT_MAX_PRICE,
+        "profile": "fast",
+        "ebay_official_lane": "hidden-inventory",
+    }
+    for search in EBAY_HIDDEN_INVENTORY_SEARCHES
+)
 # The historical Rogue auction arrived through the rotating HTML scrape 80.95
 # seconds before close. All configured Browse-API auction searches were also
 # being stripped by focus, and none targeted golf. One broad official lane is
@@ -2457,6 +2816,9 @@ GOLF_EBAY_AUCTION_SEARCH = {
     "max_price": GOLF_EQUIPMENT_MAX_PRICE,
     "closing_soon_minutes": 30,
     "contested_closing_soon_minutes": 30,
+    "search_window_minutes": 120,
+    "bid_count_max": 1,
+    "sort": "endingSoonest",
     "enabled": True,
 }
 EBAY_AUCTION_SEARCHES = [*EBAY_AUCTION_SEARCHES, GOLF_EBAY_AUCTION_SEARCH]
@@ -2956,9 +3318,49 @@ def _golf_club_run_text(title):
     return None
 
 
+GOLF_CATALOG_BRAND_ALIASES = {
+    "calloway": "callaway",
+    "callway": "callaway",
+    "taylor made": "taylormade",
+    "taylormaid": "taylormade",
+    "titelist": "titleist",
+    "titliest": "titleist",
+    "mizunno": "mizuno",
+    "mizino": "mizuno",
+    "misuno": "mizuno",
+    "pings": "ping",
+    "pingg": "ping",
+    "clevland": "cleveland",
+    "clevelnd": "cleveland",
+    "srixen": "srixon",
+    "srixion": "srixon",
+    "cobera": "cobra",
+    "corba": "cobra",
+    "cobraa": "cobra",
+}
+GOLF_CATALOG_BRAND_ALIAS_SIGNAL = re.compile(
+    r"\b(?:"
+    + "|".join(
+        re.escape(alias)
+        for alias in sorted(GOLF_CATALOG_BRAND_ALIASES, key=len, reverse=True)
+    )
+    + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_golf_catalog_brand_aliases(title):
+    """Normalize unambiguous seller misspellings only for catalog matching."""
+    text = str(title or "")
+    return GOLF_CATALOG_BRAND_ALIAS_SIGNAL.sub(
+        lambda match: GOLF_CATALOG_BRAND_ALIASES[match.group(0).casefold()],
+        text,
+    )
+
+
 def golf_catalog_title_match(title):
     """Return the first ordered catalog entry matching ``title``."""
-    text = str(title or "")
+    text = _normalize_golf_catalog_brand_aliases(title)
     for entry in GOLF_MODELS:
         if entry["_catalog_regex"].search(text):
             return entry
@@ -3059,6 +3461,36 @@ def golf_catalog_value(result):
         "title_key": title_match["key"] if title_match else None,
         "ai_key": ai_match["key"] if ai_match else None,
     }
+
+
+def annotate_golf_best_offer_target(result):
+    """Annotate a near-line BEST_OFFER listing without making it deliverable."""
+    result.pop("golf_best_offer_target_price", None)
+    result.pop("golf_best_offer_steal_line", None)
+    listing = result.get("listing") or {}
+    if "BEST_OFFER" not in (listing.get("buyingOptions") or []):
+        return None
+    if result.get("shipping_cost_known") is not True:
+        return None
+    catalog = golf_catalog_value(result)
+    landed = result.get("price")
+    if catalog is None or not _finite_number(landed):
+        return None
+    steal_line = GOLF_STEAL_FRACTION * catalog["value"]
+    if not (steal_line < float(landed) <= steal_line * 1.15):
+        return None
+    shipping = result.get("shipping_cost")
+    if not _finite_number(shipping) or shipping < 0:
+        return None
+    target = steal_line / (1 + SALES_TAX_RATE) - float(shipping)
+    if target <= 0:
+        return None
+    # Round down so the displayed offer remains at or under the landed 55%
+    # line after the same tax estimate used by production scoring.
+    target = math.floor(target * 100) / 100
+    result["golf_best_offer_target_price"] = target
+    result["golf_best_offer_steal_line"] = round(steal_line, 2)
+    return target
 
 
 def golf_condition_spec_reason(result):
@@ -3653,6 +4085,12 @@ def is_shipping_cost_known(listing):
     Only an actual non-negative ``shippingCost.value`` -- including explicit
     zero/free shipping -- is safe for the owner's absolute $200 ceiling.
     """
+    # A Browse pickup-radius result is zero-shipping only when the same
+    # response exposes no shippable option. The lane stamps this explicit
+    # conjunction as is_pickup_only; merely offering local pickup alongside
+    # shipping never earns the zero-cost assumption.
+    if listing.get("is_local_pickup") and listing.get("is_pickup_only") is True:
+        return True
     platform = listing.get("platform")
     if platform not in (None, "ebay", "ebay_scraped"):
         return True
@@ -3674,12 +4112,131 @@ def is_shipping_cost_known(listing):
 
 def _refresh_result_shipping(result, listing, item_price):
     """Refresh one already-scored eBay result after item-detail enrichment."""
+    if listing.get("is_local_pickup"):
+        shipping_options = listing.get("shippingOptions")
+        listing["is_pickup_only"] = not (
+            isinstance(shipping_options, list) and shipping_options
+        )
     shipping_cost = get_shipping_cost(listing)
     result["shipping_cost"] = shipping_cost
     result["shipping_cost_known"] = is_shipping_cost_known(listing)
+    if listing.get("is_local_pickup"):
+        result["is_pickup_only"] = listing.get("is_pickup_only") is True
     total_price = item_price + shipping_cost
     result["price"] = total_price * (1 + SALES_TAX_RATE)
     return total_price
+
+
+GOLF_PRICE_STATE_MAX_ITEMS = 5000
+
+
+def _runtime_golf_price_state_path():
+    """Keep test DB patches and their price state in the same temp directory."""
+    if str(DB_PATH) != "seen_items.db":
+        return Path(DB_PATH).resolve().with_name("golf_price_state.json")
+    return GOLF_PRICE_STATE_PATH
+
+
+def load_golf_price_state(path=None):
+    target = Path(path) if path is not None else _runtime_golf_price_state_path()
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {"schema_version": 1, "items": {}}
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), dict):
+        return {"schema_version": 1, "items": {}}
+    return {"schema_version": 1, "items": dict(payload["items"])}
+
+
+def save_golf_price_state(state, path=None):
+    target = Path(path) if path is not None else _runtime_golf_price_state_path()
+    raw_items = state.get("items") if isinstance(state, dict) else None
+    if not isinstance(raw_items, dict):
+        raw_items = {}
+    newest = sorted(
+        (
+            (str(item_id), entry)
+            for item_id, entry in raw_items.items()
+            if isinstance(entry, dict)
+        ),
+        key=lambda pair: str(pair[1].get("observed_at") or ""),
+        reverse=True,
+    )[:GOLF_PRICE_STATE_MAX_ITEMS]
+    payload = {"schema_version": 1, "items": dict(newest)}
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = target.with_suffix(target.suffix + ".tmp")
+        tmp_path.write_text(
+            json.dumps(payload, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+        os.replace(tmp_path, target)
+        return True
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("Failed to write golf price-observation state: %s", exc)
+        return False
+
+
+def _known_golf_landed_price(listing):
+    if not is_shipping_cost_known(listing):
+        return None
+    raw_price = (listing.get("price") or {}).get("value")
+    if isinstance(raw_price, bool) or raw_price is None:
+        return None
+    try:
+        item_price = float(raw_price)
+        shipping = get_shipping_cost(listing)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(item_price) or item_price < 0:
+        return None
+    return round((item_price + shipping) * (1 + SALES_TAX_RATE), 2)
+
+
+def observe_golf_item_price(state, listing, now=None):
+    """Persist one known eBay golf landed price and describe a >=10% drop."""
+    if not isinstance(state, dict):
+        return None
+    if listing.get("platform") not in (None, "", "ebay"):
+        return None
+    if "AUCTION" in (listing.get("buyingOptions") or []):
+        return None
+    item_id = str(listing.get("itemId") or "").strip()
+    catalog = golf_catalog_title_match(listing.get("title"))
+    landed = _known_golf_landed_price(listing)
+    if not item_id or catalog is None or landed is None:
+        return None
+
+    items = state.setdefault("items", {})
+    if not isinstance(items, dict):
+        items = {}
+        state["items"] = items
+    previous_entry = items.get(item_id)
+    previous = (
+        previous_entry.get("landed_price")
+        if isinstance(previous_entry, dict)
+        else None
+    )
+    previous = float(previous) if _finite_number(previous) else None
+    piece_count = golf_catalog_piece_count(listing.get("title"))
+    catalog_value = _adjusted_golf_catalog_value(catalog, piece_count)
+    steal_line = round(GOLF_STEAL_FRACTION * catalog_value, 2)
+    observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    items[item_id] = {
+        "landed_price": landed,
+        "observed_at": observed_at.isoformat(),
+        "catalog_key": catalog["key"],
+    }
+    if previous is None or landed > previous * 0.90:
+        return None
+    return {
+        "previous_landed_price": previous,
+        "current_landed_price": landed,
+        "drop_fraction": round(1 - landed / previous, 6) if previous else 0.0,
+        "steal_line": steal_line,
+        "crossed_steal_line": previous > steal_line and landed <= steal_line,
+    }
 
 
 def get_listing_quantity_available(listing):
@@ -8367,6 +8924,18 @@ def append_alert_log(result, delivered=False, delivery_error=None):
         "golf_catalog_value",
         "golf_steal_ratio",
         "golf_delivery_path",
+        "ebay_official_lane",
+        "is_fresh_bin",
+        "is_local_pickup",
+        "is_pickup_only",
+        "is_hidden_inventory",
+        "is_low_bid_auction",
+        "golf_price_drop_recheck",
+        "golf_previous_landed_price",
+        "golf_price_drop_fraction",
+        "golf_price_drop_crossed_steal_line",
+        "golf_best_offer_target_price",
+        "golf_best_offer_steal_line",
         "jev_iron_set",
         "jev_would_skip",
         "golf_cleared_all_gates",
@@ -8771,6 +9340,31 @@ def flush_quiet_alert_queue(conn, now=None):
     return delivered_count
 
 
+def _pickup_alert_location(listing):
+    platform = listing.get("platform")
+    if platform in {"facebook", "offerup", "craigslist"}:
+        location_lines = (listing.get("description") or "").strip().splitlines()
+        location_note = location_lines[0] if location_lines else ""
+        if location_note.startswith("Location:"):
+            return location_note[len("Location:"):].strip() or None
+        return None
+    if not listing.get("is_local_pickup"):
+        return None
+    item_location = listing.get("itemLocation") or {}
+    city = str(item_location.get("city") or "").strip()
+    state = str(item_location.get("stateOrProvince") or "").strip()
+    nearby_state_abbreviations = {
+        "south carolina": "SC",
+        "north carolina": "NC",
+        "georgia": "GA",
+    }
+    state = nearby_state_abbreviations.get(state.casefold(), state)
+    if not city:
+        return None
+    where = f"{city}, {state}" if state else city
+    return f"{where} pickup"
+
+
 def send_alert(result):
     listing = result["listing"]
     title = listing.get("title", "")
@@ -8815,16 +9409,11 @@ def send_alert(result):
         # currentPrice on a live auction is a floor that climbs until close,
         # not a purchase price - do not read it as the eBay-style fixed price.
         message += "\n(auction - price climbs until close)"
-    if listing.get("platform") in {"facebook", "offerup", "craigslist"}:
-        # Local pickup distance decides whether an alert is actionable. These
-        # lanes normalize the first description line as "Location: ...";
-        # reuse one renderer so the lock-screen pin stays byte-identical.
-        location_lines = (listing.get("description") or "").strip().splitlines()
-        location_note = location_lines[0] if location_lines else ""
-        if location_note.startswith("Location:"):
-            where = location_note[len("Location:"):].strip()
-            if where:
-                message += f"\n📍 {where}"
+    pickup_location = _pickup_alert_location(listing)
+    if pickup_location:
+        # Reuse one renderer for normalized marketplace descriptions and
+        # eBay's structured itemLocation city/state response.
+        message += f"\n📍 {pickup_location}"
     if is_golf:
         # Per task: the owner needs to decide bid/buy in seconds. One
         # compact line surfacing the fields that actually drive that call -
@@ -8854,6 +9443,15 @@ def send_alert(result):
         shaft_spec = golf_shaft_spec_text(result)
         if shaft_spec:
             message += f"\nshaft: {shaft_spec}"
+        best_offer_target = result.get("golf_best_offer_target_price")
+        if best_offer_target is None:
+            best_offer_target = annotate_golf_best_offer_target(result)
+        if best_offer_target is not None:
+            message += (
+                f"\nBest Offer: an offer of "
+                f"${_money_without_noise(best_offer_target)} (=55% line) "
+                "would make this a steal"
+            )
         golf_listing_text = _golf_listing_title_and_description(result)
         for flex_label, flex_pattern in GOLF_FLEX_VERIFY_SIGNALS:
             if flex_pattern.search(golf_listing_text):
@@ -10911,6 +11509,45 @@ def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
     return None
 
 
+def _golf_photo_order_key(candidate, partition):
+    result = candidate["result"]
+    ratio = result.get("golf_steal_ratio")
+    fresh_plausible_steal = bool(
+        partition != 0
+        and result.get("is_fresh_bin")
+        and _finite_number(ratio)
+        and ratio <= 0.70
+    )
+    return (
+        0 if fresh_plausible_steal else 1,
+        0 if result.get("golf_catalog_key") else 1,
+        ratio if _finite_number(ratio) else math.inf,
+    )
+
+
+def _prioritize_golf_photo_candidates(candidates):
+    """Reorder only golf slots inside auction/fresh/stale hard partitions."""
+    candidates = list(candidates)
+    for partition in (0, 1, 2):
+        golf_indexes = [
+            index
+            for index, candidate in enumerate(candidates)
+            if candidate["category"] == "golf-equipment"
+            and (
+                0
+                if candidate["result"].get("is_ending_soon_auction")
+                else (2 if candidate.get("_stale_before_ai") else 1)
+            ) == partition
+        ]
+        ordered_golf = sorted(
+            (candidates[index] for index in golf_indexes),
+            key=lambda candidate: _golf_photo_order_key(candidate, partition),
+        )
+        for index, candidate in zip(golf_indexes, ordered_golf):
+            candidates[index] = candidate
+    return candidates
+
+
 def run():
     global SAVED_SEARCHES, _PAID_AI_BUDGET_EXHAUSTION
     global _GOLF_STRONG_VISION_DISABLED_FOR_RUN
@@ -10959,6 +11596,7 @@ def run():
         _notify_paid_ai_budget_exhausted_once(budget_snapshot)
     flush_quiet_alert_queue(conn)
     search_activity = load_search_activity()
+    golf_price_state = load_golf_price_state()
     quiet_queued_ids = {
         quiet_queue_item_id(entry) for entry in load_quiet_alert_queue()
     }
@@ -11015,6 +11653,7 @@ def run():
 
     def _finish_run():
         save_search_activity(search_activity)
+        save_golf_price_state(golf_price_state)
         conn.close()
         _persist_scout_queue_acknowledgements()
         if ebay_token_error is not None:
@@ -11055,6 +11694,9 @@ def run():
             "contested_closing_soon_minutes": s.get(
                 "contested_closing_soon_minutes"
             ),
+            "search_window_minutes": s.get("search_window_minutes"),
+            "bid_count_max": s.get("bid_count_max"),
+            "sort": s.get("sort"),
             "is_auction_search": True,
         }
         for s in EBAY_AUCTION_SEARCHES if s.get("enabled", True)
@@ -11077,27 +11719,25 @@ def run():
         offset = ((current_utc.hour * 60 + current_utc.minute) // 5) % len(enabled_searches)
         enabled_searches = enabled_searches[offset:] + enabled_searches[:offset]
 
-    # Auction-snipe searches (EBAY_AUCTION_SEARCHES) appended to the LOCAL
-    # enabled_searches only, deliberately AFTER the rotation-shuffle above
-    # and NOT into the stable saved-search slice used by the fast/slow eBay
-    # batching below, so these never enter that rotation and are fetched
-    # unconditionally every run instead (see the dispatch check in PASS 1
-    # below and search_ebay_ending_soon_auctions()'s docstring for why
-    # rotation is wrong for a 15-minute closing window).
-    enabled_searches = enabled_searches + focused_auction_searches
-
-    # Only this run's rotating batch actually calls eBay's API. Advance by a
-    # complete slice over the STABLE search order and wrap a short tail into
-    # the next cycle. This is not the old one-position sliding window (which
-    # overlapped almost the whole batch and covered the catalog too slowly):
-    # a complete-slice stride still covers every current golf query within
-    # two runs, while avoiding the measured 13/10-call alternation that left
-    # proven daily quota unused.
-    def _ebay_batch(searches, per_run_limit):
-        # Epoch-based so the 23-run circular cycle does not restart at UTC
-        # midnight and accidentally repeat a slice across the day boundary.
-        run_number = _ebay_rotation_run_number(current_utc)
-        return _rotating_ebay_batch(searches, per_run_limit, run_number)
+    # Plan regular, new discovery, and auction calls together. This is the
+    # authoritative quota boundary: no combination of configured lane counts
+    # can schedule more than EBAY_SEARCH_CALLS_PER_RUN_CAP Browse searches.
+    ebay_eligible = _ebay_eligible_searches(stable_searches)
+    fast_searches = [s for s in ebay_eligible if s.get("profile") == "fast"]
+    slow_searches = [s for s in ebay_eligible if s.get("profile") != "fast"]
+    run_number = _ebay_rotation_run_number(current_utc)
+    ebay_search_plan = _build_ebay_search_plan(
+        fast_searches,
+        slow_searches,
+        focused_auction_searches,
+        run_number,
+        include_golf_lanes=_official_golf_lanes_active(stable_searches),
+    )
+    selected_auction_searches = ebay_search_plan["auctions"]
+    special_golf_searches = ebay_search_plan["special"]
+    enabled_searches = (
+        enabled_searches + selected_auction_searches + special_golf_searches
+    )
 
     ebay_circuit_closed = (
         token is not None
@@ -11112,19 +11752,12 @@ def run():
         # proceed as normal - this is a safety net, not a hard dependency.
         remaining, quota_limit = get_ebay_rate_limit_remaining(token)
         # Must count EVERY eBay call this run will make, not just the
-        # rotation. It previously counted only the fast+slow lanes (15),
-        # while the run also fires one call per always-on auction search
-        # and up to GEMINI_CALL_LIMIT per-item description fetches - a
-        # ~40% undercount. That matters because this guard exists to see
-        # the wall coming and skip cleanly instead of 429ing into it: at
-        # the real rate (15 + 3 + 3 = 21 per run) the daily total runs
-        # ~5,184 against eBay's 5,000 hard limit, so the bot can cross the
-        # line while the guard still reports headroom. That is precisely
-        # the shape of the Aug 9 rate-limit outage this was built after.
+        # rotation. It previously counted only the fast+slow lanes while
+        # omitting auction searches and possible per-item description fetches.
+        # The planner supplies the exact search count; existing detail-call
+        # allowances remain here so this guard sees the wall before a 429.
         needed_this_run = (
-            EBAY_FAST_SEARCHES_PER_RUN
-            + EBAY_SLOW_SEARCHES_PER_RUN
-            + len(focused_auction_searches)
+            ebay_search_plan["search_call_count"]
             + GEMINI_CALL_LIMIT  # fetch_ebay_item_details(), one per AI check
             + EBAY_SCRAPE_AI_CHECK_LIMIT  # scrape-lane item details/condition
             + AUCTION_AI_RESERVED_CALLS  # the reserved auction slot may fetch a description too
@@ -11141,18 +11774,7 @@ def run():
                 )
                 ebay_circuit_closed = False
     if ebay_circuit_closed:
-        # Two independent rotation lanes, not one pool. With the current
-        # 33 eligible fast searches, the 14-call circular slice preserves the
-        # established cadence. Local-only saved searches remain in
-        # enabled_searches so marketplace results flow through PASS 1, but an
-        # explicit `ebay: false` keeps them out of Browse and scrape rotation.
-        ebay_eligible = _ebay_eligible_searches(stable_searches)
-        fast_searches = [s for s in ebay_eligible if s.get("profile") == "fast"]
-        slow_searches = [s for s in ebay_eligible if s.get("profile") != "fast"]
-        ebay_this_run = (
-            _ebay_batch(fast_searches, EBAY_FAST_SEARCHES_PER_RUN)
-            | _ebay_batch(slow_searches, EBAY_SLOW_SEARCHES_PER_RUN)
-        )
+        ebay_this_run = ebay_search_plan["regular_queries"]
     else:
         # Circuit open - marketplace results (Grailed/Poshmark/Vinted/
         # ShopGoodwill) still get merged in for every search below
@@ -11213,7 +11835,13 @@ def run():
                 except Exception:
                     logger.exception("eBay auction-snipe search failed for query: %s", saved_search["query"])
                     listings, search_total_listings = [], None
-        elif saved_search["query"] in ebay_this_run:
+        elif (
+            saved_search["query"] in ebay_this_run
+            or (
+                saved_search.get("ebay_official_lane")
+                and ebay_circuit_closed
+            )
+        ):
             if _run_deadline_reached("before an eBay saved search"):
                 break
             logger.info("Polling saved search (eBay + marketplaces): %s", saved_search["query"])
@@ -11252,7 +11880,7 @@ def run():
                 listings, search_total_listings = [], None
             if _run_deadline_reached("after an eBay saved search"):
                 break
-            if EBAY_SCRAPE_ENABLED:
+            if EBAY_SCRAPE_ENABLED and not saved_search.get("ebay_official_lane"):
                 # Supplementary, quota-free lane - only for a query the
                 # official API is ALREADY covering this run (ebay_this_run
                 # membership, checked by the elif above), never expanding
@@ -11391,6 +12019,22 @@ def run():
             if not classify_stray_auction_listing(listing):
                 _mark_scout_queue_item_processed(item_id)
                 continue  # not tagged, not closing soon, or unparseable end date - skip
+            price_drop_recheck = None
+            if category == "golf-equipment":
+                price_drop_recheck = observe_golf_item_price(
+                    golf_price_state, listing, now=current_utc
+                )
+                if price_drop_recheck:
+                    listing["golf_price_drop_recheck"] = True
+                    listing["golf_previous_landed_price"] = price_drop_recheck[
+                        "previous_landed_price"
+                    ]
+                    listing["golf_price_drop_fraction"] = price_drop_recheck[
+                        "drop_fraction"
+                    ]
+                    listing["golf_price_drop_crossed_steal_line"] = (
+                        price_drop_recheck["crossed_steal_line"]
+                    )
             # An auction inside its final minutes is genuinely NEW
             # information about an item that may have been seen days ago
             # at a totally different price and urgency, so the seen-dedupe
@@ -11408,7 +12052,11 @@ def run():
             # reconsidered at the one moment that actually matters.
             # Re-evaluating these every run is cheap - the window filter
             # already caps it at a handful per run.
-            if not listing.get("is_ending_soon_auction") and not is_new(conn, item_id):
+            if (
+                not listing.get("is_ending_soon_auction")
+                and not is_new(conn, item_id)
+                and not price_drop_recheck
+            ):
                 _mark_scout_queue_item_processed(item_id)
                 continue
             # Already alerted on this auction? Drop it HERE, before any
@@ -11706,6 +12354,21 @@ def run():
             result["seller_feedback_percentage"] = listing.get("seller_feedback_percentage")
             if category == "golf-equipment":
                 golf_catalog_value(result)
+                for key in (
+                    "ebay_official_lane",
+                    "is_fresh_bin",
+                    "is_local_pickup",
+                    "is_pickup_only",
+                    "is_hidden_inventory",
+                    "is_low_bid_auction",
+                    "golf_price_drop_recheck",
+                    "golf_previous_landed_price",
+                    "golf_price_drop_fraction",
+                    "golf_price_drop_crossed_steal_line",
+                ):
+                    if listing.get(key) is not None:
+                        result[key] = listing[key]
+                annotate_golf_best_offer_target(result)
             if listing.get("is_ending_soon_auction"):
                 result["is_ending_soon_auction"] = True
                 result["auction_minutes_remaining"] = listing.get("auction_minutes_remaining")
@@ -12166,30 +12829,10 @@ def run():
             else (2 if candidate.get("_stale_before_ai") else 1)
         )
     )
-    # Within each hard auction/fresh/stale partition, reorder only the slots
-    # already occupied by golf. This preserves every non-golf candidate's
-    # relative order while giving scarce golf photo checks to the lowest
-    # landed/catalog ratios first; unmatched golf remains eligible afterward.
-    for partition in (0, 1, 2):
-        golf_indexes = [
-            index
-            for index, candidate in enumerate(review_candidates)
-            if candidate["category"] == "golf-equipment"
-            and (
-                0
-                if candidate["result"].get("is_ending_soon_auction")
-                else (2 if candidate.get("_stale_before_ai") else 1)
-            ) == partition
-        ]
-        ordered_golf = sorted(
-            (review_candidates[index] for index in golf_indexes),
-            key=lambda candidate: (
-                0 if candidate["result"].get("golf_catalog_key") else 1,
-                candidate["result"].get("golf_steal_ratio", math.inf),
-            ),
-        )
-        for index, candidate in zip(golf_indexes, ordered_golf):
-            review_candidates[index] = candidate
+    # Preserve non-golf positions and the hard auction/fresh/stale partitions.
+    # Within non-auction golf, first-hour catalog matches at <=70% get the
+    # latency advantage, then the established lowest-ratio ordering resumes.
+    review_candidates = _prioritize_golf_photo_candidates(review_candidates)
 
     # PASS 3 - SPEND: AI check (budget-gated), then the steal-quality gate,
     # then alert (cap-gated), in priority order.
@@ -12359,6 +13002,8 @@ def run():
                     result, listing, result.get("item_price", item_price)
                 )
                 candidate["total_price"] = total_price
+                golf_catalog_value(result)
+                annotate_golf_best_offer_target(result)
 
             # Critical for eBay/scrape candidates: title-only PASS 1 could not
             # see structured condition or description-only safety facts. The
@@ -13208,6 +13853,23 @@ def run():
                         "next ~5-min run arrives too late): deferred with no AI check",
                         item_id, minutes_left,
                     )
+            continue
+
+        # A >=10% markdown reopens an already-seen catalog item for one real
+        # evaluation. It is not permission to duplicate a prior qualifying
+        # alert: delivery is possible only when this observation newly crossed
+        # the catalog's 55% line.
+        if (
+            result.get("golf_price_drop_recheck")
+            and not result.get("golf_price_drop_crossed_steal_line")
+        ):
+            result["verdict"] = "PASS"
+            result["reason"] = (
+                "price-drop re-check completed; price did not newly cross "
+                "the 55% catalog steal line"
+            )
+            append_alert_log(result)
+            mark_seen(conn, item_id, fingerprint, total_price)
             continue
 
         # Ending-soon auctions deliberately bypass the seen-dedupe in

@@ -1187,7 +1187,6 @@
       "enabled": true,
       "profile": "fast",
       "platforms": [
-        "offerup",
         "craigslist"
       ],
       "ebay": false,
@@ -1202,7 +1201,6 @@
       "enabled": true,
       "profile": "fast",
       "platforms": [
-        "offerup",
         "craigslist"
       ],
       "ebay": false,
@@ -3574,8 +3572,27 @@
   "DEEPSEEK_TEXT_MAX_OUTPUT_TOKENS": 512,
   "DEEPSEEK_MODEL": "deepseek-v4-flash-vision-exp",
   "EBAY_SEARCHES_PER_RUN_LIMIT": 12,
-  "EBAY_FAST_SEARCHES_PER_RUN": 14,
+  "EBAY_FAST_SEARCHES_PER_RUN": 11,
   "EBAY_SLOW_SEARCHES_PER_RUN": 2,
+  "EBAY_SEARCH_CALLS_PER_RUN_CAP": 16,
+  "EBAY_FRESH_BIN_SEARCHES_PER_RUN": 2,
+  "EBAY_LOCAL_PICKUP_SEARCHES_PER_RUN": 1,
+  "EBAY_HIDDEN_SEARCHES_PER_RUN": 1,
+  "EBAY_GOLF_AUCTION_SEARCHES_PER_RUN": 1,
+  "EBAY_REGULAR_FALLBACK_SEARCH_IDS": [
+    "golf-golf-club-set",
+    "golf-complete-iron",
+    "golf-golf-clubs",
+    "golf-golf-set",
+    "golf-irons",
+    "golf-complete",
+    "golf-cobra",
+    "golf-callaway",
+    "golf-ping",
+    "golf-taylormade",
+    "golf-and-bag",
+    "golf-full"
+  ],
   "EBAY_AUCTION_CLOSING_SOON_MINUTES": 15,
   "EBAY_AUCTION_CONTESTED_CLOSING_SOON_MINUTES": 6,
   "EBAY_AUCTION_SEARCHES": [
