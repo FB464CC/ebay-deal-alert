@@ -1,0 +1,128 @@
+VINTED NEGOTIATION-AWARE PRICING AND PHOTO PRESCREEN WORK LOG
+=============================================================
+
+2026-10-19 - required reading and safety checkpoint
+---------------------------------------------------
+- Read VINTED_FAST.txt, VINTED_STRICT.txt, the external read-only buyer
+  profile, vinted_fast.py, and the relevant Vinted size, Jev, strict-gate,
+  logging, and alert paths in ebay_deal_alert.py before editing.
+- Confirmed first-run deployment safety remains explicit in
+  items_newer_than_high_water(): a missing per-search high-water marker records
+  the newest observed item and returns no candidates, so existing inventory
+  cannot generate backlog alerts on the first run after deploy.
+- No fetch, pull, push, commit, or alert delivery will be performed.
+
+2026-10-19 - untouched baseline
+-------------------------------
+- Starting tracked worktree was clean. Pre-existing untracked files
+  .golf_history_2026_10_04.jsonl, golf_models_starter.json, and task.txt are
+  unrelated and remain untouched.
+- Baseline `python -m pytest -q`: 933 passed, 4 existing lxml deprecation
+  warnings, and 841 subtests passed in 24.77s.
+- config.json started at 3,839 LF bytes, all preceded by CR, with a final CRLF.
+
+2026-10-19 - implementation review checkpoint
+---------------------------------------------
+- Found an in-progress uncommitted implementation already present in the
+  workspace and reviewed it as existing work rather than replacing it. The
+  negotiation fields, raised list-price caps, four new searches, brand floors,
+  OpenRouter photo prescreen, strict-bar math, second-look math, alert line,
+  and lane-log fields are present; requested regression tests are not yet.
+- Reconfirmed deployment safety in items_newer_than_high_water(): a search
+  without a marker establishes its baseline and returns no candidates.
+- Focused pre-test on the in-progress tree: 21 passed, 3 failed. All three are
+  stale test assumptions: no explicit TypeSafe key in the low-Jev fixture,
+  the former $45 Peter Millar floor, and the former strict-alert lead text.
+
+2026-10-19 - regression coverage checkpoint
+-------------------------------------------
+- Added negotiation math and exact alert-line coverage, the Peter Millar
+  $10-list/$35-resale alert and $20-list/$35-resale rejection boundary,
+  all changed brand floors and list-price caps, all four new saved searches,
+  XL polo coverage, and Canali 42R / EU 52 / structured Vinted size 52 matches.
+- Added mocked photo-prescreen coverage for the OpenRouter chat-completions
+  request, two 512px-bounded data-URL images, primary and fallback models,
+  errors and unparseable fail-open behavior, explicit-false-only rejection,
+  per-run call cap, latency/answer/model telemetry, and usage.cost persistence.
+- Existing-test edits are limited to setting an explicit TypeSafe key in lane
+  fixtures, changing the Peter Millar floor assertion from $45 to $30,
+  changing the strict alert assertion to the negotiated-price line, and
+  updating the enabled-search count/name from 131 to 135.
+- Focused `python -m pytest -q test_vinted_fast.py`: 35 passed in 1.76s.
+- Full `python -m pytest -q`: 944 passed, 4 existing lxml deprecation
+  warnings, and 841 subtests passed in 26.41s.
+
+2026-10-19 - live OpenRouter prescreen check
+--------------------------------------------
+- Loaded C:\Users\frost\.openrouter_key into OPENROUTER_API_KEY inside the
+  diagnostic process without printing it. TYPESAFE_API_KEY was removed from
+  that process so the new OpenRouter photo path was exercised directly.
+- Fetched current public Vinted catalog rows with the lane's normal four-second
+  request floor, then invoked only _run_vinted_prescreen(). No _process_item(),
+  send_alert(), state write, seen write, or lane-log write was called.
+- All eight calls used google/gemma-3-12b-it, returned parseable true, and did
+  not invoke the fallback model:
+    10438721037 | 1.984s | $0.000026850 | Peter Millar Crown Crafted Men Polo Shirt L Hula Girls Surf Scenic Coastal Golf
+    10438539698 | 1.671s | $0.000017450 | Peter Millar XL Blue Floral Print
+    10438411212 | 2.141s | $0.000026925 | Cutter & Buck Men's XXL Gray Stretch Golf Polo Short Sleeve Performance Shirt
+    10437946774 | 0.734s | $0.000017750 | Peter Millar XL Blue Pullover Sweater 1/4 Zip
+    10437651337 | 0.812s | $0.000027225 | Peter Millar Surge Crown Crafted Pants 33x32 Blue Golf 5 Pocket Tailored Fit
+    10437462350 | 3.766s | $0.000026325 | Peter Millar Crown Crafted Navy Blue Polo Shirt
+    10437494730 | 0.968s | $0.000026175 | Peter Millar Crown Crafted Golf Shorts
+    10437124395 | 2.656s | $0.000026175 | Peter Millar Ultimate Five Pocket Pant
+- Median latency (ordinary midpoint for eight values): 1.8275s; range
+  0.734-3.766s. Total response usage.cost: $0.000194875 across eight provider
+  calls (about $0.00002436/listing).
+- These were intentionally raw current catalog samples for the isolated
+  prescreen diagnostic. The real lane's query relevance, negative terms, and
+  L/XL size filters run before the prescreen and would remove the Cutter & Buck
+  mismatch and the numeric-size pants/shorts rows shown above.
+
+2026-10-19 - final report
+-------------------------
+- Negotiation pricing is active only in the Vinted fast lane: opener is 60%
+  of item list price and expected paid is configured at 70% of landed list
+  price. The first-photo Steal rating and fail-closed second-look 30%-of-resale
+  ceiling both use expected paid. Alerts show the exact requested second line:
+  `List $X -> open $Y (60%) -> expect ~$Z (owner median 70%)`.
+- Every pre-existing vinted-* menswear list-price cap equals its former cap
+  divided by 0.70 and rounded upward to the nearest $5. Runtime hard-cap
+  enforcement now compares item list price, matching Vinted's price_to query,
+  while expected-paid valuation continues to use landed list price.
+- Peter Millar's floor is $30. Canali is $150; Brooks Brothers, E. Marinella,
+  and Marinella are $60. The new Vinted-only fast searches are Crown Crafted,
+  Canali suits, Brooks Brothers, and E. Marinella ties. Peter Millar polos now
+  accept M/L/XL. Canali accepts 42R, explicit EU 52, and Vinted's structured
+  bare size 52 without weakening footwear-equivalent matching.
+- With no TypeSafe key, the old text-only lane fallback is replaced by the
+  OpenRouter photo prescreen. It sends at most two baseline JPEG data URLs
+  bounded to 512px, uses Gemma 3 12B then Gemini 2.5 Flash Lite only after an
+  error/unparseable reply, fails open on uncertainty, and suppresses only an
+  explicit JSON false. Model, answer, aggregate latency, aggregate usage.cost,
+  and diagnostic reason persist in the normal lane record. The 400-call cap
+  bounds primary plus fallback HTTP attempts. With TypeSafe configured, the
+  existing image Jev path remains first and unchanged.
+- First-run deployment remains backlog-safe: each missing per-search high-water
+  marker records the newest observed row and returns no candidates. The
+  existing regression test continues to verify that initial-baseline behavior.
+- Existing test edits: test_vinted_fast.py sets a mock TypeSafe key in existing
+  lane fixtures, changes the Peter Millar floor expectation $45 -> $30, and
+  replaces the old strict-alert lead assertion with expected-paid plus the
+  offer line. test_ebay_deal_alert.py changes enabled count 131 -> 135 and the
+  corresponding test name. All other coverage added is new.
+- Final validation: `python -m pytest -q` -> 944 passed, 4 existing lxml
+  deprecation warnings, 841 subtests passed in 26.41s. ast.parse passed for all
+  four touched Python files; json.load passed for config; git diff --check
+  passed. config.json is 100% CRLF: 3,912 LF bytes, all 3,912 preceded by CR,
+  zero bare LF bytes, and a final CRLF.
+- Protected comparison against HEAD found no changes to
+  AI_PAID_MONTHLY_BUDGET_USD, GEMINI_CALL_LIMIT, GEMINI_BATCH_SIZE,
+  AI_PHOTO_PROVIDER, any GOLF_STRONG_VISION_* value, or any existing JEV_*
+  value. No golf-equipment behavior or decorator/function adjacency changed.
+- Modified tracked files: config.json, ebay_deal_alert.py,
+  test_ebay_deal_alert.py, test_vinted_fast.py, and vinted_fast.py. This
+  VINTED_NEGOTIATE.txt report is untracked. Pre-existing untracked
+  .golf_history_2026_10_04.jsonl, golf_models_starter.json, and task.txt remain
+  untouched. No fetch, pull, push, commit, login, alert delivery, state write,
+  or seen-database write was performed.
+

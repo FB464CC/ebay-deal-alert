@@ -5016,6 +5016,17 @@ def listing_matches_size_filter(saved_search, listing):
         pattern = size_pattern(size_token)
         if pattern and re.search(pattern, haystack, re.IGNORECASE):
             return True
+    # Vinted exposes an EU suit tag such as ``52`` in its dedicated size
+    # field without necessarily retaining an ``EU`` prefix.  A tailoring
+    # search's explicitly configured equivalent is safe to trust there while
+    # title/description aliases still require their UK/EU qualifier (important
+    # for footwear, where an unqualified 12 must not satisfy a US-13 search).
+    if saved_search.get("category") == "tailoring":
+        structured_size = str(listing.get("size") or "")
+        for size_token in equivalent_tokens:
+            pattern = size_pattern(size_token)
+            if pattern and re.search(pattern, structured_size, re.IGNORECASE):
+                return True
     for size_token in equivalent_tokens:
         pattern = size_pattern(size_token, qualifier_required=True)
         if pattern and re.search(pattern, haystack, re.IGNORECASE):
@@ -9298,6 +9309,15 @@ def append_alert_log(
         "vinted_brand",
         "vinted_brand_key",
         "vinted_min_resale_floor",
+        "vinted_opening_offer_fraction",
+        "vinted_expected_paid_fraction",
+        "vinted_opening_offer",
+        "vinted_expected_paid",
+        "vinted_prescreen_model",
+        "vinted_prescreen_answer",
+        "vinted_prescreen_latency_seconds",
+        "vinted_prescreen_cost_usd",
+        "vinted_prescreen_reason",
         "vinted_strong_checked",
         "vinted_strong_unavailable_reason",
         "vinted_strong_model",
@@ -9771,17 +9791,34 @@ def send_alert(result):
         price_line = f"${price}{profile_note}"
     source = (listing.get("platform") or "ebay").upper()
     message = f"[{source}] {price_line} - {title}"
+    negotiation_line = None
+    if listing.get("platform") == "vinted":
+        opening_offer = result.get("vinted_opening_offer")
+        expected_paid = result.get("vinted_expected_paid")
+        if item_price is not None and opening_offer is not None and expected_paid is not None:
+            negotiation_line = (
+                f"List ${_money_without_noise(item_price)} -> "
+                f"open ${_money_without_noise(opening_offer)} (60%) -> "
+                f"expect ~${_money_without_noise(expected_paid)} "
+                "(owner median 70%)"
+            )
     if result.get("vinted_strict_apparel"):
         vinted_brand = result.get("vinted_brand") or "Unknown brand"
         vinted_item = result.get("vinted_alert_item") or title or "item"
         vinted_resale = result.get("vinted_conservative_resale_value")
         vinted_pct = result.get("vinted_conservative_discount_pct")
+        vinted_expected = result.get("vinted_expected_paid")
+        if vinted_expected is None:
+            vinted_expected = price
         message = (
             f"STEAL: {vinted_brand} {vinted_item} - "
-            f"${_money_without_noise(price)} vs "
+            f"~${_money_without_noise(vinted_expected)} expected vs "
             f"~${_money_without_noise(vinted_resale)} resale "
-            f"({vinted_pct}% off)\n{message}"
+            f"({vinted_pct}% off)"
         )
+        if negotiation_line:
+            message += f"\n{negotiation_line}"
+        message += f"\n[{source}] {price_line} - {title}"
         condition = result.get("vinted_strong_condition_grade") or "unknown"
         size_on_tag = result.get("vinted_strong_size_on_tag") or "not readable"
         premium_reason = (
@@ -9792,6 +9829,8 @@ def send_alert(result):
             f"\ncondition: {condition} | size on tag: {size_on_tag}"
             f"\npremium: {premium_reason}"
         )
+    elif negotiation_line:
+        message += f"\n{negotiation_line}"
     if result.get("golf_delivery_path") == "catalog-steal":
         ratio = result.get("golf_steal_ratio")
         off_pct = round((1 - float(ratio)) * 100) if _finite_number(ratio) else 0

@@ -1,5 +1,7 @@
+import base64
 import io
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -68,6 +70,45 @@ def _lane(tmp_path):
     )
 
 
+def _prescreen_response(answer_text='{"answer": true}', *, cost=0.00002):
+    response = mock.Mock(status_code=200)
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "choices": [{"message": {"content": answer_text}}],
+        "usage": {"cost": cost},
+    }
+    return response
+
+
+def _image_bytes(size=(1024, 768), color="navy"):
+    image = io.BytesIO()
+    Image.new("RGB", size, color).save(image, "PNG")
+    return image.getvalue()
+
+
+def _prescreen_result(item_id="prescreen-1", category="other"):
+    listing = {
+        "itemId": f"vinted:{item_id}",
+        "title": "Brooks Brothers Golden Fleece Mens Shirt",
+        "price": {"value": 12.0, "currency": "USD"},
+        "itemWebUrl": f"https://www.vinted.com/items/{item_id}",
+        "platform": "vinted",
+        "image": {"imageUrl": "https://images.example/one.jpg"},
+        "additionalImages": [
+            {"imageUrl": "https://images.example/two.jpg"},
+            {"imageUrl": "https://images.example/three.jpg"},
+        ],
+    }
+    return {
+        "listing": listing,
+        "category": category,
+        "verdict": "REVIEW",
+        "item_price": 12.0,
+        "price": 12.72,
+        "vinted_fast_lane": True,
+    }
+
+
 def _passing_strong_result(resale=100, **overrides):
     result = {
         "brand_label_visible_and_consistent": True,
@@ -133,6 +174,7 @@ def _run_one_pipeline(
             "liquidity": "fast",
         }
     with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
         mock.patch.object(engine, "jev_vinted_score", return_value=jev_score),
         mock.patch.object(engine, "check_photos_with_gemini", return_value=ai_result) as photo,
         mock.patch.object(
@@ -223,6 +265,7 @@ def _run_custom_pipeline(
         )
 
     with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
         mock.patch.object(engine, "jev_vinted_score", return_value=0.9),
         mock.patch.object(engine, "check_photos_with_gemini", return_value=ai_result),
         mock.patch.object(
@@ -282,6 +325,99 @@ def test_only_items_newer_than_high_water_enter_pipeline():
     )
     assert [item["id"] for item in newer] == ["4"]
     assert next_water["item_id"] == "4"
+
+
+def test_vinted_negotiation_price_math_uses_item_and_landed_list_prices():
+    result = {"item_price": 100.0, "price": 120.0}
+    assert fast._set_vinted_negotiation_prices(result) == 84.0
+    assert result["vinted_opening_offer"] == 60.0
+    assert result["vinted_expected_paid"] == 84.0
+    assert result["vinted_opening_offer_fraction"] == 0.60
+    assert result["vinted_expected_paid_fraction"] == 0.70
+
+
+def test_vinted_brand_resale_floors_match_owner_profile():
+    expected = {
+        "peter millar": 30,
+        "canali": 150,
+        "brooks brothers": 60,
+        "e. marinella": 60,
+        "marinella": 60,
+    }
+    assert {
+        brand: fast.VINTED_MIN_RESALE_BY_BRAND[brand]
+        for brand in expected
+    } == expected
+
+
+def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
+    searches = {search["id"]: search for search in engine.SAVED_SEARCHES}
+    required_ids = {
+        "vinted-canali-suit",
+        "vinted-brooks-brothers",
+        "vinted-e-marinella-tie",
+        "vinted-peter-millar-crown-crafted",
+    }
+    assert required_ids <= searches.keys()
+    for search_id in required_ids:
+        search = searches[search_id]
+        assert search["enabled"] is True
+        assert search["profile"] == "fast"
+        assert search["platforms"] == ["vinted"]
+        assert search["ebay"] is False
+        for negative in ("-women", "-womens", "-ladies", "-girls", "-kids"):
+            assert negative in search["query"]
+
+    canali = searches["vinted-canali-suit"]
+    assert canali["category"] == "tailoring"
+    assert canali["size"] == ["42"]
+    assert canali["size_equivalents"] == ["52"]
+    assert engine.listing_matches_size_filter(
+        canali, {"title": "Canali Navy Wool Suit 42R"}
+    )
+    assert engine.listing_matches_size_filter(
+        canali, {"title": "Canali Navy Wool Suit EU 52"}
+    )
+    assert engine.listing_matches_size_filter(
+        canali, {"title": "Canali Navy Wool Suit", "size": "52"}
+    )
+    assert not engine.listing_matches_size_filter(
+        canali, {"title": "Canali Navy Wool Suit 40R", "size": "EU 50"}
+    )
+    assert searches["vinted-brooks-brothers"]["size"] == ["M", "L", "XL"]
+    assert searches["vinted-e-marinella-tie"]["size"] is None
+    assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
+    assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L", "XL"]
+    assert len(fast.enabled_vinted_searches()) == 38
+
+
+def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
+    expected_caps = {
+        "vinted-peter-millar-polo": 30,
+        "vinted-peter-millar-quarter-zip": 45,
+        "vinted-peter-millar-jacket": 65,
+        "vinted-peter-millar": 30,
+        "vinted-peter-millar-crown-crafted": 50,
+        "vinted-canali-suit": 130,
+        "vinted-brooks-brothers": 30,
+        "vinted-e-marinella-tie": 60,
+        "vinted-brunello-cucinelli": 130,
+        "vinted-loro-piana": 130,
+        "vinted-zegna": 75,
+        "vinted-kiton": 115,
+        "vinted-brioni": 90,
+        "vinted-isaia": 90,
+        "vinted-purple-label": 75,
+        "vinted-tom-ford": 90,
+        "vinted-g-fore": 30,
+        "vinted-holderness-bourne": 25,
+    }
+    actual = {
+        search["id"]: search["max_price"]
+        for search in engine.SAVED_SEARCHES
+        if str(search.get("id") or "").startswith("vinted-")
+    }
+    assert actual == expected_caps
 
 
 def test_429_backoff_schedule_starts_at_60_and_caps_at_15_minutes(tmp_path):
@@ -394,6 +530,204 @@ def test_missing_typesafe_key_uses_openrouter_text_jev(monkeypatch):
     assert "assets" not in post.call_args.kwargs["json"]
 
 
+def test_openrouter_photo_prescreen_request_shape_resize_and_log(tmp_path, monkeypatch):
+    lane = _lane(tmp_path)
+    result = _prescreen_result()
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    downloads = [
+        (_image_bytes((1024, 768), "navy"), "image/png"),
+        (_image_bytes((300, 900), "gold"), "image/png"),
+    ]
+    with (
+        mock.patch.object(
+            engine, "_download_listing_image", side_effect=downloads
+        ),
+        mock.patch.object(
+            fast.requests,
+            "post",
+            return_value=_prescreen_response(cost=0.000021),
+        ) as post,
+        mock.patch.object(fast.time, "monotonic", side_effect=[10.0, 11.25]),
+    ):
+        assert lane._run_vinted_prescreen(result, None) is True
+
+    assert lane.prescreen_calls == 1
+    assert post.call_args.args[0] == fast.VINTED_PRESCREEN_URL
+    payload = post.call_args.kwargs["json"]
+    assert payload["model"] == "google/gemma-3-12b-it"
+    assert payload["temperature"] == 0
+    content = payload["messages"][0]["content"]
+    assert len(content) == 3
+    assert content[0]["type"] == "text"
+    assert "Is this a men's clothing item of the brand in the title" in content[0]["text"]
+    for part in content[1:]:
+        assert part["type"] == "image_url"
+        data_url = part["image_url"]["url"]
+        assert data_url.startswith("data:image/jpeg;base64,")
+        encoded = data_url.split(",", 1)[1]
+        with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+            assert max(image.size) == 512
+            assert image.width <= 512
+            assert image.height <= 512
+
+    assert result["vinted_prescreen_model"] == fast.VINTED_PRESCREEN_MODEL
+    assert result["vinted_prescreen_answer"] is True
+    assert result["vinted_prescreen_latency_seconds"] == 1.25
+    assert result["vinted_prescreen_cost_usd"] == 0.000021
+    lane._log_result(result)
+    row = json.loads(lane.log_path.read_text(encoding="utf-8"))
+    assert row["vinted_prescreen_model"] == fast.VINTED_PRESCREEN_MODEL
+    assert row["vinted_prescreen_answer"] is True
+    assert row["vinted_prescreen_latency_seconds"] == 1.25
+    assert row["vinted_prescreen_cost_usd"] == 0.000021
+
+
+def test_prescreen_falls_back_after_primary_error_or_unparseable(tmp_path, monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    primary_failures = (
+        requests.exceptions.Timeout("primary timed out"),
+        _prescreen_response("not json", cost=0.00001),
+    )
+    for index, primary_failure in enumerate(primary_failures):
+        lane = _lane(tmp_path / f"fallback-{index}")
+        result = _prescreen_result(f"fallback-{index}")
+        with (
+            mock.patch.object(
+                engine,
+                "_download_listing_image",
+                return_value=(_image_bytes(), "image/png"),
+            ),
+            mock.patch.object(
+                fast.requests,
+                "post",
+                side_effect=[
+                    primary_failure,
+                    _prescreen_response('{"answer": true}', cost=0.0001),
+                ],
+            ) as post,
+        ):
+            assert lane._run_vinted_prescreen(result, None) is True
+        assert [
+            call.kwargs["json"]["model"] for call in post.call_args_list
+        ] == [
+            fast.VINTED_PRESCREEN_MODEL,
+            fast.VINTED_PRESCREEN_FALLBACK_MODEL,
+        ]
+        assert result["vinted_prescreen_model"] == fast.VINTED_PRESCREEN_FALLBACK_MODEL
+        assert result["vinted_prescreen_answer"] is True
+
+
+def test_prescreen_errors_and_unparseable_responses_fail_open(tmp_path, monkeypatch):
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    attempt_sets = (
+        [
+            requests.exceptions.Timeout("primary timed out"),
+            requests.exceptions.ConnectionError("fallback unavailable"),
+        ],
+        [
+            _prescreen_response("not json"),
+            _prescreen_response('{"answer": "maybe"}'),
+        ],
+    )
+    for index, attempts in enumerate(attempt_sets):
+        lane = _lane(tmp_path / f"fail-open-{index}")
+        result = _prescreen_result(f"fail-open-{index}")
+        with (
+            mock.patch.object(
+                engine,
+                "_download_listing_image",
+                return_value=(_image_bytes(), "image/png"),
+            ),
+            mock.patch.object(fast.requests, "post", side_effect=attempts) as post,
+        ):
+            assert lane._run_vinted_prescreen(result, None) is None
+        assert post.call_count == 2
+        assert result["vinted_prescreen_answer"] is None
+
+
+def test_prescreen_only_explicit_false_drops_before_real_ai(tmp_path):
+    def run_case(case_name, answer):
+        case_path = tmp_path / case_name
+        case_path.mkdir()
+        lane = _lane(case_path)
+        listing, result = _listing_and_result()
+        listing["itemId"] = f"vinted:{case_name}"
+        lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+        conn = engine.init_db(lane.seen_db_path)
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"},
+            ),
+            mock.patch.object(
+                lane, "_run_vinted_prescreen", return_value=answer
+            ) as prescreen,
+            mock.patch.object(
+                engine,
+                "check_photos_with_gemini",
+                return_value=_apparel_ai(100),
+            ) as photo,
+            mock.patch.object(
+                engine,
+                "_deepseek_alert_sanity_check",
+                return_value={
+                    "is_complete_item": True,
+                    "is_part_or_accessory": False,
+                    "reason": "",
+                },
+            ),
+            mock.patch.object(engine, "send_alert") as send,
+            mock.patch.object(
+                lane,
+                "_run_vinted_strong_vision",
+                side_effect=lambda merged, _hard_stop: _record_mock_strong(
+                    lane, merged, _passing_strong_result()
+                ),
+            ),
+        ):
+            lane._process_item(
+                conn, None, {}, {"query": result["search_query"]}, None
+            )
+        conn.close()
+        prescreen.assert_called_once()
+        return photo, send
+
+    rejected_photo, rejected_send = run_case("explicit-false", False)
+    rejected_photo.assert_not_called()
+    rejected_send.assert_not_called()
+    open_photo, open_send = run_case("unknown-fails-open", None)
+    open_photo.assert_called_once()
+    open_send.assert_called_once()
+
+
+def test_prescreen_per_run_cap_stops_additional_requests(tmp_path, monkeypatch):
+    lane = _lane(tmp_path)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    first = _prescreen_result("cap-first")
+    second = _prescreen_result("cap-second")
+    with (
+        mock.patch.object(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 1),
+        mock.patch.object(
+            engine,
+            "_download_listing_image",
+            return_value=(_image_bytes(), "image/png"),
+        ) as download,
+        mock.patch.object(
+            fast.requests, "post", return_value=_prescreen_response()
+        ) as post,
+    ):
+        assert lane._run_vinted_prescreen(first, None) is True
+        assert lane._run_vinted_prescreen(second, None) is None
+    assert lane.prescreen_calls == 1
+    assert post.call_count == 1
+    assert download.call_count == 2
+    assert "per-run prescreen cap of 1 reached" == second["vinted_prescreen_reason"]
+
+
 def test_low_jev_score_skips_real_ai(tmp_path):
     _lane_obj, photo, strong, send, seen = _run_one_pipeline(
         tmp_path, jev_score=0.05
@@ -418,6 +752,7 @@ def test_ai_failure_never_sends_alert(tmp_path):
     lane._cheap_result = mock.Mock(return_value=(listing, result, None))
     conn = engine.init_db(lane.seen_db_path)
     with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "test-key"}),
         mock.patch.object(engine, "jev_vinted_score", return_value=0.8),
         mock.patch.object(engine, "check_photos_with_gemini", return_value=None),
         mock.patch.object(engine, "send_alert") as send,
@@ -502,7 +837,55 @@ def test_generic_peter_millar_polo_below_resale_floor_never_alerts(tmp_path):
     )
     strong.assert_not_called()
     send.assert_not_called()
-    assert "below $45 brand floor" in row["reason"]
+    assert "below $30 brand floor" in row["reason"]
+
+
+def test_peter_millar_ten_dollar_list_at_35_resale_alerts_after_second_look(
+    tmp_path,
+):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Crown Crafted Polo Size L",
+        10,
+        "other",
+        "peter millar crown crafted -women",
+        search_id="vinted-pm-ten-dollar-steal",
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(35),
+        strong_result=_passing_strong_result(
+            35, premium_reason="Crown Crafted label is clearly visible", size_on_tag="L"
+        ),
+    )
+    strong.assert_called_once()
+    send.assert_called_once()
+    assert row["delivered"] is True
+    assert round(row["vinted_expected_paid"], 2) == 7.42
+    assert row["deal_rating"] == "Steal"
+
+
+def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Peter Millar Crown Crafted Polo Size L",
+        20,
+        "other",
+        "peter millar crown crafted -women",
+        search_id="vinted-pm-twenty-not-steal",
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(35),
+        strong_result=_passing_strong_result(35),
+    )
+    strong.assert_not_called()
+    send.assert_not_called()
+    assert round(row["vinted_expected_paid"], 2) == 14.84
+    assert row["deal_rating"] == "Great Deal"
+    assert "below Steal" in row["reason"]
 
 
 def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
@@ -792,24 +1175,30 @@ def test_vinted_apparel_alert_starts_with_required_strict_summary(monkeypatch):
             "vinted_brand": "Peter Millar",
             "vinted_alert_item": "Crown Crafted Cashmere Quarter Zip",
             "vinted_conservative_resale_value": 110,
-            "vinted_conservative_discount_pct": 83,
+            "vinted_conservative_discount_pct": 88,
             "vinted_strong_condition_grade": "excellent",
             "vinted_strong_size_on_tag": "L",
             "vinted_strong_premium_reason": "Crown Crafted cashmere tag is visible",
             "deal_rating": "Steal",
-            "discount_pct": 83,
+            "discount_pct": 88,
             "estimated_resale_value": 110,
         }
     )
+    fast._set_vinted_negotiation_prices(result)
     response = mock.Mock(status_code=200)
     response.raise_for_status.return_value = None
     monkeypatch.setenv("NTFY_TOPIC", "test-topic")
     with mock.patch.object(engine.requests, "post", return_value=response) as post:
         engine.send_alert(result)
     message = post.call_args.kwargs["data"].decode("utf-8")
-    assert message.startswith(
+    lines = message.splitlines()
+    assert lines[0] == (
         "STEAL: Peter Millar Crown Crafted Cashmere Quarter Zip - "
-        "$19.08 vs ~$110 resale (83% off)"
+        "~$13.36 expected vs ~$110 resale (88% off)"
+    )
+    assert lines[1] == (
+        "List $18 -> open $10.80 (60%) -> expect ~$13.36 "
+        "(owner median 70%)"
     )
     assert "condition: excellent | size on tag: L" in message
     assert "premium: Crown Crafted cashmere tag is visible" in message

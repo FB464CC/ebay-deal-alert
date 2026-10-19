@@ -6,6 +6,7 @@ four-second request floor.
 """
 
 import argparse
+import base64
 import json
 import logging
 import math
@@ -15,6 +16,7 @@ import sqlite3
 import time
 from collections import Counter
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 import requests
@@ -50,6 +52,22 @@ VINTED_STRONG_LOOK_MAX_PER_RUN = max(
 VINTED_STRONG_VISION_MODEL = engine._CONFIG.get(
     "VINTED_STRONG_VISION_MODEL", engine.GOLF_STRONG_VISION_MODEL
 )
+VINTED_EXPECTED_PAID_FRACTION = float(
+    engine._CONFIG.get("VINTED_EXPECTED_PAID_FRACTION", 0.70)
+)
+VINTED_OPENING_OFFER_FRACTION = 0.60
+VINTED_PRESCREEN_MODEL = str(
+    engine._CONFIG.get("VINTED_PRESCREEN_MODEL", "google/gemma-3-12b-it")
+)
+VINTED_PRESCREEN_FALLBACK_MODEL = str(
+    engine._CONFIG.get(
+        "VINTED_PRESCREEN_FALLBACK_MODEL", "google/gemini-2.5-flash-lite"
+    )
+)
+VINTED_PRESCREEN_MAX_PER_RUN = max(
+    0, int(engine._CONFIG.get("VINTED_PRESCREEN_MAX_PER_RUN", 400))
+)
+VINTED_PRESCREEN_URL = "https://openrouter.ai/api/v1/chat/completions"
 VINTED_APPAREL_CATEGORIES = frozenset(
     {
         "golf",
@@ -67,7 +85,11 @@ VINTED_MIN_RESALE_BY_BRAND = {
     for brand, floor in engine._CONFIG.get(
         "VINTED_MIN_RESALE_BY_BRAND",
         {
-            "peter millar": 45,
+            "peter millar": 30,
+            "canali": 150,
+            "brooks brothers": 60,
+            "e. marinella": 60,
+            "marinella": 60,
             "g/fore": 45,
             "holderness & bourne": 45,
             "zegna": 100,
@@ -86,6 +108,10 @@ VINTED_DEFAULT_MIN_RESALE = float(VINTED_MIN_RESALE_BY_BRAND.get("default", 60))
 
 _VINTED_BRAND_DISPLAY_NAMES = {
     "peter millar": "Peter Millar",
+    "canali": "Canali",
+    "brooks brothers": "Brooks Brothers",
+    "e. marinella": "E. Marinella",
+    "marinella": "E. Marinella",
     "g/fore": "G/Fore",
     "holderness & bourne": "Holderness & Bourne",
     "zegna": "Zegna",
@@ -99,6 +125,81 @@ _VINTED_BRAND_DISPLAY_NAMES = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _set_vinted_negotiation_prices(result):
+    """Attach the owner's measured opener and expected negotiated landed price."""
+    item_price = engine._sane_ai_price(result.get("item_price"))
+    landed_list_price = engine._sane_ai_price(result.get("price"))
+    result["vinted_opening_offer_fraction"] = VINTED_OPENING_OFFER_FRACTION
+    result["vinted_expected_paid_fraction"] = VINTED_EXPECTED_PAID_FRACTION
+    result["vinted_opening_offer"] = (
+        item_price * VINTED_OPENING_OFFER_FRACTION
+        if item_price is not None
+        else None
+    )
+    result["vinted_expected_paid"] = (
+        landed_list_price * VINTED_EXPECTED_PAID_FRACTION
+        if landed_list_price is not None
+        else None
+    )
+    return result.get("vinted_expected_paid")
+
+
+_VINTED_PRESCREEN_ITEM_TYPES = {
+    "golf": "golf top or garment",
+    "other": "clothing item",
+    "knitwear": "sweater, quarter-zip, or other knitwear item",
+    "outerwear": "jacket, coat, or vest",
+    "tailoring": "suit",
+    "footwear": "pair of shoes",
+    "neckwear": "tie",
+    "leather-goods": "leather accessory",
+    "school-gear": "South Carolina Gamecocks garment",
+    "watches": "wristwatch",
+}
+
+
+def _vinted_prescreen_question(listing, category):
+    if category == "poker-chips":
+        question = "Is this a set or lot of real poker chips?"
+    else:
+        item_type = _VINTED_PRESCREEN_ITEM_TYPES.get(category, "item")
+        question = (
+            f"Is this a men's {item_type} of the brand in the title, in good "
+            "condition, not a women's/kids item, not a different item?"
+        )
+    title = " ".join(str(listing.get("title") or "").split())
+    return (
+        f"Listing title: {title!r}. {question} "
+        'Reply with only JSON: {"answer": true} or {"answer": false}.'
+    )
+
+
+def _prepare_vinted_prescreen_image(content):
+    """Return a bake-compatible baseline JPEG bounded to 512px."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(content)) as original:
+            image = ImageOps.exif_transpose(original).convert("RGB")
+    except (OSError, ValueError, UnidentifiedImageError):
+        return None
+    if image.width <= 0 or image.height <= 0:
+        return None
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    image.thumbnail((512, 512), resampling)
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=80)
+    return output.getvalue()
+
+
+def _openrouter_usage_cost(payload):
+    try:
+        cost = float((payload.get("usage") or {}).get("cost"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
 
 def _vinted_brand_and_floor(result):
@@ -407,8 +508,11 @@ def _merge_ai_result(result, ai_result, category):
             result["estimated_resale_value"] = engine.clamp_watch_resale_estimate(
                 result["estimated_resale_value"], band
             )
+    expected_paid = result.get("vinted_expected_paid")
+    if expected_paid is None:
+        expected_paid = _set_vinted_negotiation_prices(result)
     rating, discount = engine.compute_deal_rating(
-        result.get("price"), result.get("estimated_resale_value")
+        expected_paid, result.get("estimated_resale_value")
     )
     if rating is not None:
         result["deal_rating"] = rating
@@ -492,11 +596,161 @@ class VintedFastLane:
         self.backoff_streak = 0
         self.ai_calls = 0
         self.strong_look_calls = 0
+        self.prescreen_calls = 0
         self.samples = []
         self.stats = Counter()
         self.statuses = Counter()
         self._last_request_started = None
         self._summary_started = None
+
+    def _call_vinted_prescreen_model(self, model, content, hard_stop):
+        if self.prescreen_calls >= VINTED_PRESCREEN_MAX_PER_RUN:
+            return None
+        timeout = engine._deadline_timeout(hard_stop, 20)
+        if timeout is None:
+            return None
+        api_key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 400,
+            "temperature": 0,
+        }
+        self.prescreen_calls += 1
+        started = time.monotonic()
+        answer = None
+        cost = None
+        error = None
+        try:
+            response = requests.post(
+                VINTED_PRESCREEN_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            response_payload = response.json()
+            cost = _openrouter_usage_cost(response_payload)
+            response_text = response_payload["choices"][0]["message"]["content"]
+            parsed = json.loads(engine._strip_json_code_fence(response_text))
+            answer = parsed.get("answer")
+            if type(answer) is not bool:
+                raise ValueError("prescreen JSON answer is not boolean")
+        except (
+            requests.exceptions.RequestException,
+            AttributeError,
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+            error = str(exc)
+            answer = None
+        latency = time.monotonic() - started
+        logger.info(
+            "vinted prescreen model=%s answer=%s latency=%.3fs cost=%s",
+            model,
+            answer,
+            latency,
+            f"${cost:.8f}" if cost is not None else "unknown",
+        )
+        return {
+            "model": model,
+            "answer": answer,
+            "latency_seconds": latency,
+            "cost_usd": cost,
+            "error": error,
+        }
+
+    def _run_vinted_prescreen(self, result, hard_stop):
+        """Run the cheap negative-only OpenRouter photo screen, failing open."""
+        listing = result.get("listing") or {}
+        if not str(os.environ.get("OPENROUTER_API_KEY") or "").strip():
+            result["vinted_prescreen_reason"] = "OPENROUTER_API_KEY is not configured"
+            return None
+        if self.prescreen_calls >= VINTED_PRESCREEN_MAX_PER_RUN:
+            result["vinted_prescreen_reason"] = (
+                f"per-run prescreen cap of {VINTED_PRESCREEN_MAX_PER_RUN} reached"
+            )
+            return None
+
+        images = []
+        for image_url in engine._collect_listing_image_urls(listing)[:2]:
+            if engine._deadline_timeout(hard_stop, 1) is None:
+                break
+            downloaded = engine._download_listing_image(
+                image_url, hard_stop=hard_stop
+            )
+            if downloaded is None:
+                continue
+            prepared = _prepare_vinted_prescreen_image(downloaded[0])
+            if prepared is not None:
+                images.append(prepared)
+        if not images:
+            result["vinted_prescreen_reason"] = "no usable listing photos"
+            return None
+
+        content = [
+            {
+                "type": "text",
+                "text": _vinted_prescreen_question(
+                    listing, result.get("category")
+                ),
+            }
+        ]
+        content.extend(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/jpeg;base64,"
+                    + base64.b64encode(image).decode("ascii")
+                },
+            }
+            for image in images
+        )
+
+        attempts = []
+        models = (VINTED_PRESCREEN_MODEL, VINTED_PRESCREEN_FALLBACK_MODEL)
+        for model in dict.fromkeys(models):
+            attempt = self._call_vinted_prescreen_model(
+                model, content, hard_stop
+            )
+            if attempt is None:
+                break
+            attempts.append(attempt)
+            if type(attempt["answer"]) is bool:
+                break
+
+        if attempts:
+            final = attempts[-1]
+            result["vinted_prescreen_model"] = final["model"]
+            result["vinted_prescreen_answer"] = final["answer"]
+            result["vinted_prescreen_latency_seconds"] = round(
+                sum(attempt["latency_seconds"] for attempt in attempts), 6
+            )
+            costs = [
+                attempt["cost_usd"]
+                for attempt in attempts
+                if attempt["cost_usd"] is not None
+            ]
+            if costs:
+                result["vinted_prescreen_cost_usd"] = sum(costs)
+            errors = [attempt["error"] for attempt in attempts if attempt["error"]]
+            if errors:
+                result["vinted_prescreen_reason"] = "; ".join(errors)[-500:]
+            return final["answer"]
+        result["vinted_prescreen_reason"] = (
+            f"per-run prescreen cap of {VINTED_PRESCREEN_MAX_PER_RUN} reached"
+            if self.prescreen_calls >= VINTED_PRESCREEN_MAX_PER_RUN
+            else "prescreen request unavailable"
+        )
+        return None
 
     def _strong_look_unavailable(self, result, reason):
         result["vinted_strong_checked"] = False
@@ -657,17 +911,21 @@ class VintedFastLane:
         if cheap_resale is None:
             return "first-look resale estimate missing"
         conservative_resale = min(cheap_resale, strong_resale)
-        landed = engine._sane_ai_price(result.get("price"))
-        if landed is None:
-            return "landed price missing"
-        if landed > conservative_resale * 0.30:
+        expected_paid = engine._sane_ai_price(
+            result.get("vinted_expected_paid")
+        )
+        if expected_paid is None:
+            expected_paid = _set_vinted_negotiation_prices(result)
+        if expected_paid is None:
+            return "expected negotiated landed price missing"
+        if expected_paid > conservative_resale * 0.30:
             return (
-                f"landed ${landed:g} exceeds 30% of conservative "
+                f"expected paid ${expected_paid:g} exceeds 30% of conservative "
                 f"${conservative_resale:g} resale"
             )
         result["vinted_conservative_resale_value"] = conservative_resale
         result["vinted_conservative_discount_pct"] = round(
-            (conservative_resale - landed) / conservative_resale * 100
+            (conservative_resale - expected_paid) / conservative_resale * 100
         )
         result["vinted_alert_item"] = _vinted_item_label(result)
         return None
@@ -857,10 +1115,10 @@ class VintedFastLane:
         item_price = float((listing.get("price") or {}).get("value") or 0)
         shipping = engine.get_shipping_cost(listing)
         total_price = item_price + shipping
-        if total_price > float(search.get("max_price", math.inf)):
+        if item_price > float(search.get("max_price", math.inf)):
             return listing, None, (
-                f"over max price: ${total_price:.2f} landed before tax > "
-                f"${search.get('max_price')} cap"
+                f"over max price: ${item_price:.2f} list price > "
+                f"${search.get('max_price')} list-price cap"
             )
         result = engine.score_listing(
             listing,
@@ -881,6 +1139,7 @@ class VintedFastLane:
                 "vinted_fast_lane": True,
             }
         )
+        _set_vinted_negotiation_prices(result)
         return listing, result, None
 
     def _process_item(self, conn, main_conn, item, search, hard_stop):
@@ -905,6 +1164,7 @@ class VintedFastLane:
                 "verdict": "PASS",
                 "vinted_fast_lane": True,
             }
+            _set_vinted_negotiation_prices(result)
             self._finish(
                 conn, result, item_id, fingerprint, total_price, cheap_reason
             )
@@ -921,12 +1181,16 @@ class VintedFastLane:
             return
 
         category = result["category"]
-        jev_score = engine.jev_vinted_score(
-            listing, category, hard_stop=hard_stop
-        )
-        if jev_score is not None:
-            result["jev_vinted_score"] = jev_score
-            if jev_score <= engine.JEV_VINTED_SKIP_THRESHOLD:
+        if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
+            jev_score = engine.jev_vinted_score(
+                listing, category, hard_stop=hard_stop
+            )
+            if jev_score is not None:
+                result["jev_vinted_score"] = jev_score
+            if (
+                jev_score is not None
+                and jev_score <= engine.JEV_VINTED_SKIP_THRESHOLD
+            ):
                 self._finish(
                     conn,
                     result,
@@ -935,6 +1199,18 @@ class VintedFastLane:
                     total_price,
                     "Jev pre-photo screen rejected listing "
                     f"({jev_score:.6f} <= {engine.JEV_VINTED_SKIP_THRESHOLD:.6f})",
+                )
+                return
+        else:
+            prescreen_answer = self._run_vinted_prescreen(result, hard_stop)
+            if prescreen_answer is False:
+                self._finish(
+                    conn,
+                    result,
+                    item_id,
+                    fingerprint,
+                    total_price,
+                    "OpenRouter photo prescreen explicitly rejected listing",
                 )
                 return
 

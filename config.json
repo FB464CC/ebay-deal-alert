@@ -1208,9 +1208,10 @@
       "query": "peter millar polo -women -womens -ladies -girls -kids -scarf",
       "size": [
         "M",
-        "L"
+        "L",
+        "XL"
       ],
-      "max_price": 20,
+      "max_price": 30,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1226,7 +1227,7 @@
         "L",
         "XL"
       ],
-      "max_price": 30,
+      "max_price": 45,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1242,7 +1243,7 @@
         "L",
         "XL"
       ],
-      "max_price": 45,
+      "max_price": 65,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1259,7 +1260,7 @@
         "L",
         "XL"
       ],
-      "max_price": 20,
+      "max_price": 30,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1270,9 +1271,73 @@
       "category": "other"
     },
     {
+      "query": "peter millar crown crafted -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "L",
+        "XL"
+      ],
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-peter-millar-crown-crafted",
+      "category": "golf"
+    },
+    {
+      "query": "canali suit -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "42"
+      ],
+      "size_equivalents": [
+        "52"
+      ],
+      "max_price": 130,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-canali-suit",
+      "category": "tailoring"
+    },
+    {
+      "query": "brooks brothers -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 30,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-brooks-brothers",
+      "category": "other"
+    },
+    {
+      "query": "e. marinella tie -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 60,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-e-marinella-tie",
+      "category": "neckwear"
+    },
+    {
       "query": "\"brunello cucinelli\" -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 90,
+      "max_price": 130,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1285,7 +1350,7 @@
     {
       "query": "\"loro piana\" -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 90,
+      "max_price": 130,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1298,7 +1363,7 @@
     {
       "query": "zegna -\"z zegna\" -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 50,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1311,7 +1376,7 @@
     {
       "query": "kiton -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 80,
+      "max_price": 115,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1324,7 +1389,7 @@
     {
       "query": "brioni -bianco -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 60,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1337,7 +1402,7 @@
     {
       "query": "isaia -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 60,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1350,7 +1415,7 @@
     {
       "query": "ralph lauren \"purple label\" -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 50,
+      "max_price": 75,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1363,7 +1428,7 @@
     {
       "query": "\"tom ford\" -perfume -cologne -fragrance -eau -parfum -lipstick -makeup -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 60,
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1379,7 +1444,7 @@
         "M",
         "L"
       ],
-      "max_price": 20,
+      "max_price": 30,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1395,7 +1460,7 @@
         "M",
         "L"
       ],
-      "max_price": 15,
+      "max_price": 25,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -3764,10 +3829,18 @@
   "VINTED_FAST_ENABLED": true,
   "VINTED_FAST_RUN_MINUTES": 70,
   "VINTED_FAST_MAX_AI_CALLS_PER_RUN": 40,
+  "VINTED_EXPECTED_PAID_FRACTION": 0.70,
+  "VINTED_PRESCREEN_MODEL": "google/gemma-3-12b-it",
+  "VINTED_PRESCREEN_FALLBACK_MODEL": "google/gemini-2.5-flash-lite",
+  "VINTED_PRESCREEN_MAX_PER_RUN": 400,
   "VINTED_STRONG_LOOK_MAX_PER_RUN": 10,
   "VINTED_STRONG_VISION_MODEL": "gemini-3.8-flash",
   "VINTED_MIN_RESALE_BY_BRAND": {
-    "peter millar": 45,
+    "peter millar": 30,
+    "canali": 150,
+    "brooks brothers": 60,
+    "e. marinella": 60,
+    "marinella": 60,
     "g/fore": 45,
     "holderness & bourne": 45,
     "zegna": 100,
