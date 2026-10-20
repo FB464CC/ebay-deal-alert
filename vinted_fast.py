@@ -931,14 +931,23 @@ class VintedFastLane:
                     cache_rate_limit=False,
                 )
                 last_error = None
+                # Gemini JSON mode sometimes wraps the object in a list.
+                if (
+                    isinstance(strong_result, list)
+                    and len(strong_result) == 1
+                    and isinstance(strong_result[0], dict)
+                ):
+                    strong_result = strong_result[0]
                 if isinstance(strong_result, dict):
                     result["vinted_strong_model"] = model
                     break
                 last_error = RuntimeError("strong model returned no usable JSON object")
-                break
             except Exception as exc:
                 last_error = exc
-                if _strong_http_status(exc) not in (429, 500, 502, 503, 504):
+                # Timeouts, bad JSON and transient HTTP all try the fallback;
+                # only a hard 4xx (bad request/auth) stops here.
+                status = _strong_http_status(exc)
+                if status is not None and status not in (429, 500, 502, 503, 504):
                     break
         if last_error is not None or not isinstance(strong_result, dict):
             status = _strong_http_status(last_error)

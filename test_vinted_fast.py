@@ -1162,6 +1162,29 @@ def test_strong_look_uses_golf_fallback_on_503_and_ledgers_both_attempts(tmp_pat
     assert result["vinted_strong_model"] == engine.GOLF_STRONG_VISION_FALLBACK_MODEL
 
 
+def test_strong_look_falls_back_on_timeout_or_bad_json_and_unwraps_list(tmp_path):
+    for primary in (requests.exceptions.ReadTimeout("slow"), None, "not json"):
+        lane = _lane(tmp_path)
+        _listing, result = _apparel_listing_result(
+            "Loro Piana Cashmere Sweater", 40, "other", '"loro piana"',
+            search_id="vinted-fallback",
+        )
+        with (
+            mock.patch.object(engine, "_configured_gemini_api_keys", return_value=["key"]),
+            mock.patch.object(
+                engine, "_download_listing_image", return_value=(b"jpeg", "image/jpeg")
+            ),
+            mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+            mock.patch.object(
+                engine,
+                "_call_gemini_json",
+                side_effect=[primary, [_passing_strong_result(400)]],
+            ),
+        ):
+            assert lane._run_vinted_strong_vision(result, None)
+        assert result["vinted_strong_model"] == engine.GOLF_STRONG_VISION_FALLBACK_MODEL
+
+
 def test_vinted_apparel_alert_starts_with_required_strict_summary(monkeypatch):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip",
