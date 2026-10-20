@@ -25,8 +25,18 @@ import ebay_deal_alert as engine
 import platforms as marketplaces
 
 
-VINTED_FAST_POLL_SECONDS = 4
+VINTED_FAST_POLL_SECONDS = float(engine._CONFIG.get("VINTED_FAST_POLL_SECONDS", 4))
 VINTED_FAST_PAGE_SIZE = 24
+# Combined feeds replace the one-search-per-tick rotation (38 searches x 4s =
+# every search refreshed only every ~2.5 min). svc-catalogue ignores every
+# brand filter spelling, but the web catalog page applies brand_ids[] and
+# embeds its 96 newest items in the flight payload, so one request watches
+# every luxury brand. Text feeds cover poker and brands without an id; each
+# new item is routed back to the saved search whose caps/filters it meets.
+VINTED_WEB_CATALOG_URL = "https://www.vinted.com/catalog"
+VINTED_BRAND_FEED_IDS = [int(i) for i in engine._CONFIG.get("VINTED_BRAND_FEED_IDS", [])]
+VINTED_BRAND_FEED_MAX_PRICE = engine._CONFIG.get("VINTED_BRAND_FEED_MAX_PRICE")
+VINTED_TEXT_FEEDS = list(engine._CONFIG.get("VINTED_TEXT_FEEDS", []))
 VINTED_FAST_BACKOFF_INITIAL_SECONDS = 60
 VINTED_FAST_BACKOFF_MAX_SECONDS = 15 * 60
 VINTED_FAST_STATE_PATH = Path(__file__).resolve().with_name(
@@ -373,6 +383,84 @@ def items_newer_than_high_water(items, high_water):
     return newer, max((high_water, newest_marker), key=_marker_key)
 
 
+def _words(text):
+    # Light plural folding so the "poker chip" feed matches "casino chips lot".
+    words = re.findall(r"[a-z0-9]+", str(text or "").lower())
+    return [w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words if len(w) >= 3]
+
+
+def _web_item_to_catalog_item(entry):
+    """Map a web-catalog productItem onto the svc-catalogue item shape."""
+    product = entry.get("productItem") if isinstance(entry, dict) else None
+    if not isinstance(product, dict) or not product.get("id"):
+        return None
+    box = product.get("itemBox") if isinstance(product.get("itemBox"), dict) else {}
+    photos = [
+        {"url": photo["url"], "is_main": index == 0}
+        for index, photo in enumerate(product.get("photos") or [])
+        if isinstance(photo, dict) and photo.get("url")
+    ]
+    title = str(product.get("title") or "").strip()
+    brand = str(box.get("firstLine") or "").strip()
+    # Vinted titles often omit the brand ("Cashmere sweater"); the brand
+    # filter already proved it, and relevance/AI both key on the title.
+    if brand and brand.lower() not in title.lower():
+        title = f"{brand} {title}".strip()
+    return {
+        "id": product["id"],
+        "title": title,
+        "url": product.get("url"),
+        "price": {"amount": (product.get("price") or {}).get("amount")},
+        "total_item_price": {"amount": (product.get("totalItemPrice") or {}).get("amount")},
+        "photo": photos[0] if photos else {"url": product.get("thumbnailUrl")},
+        "photos": photos,
+        "user": {"id": (product.get("user") or {}).get("id")},
+        "item_box": {
+            "first_line": brand,
+            "second_line": box.get("secondLine"),
+            "accessibility_label": box.get("accessibilityLabel"),
+        },
+    }
+
+
+def parse_web_catalog_items(html):
+    """Items embedded in a www.vinted.com/catalog page, or None if absent."""
+    payload = "".join(marketplaces._flight_payload_strings(html or ""))
+    marker = '"items":{"items":'
+    start = payload.find(marker)
+    if start < 0:
+        return None
+    try:
+        entries, _end = json.JSONDecoder().raw_decode(payload, start + len(marker))
+    except ValueError:
+        return None
+    if not isinstance(entries, list):
+        return None
+    return [item for item in map(_web_item_to_catalog_item, entries) if item]
+
+
+def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None):
+    """Brand feed on every other request; text feeds share the rest."""
+    brand_ids = VINTED_BRAND_FEED_IDS if brand_ids is None else brand_ids
+    text_feeds = VINTED_TEXT_FEEDS if text_feeds is None else text_feeds
+    brand_max_price = VINTED_BRAND_FEED_MAX_PRICE if brand_max_price is None else brand_max_price
+    texts = [
+        ("text", {"id": f"feed-text-{feed['query']}", "query": feed["query"],
+                  "max_price": feed.get("max_price")})
+        for feed in text_feeds
+    ]
+    if not brand_ids:
+        return texts
+    brand = ("brands", {"id": "feed-brands", "brand_ids": list(brand_ids),
+                        "max_price": brand_max_price})
+    if not texts:
+        return [brand]
+    schedule = []
+    for text in texts:
+        schedule += [brand, text]
+    return schedule
+
+
 def _response_status(response):
     status = getattr(response, "status", None)
     if status is None:
@@ -578,8 +666,22 @@ class VintedFastLane:
         run_seconds=None,
         clock=time.monotonic,
         sleeper=time.sleep,
+        schedule=None,
     ):
         self.searches = enabled_vinted_searches(searches)
+        # Production (no injected searches) polls the combined feeds; tests
+        # and explicit search lists keep the per-search rotation.
+        if schedule is None and searches is None:
+            schedule = build_feed_schedule()
+        self.schedule = schedule or [("search", search) for search in self.searches]
+        # Shortest query first: on a score tie the generic row (and its usually
+        # lower cap) wins; _route prefers the most title-word matches.
+        self._routing_order = sorted(
+            self.searches,
+            key=lambda search: len(
+                marketplaces.split_query_exclusions(search.get("query", ""))[0].split()
+            ),
+        )
         self.state_path = Path(state_path)
         self.seen_db_path = Path(seen_db_path)
         self.log_path = Path(log_path)
@@ -954,6 +1056,79 @@ class VintedFastLane:
             result["reason"] = reason
         self._log_result(result)
         engine.mark_seen(conn, item_id, fingerprint, total_price)
+
+    def _brand_catalog_request(self, feed):
+        """One web-catalog request covering every brand id in the feed."""
+        self._respect_interval()
+        if self.session is None:
+            self.session = marketplaces._get_vinted_session()
+        if self.session is None:
+            return 0, None
+        params = [("brand_ids[]", brand_id) for brand_id in feed["brand_ids"]]
+        params.append(("order", "newest_first"))
+        if feed.get("max_price") is not None:
+            params += [("price_to", feed["max_price"]), ("currency", "USD")]
+        self._last_request_started = self.clock()
+        self.stats["requests"] += 1
+        try:
+            response = self.session.get(
+                VINTED_WEB_CATALOG_URL, params=params, timeout=marketplaces.HTTP_TIMEOUT
+            )
+        except Exception as exc:
+            logger.warning("vinted-fast brand feed request failed: %s", exc)
+            self.statuses["ERROR"] += 1
+            return 0, None
+        status = _response_status(response)
+        self.statuses[str(status or "UNKNOWN")] += 1
+        if status in {401, 403}:
+            marketplaces._discard_vinted_session(self.session)
+            self.session = None
+        if not 200 <= status < 300:
+            return status, None
+        body = getattr(response, "body", None)
+        if body is None:
+            body = getattr(response, "text", "")
+        if isinstance(body, bytes):
+            body = body.decode("utf-8", "replace")
+        items = parse_web_catalog_items(body)
+        if items is None:
+            logger.warning("vinted-fast brand feed page had no item payload")
+        return status, items
+
+    def _route(self, item, source_text=None):
+        """The saved search this feed item best satisfies, if any.
+
+        Only searches sharing a word with the feed source (the item's brand,
+        or the text feed's query) are candidates, so "Brooks Brothers
+        seersucker set" cannot land in "casino poker chips set". Among those,
+        the most query words present in the title wins ("Peter Millar Polo"
+        -> the polo search and its $30 cap, not the quarter-zip one).
+        """
+        listing = marketplaces._vinted_item_to_listing(item)
+        if not listing:
+            return None
+        if source_text is None:
+            source_text = (item.get("item_box") or {}).get("first_line") or ""
+        source_words = set(_words(source_text))
+        title_words = set(_words(listing.get("title")))
+        price = marketplaces._to_float(((item.get("price") or {}).get("amount")))
+        best, best_score = None, 0
+        for search in self._routing_order:
+            positive, excluded = marketplaces.split_query_exclusions(search.get("query", ""))
+            query_words = _words(positive)
+            if not source_words & set(query_words):
+                continue
+            cap = search.get("max_price")
+            if cap is not None and price is not None and price > float(cap):
+                continue
+            if marketplaces.title_matches_exclusion(listing.get("title"), excluded):
+                continue
+            if not engine.is_relevant_marketplace_listing(listing, search.get("query", "")):
+                continue
+            score = len(title_words & set(query_words))
+            if score > best_score:
+                best, best_score = search, score
+        return best
 
     def _respect_interval(self):
         if self._last_request_started is None:
@@ -1353,9 +1528,12 @@ class VintedFastLane:
         )
         try:
             while self.clock() < deadline:
-                search = self.searches[index % len(self.searches)]
+                kind, search = self.schedule[index % len(self.schedule)]
                 index += 1
-                status, items = self._catalog_request(search)
+                if kind == "brands":
+                    status, items = self._brand_catalog_request(search)
+                else:
+                    status, items = self._catalog_request(search)
                 totals["requests"] += 1
                 if status in {403, 429}:
                     totals["backoffs"] += 1
@@ -1384,9 +1562,16 @@ class VintedFastLane:
                 pipeline_block_status = None
                 if not self.dry_run:
                     for item in new_items:
+                        target = (
+                            search if kind == "search"
+                            else self._route(item, None if kind == "brands" else search["query"])
+                        )
+                        if target is None:
+                            totals["unrouted"] += 1
+                            continue
                         try:
                             self._process_item(
-                                lane_conn, main_conn, item, search, deadline
+                                lane_conn, main_conn, item, target, deadline
                             )
                         except VintedRequestBlocked as exc:
                             pipeline_block_status = exc.status

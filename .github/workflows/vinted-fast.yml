@@ -2,7 +2,10 @@ name: Vinted Fast Lane
 
 on:
   schedule:
-    - cron: '7 * * * *'
+    # Watchdog only: each run dispatches its successor (below), so coverage
+    # does not depend on GitHub's delayed/dropped hourly cron (observed: runs
+    # only every ~5h, i.e. the lane was dark ~75% of the time).
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +19,7 @@ permissions:
 jobs:
   vinted-fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    timeout-minutes: 355
 
     steps:
       - name: Check out repository
@@ -90,3 +93,13 @@ jobs:
             | while read -r cache_id; do
                 [ -n "$cache_id" ] && gh cache delete "$cache_id" || true
               done
+
+      - name: Chain the next run
+        # A pending run in the vinted-fast concurrency group starts as soon as
+        # this one ends (~1 min gap per ~5h40m run). workflow_dispatch from
+        # GITHUB_TOKEN is allowed to start workflows.
+        if: always() && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run vinted-fast.yml --ref main

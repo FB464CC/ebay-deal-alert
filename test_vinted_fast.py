@@ -435,7 +435,7 @@ def test_429_backoff_schedule_starts_at_60_and_caps_at_15_minutes(tmp_path):
     assert sleeps == delays
 
 
-def test_hardcoded_four_second_interval_is_respected(tmp_path):
+def test_configured_poll_interval_is_respected(tmp_path):
     sleeps = []
     response = mock.Mock(status=200)
     response.json.return_value = {"items": []}
@@ -454,7 +454,8 @@ def test_hardcoded_four_second_interval_is_respected(tmp_path):
     lane._catalog_request(search)
     lane._catalog_request(search)
     assert sleeps == [fast.VINTED_FAST_POLL_SECONDS]
-    assert fast.VINTED_FAST_POLL_SECONDS == 4
+    # Owner wants 1-3s refresh; feeds keep total load near 1 req/s.
+    assert 1 <= fast.VINTED_FAST_POLL_SECONDS <= 3
 
 
 def test_jev_image_request_shape_and_resize_bounds(monkeypatch):
@@ -1202,3 +1203,62 @@ def test_vinted_apparel_alert_starts_with_required_strict_summary(monkeypatch):
     )
     assert "condition: excellent | size on tag: L" in message
     assert "premium: Crown Crafted cashmere tag is visible" in message
+
+
+def test_web_catalog_items_parse_route_and_brand_title(tmp_path):
+    product = {
+        "id": 10462300934, "title": "Cashmere crewneck sweater", "url": "/items/10462300934-x",
+        "price": {"amount": "10.00", "currencyCode": "USD"},
+        "totalItemPrice": {"amount": "11.20", "currencyCode": "USD"},
+        "photos": [{"url": "https://images1.vinted.net/a.webp"}],
+        "itemBox": {"firstLine": "Ermenegildo Zegna", "secondLine": "L · Very good"},
+    }
+    payload = json.dumps({"items": {"items": [{"id": 10462300934, "productItem": product}]}}, separators=(",", ":"))
+    html = '<script>self.__next_f.push([1,' + json.dumps(payload) + '])</script>'
+    items = fast.parse_web_catalog_items(html)
+    assert [item["id"] for item in items] == [10462300934]
+    assert items[0]["title"] == "Ermenegildo Zegna Cashmere crewneck sweater"
+    assert fast.parse_web_catalog_items("<html></html>") is None
+    searches = [
+        {"id": "z", "query": 'zegna -"z zegna" -women', "max_price": 75, "platforms": ["vinted"]},
+        {"id": "pm", "query": "peter millar", "max_price": 30, "platforms": ["vinted"]},
+    ]
+    lane = fast.VintedFastLane(
+        searches=searches, state_path=tmp_path / "s", seen_db_path=tmp_path / "d",
+        log_path=tmp_path / "l", schedule=fast.build_feed_schedule([1], [], 130),
+    )
+    assert lane._route(items[0])["id"] == "z"
+    pricey = dict(items[0], price={"amount": "90.00"})
+    assert lane._route(pricey) is None
+
+
+def test_feed_schedule_puts_brand_feed_on_every_other_request():
+    schedule = fast.build_feed_schedule(
+        [1, 2], [{"query": "poker chip", "max_price": 150}, {"query": "marinella"}], 130
+    )
+    assert [kind for kind, _ in schedule] == ["brands", "text", "brands", "text"]
+    assert schedule[0][1]["brand_ids"] == [1, 2]
+    assert fast.build_feed_schedule([], [{"query": "poker chip"}], None)[0][0] == "text"
+
+
+def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
+    searches = [
+        {"id": "pm", "query": "peter millar -women", "max_price": 30, "platforms": ["vinted"]},
+        {"id": "pm-polo", "query": "peter millar polo -women", "max_price": 30, "platforms": ["vinted"]},
+        {"id": "pm-qz", "query": "peter millar quarter zip -women", "max_price": 45, "platforms": ["vinted"]},
+        {"id": "poker", "query": "casino poker chips set", "max_price": 150, "platforms": ["vinted"]},
+        {"id": "bb", "query": "brooks brothers -women", "max_price": 30, "platforms": ["vinted"]},
+    ]
+    lane = fast.VintedFastLane(
+        searches=searches, state_path=tmp_path / "s", seen_db_path=tmp_path / "d",
+        log_path=tmp_path / "l", schedule=[],
+    )
+
+    def item(title, brand, price):
+        return {"id": 1, "title": title, "url": "/items/1", "price": {"amount": price},
+                "photo": {"url": "https://x/a.webp"}, "photos": [], "item_box": {"first_line": brand}}
+
+    assert lane._route(item("Peter Millar Polo", "Peter Millar", "25.00"))["id"] == "pm-polo"
+    assert lane._route(item("Peter Millar quarter zip pullover", "Peter Millar", "40.00"))["id"] == "pm-qz"
+    assert lane._route(item("Brooks Brothers seersucker set", "Brooks Brothers", "21.00"))["id"] == "bb"
+    assert lane._route(item("Casino chips lot", "unknown", "40.00"), "poker chip")["id"] == "poker"
