@@ -94,6 +94,10 @@ VINTED_PRESCREEN_MAX_PER_RUN = max(
     0, int(engine._CONFIG.get("VINTED_PRESCREEN_MAX_PER_RUN", 400))
 )
 VINTED_PRESCREEN_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Last-resort strong look when Google rate-limits (429) both Gemini models.
+VINTED_STRONG_OPENROUTER_MODEL = str(
+    engine._CONFIG.get("VINTED_STRONG_OPENROUTER_MODEL", "google/gemini-2.5-flash")
+)
 VINTED_APPAREL_CATEGORIES = frozenset(
     {
         "golf",
@@ -974,6 +978,13 @@ class VintedFastLane:
                 if status is not None and status not in (429, 500, 502, 503, 504):
                     break
         if last_error is not None or not isinstance(strong_result, dict):
+            backup = self._openrouter_strong_look(prompt, images, hard_stop)
+            if isinstance(backup, dict):
+                strong_result, last_error = backup, None
+                result["vinted_strong_model"] = (
+                    f"openrouter:{VINTED_STRONG_OPENROUTER_MODEL}"
+                )
+        if last_error is not None or not isinstance(strong_result, dict):
             status = _strong_http_status(last_error)
             reason = (
                 f"HTTP {status} after primary/fallback"
@@ -1015,6 +1026,48 @@ class VintedFastLane:
             else None
         )
         return strong_result
+
+    def _openrouter_strong_look(self, prompt, images, hard_stop):
+        api_key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
+        timeout = engine._deadline_timeout(hard_stop, 30)
+        if not api_key or timeout is None:
+            return None
+        if not engine._reserve_paid_ai_spend(
+            engine.AI_PAID_VISION_RESERVATION_USD, kind="vision"
+        ):
+            return None
+        content = [{"type": "text", "text": prompt}] + [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,"
+                    + base64.b64encode(image).decode("ascii")
+                },
+            }
+            for image, mime_type in images
+        ]
+        try:
+            response = requests.post(
+                VINTED_PRESCREEN_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": VINTED_STRONG_OPENROUTER_MODEL,
+                    "messages": [{"role": "user", "content": content}],
+                    "max_tokens": 1500,
+                    "temperature": 0,
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            text = response.json()["choices"][0]["message"]["content"]
+            parsed = json.loads(engine._strip_json_code_fence(text))
+        except (requests.exceptions.RequestException, KeyError, IndexError,
+                TypeError, ValueError) as exc:
+            logger.warning("vinted-fast OpenRouter strong look failed: %s", exc)
+            return None
+        if isinstance(parsed, list) and len(parsed) == 1:
+            parsed = parsed[0]
+        return parsed if isinstance(parsed, dict) else None
 
     def _strong_look_veto_reason(self, result):
         if result.get("vinted_strong_checked") is not True:
