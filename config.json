@@ -1374,6 +1374,19 @@
       "category": "other"
     },
     {
+      "query": "canali -women -womens -ladies -girls -kids -scarf",
+      "size": null,
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-canali",
+      "category": "other"
+    },
+    {
       "query": "kiton -women -womens -ladies -girls -kids -scarf",
       "size": null,
       "max_price": 115,
@@ -3838,7 +3851,14 @@
     {"query": "casino chip", "max_price": 150},
     {"query": "poker chip", "max_price": 150},
     {"query": "marinella", "max_price": 60},
-    {"query": "holderness bourne", "max_price": 25}
+    {"query": "holderness bourne", "max_price": 25},
+    {"query": "zegna", "max_price": 75},
+    {"query": "loro piana", "max_price": 130},
+    {"query": "cucinelli", "max_price": 130},
+    {"query": "kiton", "max_price": 115},
+    {"query": "brioni", "max_price": 90},
+    {"query": "isaia", "max_price": 90},
+    {"query": "canali", "max_price": 130}
   ],
   "VINTED_FAST_MAX_AI_CALLS_PER_RUN": 200,
   "VINTED_EXPECTED_PAID_FRACTION": 0.70,
@@ -3850,7 +3870,7 @@
   "VINTED_MIN_RESALE_BY_BRAND": {
     "peter millar": 30,
     "canali": 150,
-    "brooks brothers": 60,
+    "brooks brothers": 35,
     "e. marinella": 60,
     "marinella": 60,
     "g/fore": 45,

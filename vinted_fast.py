@@ -66,6 +66,22 @@ VINTED_EXPECTED_PAID_FRACTION = float(
     engine._CONFIG.get("VINTED_EXPECTED_PAID_FRACTION", 0.70)
 )
 VINTED_OPENING_OFFER_FRACTION = 0.60
+# Luxury apparel listed at or under this fraction of its brand resale floor
+# pings immediately, before the 15-30 s of AI checks; those steals sell in
+# about a minute. The verified alert still follows if it passes.
+VINTED_INSTANT_ALERT_FRACTION = float(
+    engine._CONFIG.get("VINTED_INSTANT_ALERT_FRACTION", 0.25)
+)
+VINTED_INSTANT_MIN_FLOOR = 100.0
+_VINTED_NECKTIE = re.compile(r"\b(?:neck)?ties?\b", re.IGNORECASE)
+_VINTED_INSTANT_SKIP_WORDS = re.compile(
+    r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|sunglass(?:es)?|glasses|frames?"
+    r"|perfume|cologne|fragrance|parfum|eau|ml|candle|lip|balm|socks?|cufflinks?"
+    r"|hanger|scarf|hat|cap|beanie|pocket square|keychain|card holder|box|dust ?bag"
+    r"|shoes?|sneakers?|loafers?|boots?|sandals?|slippers?|trainers?|unisex"
+    r"|women'?s?|ladies|girls?|kids?|boys?)\b",
+    re.IGNORECASE,
+)
 VINTED_PRESCREEN_MODEL = str(
     engine._CONFIG.get("VINTED_PRESCREEN_MODEL", "google/gemma-3-12b-it")
 )
@@ -175,9 +191,12 @@ def _vinted_prescreen_question(listing, category):
         question = "Is this a set or lot of real poker chips?"
     else:
         item_type = _VINTED_PRESCREEN_ITEM_TYPES.get(category, "item")
+        # Negative-only: a 12B model cannot verify brand or grade condition
+        # from one photo, and the later checks do both properly.
         question = (
-            f"Is this a men's {item_type} of the brand in the title, in good "
-            "condition, not a women's/kids item, not a different item?"
+            f"Answer false ONLY if the photo clearly shows a women's or kids "
+            f"item, something other than a {item_type}, or obvious heavy damage. "
+            "If unsure, answer true."
         )
     title = " ".join(str(listing.get("title") or "").split())
     return (
@@ -903,10 +922,15 @@ class VintedFastLane:
         self.ai_calls += 1
         last_error = None
         strong_result = None
-        for model in (
+        for attempt, model in enumerate((
             VINTED_STRONG_VISION_MODEL,
             engine.GOLF_STRONG_VISION_FALLBACK_MODEL,
-        ):
+            VINTED_STRONG_VISION_MODEL,
+        )):
+            if attempt == 2:
+                # Both models 503 together during Gemini overloads; a short
+                # pause usually clears it.
+                self.sleeper(3)
             timeout = engine._deadline_timeout(
                 hard_stop, engine.GOLF_STRONG_VISION_TIMEOUT_SECONDS
             )
@@ -1032,6 +1056,56 @@ class VintedFastLane:
         )
         result["vinted_alert_item"] = _vinted_item_label(result)
         return None
+
+    def _maybe_instant_alert(self, result, category):
+        """Unverified ping for a luxury piece at a give-away price."""
+        if category not in VINTED_APPAREL_CATEGORIES or category in {
+            "neckwear", "leather-goods",
+        }:
+            return False
+        brand, floor = _vinted_brand_and_floor(result)
+        price = engine._sane_ai_price(result.get("item_price"))
+        listing = result.get("listing") or {}
+        title = str(listing.get("title") or "")
+        if (
+            floor < VINTED_INSTANT_MIN_FLOOR
+            or price is None
+            or price > floor * VINTED_INSTANT_ALERT_FRACTION
+            or _VINTED_INSTANT_SKIP_WORDS.search(title)
+        ):
+            return False
+        result["vinted_instant_alerted"] = True
+        details = " · ".join(
+            str(part) for part in (listing.get("size"), listing.get("condition")) if part
+        )
+        message = (
+            f"${price:g} {title}\n{details}\n"
+            "Unverified: AI photo check still running. Tap to grab it."
+        )
+        logger.info("vinted-fast instant alert: $%g %s | %s", price, brand, title)
+        if self.dry_run or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
+            return True
+        url = listing.get("itemWebUrl") or ""
+        headers = {
+            "Title": engine._ascii_safe_header(f"FAST {brand} ${price:g}: {title[:50]}"),
+            "Priority": "5",
+            "Tags": "zap",
+        }
+        if url:
+            headers["Click"] = url
+        image_url = (listing.get("image") or {}).get("imageUrl")
+        if image_url:
+            headers["Attach"] = image_url
+        try:
+            requests.post(
+                f"https://ntfy.sh/{engine.NTFY_TOPIC}",
+                data=message.encode("utf-8"),
+                headers=headers,
+                timeout=5,
+            ).raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            logger.warning("vinted-fast instant alert failed: %s", exc)
+        return True
 
     def _log_result(self, result, *, delivered=False, delivery_error=None):
         result["vinted_fast_lane"] = True
@@ -1373,6 +1447,16 @@ class VintedFastLane:
             return
 
         category = result["category"]
+        _brand, floor = _vinted_brand_and_floor(result)
+        if floor > 60 and _VINTED_NECKTIE.search(str(listing.get("title") or "")):
+            # Production: luxury ties resell for $45-75 against $100-150
+            # floors, so the AI checks (which pause polling) always reject.
+            self._finish(
+                conn, result, item_id, fingerprint, total_price,
+                f"necktie cannot clear the ${floor:g} brand resale floor",
+            )
+            return
+        self._maybe_instant_alert(result, category)
         if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
             jev_score = engine.jev_vinted_score(
                 listing, category, hard_stop=hard_stop

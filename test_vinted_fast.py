@@ -340,7 +340,7 @@ def test_vinted_brand_resale_floors_match_owner_profile():
     expected = {
         "peter millar": 30,
         "canali": 150,
-        "brooks brothers": 60,
+        "brooks brothers": 35,
         "e. marinella": 60,
         "marinella": 60,
     }
@@ -388,7 +388,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L", "XL"]
-    assert len(fast.enabled_vinted_searches()) == 38
+    assert len(fast.enabled_vinted_searches()) == 39
 
 
 def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
@@ -399,6 +399,7 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-peter-millar": 30,
         "vinted-peter-millar-crown-crafted": 50,
         "vinted-canali-suit": 130,
+        "vinted-canali": 90,
         "vinted-brooks-brothers": 30,
         "vinted-e-marinella-tie": 60,
         "vinted-brunello-cucinelli": 130,
@@ -561,7 +562,7 @@ def test_openrouter_photo_prescreen_request_shape_resize_and_log(tmp_path, monke
     content = payload["messages"][0]["content"]
     assert len(content) == 3
     assert content[0]["type"] == "text"
-    assert "Is this a men's clothing item of the brand in the title" in content[0]["text"]
+    assert "Answer false ONLY if the photo clearly shows" in content[0]["text"]
     for part in content[1:]:
         assert part["type"] == "image_url"
         data_url = part["image_url"]["url"]
@@ -953,6 +954,42 @@ def test_vinted_strong_condition_good_alerts(tmp_path):
         ),
     )
     send.assert_called_once()
+
+
+def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    cases = [
+        ("Zegna Cashmere sweater", 10, "knitwear", True),
+        ("Zegna Cashmere sweater", 40, "knitwear", False),  # over 25% of $100 floor
+        ("Zegna silk tie", 5, "other", False),
+        ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", False),  # floor < $100
+        ("Loro Piana cashmere crewneck", 30, "knitwear", True),
+    ]
+    for title, price, category, expected in cases:
+        _listing, result = _apparel_listing_result(
+            title, price, category, title.split()[0].lower(), search_id="s"
+        )
+        with mock.patch.object(fast.requests, "post") as post:
+            assert lane._maybe_instant_alert(result, category) is expected, title
+        assert post.called is expected, title
+        if expected:
+            headers = post.call_args.kwargs["headers"]
+            assert headers["Priority"] == "5"
+            assert headers["Title"].startswith("FAST ")
+
+
+def test_luxury_necktie_skips_ai_but_marinella_tie_does_not(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Brioni Silk Necktie", 15, "other", "brioni", search_id="vinted-brioni"
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _apparel_ai(150),
+        strong_result=_passing_strong_result(150),
+    )
+    strong.assert_not_called()
+    send.assert_not_called()
+    assert "necktie cannot clear the $120 brand resale floor" in row["reason"]
 
 
 def test_vinted_strong_label_not_visible_still_alerts(tmp_path):
