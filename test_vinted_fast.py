@@ -1004,6 +1004,26 @@ def test_strong_look_uses_openrouter_when_gemini_rate_limits_everything(tmp_path
     assert result["vinted_strong_model"].startswith("openrouter:")
 
 
+def test_identical_title_and_price_batch_is_rejected_before_ai(tmp_path):
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    first = _listing_and_result()
+    second = _listing_and_result()
+    second[0]["itemId"] = "v|duplicate"
+    second[1]["listing"] = second[0]
+    second[0]["price"] = {"value": float(first[0]["price"]["value"]) + 1, "currency": "USD"}
+    lane._cheap_result = mock.Mock(side_effect=[(*first, None), (*second, None)])
+    with (
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=None) as photo,
+        mock.patch.object(lane, "_run_vinted_prescreen", return_value=None),
+    ):
+        lane._process_item(conn, None, {}, {"query": first[1]["search_query"]}, None)
+        lane._process_item(conn, None, {}, {"query": first[1]["search_query"]}, None)
+    assert photo.call_count == 1
+    assert not engine.is_new(conn, "v|duplicate")
+    conn.close()
+
+
 def test_luxury_necktie_skips_ai_but_marinella_tie_does_not(tmp_path):
     listing, result = _apparel_listing_result(
         "Brioni Silk Necktie", 15, "other", "brioni", search_id="vinted-brioni"

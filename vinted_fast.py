@@ -721,6 +721,8 @@ class VintedFastLane:
         self.backoff_streak = 0
         self.ai_calls = 0
         self.strong_look_calls = 0
+        # (title words, rounded price) -> first item id seen this run.
+        self._listing_signatures = {}
         self.prescreen_calls = 0
         self.samples = []
         self.stats = Counter()
@@ -1500,6 +1502,16 @@ class VintedFastLane:
             return
 
         category = result["category"]
+        # Scam batches post the same generic title at the same price from
+        # several accounts within minutes (3x "tom ford sunglasses" $69-70).
+        signature = (" ".join(_words(listing.get("title"))), round(item_price / 5))
+        if self._listing_signatures.setdefault(signature, item_id) != item_id:
+            self._finish(
+                conn, result, item_id, fingerprint, total_price,
+                "identical title and price to another listing this run "
+                "(scam batch pattern)",
+            )
+            return
         _brand, floor = _vinted_brand_and_floor(result)
         if floor > 60 and _VINTED_NECKTIE.search(str(listing.get("title") or "")):
             # Production: luxury ties resell for $45-75 against $100-150
