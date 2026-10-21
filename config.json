@@ -1442,7 +1442,8 @@
       "query": "g/fore polo -women -womens -ladies -girls -kids -scarf",
       "size": [
         "M",
-        "L"
+        "L",
+        "XL"
       ],
       "max_price": 30,
       "enabled": true,
@@ -1458,7 +1459,8 @@
       "query": "\"holderness & bourne\" -women -womens -ladies -girls -kids -scarf",
       "size": [
         "M",
-        "L"
+        "L",
+        "XL"
       ],
       "max_price": 25,
       "enabled": true,

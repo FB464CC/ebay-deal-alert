@@ -262,10 +262,10 @@ def _vinted_apparel_bar_reason(result, category):
             f"vinted menswear bar: AI resale ${resale:g} below "
             f"${floor:g} brand floor"
         )
-    if result.get("deal_rating") != "Steal":
+    if result.get("deal_rating") not in {"Steal", "Great Deal"}:
         return (
             "vinted menswear bar: deal_rating "
-            f"{result.get('deal_rating')!r} below Steal"
+            f"{result.get('deal_rating')!r} below Great Deal"
         )
     return None
 
@@ -995,21 +995,13 @@ class VintedFastLane:
     def _strong_look_veto_reason(self, result):
         if result.get("vinted_strong_checked") is not True:
             return None
-        if result.get("vinted_strong_brand_label_visible_and_consistent") is not True:
-            reason = result.get("vinted_strong_brand_label_reason") or "label not visible"
-            return f"brand label/tag not visibly consistent: {reason}"
         if result.get("vinted_strong_counterfeit_indicators") is not False:
             reason = result.get("vinted_strong_counterfeit_reason") or "assessment missing"
             return f"counterfeit indicators present or unresolved: {reason}"
         condition = result.get("vinted_strong_condition_grade")
-        if condition not in {"nwt", "excellent"}:
+        if condition not in {"nwt", "excellent", "good"}:
             flaws = result.get("vinted_strong_flaws_found")
-            return f"condition grade {condition or 'missing'} not nwt/excellent: {flaws or 'no detail'}"
-        if result.get("vinted_strong_premium") is not True:
-            reason = result.get("vinted_strong_premium_reason") or "premium evidence missing"
-            return f"not a premium/desirable piece: {reason}"
-        if not result.get("vinted_strong_premium_reason"):
-            return "premium/desirable verdict has no supporting reason"
+            return f"condition grade {condition or 'missing'} below good: {flaws or 'no detail'}"
         _brand, floor = _vinted_brand_and_floor(result)
         strong_resale = result.get("vinted_strong_estimated_resale_value")
         if strong_resale is None:
@@ -1029,9 +1021,9 @@ class VintedFastLane:
             expected_paid = _set_vinted_negotiation_prices(result)
         if expected_paid is None:
             return "expected negotiated landed price missing"
-        if expected_paid > conservative_resale * 0.30:
+        if expected_paid > conservative_resale * 0.40:
             return (
-                f"expected paid ${expected_paid:g} exceeds 30% of conservative "
+                f"expected paid ${expected_paid:g} exceeds 40% of conservative "
                 f"${conservative_resale:g} resale"
             )
         result["vinted_conservative_resale_value"] = conservative_resale
@@ -1125,6 +1117,9 @@ class VintedFastLane:
         listing = marketplaces._vinted_item_to_listing(item)
         if not listing:
             return None
+        # Brand feeds route on garment words; text feeds (poker) vary too
+        # much in wording to demand every query word.
+        brand_feed = source_text is None
         if source_text is None:
             source_text = (item.get("item_box") or {}).get("first_line") or ""
         source_words = set(_words(source_text))
@@ -1135,6 +1130,10 @@ class VintedFastLane:
             positive, excluded = marketplaces.split_query_exclusions(search.get("query", ""))
             query_words = _words(positive)
             if not source_words & set(query_words):
+                continue
+            # Every non-brand query word must be in the title, so an over-cap
+            # polo cannot fall through to the pricier jacket search.
+            if brand_feed and not set(query_words) - source_words <= title_words:
                 continue
             cap = search.get("max_price")
             if cap is not None and price is not None and price > float(cap):

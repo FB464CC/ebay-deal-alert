@@ -882,11 +882,10 @@ def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
         _apparel_ai(35),
         strong_result=_passing_strong_result(35),
     )
-    strong.assert_not_called()
     send.assert_not_called()
     assert round(row["vinted_expected_paid"], 2) == 14.84
     assert row["deal_rating"] == "Great Deal"
-    assert "below Steal" in row["reason"]
+    assert "exceeds 40% of conservative" in row["reason"]
 
 
 def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
@@ -915,7 +914,7 @@ def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
     assert row["vinted_conservative_resale_value"] == 110
 
 
-def test_vinted_strong_condition_good_vetoes(tmp_path):
+def test_vinted_strong_condition_fair_vetoes(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip",
         18,
@@ -929,14 +928,34 @@ def test_vinted_strong_condition_good_vetoes(tmp_path):
         result,
         _apparel_ai(120),
         strong_result=_passing_strong_result(
-            120, condition_grade="good", flaws_found=["light pilling"]
+            120, condition_grade="fair", flaws_found=["heavy pilling"]
         ),
     )
     send.assert_not_called()
-    assert "condition grade good not nwt/excellent" in row["reason"]
+    assert "condition grade fair below good" in row["reason"]
 
 
-def test_vinted_strong_label_not_visible_vetoes(tmp_path):
+def test_vinted_strong_condition_good_alerts(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Zegna Cashmere sweater",
+        10,
+        "knitwear",
+        "zegna",
+        search_id="vinted-zegna-good-condition",
+    )
+    _lane_obj, _strong, send, _row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(150),
+        strong_result=_passing_strong_result(
+            150, condition_grade="good", flaws_found=["light wear"]
+        ),
+    )
+    send.assert_called_once()
+
+
+def test_vinted_strong_label_not_visible_still_alerts(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip",
         18,
@@ -955,8 +974,8 @@ def test_vinted_strong_label_not_visible_vetoes(tmp_path):
             brand_label_reason="No readable permanent label photo",
         ),
     )
-    send.assert_not_called()
-    assert "brand label/tag not visibly consistent" in row["reason"]
+    # Counterfeit signs still veto; a missing tag photo alone no longer does.
+    send.assert_called_once()
 
 
 def test_vinted_strong_unavailable_fails_closed_and_logs_code(tmp_path):
@@ -1285,3 +1304,5 @@ def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
     assert lane._route(item("Peter Millar quarter zip pullover", "Peter Millar", "40.00"))["id"] == "pm-qz"
     assert lane._route(item("Brooks Brothers seersucker set", "Brooks Brothers", "21.00"))["id"] == "bb"
     assert lane._route(item("Casino chips lot", "unknown", "40.00"), "poker chip")["id"] == "poker"
+    # Over the polo cap: must not fall through to a pricier garment search.
+    assert lane._route(item("Peter Millar Polo", "Peter Millar", "40.00")) is None
