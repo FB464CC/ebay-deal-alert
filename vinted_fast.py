@@ -73,6 +73,14 @@ VINTED_INSTANT_ALERT_FRACTION = float(
     engine._CONFIG.get("VINTED_INSTANT_ALERT_FRACTION", 0.25)
 )
 VINTED_INSTANT_MIN_FLOOR = 100.0
+# Instant pings need a clearly valuable garment: an $8 "shirt" tagged with a
+# luxury brand was a mis-tag (production, Canali "Camisa de manga larga").
+_VINTED_INSTANT_GARMENT = re.compile(
+    r"\b(?:cashmere|merino|vicu.a|alpaca|camel ?hair|sweaters?|cardigans?|jumpers?"
+    r"|knit(?:wear)?|crew ?neck|turtle ?neck|quarter[- ]?zip|1/4[- ]?zip|blazers?"
+    r"|sport ?coats?|jackets?|coats?|overcoats?|suits?|tuxedo|suede|leather|trousers)\b",
+    re.IGNORECASE,
+)
 _VINTED_NECKTIE = re.compile(r"\b(?:neck)?ties?\b", re.IGNORECASE)
 _VINTED_INSTANT_SKIP_WORDS = re.compile(
     r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|sunglass(?:es)?|glasses|frames?"
@@ -647,6 +655,7 @@ def _vinted_strong_prompt(result, brand):
         f"Listing description: {description!r}.\n\n"
         "Return strict JSON only, without markdown, in exactly this shape: "
         '{"brand_label_visible_and_consistent": bool, "brand_label_reason": string, '
+        '"label_shows_different_brand": bool, '
         '"counterfeit_indicators": bool, "counterfeit_reason": string, '
         '"condition_grade": string, "flaws_found": [string], '
         '"premium_desirable_piece": bool, "premium_reason": string, '
@@ -654,7 +663,9 @@ def _vinted_strong_prompt(result, brand):
         f"brand_label_visible_and_consistent is true only when a permanent label or "
         f"tag is clearly readable and consistent with genuine {brand}; a title, hangtag "
         "claim, familiar design, or logo alone is not enough. State what is readable in "
-        "brand_label_reason. counterfeit_indicators is true for inconsistent labels, "
+        f"brand_label_reason. label_shows_different_brand is true when any readable "
+        f"garment label names a maker other than {brand} (for example a store brand "
+        f"suit made from {brand} fabric), otherwise false. counterfeit_indicators is true for inconsistent labels, "
         "fonts, construction, stitching, hardware, seller replica language, or other "
         "authenticity concerns. condition_grade must be exactly one of nwt, excellent, "
         "good, fair, or poor. Inspect for pilling, stains, holes, fading, and alterations, "
@@ -1002,6 +1013,9 @@ class VintedFastLane:
         result["vinted_strong_brand_label_reason"] = strong_result.get(
             "brand_label_reason"
         )
+        result["vinted_strong_label_other_brand"] = strong_result.get(
+            "label_shows_different_brand"
+        )
         result["vinted_strong_counterfeit_indicators"] = strong_result.get(
             "counterfeit_indicators"
         )
@@ -1074,6 +1088,9 @@ class VintedFastLane:
     def _strong_look_veto_reason(self, result):
         if result.get("vinted_strong_checked") is not True:
             return None
+        if result.get("vinted_strong_label_other_brand") is True:
+            reason = result.get("vinted_strong_brand_label_reason") or "other maker"
+            return f"garment label names a different brand: {reason}"
         if result.get("vinted_strong_counterfeit_indicators") is not False:
             reason = result.get("vinted_strong_counterfeit_reason") or "assessment missing"
             return f"counterfeit indicators present or unresolved: {reason}"
@@ -1127,6 +1144,7 @@ class VintedFastLane:
             or price is None
             or price > floor * VINTED_INSTANT_ALERT_FRACTION
             or _VINTED_INSTANT_SKIP_WORDS.search(title)
+            or not _VINTED_INSTANT_GARMENT.search(title)
         ):
             return False
         result["vinted_instant_alerted"] = True
@@ -1138,17 +1156,22 @@ class VintedFastLane:
             "Unverified: AI photo check still running. Tap to grab it."
         )
         logger.info("vinted-fast instant alert: $%g %s | %s", price, brand, title)
+        self._ntfy(
+            f"FAST {brand} ${price:g}: {title[:50]}", message, "5", "zap",
+            listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
+        )
+        return True
+
+    def _ntfy(self, title, message, priority, tags, url=None, image_url=None):
         if self.dry_run or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
-            return True
-        url = listing.get("itemWebUrl") or ""
+            return
         headers = {
-            "Title": engine._ascii_safe_header(f"FAST {brand} ${price:g}: {title[:50]}"),
-            "Priority": "5",
-            "Tags": "zap",
+            "Title": engine._ascii_safe_header(title),
+            "Priority": priority,
+            "Tags": tags,
         }
         if url:
             headers["Click"] = url
-        image_url = (listing.get("image") or {}).get("imageUrl")
         if image_url:
             headers["Attach"] = image_url
         try:
@@ -1159,8 +1182,7 @@ class VintedFastLane:
                 timeout=5,
             ).raise_for_status()
         except requests.exceptions.RequestException as exc:
-            logger.warning("vinted-fast instant alert failed: %s", exc)
-        return True
+            logger.warning("vinted-fast ntfy post failed: %s", exc)
 
     def _log_result(self, result, *, delivered=False, delivery_error=None):
         result["vinted_fast_lane"] = True
@@ -1193,6 +1215,13 @@ class VintedFastLane:
         if reason:
             result["verdict"] = verdict
             result["reason"] = reason
+        if result.get("vinted_instant_alerted"):
+            listing = result.get("listing") or {}
+            self._ntfy(
+                f"SKIP: {str(listing.get('title') or '')[:50]}",
+                f"Failed the full check: {result.get('reason') or verdict}",
+                "2", "x", listing.get("itemWebUrl"),
+            )
         self._log_result(result)
         engine.mark_seen(conn, item_id, fingerprint, total_price)
 

@@ -134,6 +134,9 @@ def _record_mock_strong(lane, result, strong_result):
     result["vinted_strong_brand_label_reason"] = strong_result.get(
         "brand_label_reason"
     )
+    result["vinted_strong_label_other_brand"] = strong_result.get(
+        "label_shows_different_brand"
+    )
     result["vinted_strong_counterfeit_indicators"] = strong_result.get(
         "counterfeit_indicators"
     )
@@ -965,6 +968,7 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Zegna silk tie", 5, "other", False),
         ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", False),  # floor < $100
         ("Loro Piana cashmere crewneck", 30, "knitwear", True),
+        ("Canali Camisa de manga larga", 8, "other", False),  # mis-tagged shirt
     ]
     for title, price, category, expected in cases:
         _listing, result = _apparel_listing_result(
@@ -1035,6 +1039,38 @@ def test_luxury_necktie_skips_ai_but_marinella_tie_does_not(tmp_path):
     strong.assert_not_called()
     send.assert_not_called()
     assert "necktie cannot clear the $120 brand resale floor" in row["reason"]
+
+
+def test_instant_alerted_item_that_fails_gets_quiet_skip_followup(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    listing, result = _apparel_listing_result(
+        "Zegna Cashmere sweater", 10, "knitwear", "zegna", search_id="s"
+    )
+    result["vinted_instant_alerted"] = True
+    with mock.patch.object(fast.requests, "post") as post:
+        lane._finish(conn, result, listing["itemId"], "fp", 10, "AI resale $15 below floor")
+    headers = post.call_args.kwargs["headers"]
+    assert headers["Title"].startswith("SKIP: ") and headers["Priority"] == "2"
+    assert b"AI resale $15 below floor" in post.call_args.kwargs["data"]
+    conn.close()
+
+
+def test_vinted_strong_label_naming_other_brand_vetoes(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Loro Piana fabric wool blazer", 30, "tailoring", '"loro piana"',
+        search_id="vinted-loro-piana",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _apparel_ai(200),
+        strong_result=_passing_strong_result(
+            200, label_shows_different_brand=True,
+            brand_label_reason="Jacket label reads Jos. A. Bank",
+        ),
+    )
+    send.assert_not_called()
+    assert "garment label names a different brand: Jacket label reads Jos. A. Bank" in row["reason"]
 
 
 def test_vinted_strong_label_not_visible_still_alerts(tmp_path):
