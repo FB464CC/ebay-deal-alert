@@ -1424,3 +1424,21 @@ def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
     assert lane._route(item("Casino chips lot", "unknown", "40.00"), "poker chip")["id"] == "poker"
     # Over the polo cap: must not fall through to a pricier garment search.
     assert lane._route(item("Peter Millar Polo", "Peter Millar", "40.00")) is None
+
+
+def test_off_profile_rejects_dresses_and_other_schools_only():
+    off = fast._off_profile_reason
+    assert "dress" in off("Loro Piana cashmere t shirt dress")
+    assert "Georgia" in off("Peter Millar skort with Georgia emblem on back")
+    assert "UGA" in off("Peter Millar UGA full zip jacket")
+    assert "clemson" in off("polo with clemson logo", schools_only=True)
+    for fine in (
+        "Brooks Brothers dress shirt",
+        "Brooks Brothers navy polo",
+        "Peter Millar Gamecocks polo",
+        "Peter Millar University of South Carolina polo",
+        "Zegna Cashmere sweater",
+    ):
+        assert off(fine) is None, fine
+    assert off("Loro Piana t shirt dress", schools_only=True) is None
+    assert engine._text_safety_hard_fails("peter millar golf skort") is not None

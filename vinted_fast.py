@@ -81,6 +81,32 @@ _VINTED_INSTANT_GARMENT = re.compile(
     r"|sport ?coats?|jackets?|coats?|overcoats?|suits?|tuxedo|suede|leather|trousers)\b",
     re.IGNORECASE,
 )
+# Title-only: descriptions say "dress or casual" about menswear.
+_VINTED_WOMENS_DRESS = re.compile(
+    # Named dress styles ("t shirt dress"), or "dress" with no menswear
+    # garment after it ("Dress Casual Shirt" and "dress pants" stay).
+    r"\b(?:(?:t[\s-]?)?shirt|sweater|polo|slip|maxi|midi|mini|cocktail|wrap|sun"
+    r"|wedding|party|evening|knit)[\s-]+dress(?:es)?\b(?![\s-]*shirts?\b)"
+    r"|\bdress(?:es)?\b(?![\s-]*(?:up|code|occasions?)\b)(?!.*\b(?:shirts?|pants"
+    r"|trousers|slacks|shoes|socks|coats?|boots|belts?|watch)\b)",
+    re.IGNORECASE,
+)
+# Owner wants Gamecocks school gear only; any other school or team is out.
+_VINTED_USC = re.compile(r"\b(?:south carolina|gamecocks?|usc|cocky)\b", re.IGNORECASE)
+_VINTED_OTHER_SCHOOL = re.compile(
+    r"\b(?:university|college|collegiate|alumni|fraternity|sorority|varsity|ncaa"
+    r"|georgia|uga|bulldogs?|clemson|alabama|crimson tide|auburn|tennessee"
+    r"|florida|gators|seminoles|fsu|lsu|ole miss|mississippi|razorbacks|arkansas"
+    r"|kentucky|wildcats|missouri|vanderbilt|texas|longhorns|aggies|oklahoma|sooners"
+    r"|michigan|wolverines|ohio state|buckeyes|notre dame|penn state|duke|blue devils"
+    r"|unc|tar heels|nc state|wolfpack|virginia|hokies|wake forest|georgia tech"
+    r"|miami|baylor|tcu|stanford|usc trojans"
+    r"|ucla|oregon|washington|huskies|wisconsin|badgers|iowa|nebraska"
+    r"|purdue|indiana|hoosiers|illinois|kansas|jayhawks|syracuse|louisville"
+    r"|pitt|boston college|coastal carolina|furman"
+    r"|the citadel|wofford|appalachian|east carolina)\b",
+    re.IGNORECASE,
+)
 _VINTED_NECKTIE = re.compile(r"\b(?:neck)?ties?\b", re.IGNORECASE)
 _VINTED_INSTANT_SKIP_WORDS = re.compile(
     r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|sunglass(?:es)?|glasses|frames?"
@@ -268,6 +294,21 @@ def _vinted_brand_and_floor(result):
     result["vinted_brand"] = display
     result["vinted_min_resale_floor"] = floor
     return display, floor
+
+
+def _off_profile_reason(text, schools_only=False):
+    """Women's dresses and non-Gamecocks school/team gear are never wanted."""
+    text = str(text or "")
+    if (
+        not schools_only
+        and _VINTED_WOMENS_DRESS.search(text)
+        and not re.search(r"\bmen(?:'?s)?\b", text, re.IGNORECASE)
+    ):
+        return "women's dress, not menswear"
+    school = _VINTED_OTHER_SCHOOL.search(text)
+    if school and not _VINTED_USC.search(text):
+        return f"other school/team gear ({school.group(0)}), Gamecocks only"
+    return None
 
 
 def _vinted_apparel_bar_reason(result, category):
@@ -1541,6 +1582,14 @@ class VintedFastLane:
                 "(scam batch pattern)",
             )
             return
+        off_profile = (
+            _off_profile_reason(listing.get("title"))
+            if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"
+            else None
+        )
+        if off_profile:
+            self._finish(conn, result, item_id, fingerprint, total_price, off_profile)
+            return
         _brand, floor = _vinted_brand_and_floor(result)
         if floor > 60 and _VINTED_NECKTIE.search(str(listing.get("title") or "")):
             # Production: luxury ties resell for $45-75 against $100-150
@@ -1614,7 +1663,12 @@ class VintedFastLane:
                 verdict="NO_AI_BUDGET",
             )
             return
-        ai_reject = _merge_ai_result(result, ai_result, category)
+        ai_reject = _merge_ai_result(result, ai_result, category) or (
+            # The photo summary names logos the title never mentions.
+            _off_profile_reason(ai_result.get("summary"), schools_only=True)
+            if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"
+            else None
+        )
         if ai_reject:
             self._finish(
                 conn, result, item_id, fingerprint, total_price, ai_reject
