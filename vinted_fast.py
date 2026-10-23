@@ -108,6 +108,13 @@ _VINTED_OTHER_SCHOOL = re.compile(
     re.IGNORECASE,
 )
 _VINTED_NECKTIE = re.compile(r"\b(?:neck)?ties?\b", re.IGNORECASE)
+# Production: Tom Ford and Brunello Cucinelli sunglasses at $60-70 came from
+# brand-new single-listing accounts. Designer eyewear on Vinted is fakes.
+_VINTED_EYEWEAR = re.compile(
+    r"\b(?:sun ?glass(?:es)?|eye ?glass(?:es)?|glasses|eyewear|optical"
+    r"|lentes|gafas|anteojos|[oó]culos|lunettes|occhiali|sonnenbrille)\b",
+    re.IGNORECASE,
+)
 _VINTED_INSTANT_SKIP_WORDS = re.compile(
     r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|sunglass(?:es)?|glasses|frames?"
     r"|perfume|cologne|fragrance|parfum|eau|ml|candle|lip|balm|socks?|cufflinks?"
@@ -1481,6 +1488,8 @@ class VintedFastLane:
         description = details.get("description")
         if description:
             listing["description"] = description
+        if "seller_feedback_count" in details:
+            listing["seller_feedback_count"] = details["seller_feedback_count"]
         gallery_urls = details.get("image_urls") or []
         primary_url = (listing.get("image") or {}).get("imageUrl")
         image_urls = [primary_url] if primary_url else []
@@ -1590,7 +1599,24 @@ class VintedFastLane:
         if off_profile:
             self._finish(conn, result, item_id, fingerprint, total_price, off_profile)
             return
+        if _VINTED_EYEWEAR.search(str(listing.get("title") or "")):
+            self._finish(
+                conn, result, item_id, fingerprint, total_price,
+                "designer eyewear on Vinted is fakes/scams",
+            )
+            return
         _brand, floor = _vinted_brand_and_floor(result)
+        if (
+            floor >= VINTED_INSTANT_MIN_FLOOR
+            and listing.get("seller_feedback_count") == 0
+        ):
+            # ponytail: page has reviews but not listing count; 0 reviews on
+            # a $100+ brand is the throwaway-account scam shape.
+            self._finish(
+                conn, result, item_id, fingerprint, total_price,
+                "seller has 0 reviews on a luxury brand (new-account scam pattern)",
+            )
+            return
         if floor > 60 and _VINTED_NECKTIE.search(str(listing.get("title") or "")):
             # Production: luxury ties resell for $45-75 against $100-150
             # floors, so the AI checks (which pause polling) always reject.

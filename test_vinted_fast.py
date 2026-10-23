@@ -1041,6 +1041,41 @@ def test_luxury_necktie_skips_ai_but_marinella_tie_does_not(tmp_path):
     assert "necktie cannot clear the $120 brand resale floor" in row["reason"]
 
 
+def test_eyewear_and_zero_review_luxury_sellers_skip_ai(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    listing, result = _apparel_listing_result(
+        "Brunello Cucinelli Sunglasses", 65, "other", "brunello cucinelli",
+        search_id="vinted-cucinelli",
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path / "a", listing, result, _apparel_ai(300),
+        strong_result=_passing_strong_result(300),
+    )
+    strong.assert_not_called()
+    send.assert_not_called()
+    assert "eyewear" in row["reason"]
+
+    listing, result = _apparel_listing_result(
+        "Loro Piana Cashmere sweater", 40, "knitwear", "loro piana",
+        search_id="vinted-loro",
+    )
+    listing["seller_feedback_count"] = 0
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path / "b", listing, result, _apparel_ai(400),
+        strong_result=_passing_strong_result(400),
+    )
+    send.assert_not_called()
+    assert "0 reviews" in row["reason"]
+
+
+def test_page_details_parse_seller_feedback_count():
+    page = '<meta property="og:description" content="x">{\\"feedback_count\\":7}'
+    resp = mock.Mock(status_code=200, text=page)
+    with mock.patch.object(engine.requests, "get", return_value=resp):
+        assert engine.fetch_vinted_item_page_details("u")["seller_feedback_count"] == 7
+
+
 def test_instant_alerted_item_that_fails_gets_quiet_skip_followup(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
     lane = _lane(tmp_path)
