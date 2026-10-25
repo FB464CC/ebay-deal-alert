@@ -116,6 +116,28 @@ _VINTED_EYEWEAR = re.compile(
     r"|lentes|gafas|anteojos|[oó]culos|lunettes|occhiali|sonnenbrille)\b",
     re.IGNORECASE,
 )
+# Owner (10-25): polos M/L only, woven shirts only from the top houses,
+# tailoring only as a full suit in 40-44 R/L (EU 50-54), never a lone jacket.
+_VINTED_POLO = re.compile(r"\bpolos?\b|\bgolf[\s-]+shirts?\b", re.IGNORECASE)
+_VINTED_XL = re.compile(r"\b(?:[2-5]?x+l|extra[\s-]+large)\b", re.IGNORECASE)
+_VINTED_WOVEN_SHIRT = re.compile(
+    r"(?<![\w-])(?<!\bt )shirts?\b(?![\s-]*jac(?:ket)?s?\b)", re.IGNORECASE
+)
+_VINTED_ELITE_SHIRT_BRANDS = frozenset(
+    {"brunello cucinelli", "kiton", "loro piana", "brioni"}
+)
+_VINTED_LONE_TAILORING = re.compile(
+    r"\b(?:blazers?|sports?[\s-]?coats?|dinner[\s-]+jackets?|tuxedo[\s-]+jackets?"
+    r"|jacket[\s-]+only|suit[\s-]+(?:jackets?|coats?|pants|trousers|vests?|separates?))\b",
+    re.IGNORECASE,
+)
+_VINTED_SUIT = re.compile(
+    r"(?<!track )(?<!sweat )(?<!swim )(?<!rain )\b(?:suits?|tuxedos?)\b", re.IGNORECASE
+)
+_VINTED_SUIT_SIZE = re.compile(
+    r"\b(?:4[0-4]|5[024])(?:\s?(?:r|l|reg(?:ular)?|long))?\b(?![\s/-]?(?:s|short)\b)",
+    re.IGNORECASE,
+)
 _VINTED_FRAGRANCE_EXCLUDED = re.compile(
     r"\b(?:decants?|samples?|vials?|minis?|miniatures?|travel[\s-]*size|testers?"
     r"|unboxed|empty|refills?|dupes?|inspired(?:\s+by)?|smells\s+like|clones?"
@@ -394,16 +416,38 @@ def fetch_vinted_seller_stats(user_id):
     return stats
 
 
+def _menswear_shape_reason(listing, brand_key):
+    """Garment types/sizes the owner never buys, judged from the title."""
+    title = str(listing.get("title") or "")
+    sized = f"{title} {listing.get('size') or ''}"
+    if _VINTED_POLO.search(title) and _VINTED_XL.search(sized):
+        return "XL polo (owner wears M/L polos)"
+    if _VINTED_LONE_TAILORING.search(title):
+        return "lone blazer/sport coat/suit piece, full suits only"
+    if _VINTED_SUIT.search(title):
+        if not _VINTED_SUIT_SIZE.search(f"{sized} {listing.get('description') or ''}"):
+            return "suit is not a 40-44 R/L (EU 50-54)"
+        return None
+    if (
+        brand_key not in _VINTED_ELITE_SHIRT_BRANDS
+        and not _VINTED_POLO.search(title)
+        and _VINTED_WOVEN_SHIRT.search(title)
+    ):
+        return "dress shirt below Brunello/Kiton/Loro Piana/Brioni tier"
+    return None
+
+
 def _seller_trust_reason(stats, strict=True):
     """Strict (fragrance): a proven seller. Loose (menswear): Vinted holds
-    payment until the buyer confirms, so only obvious throwaways are cut."""
+    payment until the buyer confirms, so only badly rated sellers are cut
+    (owner checked the new 0-review sellers this blocked: all legit)."""
     if "feedback_count" not in stats:
         return "seller history unavailable (needs a proven seller)" if strict else None
     reviews = stats["feedback_count"]
     rating = stats.get("feedback_reputation", 0.0)
     items = stats.get("item_count", 0.0) + stats.get("given_item_count", 0.0)
     if not strict:
-        if (reviews == 0 and items < 5) or (reviews >= 3 and rating < 0.8):
+        if reviews >= 3 and rating < 0.8:
             return (
                 f"throwaway-looking seller: {reviews:g} reviews, {rating * 5:.1f} stars, "
                 f"{items:g} items listed/sold"
@@ -1764,6 +1808,12 @@ class VintedFastLane:
         if off_profile:
             self._finish(conn, result, item_id, fingerprint, total_price, off_profile)
             return
+        if category in VINTED_APPAREL_CATEGORIES:
+            _vinted_brand_and_floor(result)
+            shape = _menswear_shape_reason(listing, result.get("vinted_brand_key"))
+            if shape:
+                self._finish(conn, result, item_id, fingerprint, total_price, shape)
+                return
         if _VINTED_EYEWEAR.search(str(listing.get("title") or "")):
             self._finish(
                 conn, result, item_id, fingerprint, total_price,
@@ -1790,12 +1840,8 @@ class VintedFastLane:
                 )
                 return
         _brand, floor = _vinted_brand_and_floor(result)
-        if (
-            (category == "fragrance" or floor >= VINTED_INSTANT_MIN_FLOOR)
-            and listing.get("seller_feedback_count") == 0
-        ):
-            # ponytail: page has reviews but not listing count; 0 reviews on
-            # a $100+ brand is the throwaway-account scam shape.
+        if category == "fragrance" and listing.get("seller_feedback_count") == 0:
+            # 0 reviews on a perfume is the throwaway-account fake shape.
             self._finish(
                 conn, result, item_id, fingerprint, total_price,
                 "seller has 0 reviews on a luxury brand (new-account scam pattern)",

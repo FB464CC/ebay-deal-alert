@@ -422,8 +422,8 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
 
     canali = searches["vinted-canali-suit"]
     assert canali["category"] == "tailoring"
-    assert canali["size"] == ["42"]
-    assert canali["size_equivalents"] == ["52"]
+    assert canali["size"] == ["40", "41", "42", "43", "44"]
+    assert canali["size_equivalents"] == ["50", "52", "54"]
     assert engine.listing_matches_size_filter(
         canali, {"title": "Canali Navy Wool Suit 42R"}
     )
@@ -434,12 +434,12 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
         canali, {"title": "Canali Navy Wool Suit", "size": "52"}
     )
     assert not engine.listing_matches_size_filter(
-        canali, {"title": "Canali Navy Wool Suit 40R", "size": "EU 50"}
+        canali, {"title": "Canali Navy Wool Suit 46R", "size": "EU 56"}
     )
-    assert searches["vinted-brooks-brothers"]["size"] == ["42"]
+    assert searches["vinted-brooks-brothers"]["size"] == ["40", "41", "42", "43", "44"]
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
-    assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L", "XL"]
+    assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
     assert len(fast.enabled_vinted_searches()) == 40
 
 
@@ -1147,8 +1147,7 @@ def test_eyewear_and_zero_review_luxury_sellers_skip_ai(tmp_path):
         tmp_path / "b", listing, result, _apparel_ai(400),
         strong_result=_passing_strong_result(400),
     )
-    send.assert_not_called()
-    assert "0 reviews" in row["reason"]
+    assert "0 reviews" not in (row.get("reason") or "")  # menswear: owner said legit
 
 
 def test_womens_fragrance_routes_ignores_gender_and_reaches_real_ai(tmp_path):
@@ -1342,7 +1341,7 @@ def test_fragrance_needs_a_proven_seller(tmp_path, monkeypatch, stats, fragment)
     assert "seller" in row["reason"] and fragment in row["reason"]
 
 
-def test_menswear_needs_a_proven_seller_too(tmp_path, monkeypatch):
+def test_menswear_new_seller_is_not_blocked(tmp_path, monkeypatch):
     monkeypatch.setattr(fast, "fetch_vinted_seller_stats", lambda _user_id: {
         "_http_status": 200, "feedback_count": 0.0, "feedback_reputation": 0.0,
         "item_count": 1.0, "given_item_count": 0.0,
@@ -1353,20 +1352,41 @@ def test_menswear_needs_a_proven_seller_too(tmp_path, monkeypatch):
     _lane_obj, strong, send, row = _run_custom_pipeline(
         tmp_path, listing, result, _apparel_ai(400), strong_result=_passing_strong_result(400)
     )
-    strong.assert_not_called()
-    send.assert_not_called()
-    assert "throwaway-looking seller: 0 reviews" in row["reason"]
+    assert "seller" not in (row.get("reason") or "")
 
 
 def test_menswear_seller_rule_only_cuts_obvious_throwaways():
     loose = lambda **kw: fast._seller_trust_reason(
         dict({"feedback_count": 0.0, "feedback_reputation": 0.0,
               "item_count": 0.0, "given_item_count": 0.0}, **kw), strict=False)
-    assert loose(item_count=1.0) is not None  # brand-new, one listing
+    assert loose(item_count=1.0) is None  # brand-new, one listing
     assert loose(item_count=13.0) is None  # new seller clearing a closet
     assert loose(feedback_count=4.0, feedback_reputation=0.8, item_count=45.0) is None
     assert loose(feedback_count=5.0, feedback_reputation=0.6, item_count=20.0) is not None
     assert fast._seller_trust_reason({"_http_status": 500}, strict=False) is None
+
+
+@pytest.mark.parametrize(
+    ("title", "size", "brand", "blocked"),
+    [
+        ("Peter Millar polo", "XL", None, True),
+        ("Peter Millar polo", "L", None, False),
+        ("Jack Victor x Loro Piana Blazer 46 L", "46", "loro piana", True),
+        ("Tom Ford sport coat 42R", "42", "tom ford", True),
+        ("Kiton suit pants", "34", "kiton", True),
+        ("Canali suit 42R", "42", "canali", False),
+        ("Zegna suit 40L", "", "zegna", False),
+        ("Canali suit 46", "", "canali", True),
+        ("Canali suit 42S", "", "canali", True),
+        ("Peter Millar men's dress shirt", "L", "peter millar", True),
+        ("Kiton dress shirt", "16", "kiton", False),
+        ("Peter Millar T-shirt", "L", "peter millar", False),
+        ("Zegna mens sweater", "L", "zegna", False),
+    ],
+)
+def test_menswear_shape_rule(title, size, brand, blocked):
+    reason = fast._menswear_shape_reason({"title": title, "size": size}, brand)
+    assert (reason is not None) is blocked, reason
 
 
 def test_seller_stats_parse_member_page():
@@ -1446,7 +1466,7 @@ def test_instant_alerted_item_that_fails_gets_quiet_skip_followup(tmp_path, monk
 
 def test_vinted_strong_label_naming_other_brand_vetoes(tmp_path):
     listing, result = _apparel_listing_result(
-        "Loro Piana fabric wool blazer", 30, "tailoring", '"loro piana"',
+        "Loro Piana fabric wool suit 42R", 30, "tailoring", '"loro piana"',
         search_id="vinted-loro-piana",
     )
     _lane_obj, _strong, send, row = _run_custom_pipeline(

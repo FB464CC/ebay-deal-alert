@@ -1208,8 +1208,7 @@
       "query": "peter millar polo -women -womens -ladies -girls -kids -scarf",
       "size": [
         "M",
-        "L",
-        "XL"
+        "L"
       ],
       "max_price": 30,
       "enabled": true,
@@ -1257,8 +1256,7 @@
       "query": "\"peter millar\" -women -womens -ladies -girls -kids -scarf",
       "size": [
         "M",
-        "L",
-        "XL"
+        "L"
       ],
       "max_price": 30,
       "enabled": true,
@@ -1289,10 +1287,16 @@
     {
       "query": "canali suit -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "42"
+        "40",
+        "41",
+        "42",
+        "43",
+        "44"
       ],
       "size_equivalents": [
-        "52"
+        "50",
+        "52",
+        "54"
       ],
       "max_price": 130,
       "enabled": true,
@@ -1307,10 +1311,16 @@
     {
       "query": "brooks brothers suit -shirt -tie -vest -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "42"
+        "40",
+        "41",
+        "42",
+        "43",
+        "44"
       ],
       "size_equivalents": [
-        "52"
+        "50",
+        "52",
+        "54"
       ],
       "max_price": 90,
       "enabled": true,
