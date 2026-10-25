@@ -1376,12 +1376,13 @@ class VintedFastLane:
         result["vinted_fast_lane"] = True
         listing = result.get("listing") or {}
         logger.info(
-            "vinted-fast decision: %s $%.2f %s | %s | %s",
+            "vinted-fast decision: %s $%.2f %s | %s | %s | %s",
             "ALERTED" if delivered else result.get("verdict"),
             float(result.get("item_price") or 0),
             result.get("search_id"),
             listing.get("title"),
             result.get("reason") or "",
+            listing.get("itemWebUrl") or "",
         )
         return engine.append_alert_log(
             result,
