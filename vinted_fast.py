@@ -15,6 +15,7 @@ import re
 import sqlite3
 import time
 from collections import Counter
+from contextlib import closing
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -383,6 +384,37 @@ def enabled_vinted_searches(searches=None):
         and search.get("enabled", True)
         and "vinted" in (search.get("platforms") or [])
     ]
+
+
+def _repair_phantom_lane_ledger(seen_db_path):
+    """One-time credit for the lane mirror's unsettled free-tier reservations.
+
+    Afterwards the lane's effective monthly spend equals the git-backed ledger's.
+    """
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    query = (
+        "SELECT gross_reserved_usd, settled_credit_usd FROM ai_paid_accounting "
+        "WHERE month=?"
+    )
+    with closing(sqlite3.connect(seen_db_path)) as lane, closing(
+        sqlite3.connect(engine.AI_SPEND_DB_PATH)
+    ) as repo:
+        lane.execute("CREATE TABLE IF NOT EXISTS ledger_repairs (key TEXT PRIMARY KEY)")
+        if lane.execute("SELECT 1 FROM ledger_repairs WHERE key=?", (month,)).fetchone():
+            return
+        engine._ensure_paid_ai_schema(lane)
+        engine._ensure_paid_ai_schema(repo)
+        lane_row = lane.execute(query, (month,)).fetchone()
+        repo_row = repo.execute(query, (month,)).fetchone() or (0.0, 0.0)
+        if lane_row:
+            gross = max(lane_row[0], repo_row[0])
+            credits = max(lane_row[1], repo_row[1], gross - max(0.0, repo_row[0] - repo_row[1]))
+            lane.execute(
+                "UPDATE ai_paid_accounting SET settled_credit_usd=? WHERE month=?",
+                (credits, month),
+            )
+        lane.execute("INSERT INTO ledger_repairs VALUES (?)", (month,))
+        lane.commit()
 
 
 def _load_state(path):
@@ -1038,6 +1070,13 @@ class VintedFastLane:
                 status = _strong_http_status(exc)
                 if status is not None and status not in (429, 500, 502, 503, 504):
                     break
+            finally:
+                # Gemini strong looks run on the free tier. Unsettled $0.01
+                # reservations filled the cached lane ledger to the $10 cap
+                # while real October spend was $1.18 (production 2026-10-25).
+                engine._settle_paid_ai_spend(
+                    engine.AI_PAID_VISION_RESERVATION_USD, 0.0
+                )
         if last_error is not None or not isinstance(strong_result, dict):
             backup = self._openrouter_strong_look(prompt, images, hard_stop)
             if isinstance(backup, dict):
@@ -1123,7 +1162,12 @@ class VintedFastLane:
                 timeout=timeout,
             )
             response.raise_for_status()
-            text = response.json()["choices"][0]["message"]["content"]
+            response_payload = response.json()
+            engine._settle_paid_ai_spend(
+                engine.AI_PAID_VISION_RESERVATION_USD,
+                _openrouter_usage_cost(response_payload),
+            )
+            text = response_payload["choices"][0]["message"]["content"]
             parsed = json.loads(engine._strip_json_code_fence(text))
         except (requests.exceptions.RequestException, KeyError, IndexError,
                 TypeError, ValueError) as exc:
@@ -1792,6 +1836,7 @@ class VintedFastLane:
         # unchanged monthly guard cannot reset between hourly workflow runs.
         original_engine_db_path = engine.DB_PATH
         engine.DB_PATH = str(self.seen_db_path)
+        _repair_phantom_lane_ledger(self.seen_db_path)
         started = self.clock()
         deadline = started + max(0.0, self.run_seconds)
         self._summary_started = started

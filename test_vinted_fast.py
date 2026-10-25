@@ -2,11 +2,14 @@ import base64
 import io
 import json
 import os
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 from PIL import Image
+import pytest
 import requests
 
 import ebay_deal_alert as engine
@@ -1067,6 +1070,30 @@ def test_eyewear_and_zero_review_luxury_sellers_skip_ai(tmp_path):
     )
     send.assert_not_called()
     assert "0 reviews" in row["reason"]
+
+
+def test_phantom_lane_ledger_is_repaired_once_to_repo_effective(tmp_path, monkeypatch):
+    repo_db, lane_db = tmp_path / "ai_spend.db", tmp_path / "lane.db"
+    monkeypatch.setattr(engine, "AI_SPEND_DB_PATH", str(repo_db))
+    month = fast.datetime.now(fast.timezone.utc).strftime("%Y-%m")
+    for path, gross, credits in ((repo_db, 4.5, 3.3), (lane_db, 13.3, 3.3)):
+        with closing(sqlite3.connect(path)) as conn:
+            engine._ensure_paid_ai_schema(conn)
+            conn.execute(
+                "INSERT INTO ai_paid_accounting VALUES (?, ?, ?, 0, 0, 0, 0)",
+                (month, gross, credits),
+            )
+            conn.commit()
+    fast._repair_phantom_lane_ledger(lane_db)
+    monkeypatch.setattr(engine, "DB_PATH", str(lane_db))
+    effective, _calls = engine._reconcile_paid_ai_ledgers(month)
+    assert effective == pytest.approx(1.2)
+    # A second start must not reset spend the lane has since reserved.
+    with closing(sqlite3.connect(lane_db)) as conn:
+        conn.execute("UPDATE ai_paid_accounting SET gross_reserved_usd=gross_reserved_usd+1")
+        conn.commit()
+    fast._repair_phantom_lane_ledger(lane_db)
+    assert engine._reconcile_paid_ai_ledgers(month)[0] == pytest.approx(2.2)
 
 
 def test_page_details_parse_seller_feedback_count():
