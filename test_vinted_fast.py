@@ -320,6 +320,37 @@ def _apparel_ai(resale, **overrides):
     return result
 
 
+def _fragrance_search(search_id="vinted-pdm-delina-exclusif"):
+    return next(search for search in engine.SAVED_SEARCHES if search["id"] == search_id)
+
+
+def _fragrance_item(item_id, title, price, brand="Parfums de Marly"):
+    item = _raw_item(item_id)
+    item["title"] = title
+    item["price"] = {"amount": str(price)}
+    item["total_item_price"] = {"amount": str(price)}
+    item["item_box"] = {"first_line": brand}
+    return item
+
+
+def _fragrance_ai(resale=400, **overrides):
+    result = {
+        "damage_found": False,
+        "weird_logo_found": False,
+        "looks_good": True,
+        "counterfeit_suspected": False,
+        "counterfeit_reason": "",
+        "summary": "Sealed full-size women's perfume bottle in clean condition",
+        "visible_brand_evidence": "Parfums de Marly bottle and box markings",
+        "estimated_retail_price": 430,
+        "estimated_resale_value": resale,
+        "price_confidence": "high",
+        "liquidity": "fast",
+    }
+    result.update(overrides)
+    return result
+
+
 def test_only_items_newer_than_high_water_enter_pipeline():
     baseline, water = fast.items_newer_than_high_water(
         [_raw_item(3, 300), _raw_item(2, 200)], None
@@ -394,7 +425,36 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L", "XL"]
-    assert len(fast.enabled_vinted_searches()) == 37
+    assert len(fast.enabled_vinted_searches()) == 40
+
+
+def test_fragrance_searches_and_feeds_load_with_price_floors():
+    expected = {
+        "vinted-pdm-delina-exclusif": (150, 290),
+        "vinted-pdm-oriana": (140, 200),
+        "vinted-kilian-angels-share": (150, 230),
+    }
+    searches = {search["id"]: search for search in engine.SAVED_SEARCHES}
+    for search_id, (minimum, maximum) in expected.items():
+        search = searches[search_id]
+        assert search["enabled"] is True
+        assert search["profile"] == "fast"
+        assert search["platforms"] == ["vinted"]
+        assert search["ebay"] is False
+        assert search["size"] is None
+        assert search["category"] == "fragrance"
+        assert (search["min_price"], search["max_price"]) == (minimum, maximum)
+    assert {("delina exclusif", 290), ("oriana marly", 200), ("angels share kilian", 230)} <= {
+        (feed["query"], feed["max_price"]) for feed in fast.VINTED_TEXT_FEEDS
+    }
+    assert fast.VINTED_MIN_RESALE_BY_BRAND["parfums de marly"] == 150
+    assert fast.VINTED_MIN_RESALE_BY_BRAND["kilian"] == 150
+    for title, display in (
+        ("Parfums de Marly Delina Exclusif 75ml", "Parfums de Marly"),
+        ("By Kilian Angel's Share 100ml", "Kilian"),
+    ):
+        result = {"listing": {"title": title}}
+        assert fast._vinted_brand_and_floor(result) == (display, 150)
 
 
 def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
@@ -418,6 +478,9 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-tom-ford": 90,
         "vinted-g-fore": 30,
         "vinted-holderness-bourne": 25,
+        "vinted-pdm-delina-exclusif": 290,
+        "vinted-pdm-oriana": 200,
+        "vinted-kilian-angels-share": 230,
     }
     actual = {
         search["id"]: search["max_price"]
@@ -972,6 +1035,7 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", False),  # floor < $100
         ("Loro Piana cashmere crewneck", 30, "knitwear", True),
         ("Canali Camisa de manga larga", 8, "other", False),  # mis-tagged shirt
+        ("Parfums de Marly Delina Exclusif perfume 75ml", 10, "fragrance", False),
     ]
     for title, price, category, expected in cases:
         _listing, result = _apparel_listing_result(
@@ -1070,6 +1134,184 @@ def test_eyewear_and_zero_review_luxury_sellers_skip_ai(tmp_path):
     )
     send.assert_not_called()
     assert "0 reviews" in row["reason"]
+
+
+def test_womens_fragrance_routes_ignores_gender_and_reaches_real_ai(tmp_path):
+    search = _fragrance_search()
+    item = _fragrance_item(
+        "delina-womens",
+        "Parfums de Marly Delina Exclusif Women's EDP 75ml sealed",
+        220,
+    )
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "state",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        schedule=[],
+    )
+    routed = lane._route(item, "delina exclusif")
+    assert routed["id"] == "vinted-pdm-delina-exclusif"
+    conn = engine.init_db(lane.seen_db_path)
+    details = {
+        "_http_status": 200,
+        "description": "New sealed women's perfume, full retail bottle",
+        "seller_feedback_count": 12,
+        "image_urls": [],
+    }
+    with (
+        mock.patch.object(engine, "fetch_vinted_item_page_details", return_value=details),
+        mock.patch.object(engine, "jev_vinted_score") as jev,
+        mock.patch.object(lane, "_run_vinted_prescreen") as prescreen,
+        mock.patch.object(
+            engine, "check_photos_with_gemini", return_value=_fragrance_ai()
+        ) as photo,
+        mock.patch.object(
+            engine,
+            "_deepseek_alert_sanity_check",
+            return_value={
+                "is_complete_item": True,
+                "is_part_or_accessory": False,
+                "reason": "",
+            },
+        ),
+        mock.patch.object(engine, "send_alert") as send,
+    ):
+        lane._process_item(conn, None, item, routed, None)
+    conn.close()
+    jev.assert_not_called()
+    prescreen.assert_not_called()
+    photo.assert_called_once()
+    assert photo.call_args.kwargs["category"] == "fragrance"
+    send.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("title", "price", "expected_reason"),
+    [
+        (
+            "Parfums de Marly Delina Exclusif Women's EDP 75ml sealed",
+            100,
+            "below fake-price floor: $100 < $150 (almost certainly counterfeit)",
+        ),
+        (
+            "Delina Exclusif decant 10ml",
+            220,
+            "fragrance listing is a decant/sample/tester/dupe/empty, not a sealed full bottle",
+        ),
+    ],
+)
+def test_fragrance_fake_price_floor_and_decants_reject_before_ai(
+    tmp_path, title, price, expected_reason
+):
+    search = _fragrance_search()
+    item = _fragrance_item("cheap-reject", title, price)
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "state",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        schedule=[],
+    )
+    conn = engine.init_db(lane.seen_db_path)
+    details = {
+        "_http_status": 200,
+        "description": "Sealed full retail bottle",
+        "seller_feedback_count": 10,
+        "image_urls": [],
+    }
+    with (
+        mock.patch.object(engine, "fetch_vinted_item_page_details", return_value=details),
+        mock.patch.object(engine, "check_photos_with_gemini") as photo,
+    ):
+        _listing, result, reason = lane._cheap_result(conn, None, item, search)
+    conn.close()
+    assert result is None
+    assert reason == expected_reason
+    photo.assert_not_called()
+
+
+def test_zero_review_fragrance_seller_rejects_before_ai(tmp_path):
+    search = _fragrance_search()
+    item = _fragrance_item(
+        "zero-review-fragrance", "Parfums de Marly Delina Exclusif 75ml sealed", 220
+    )
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "state",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        schedule=[],
+    )
+    conn = engine.init_db(lane.seen_db_path)
+    with (
+        mock.patch.object(
+            engine,
+            "fetch_vinted_item_page_details",
+            return_value={
+                "_http_status": 200,
+                "description": "Sealed full retail bottle",
+                "seller_feedback_count": 0,
+                "image_urls": [],
+            },
+        ),
+        mock.patch.object(engine, "check_photos_with_gemini") as photo,
+    ):
+        lane._process_item(conn, None, item, search, None)
+    conn.close()
+    photo.assert_not_called()
+    row = json.loads(lane.log_path.read_text(encoding="utf-8"))
+    assert "seller has 0 reviews" in row["reason"]
+
+
+@pytest.mark.parametrize(
+    ("ai_result", "should_alert", "reason_fragment"),
+    [
+        (
+            _fragrance_ai(counterfeit_suspected=True, counterfeit_reason="wrong box font"),
+            False,
+            "counterfeit assessment not explicitly clear",
+        ),
+        (_fragrance_ai(), True, None),
+        (
+            _fragrance_ai(summary="Authentic bottle, partially used and about 70% full"),
+            False,
+            "used/partially-full bottle",
+        ),
+    ],
+)
+def test_fragrance_ai_bar_requires_clean_great_deal(
+    tmp_path, ai_result, should_alert, reason_fragment
+):
+    listing, result = _apparel_listing_result(
+        "Parfums de Marly Delina Exclusif Women's EDP 75ml sealed",
+        220,
+        "fragrance",
+        "delina exclusif",
+        search_id="vinted-pdm-delina-ai-bar",
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, ai_result
+    )
+    strong.assert_not_called()
+    assert send.called is should_alert
+    if should_alert:
+        assert row["deal_rating"] == "Great Deal"
+    else:
+        assert reason_fragment in row["reason"]
+
+
+def test_mens_apparel_with_womens_title_still_fails_gender_gate():
+    listing = marketplaces.make_listing(
+        "vinted",
+        "mens-regression",
+        "Zegna Men's Women's Cashmere Sweater",
+        50,
+        "https://www.vinted.com/items/mens-regression",
+    )
+    result = engine.score_listing(listing, None, category="knitwear")
+    assert result["verdict"] == "PASS"
+    assert result["reason"] == "excluded gender keyword in title/description"
 
 
 def test_phantom_lane_ledger_is_repaired_once_to_repo_effective(tmp_path, monkeypatch):
@@ -1486,6 +1728,65 @@ def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
     assert lane._route(item("Casino chips lot", "unknown", "40.00"), "poker chip")["id"] == "poker"
     # Over the polo cap: must not fall through to a pricier garment search.
     assert lane._route(item("Peter Millar Polo", "Peter Millar", "40.00")) is None
+
+
+@pytest.mark.parametrize(
+    ("search_id", "source_text", "title", "brand"),
+    [
+        (
+            "vinted-pdm-delina-exclusif",
+            "delina exclusif",
+            "Parfums de Marly Delina Exclusif 75ml",
+            "Parfums de Marly",
+        ),
+        (
+            "vinted-pdm-oriana",
+            "oriana marly",
+            "Parfums de Marly Oriana",
+            "Parfums de Marly",
+        ),
+        (
+            "vinted-kilian-angels-share",
+            "angels share kilian",
+            "Kilian Angels' Share EDP 50ml",
+            "Kilian",
+        ),
+        (
+            "vinted-kilian-angels-share",
+            "angels share kilian",
+            "By Kilian Angel's Share 100ml",
+            "Kilian",
+        ),
+    ],
+)
+def test_fragrance_text_feeds_route_brand_and_apostrophe_variants(
+    tmp_path, search_id, source_text, title, brand
+):
+    search = _fragrance_search(search_id)
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "s",
+        seen_db_path=tmp_path / "d",
+        log_path=tmp_path / "l",
+        schedule=[],
+    )
+    item = _fragrance_item("route", title, search["max_price"], brand=brand)
+    assert lane._route(item, source_text)["id"] == search_id
+
+
+def test_fragrance_route_requires_the_exact_scent_words(tmp_path):
+    search = _fragrance_search("vinted-kilian-angels-share")
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "s",
+        seen_db_path=tmp_path / "d",
+        log_path=tmp_path / "l",
+        schedule=[],
+    )
+    item = _fragrance_item(
+        "other-scent", "Sealed Kilian Good Girl Gone Bad EDP 100ml", 180, brand="Kilian"
+    )
+    assert lane._route(item, "angels share kilian") is None
 
 
 def test_off_profile_rejects_dresses_and_other_schools_only():

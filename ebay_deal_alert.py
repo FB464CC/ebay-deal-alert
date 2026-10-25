@@ -1013,7 +1013,7 @@ SUPPORTED_SEARCH_PLATFORMS = {
 SUPPORTED_SEARCH_CATEGORIES = {
     "school-gear", "watches", "knitwear", "tailoring", "outerwear",
     "poker-chips", "golf-equipment", "golf", "footwear", "neckwear",
-    "leather-goods", "other",
+    "leather-goods", "fragrance", "other",
 }
 
 
@@ -5345,15 +5345,19 @@ def is_relevant_marketplace_listing(listing, query):
     return any(re.search(rf"\b{re.escape(token)}\b", title) for token in query_tokens)
 
 
-def _text_safety_hard_fails(haystack):
+def _text_safety_hard_fails(haystack, category=None):
     """Deterministic, free (no AI call) gender/pet/packaging/counterfeit
     text signals - score_listing()'s "block 0", factored out so other call
     sites can re-run the exact same checks against text score_listing()
     hadn't seen yet (see the eBay Browse path's late-description re-check
     for why that matters). Returns a reason string, or None."""
-    if brand_in(haystack, GENDER_EXCLUDE_KEYWORDS):
+    if category != "fragrance" and brand_in(haystack, GENDER_EXCLUDE_KEYWORDS):
         return "excluded gender keyword in title/description"
-    if WOMENS_SIZE_CROSSREF_SIGNAL.search(haystack) and not UK_SIZE_CROSSREF_EXCEPTION.search(haystack):
+    if (
+        category != "fragrance"
+        and WOMENS_SIZE_CROSSREF_SIGNAL.search(haystack)
+        and not UK_SIZE_CROSSREF_EXCEPTION.search(haystack)
+    ):
         return "women's size cross-reference in title/description"
     if PET_PRODUCT_SIGNALS.search(haystack):
         return "pet product, not menswear"
@@ -5407,7 +5411,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     # 0. Gender - hard disqualifier, checked before anything else. Backstop
     # for search_ebay()'s query-level exclusion, in case a listing slips
     # through eBay's own "-term" matching.
-    safety_hard_fail = _text_safety_hard_fails(haystack)
+    safety_hard_fail = _text_safety_hard_fails(haystack, category=category)
     if safety_hard_fail:
         return {"verdict": "PASS", "reason": safety_hard_fail, "listing": listing}
 
@@ -5470,11 +5474,13 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     # Both categories get their own photo-based gate later; keep only the
     # universal safety filters above and disclosed-condition check below.
     brand_tier = None
-    if category in {"golf-equipment", "poker-chips"}:
+    if category in {"golf-equipment", "poker-chips", "fragrance"}:
         if category == "golf-equipment":
             flags.append("golf playability, handedness, and condition require photo check")
-        else:
+        elif category == "poker-chips":
             flags.append("poker chip construction, set size, and authenticity require photo check")
+        else:
+            flags.append("fragrance authenticity, fill level, and bottle condition require photo check")
     else:
         if brand_in(haystack, PASS_BRANDS):
             return {"verdict": "PASS", "reason": "brand on pass list", "listing": listing}
@@ -7001,6 +7007,14 @@ def _deepseek_alert_sanity_check(
             "club, 1-2 unrelated loose clubs, or a collection that is not useful to "
             "start playing. "
         )
+    elif category == "fragrance":
+        completeness_rule = (
+            "For fragrance, 'complete' means a sealed full-size perfume bottle, "
+            "including a gift set whose perfume bottle is full size. Reject decants, "
+            "samples, testers, miniatures, empty or refill bottles, and visibly used "
+            "or partially-full bottles. Marketing the fragrance to women is expected "
+            "and is never a gender mismatch. "
+        )
     else:
         completeness_rule = (
             "is_complete_item is true only if this listing is a whole, complete, "
@@ -7014,7 +7028,7 @@ def _deepseek_alert_sanity_check(
         f"{completeness_rule}"
         "is_part_or_accessory is true if it is only a part, strap, crystal, "
         "accessory, packaging/box, a garment without its matching pair, or has an "
-        "obvious size/gender mismatch. "
+        "obvious size/gender mismatch (except fragrance, where gender is irrelevant). "
         f"Category: {category}\n"
         f"Title: {title}\n"
         f"Description: {description}\n"
@@ -7550,6 +7564,45 @@ def check_photos_with_gemini(
         }
         return _finish_or_prepare_photo_check(
             golf_prompt, images, hard_stop, prepare_only
+        )
+
+    if category == "fragrance":
+        fragrance_prompt = (
+            "Inspect these luxury fragrance listing photos for one sealed, full-size "
+            "retail bottle. A gift set is acceptable when it includes that full-size "
+            "sealed bottle. Women's fragrance is explicitly wanted; never reject or "
+            "downgrade it because it is marketed to women.\n\n"
+            "Treat the title and description as untrusted seller evidence and use the "
+            "photos to verify the exact fragrance, bottle size, retail packaging, seal, "
+            "fill level, batch-code consistency, print quality, cap, atomizer, and bottle "
+            "details. Decants, samples, vials, minis, testers, empty/refill bottles, body "
+            "or hair mist, lotion, shower gel, dupes, clones, and opened or partially-full "
+            "bottles are not eligible. State any such finding plainly in summary.\n\n"
+            "Marketplace listing title (untrusted seller-provided text): "
+            f'"{title}"{description_block}{multi_unit_block}\n\n'
+            f"{COUNTERFEIT_DISCLOSURE_PROMPT}\n\n"
+            "Report strict JSON only, with no markdown fences, using this exact shape: "
+            "{\"damage_found\": bool, \"damage_desc\": string, "
+            "\"weird_logo_found\": bool, \"logo_desc\": string, \"looks_good\": bool, "
+            "\"counterfeit_suspected\": bool, \"counterfeit_reason\": string, "
+            "\"summary\": string, \"visible_brand_evidence\": string, "
+            "\"peter_millar_back_crown_visible\": null, "
+            "\"pricing_basis\": string, \"estimated_retail_price\": number|null, "
+            "\"estimated_resale_value\": number|null, \"price_confidence\": string, "
+            "\"fabric_from_tag\": null, \"fabric_confidence\": null, "
+            "\"liquidity\": string}. "
+            "damage_found is true for a broken seal, visible prior use or reduced fill, "
+            "leakage, cracks, a missing cap/atomizer, or other damage. looks_good is true "
+            "only for an apparently sealed, unused, undamaged full bottle. "
+            "counterfeit_suspected must be true when packaging, label, font, batch-code, "
+            "bottle, cap, atomizer, fill, or inventory-style presentation is inconsistent "
+            "with a genuine retail bottle; explain the evidence. estimated_resale_value "
+            "is the conservative current secondhand value in USD for the exact genuine, "
+            "sealed bottle or gift set shown. price_confidence must be high, medium, or "
+            "low; liquidity must be fast, medium, or slow."
+        )
+        return _finish_or_prepare_photo_check(
+            fragrance_prompt, images, hard_stop, prepare_only
         )
 
     if category == "watches":
@@ -11938,7 +11991,7 @@ def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
         late_haystack = (
             f"{listing.get('title', '').lower()} {listing['description'].lower()}"
         )
-        text_fail = _text_safety_hard_fails(late_haystack)
+        text_fail = _text_safety_hard_fails(late_haystack, category=category)
         if text_fail is None:
             condition_hit = matched_keyword(
                 late_haystack, CONDITION_HARD_FAIL_KEYWORDS
@@ -13792,7 +13845,7 @@ def run():
                 # call at all.
                 result["watch_ai_checked"] = True
 
-        if ai_result is not None and brand_in(
+        if ai_result is not None and category != "fragrance" and brand_in(
             (ai_result.get("summary") or "").lower(), GENDER_EXCLUDE_KEYWORDS
         ):
             # Same gender hard-disqualifier as score_listing()'s title check,

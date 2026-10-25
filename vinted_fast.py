@@ -116,6 +116,17 @@ _VINTED_EYEWEAR = re.compile(
     r"|lentes|gafas|anteojos|[oó]culos|lunettes|occhiali|sonnenbrille)\b",
     re.IGNORECASE,
 )
+_VINTED_FRAGRANCE_EXCLUDED = re.compile(
+    r"\b(?:decants?|samples?|vials?|minis?|miniatures?|travel[\s-]*size|testers?"
+    r"|unboxed|empty|refills?|dupes?|inspired(?:\s+by)?|smells\s+like|clones?"
+    r"|alternatives?|body\s+mist|hair\s+mist|lotions?|shower\s+gels?)\b",
+    re.IGNORECASE,
+)
+_VINTED_FRAGRANCE_USED_SUMMARY = re.compile(
+    r"\b(?:partially[\s-]+used|partially[\s-]+full|half[\s-]+full"
+    r"|used[\s-]+bottle|\d{1,3}\s*%\s*full)\b",
+    re.IGNORECASE,
+)
 _VINTED_INSTANT_SKIP_WORDS = re.compile(
     r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|sunglass(?:es)?|glasses|frames?"
     r"|perfume|cologne|fragrance|parfum|eau|ml|candle|lip|balm|socks?|cufflinks?"
@@ -172,6 +183,8 @@ VINTED_MIN_RESALE_BY_BRAND = {
             "tom ford": 100,
             "brunello cucinelli": 150,
             "loro piana": 150,
+            "parfums de marly": 150,
+            "kilian": 150,
             "default": 60,
         },
     ).items()
@@ -194,6 +207,8 @@ _VINTED_BRAND_DISPLAY_NAMES = {
     "tom ford": "Tom Ford",
     "brunello cucinelli": "Brunello Cucinelli",
     "loro piana": "Loro Piana",
+    "parfums de marly": "Parfums de Marly",
+    "kilian": "Kilian",
 }
 
 logger = logging.getLogger(__name__)
@@ -345,6 +360,27 @@ def _vinted_apparel_bar_reason(result, category):
     if result.get("deal_rating") not in {"Steal", "Great Deal"}:
         return (
             "vinted menswear bar: deal_rating "
+            f"{result.get('deal_rating')!r} below Great Deal"
+        )
+    return None
+
+
+def _vinted_fragrance_bar_reason(result, category):
+    """Require affirmative clean photo evidence for a full fragrance bottle."""
+    if category != "fragrance":
+        return None
+    if result.get("vinted_photo_ai_checked") is not True:
+        return "vinted fragrance bar: real AI photo check missing"
+    if result.get("counterfeit_suspected") is not False:
+        return "vinted fragrance bar: counterfeit assessment not explicitly clear"
+    if result.get("damage_found") is not False:
+        return "vinted fragrance bar: damage assessment not explicitly clear"
+    summary = str(result.get("vinted_ai_summary") or "")
+    if _VINTED_FRAGRANCE_USED_SUMMARY.search(summary):
+        return "vinted fragrance bar: AI summary indicates a used/partially-full bottle"
+    if result.get("deal_rating") not in {"Steal", "Great Deal"}:
+        return (
+            "vinted fragrance bar: deal_rating "
             f"{result.get('deal_rating')!r} below Great Deal"
         )
     return None
@@ -658,7 +694,11 @@ def _merge_ai_result(result, ai_result, category):
         )
 
     summary = str(ai_result.get("summary") or "")
-    if engine.brand_in(summary.lower(), engine.GENDER_EXCLUDE_KEYWORDS):
+    result["vinted_ai_summary"] = summary
+    if (
+        category != "fragrance"
+        and engine.brand_in(summary.lower(), engine.GENDER_EXCLUDE_KEYWORDS)
+    ):
         return f"AI photo check found gender-excluded keyword: {summary}"
     if engine.PET_PRODUCT_SIGNALS.search(summary.lower()):
         return f"AI photo check found pet product: {summary}"
@@ -1385,6 +1425,10 @@ class VintedFastLane:
             # polo cannot fall through to the pricier jacket search.
             if brand_feed and not set(query_words) - source_words <= title_words:
                 continue
+            # One house makes many scents: "Kilian Good Girl Gone Bad" must
+            # not land in the Angels' Share search (production feed check).
+            if search.get("category") == "fragrance" and not set(query_words) <= title_words:
+                continue
             cap = search.get("max_price")
             if cap is not None and price is not None and price > float(cap):
                 continue
@@ -1509,6 +1553,14 @@ class VintedFastLane:
         item_id = listing["itemId"]
         if _already_seen(conn, main_conn, item_id):
             return None
+        category = engine.classify_search_category(search)
+        if category == "fragrance" and _VINTED_FRAGRANCE_EXCLUDED.search(
+            str(listing.get("title") or "")
+        ):
+            return listing, None, (
+                "fragrance listing is a decant/sample/tester/dupe/empty, "
+                "not a sealed full bottle"
+            )
         _positive, excluded = marketplaces.split_query_exclusions(
             search.get("query", "")
         )
@@ -1547,8 +1599,14 @@ class VintedFastLane:
             return listing, None, "configured shoe size has excluded E width"
         if not engine.listing_matches_size_filter(search, listing):
             return listing, None, "size mismatch for saved search"
-        category = engine.classify_search_category(search)
         title = str(listing.get("title") or "")
+        if category == "fragrance" and _VINTED_FRAGRANCE_EXCLUDED.search(
+            f"{title} {listing.get('description') or ''}"
+        ):
+            return listing, None, (
+                "fragrance listing is a decant/sample/tester/dupe/empty, "
+                "not a sealed full bottle"
+            )
         if category == "watches":
             if engine.WATCH_NOT_A_WATCH_SIGNALS.search(title):
                 return listing, None, "watch title describes packaging/parts, not a timepiece"
@@ -1559,6 +1617,12 @@ class VintedFastLane:
         item_price = float((listing.get("price") or {}).get("value") or 0)
         shipping = engine.get_shipping_cost(listing)
         total_price = item_price + shipping
+        min_price = engine._sane_ai_price(search.get("min_price"))
+        if min_price is not None and item_price < min_price:
+            return listing, None, (
+                f"below fake-price floor: ${item_price:g} < ${min_price:g} "
+                "(almost certainly counterfeit)"
+            )
         if item_price > float(search.get("max_price", math.inf)):
             return listing, None, (
                 f"over max price: ${item_price:.2f} list price > "
@@ -1651,7 +1715,7 @@ class VintedFastLane:
             return
         _brand, floor = _vinted_brand_and_floor(result)
         if (
-            floor >= VINTED_INSTANT_MIN_FLOOR
+            (category == "fragrance" or floor >= VINTED_INSTANT_MIN_FLOOR)
             and listing.get("seller_feedback_count") == 0
         ):
             # ponytail: page has reviews but not listing count; 0 reviews on
@@ -1670,38 +1734,39 @@ class VintedFastLane:
             )
             return
         self._maybe_instant_alert(result, category)
-        if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
-            jev_score = engine.jev_vinted_score(
-                listing, category, hard_stop=hard_stop
-            )
-            if jev_score is not None:
-                result["jev_vinted_score"] = jev_score
-            if (
-                jev_score is not None
-                and jev_score <= engine.JEV_VINTED_SKIP_THRESHOLD
-            ):
-                self._finish(
-                    conn,
-                    result,
-                    item_id,
-                    fingerprint,
-                    total_price,
-                    "Jev pre-photo screen rejected listing "
-                    f"({jev_score:.6f} <= {engine.JEV_VINTED_SKIP_THRESHOLD:.6f})",
+        if category != "fragrance":
+            if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
+                jev_score = engine.jev_vinted_score(
+                    listing, category, hard_stop=hard_stop
                 )
-                return
-        else:
-            prescreen_answer = self._run_vinted_prescreen(result, hard_stop)
-            if prescreen_answer is False:
-                self._finish(
-                    conn,
-                    result,
-                    item_id,
-                    fingerprint,
-                    total_price,
-                    "OpenRouter photo prescreen explicitly rejected listing",
-                )
-                return
+                if jev_score is not None:
+                    result["jev_vinted_score"] = jev_score
+                if (
+                    jev_score is not None
+                    and jev_score <= engine.JEV_VINTED_SKIP_THRESHOLD
+                ):
+                    self._finish(
+                        conn,
+                        result,
+                        item_id,
+                        fingerprint,
+                        total_price,
+                        "Jev pre-photo screen rejected listing "
+                        f"({jev_score:.6f} <= {engine.JEV_VINTED_SKIP_THRESHOLD:.6f})",
+                    )
+                    return
+            else:
+                prescreen_answer = self._run_vinted_prescreen(result, hard_stop)
+                if prescreen_answer is False:
+                    self._finish(
+                        conn,
+                        result,
+                        item_id,
+                        fingerprint,
+                        total_price,
+                        "OpenRouter photo prescreen explicitly rejected listing",
+                    )
+                    return
 
         if self.ai_calls >= VINTED_FAST_MAX_AI_CALLS_PER_RUN:
             self._finish(
@@ -1744,7 +1809,9 @@ class VintedFastLane:
                 conn, result, item_id, fingerprint, total_price, ai_reject
             )
             return
-        vinted_bar_reason = _vinted_apparel_bar_reason(result, category)
+        vinted_bar_reason = _vinted_fragrance_bar_reason(
+            result, category
+        ) or _vinted_apparel_bar_reason(result, category)
         if vinted_bar_reason:
             self._finish(
                 conn,
