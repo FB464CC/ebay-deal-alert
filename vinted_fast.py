@@ -394,12 +394,21 @@ def fetch_vinted_seller_stats(user_id):
     return stats
 
 
-def _seller_trust_reason(stats):
+def _seller_trust_reason(stats, strict=True):
+    """Strict (fragrance): a proven seller. Loose (menswear): Vinted holds
+    payment until the buyer confirms, so only obvious throwaways are cut."""
     if "feedback_count" not in stats:
-        return "seller history unavailable (needs a proven seller)"
+        return "seller history unavailable (needs a proven seller)" if strict else None
     reviews = stats["feedback_count"]
     rating = stats.get("feedback_reputation", 0.0)
     items = stats.get("item_count", 0.0) + stats.get("given_item_count", 0.0)
+    if not strict:
+        if (reviews == 0 and items < 5) or (reviews >= 3 and rating < 0.8):
+            return (
+                f"throwaway-looking seller: {reviews:g} reviews, {rating * 5:.1f} stars, "
+                f"{items:g} items listed/sold"
+            )
+        return None
     if (
         reviews < VINTED_MIN_SELLER_REVIEWS
         or rating < VINTED_MIN_SELLER_RATING
@@ -1773,7 +1782,7 @@ class VintedFastLane:
             self.statuses[str(status or "ERROR")] += 1
             if status in {401, 403, 429}:
                 raise VintedRequestBlocked(status)
-            seller_reason = _seller_trust_reason(stats)
+            seller_reason = _seller_trust_reason(stats, strict=category == "fragrance")
             if seller_reason:
                 self._finish(
                     conn, result, item_id, fingerprint, total_price, seller_reason

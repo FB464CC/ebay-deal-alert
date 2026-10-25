@@ -1355,7 +1355,18 @@ def test_menswear_needs_a_proven_seller_too(tmp_path, monkeypatch):
     )
     strong.assert_not_called()
     send.assert_not_called()
-    assert "seller not proven: 0 reviews" in row["reason"]
+    assert "throwaway-looking seller: 0 reviews" in row["reason"]
+
+
+def test_menswear_seller_rule_only_cuts_obvious_throwaways():
+    loose = lambda **kw: fast._seller_trust_reason(
+        dict({"feedback_count": 0.0, "feedback_reputation": 0.0,
+              "item_count": 0.0, "given_item_count": 0.0}, **kw), strict=False)
+    assert loose(item_count=1.0) is not None  # brand-new, one listing
+    assert loose(item_count=13.0) is None  # new seller clearing a closet
+    assert loose(feedback_count=4.0, feedback_reputation=0.8, item_count=45.0) is None
+    assert loose(feedback_count=5.0, feedback_reputation=0.6, item_count=20.0) is not None
+    assert fast._seller_trust_reason({"_http_status": 500}, strict=False) is None
 
 
 def test_seller_stats_parse_member_page():
