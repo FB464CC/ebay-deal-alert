@@ -1339,7 +1339,23 @@ def test_fragrance_needs_a_proven_seller(tmp_path, monkeypatch, stats, fragment)
         tmp_path, listing, result, _fragrance_ai()
     )
     send.assert_not_called()
-    assert "fragrance seller" in row["reason"] and fragment in row["reason"]
+    assert "seller" in row["reason"] and fragment in row["reason"]
+
+
+def test_menswear_needs_a_proven_seller_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(fast, "fetch_vinted_seller_stats", lambda _user_id: {
+        "_http_status": 200, "feedback_count": 0.0, "feedback_reputation": 0.0,
+        "item_count": 1.0, "given_item_count": 0.0,
+    })
+    listing, result = _apparel_listing_result(
+        "Loro Piana Cashmere sweater", 40, "knitwear", "loro piana", search_id="vinted-loro"
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _apparel_ai(400), strong_result=_passing_strong_result(400)
+    )
+    strong.assert_not_called()
+    send.assert_not_called()
+    assert "seller not proven: 0 reviews" in row["reason"]
 
 
 def test_seller_stats_parse_member_page():
@@ -1354,7 +1370,7 @@ def test_seller_stats_parse_member_page():
         "item_count": 26.0,
         "given_item_count": 69.0,
     }
-    assert fast._fragrance_seller_reason(stats) is None
+    assert fast._seller_trust_reason(stats) is None
 
 
 def test_mens_apparel_with_womens_title_still_fails_gender_gate():

@@ -365,11 +365,12 @@ def _vinted_apparel_bar_reason(result, category):
     return None
 
 
-# Owner rule: fake perfume comes from accounts with no sales and no reviews;
-# rated sellers with several items are the real-but-cheap ones.
-VINTED_FRAGRANCE_MIN_SELLER_REVIEWS = 3
-VINTED_FRAGRANCE_MIN_SELLER_RATING = 0.9  # Vinted 0-1 scale: 0.9 = 4.5 stars
-VINTED_FRAGRANCE_MIN_SELLER_ITEMS = 3  # listed + sold
+# Owner rule: fakes and scams come from accounts with no sales and no
+# reviews; rated sellers with several items are the real-but-cheap ones.
+# Applies to fragrance and menswear (owner, 2026-10-25).
+VINTED_MIN_SELLER_REVIEWS = 3
+VINTED_MIN_SELLER_RATING = 0.9  # Vinted 0-1 scale: 0.9 = 4.5 stars
+VINTED_MIN_SELLER_ITEMS = 3  # listed + sold
 
 
 def fetch_vinted_seller_stats(user_id):
@@ -393,20 +394,20 @@ def fetch_vinted_seller_stats(user_id):
     return stats
 
 
-def _fragrance_seller_reason(stats):
+def _seller_trust_reason(stats):
     if "feedback_count" not in stats:
-        return "fragrance seller history unavailable (needs a proven seller)"
+        return "seller history unavailable (needs a proven seller)"
     reviews = stats["feedback_count"]
     rating = stats.get("feedback_reputation", 0.0)
     items = stats.get("item_count", 0.0) + stats.get("given_item_count", 0.0)
     if (
-        reviews < VINTED_FRAGRANCE_MIN_SELLER_REVIEWS
-        or rating < VINTED_FRAGRANCE_MIN_SELLER_RATING
-        or items < VINTED_FRAGRANCE_MIN_SELLER_ITEMS
+        reviews < VINTED_MIN_SELLER_REVIEWS
+        or rating < VINTED_MIN_SELLER_RATING
+        or items < VINTED_MIN_SELLER_ITEMS
     ):
         return (
-            f"fragrance seller not proven: {reviews:g} reviews, {rating * 5:.1f} stars, "
-            f"{items:g} items listed/sold (fake-perfume pattern)"
+            f"seller not proven: {reviews:g} reviews, {rating * 5:.1f} stars, "
+            f"{items:g} items listed/sold (throwaway-account fake/scam pattern)"
         )
     return None
 
@@ -1759,7 +1760,11 @@ class VintedFastLane:
                 "designer eyewear on Vinted is fakes/scams",
             )
             return
-        if category == "fragrance":
+        if (
+            category == "fragrance"
+            or category in VINTED_APPAREL_CATEGORIES
+            or category == "school-gear"
+        ):
             self._respect_interval()
             self._last_request_started = self.clock()
             self.stats["requests"] += 1
@@ -1768,7 +1773,7 @@ class VintedFastLane:
             self.statuses[str(status or "ERROR")] += 1
             if status in {401, 403, 429}:
                 raise VintedRequestBlocked(status)
-            seller_reason = _fragrance_seller_reason(stats)
+            seller_reason = _seller_trust_reason(stats)
             if seller_reason:
                 self._finish(
                     conn, result, item_id, fingerprint, total_price, seller_reason
