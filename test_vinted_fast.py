@@ -1389,6 +1389,42 @@ def test_menswear_shape_rule(title, size, brand, blocked):
     assert (reason is not None) is blocked, reason
 
 
+@pytest.mark.parametrize(
+    ("title", "description", "blocked"),
+    [
+        ("Jos A Bank Loro Piana fabric suit 42R", "", True),
+        ("Jack Victor x Loro Piana suit 42R", "", True),
+        ("Mens suit 42R", "Made with Ermenegildo Zegna cloth", True),
+        ("Canali suit 42R", "Made with Ermenegildo Zegna fabric", False),
+        ("Loro Piana cashmere sweater", "", False),
+    ],
+)
+def test_mill_fabric_from_other_makers_is_not_the_house(title, description, blocked):
+    reason = fast._menswear_shape_reason(
+        {"title": title, "size": "L", "description": description}, None
+    )
+    assert (reason is not None) is blocked, reason
+
+
+def test_named_fabric_makers_are_on_pass_list():
+    for title in ("jos. a. bank loro piana suit", "joseph abboud zegna blazer"):
+        assert engine.brand_in(title, engine.PASS_BRANDS)
+
+
+@pytest.mark.parametrize(
+    ("summary", "blocked"),
+    [
+        ("Zegna navy wool sport coat, two-button, size 42R", True),
+        ("Tailored wool jacket in grey herringbone", True),
+        ("Canali navy two-piece suit with matching trousers", False),
+        ("Zegna quilted down jacket", False),
+    ],
+)
+def test_ai_summary_lone_sport_coat_is_rejected(summary, blocked):
+    reason = fast._ai_lone_tailoring_reason(summary, "other")
+    assert (reason is not None) is blocked, reason
+
+
 def test_seller_stats_parse_member_page():
     page = '{\\"feedback_count\\":45,\\"feedback_reputation\\":0.98,\\"item_count\\":26,\\"given_item_count\\":69}'
     resp = mock.Mock(status_code=200, text=page)
@@ -1466,7 +1502,7 @@ def test_instant_alerted_item_that_fails_gets_quiet_skip_followup(tmp_path, monk
 
 def test_vinted_strong_label_naming_other_brand_vetoes(tmp_path):
     listing, result = _apparel_listing_result(
-        "Loro Piana fabric wool suit 42R", 30, "tailoring", '"loro piana"',
+        "Loro Piana wool suit 42R", 30, "tailoring", '"loro piana"',
         search_id="vinted-loro-piana",
     )
     _lane_obj, _strong, send, row = _run_custom_pipeline(

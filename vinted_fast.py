@@ -138,6 +138,25 @@ _VINTED_SUIT_SIZE = re.compile(
     r"\b(?:4[0-4]|5[024])(?:\s?(?:r|l|reg(?:ular)?|long))?\b(?![\s/-]?(?:s|short)\b)",
     re.IGNORECASE,
 )
+# Mid-tier makers advertise the mill's cloth ("Jack Victor x Loro Piana",
+# "Jos. A. Bank Loro Piana fabric suit"); the brand floor would treat them as
+# the real house. Makers by name are in PASS_BRANDS; this catches the rest.
+_VINTED_MILL = r"(?:loro\s+piana|(?:ermenegildo\s+)?zegna|vitale\s+barberis(?:\s+canonico)?)"
+_VINTED_MILL_FABRIC = re.compile(
+    rf"\b{_VINTED_MILL}(?:\s+(?:wool|cashmere|silk|linen|super\s*\d+'?s?))*"
+    r"\s+(?:fabric|cloth|textile)s?\b"
+    rf"|\b(?:fabric|cloth|textile)s?\s+(?:by|from)\s+{_VINTED_MILL}\b"
+    r"|\bx\s+loro\s+piana\b",
+    re.IGNORECASE,
+)
+# The photo check names a sport coat that the title only called a "jacket".
+_VINTED_AI_LONE_TAILORING = re.compile(
+    r"\b(?:blazers?|sports?[\s-]?coats?|suit[\s-]+jackets?|tailored\s+(?:\w+\s+)?jackets?)\b",
+    re.IGNORECASE,
+)
+_VINTED_AI_FULL_SUIT = re.compile(
+    r"\b(?:pants|trousers|slacks|(?:two|three|2|3)[\s-]?piece)\b", re.IGNORECASE
+)
 _VINTED_FRAGRANCE_EXCLUDED = re.compile(
     r"\b(?:decants?|samples?|vials?|minis?|miniatures?|travel[\s-]*size|testers?"
     r"|unboxed|empty|refills?|dupes?|inspired(?:\s+by)?|smells\s+like|clones?"
@@ -420,6 +439,14 @@ def _menswear_shape_reason(listing, brand_key):
     """Garment types/sizes the owner never buys, judged from the title."""
     title = str(listing.get("title") or "")
     sized = f"{title} {listing.get('size') or ''}"
+    houses = [
+        brand for brand in VINTED_MIN_RESALE_BY_BRAND
+        if brand not in {"default", "loro piana", "zegna"}
+    ]
+    if not engine.brand_in(title.casefold(), houses) and _VINTED_MILL_FABRIC.search(
+        f"{title} {listing.get('description') or ''}"
+    ):
+        return "another maker using Loro Piana/Zegna fabric, not the house itself"
     if _VINTED_POLO.search(title) and _VINTED_XL.search(sized):
         return "XL polo (owner wears M/L polos)"
     if _VINTED_LONE_TAILORING.search(title):
@@ -434,6 +461,17 @@ def _menswear_shape_reason(listing, brand_key):
         and _VINTED_WOVEN_SHIRT.search(title)
     ):
         return "dress shirt below Brunello/Kiton/Loro Piana/Brioni tier"
+    return None
+
+
+def _ai_lone_tailoring_reason(summary, category):
+    summary = str(summary or "")
+    if (
+        category in VINTED_APPAREL_CATEGORIES
+        and _VINTED_AI_LONE_TAILORING.search(summary)
+        and not _VINTED_AI_FULL_SUIT.search(summary)
+    ):
+        return "AI photos show a lone blazer/sport coat, full suits only"
     return None
 
 
@@ -1925,7 +1963,7 @@ class VintedFastLane:
             _off_profile_reason(ai_result.get("summary"), schools_only=True)
             if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"
             else None
-        )
+        ) or _ai_lone_tailoring_reason(ai_result.get("summary"), category)
         if ai_reject:
             self._finish(
                 conn, result, item_id, fingerprint, total_price, ai_reject
