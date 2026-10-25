@@ -1305,13 +1305,14 @@
       "category": "tailoring"
     },
     {
-      "query": "brooks brothers -women -womens -ladies -girls -kids -scarf",
+      "query": "brooks brothers suit -shirt -tie -vest -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "M",
-        "L",
-        "XL"
+        "42"
       ],
-      "max_price": 30,
+      "size_equivalents": [
+        "52"
+      ],
+      "max_price": 90,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1319,7 +1320,7 @@
       ],
       "ebay": false,
       "id": "vinted-brooks-brothers",
-      "category": "other"
+      "category": "tailoring"
     },
     {
       "query": "e. marinella tie -women -womens -ladies -girls -kids -scarf",
@@ -3893,7 +3894,7 @@
   "VINTED_MIN_RESALE_BY_BRAND": {
     "peter millar": 30,
     "canali": 150,
-    "brooks brothers": 35,
+    "brooks brothers": 150,
     "e. marinella": 60,
     "marinella": 60,
     "g/fore": 45,

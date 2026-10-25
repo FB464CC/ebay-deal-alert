@@ -346,7 +346,7 @@ def test_vinted_brand_resale_floors_match_owner_profile():
     expected = {
         "peter millar": 30,
         "canali": 150,
-        "brooks brothers": 35,
+        "brooks brothers": 150,
         "e. marinella": 60,
         "marinella": 60,
     }
@@ -390,7 +390,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert not engine.listing_matches_size_filter(
         canali, {"title": "Canali Navy Wool Suit 40R", "size": "EU 50"}
     )
-    assert searches["vinted-brooks-brothers"]["size"] == ["M", "L", "XL"]
+    assert searches["vinted-brooks-brothers"]["size"] == ["42"]
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L", "XL"]
@@ -406,7 +406,7 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-peter-millar-crown-crafted": 50,
         "vinted-canali-suit": 130,
         "vinted-canali": 90,
-        "vinted-brooks-brothers": 30,
+        "vinted-brooks-brothers": 90,
         "vinted-e-marinella-tie": 60,
         "vinted-brunello-cucinelli": 130,
         "vinted-loro-piana": 130,
