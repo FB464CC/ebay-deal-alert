@@ -320,6 +320,21 @@ def _apparel_ai(resale, **overrides):
     return result
 
 
+_REAL_SELLER_STATS = fast.fetch_vinted_seller_stats
+TRUSTED_SELLER = {
+    "_http_status": 200,
+    "feedback_count": 12.0,
+    "feedback_reputation": 1.0,
+    "item_count": 20.0,
+    "given_item_count": 15.0,
+}
+
+
+@pytest.fixture(autouse=True)
+def _no_live_seller_lookup(monkeypatch):
+    monkeypatch.setattr(fast, "fetch_vinted_seller_stats", lambda _user_id: dict(TRUSTED_SELLER))
+
+
 def _fragrance_search(search_id="vinted-pdm-delina-exclusif"):
     return next(search for search in engine.SAVED_SEARCHES if search["id"] == search_id)
 
@@ -430,9 +445,9 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
     expected = {
-        "vinted-pdm-delina-exclusif": (150, 290),
-        "vinted-pdm-oriana": (140, 200),
-        "vinted-kilian-angels-share": (150, 230),
+        "vinted-pdm-delina-exclusif": (100, 290),
+        "vinted-pdm-oriana": (90, 200),
+        "vinted-kilian-angels-share": (90, 230),
     }
     searches = {search["id"]: search for search in engine.SAVED_SEARCHES}
     for search_id, (minimum, maximum) in expected.items():
@@ -1191,8 +1206,8 @@ def test_womens_fragrance_routes_ignores_gender_and_reaches_real_ai(tmp_path):
     [
         (
             "Parfums de Marly Delina Exclusif Women's EDP 75ml sealed",
-            100,
-            "below fake-price floor: $100 < $150 (almost certainly counterfeit)",
+            80,
+            "below fake-price floor: $80 < $100 (almost certainly counterfeit)",
         ),
         (
             "Delina Exclusif decant 10ml",
@@ -1299,6 +1314,47 @@ def test_fragrance_ai_bar_requires_clean_great_deal(
         assert row["deal_rating"] == "Great Deal"
     else:
         assert reason_fragment in row["reason"]
+
+
+@pytest.mark.parametrize(
+    ("stats", "fragment"),
+    [
+        ({"_http_status": 200, "feedback_count": 0.0, "feedback_reputation": 0.0,
+          "item_count": 1.0, "given_item_count": 0.0}, "0 reviews, 0.0 stars, 1 items"),
+        (dict(TRUSTED_SELLER, feedback_reputation=0.8), "4.0 stars"),
+        (dict(TRUSTED_SELLER, item_count=1.0, given_item_count=1.0), "2 items"),
+        ({"_http_status": 500}, "history unavailable"),
+    ],
+)
+def test_fragrance_needs_a_proven_seller(tmp_path, monkeypatch, stats, fragment):
+    monkeypatch.setattr(fast, "fetch_vinted_seller_stats", lambda _user_id: stats)
+    listing, result = _apparel_listing_result(
+        "Parfums de Marly Delina Exclusif 75ml sealed",
+        220,
+        "fragrance",
+        "delina exclusif",
+        search_id="vinted-pdm-delina-seller",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _fragrance_ai()
+    )
+    send.assert_not_called()
+    assert "fragrance seller" in row["reason"] and fragment in row["reason"]
+
+
+def test_seller_stats_parse_member_page():
+    page = '{\\"feedback_count\\":45,\\"feedback_reputation\\":0.98,\\"item_count\\":26,\\"given_item_count\\":69}'
+    resp = mock.Mock(status_code=200, text=page)
+    with mock.patch.object(fast.requests, "get", return_value=resp):
+        stats = _REAL_SELLER_STATS(123)
+    assert stats == {
+        "_http_status": 200,
+        "feedback_count": 45.0,
+        "feedback_reputation": 0.98,
+        "item_count": 26.0,
+        "given_item_count": 69.0,
+    }
+    assert fast._fragrance_seller_reason(stats) is None
 
 
 def test_mens_apparel_with_womens_title_still_fails_gender_gate():

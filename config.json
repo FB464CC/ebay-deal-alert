@@ -1489,7 +1489,7 @@
     {
       "query": "delina exclusif -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
-      "min_price": 150,
+      "min_price": 100,
       "max_price": 290,
       "enabled": true,
       "profile": "fast",
@@ -1503,7 +1503,7 @@
     {
       "query": "oriana marly -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
-      "min_price": 140,
+      "min_price": 90,
       "max_price": 200,
       "enabled": true,
       "profile": "fast",
@@ -1517,7 +1517,7 @@
     {
       "query": "angels share kilian -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
-      "min_price": 150,
+      "min_price": 90,
       "max_price": 230,
       "enabled": true,
       "profile": "fast",
