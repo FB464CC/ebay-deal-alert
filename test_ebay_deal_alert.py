@@ -2166,7 +2166,7 @@ class GolfEquipmentGate(unittest.TestCase):
     def test_title_prefilter_keeps_real_sets_and_requested_components(self):
         cases = (
             ("golf club set", "Golf clubs and bag"),
-            ("complete golf iron set", "Ping Zing iron set"),
+            ("complete golf iron set", "Ping G410 iron set"),
             ("golf club set", "Cleaveland CG RED 3-PW + CG10 56"),
             ("golf club set", "Cleveland TA7 4i-PW"),
             ("TaylorMade RBZ irons", "Lot Of TaylorMade And One RBZ Golf Irons"),
@@ -2196,7 +2196,7 @@ class GolfEquipmentGate(unittest.TestCase):
                 self.assertIsNotNone(m.golf_wrong_item_title_reason(title, "ping g425 irons"))
         kept = (
             "Principle Golf Flow Weight System HMG40 Iron Set 3-PW 8pc RH Steel",
-            "Callaway X-14 Steelhead 5-6-7-8-9-Pw-Aw-Sw 8pcs RH Constant Weight Golf Iron Set",
+            "Callaway Rogue ST Max 5-6-7-8-9-Pw-Aw-Sw 8pcs RH Constant Weight Golf Iron Set",
             "Titleist T100 2019 Irons / 4-9i / Stiff Flex AMT Tour White S300 Shafts",
             "Ping i500 Irons / 5-9i / Red Dot / Regular Flex UST Mamiya Recoil ES 780 Shafts",
             "Finesse Square Two Golf Clubs (10PCS) - LIGHT WEIGHT HIGH LAUNCH SHAFTS",
@@ -11544,12 +11544,14 @@ class RunIntegration(unittest.TestCase):
         self._patch("check_photos_with_gemini", golf_ai)
         m.run()
 
-        self.assertEqual(len(self.ai_calls), 6)
+        # The "Vintage PING Eye" title is now a pre-AI vintage reject.
+        self.assertEqual(len(self.ai_calls), 5)
         # Owner decision 2026-09-21: Wilson Prestige is too low-tier, so all six
         # real rows (incl. Wilson Prestige) are full-set-only rejects.
         self.assertEqual([alert["listing"]["itemId"] for alert in self.alerts], [])
         records = {row["item_id"]: row for row in self._alert_log_records()}
-        for item_id in set(ai_by_id):
+        self.assertIn("vintage", records["shopgoodwill:277348678"]["reason"])
+        for item_id in set(ai_by_id) - {"shopgoodwill:277348678"}:
             self.assertEqual(
                 records[item_id]["disposition_code"],
                 "GOLF_FULL_SET_ONLY_REJECT",

@@ -3994,6 +3994,14 @@ def golf_wrong_item_title_reason(title, query):
             blocked_brand = None
     if blocked_brand:
         return f"title-identifiable blocked golf brand {blocked_brand!r}"
+    if GOLF_FULL_SET_ONLY and not component_kind:
+        # The post-AI full-set gate rejects these same pre-2012 titles; the
+        # vision call in between was pure waste (Ping Eye 2, Johnny Miller).
+        vintage = re.search(r"\b(?:vintage|persimmon)\b", title, re.IGNORECASE)
+        for pattern in _golf_profile_regexes("full_set_vintage_model_patterns"):
+            vintage = vintage or pattern.search(title)
+        if vintage:
+            return f"pre-2012 vintage set {vintage.group(0)!r} (owner wants 2012+)"
 
     if component_kind:
         if not GOLF_COMPONENT_TITLE_PATTERNS[component_kind].search(title):
@@ -5363,7 +5371,9 @@ def _text_safety_hard_fails(haystack, category=None):
         return "pet product, not menswear"
     if EMPTY_PACKAGING_SIGNALS.search(haystack):
         return "packaging/accessory-only listing, not the item"
-    if BUTTON_DOWN_SHIRT_SIGNALS.search(haystack) and not brand_in(haystack, ("kiton",)):
+    if BUTTON_DOWN_SHIRT_SIGNALS.search(haystack) and not brand_in(
+        haystack, ("kiton", "brunello cucinelli", "loro piana", "brioni")
+    ):
         return "button-down/button-up dress shirt not wanted (Kiton exempted)"
     if COUNTERFEIT_SIGNALS.search(haystack):
         return "counterfeit/replica listing language in title/description"
