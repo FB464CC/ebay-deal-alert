@@ -1460,7 +1460,7 @@
         "XL"
       ],
       "max_price": 30,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1477,7 +1477,7 @@
         "XL"
       ],
       "max_price": 25,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -3868,14 +3868,13 @@
   "VINTED_FAST_ENABLED": true,
   "VINTED_FAST_RUN_MINUTES": 340,
   "VINTED_FAST_POLL_SECONDS": 1.0,
-  "VINTED_BRAND_FEED_IDS": [174480, 203598, 219848, 103740, 414476, 360098, 469314, 238464, 454955, 154396, 4559, 2847834, 1408394],
+  "VINTED_BRAND_FEED_IDS": [174480, 203598, 219848, 103740, 414476, 360098, 469314, 238464, 454955, 154396, 4559, 2847834],
   "VINTED_BRAND_FEED_MAX_PRICE": 130,
   "VINTED_TEXT_FEEDS": [
     {"query": "poker chip", "max_price": 150},
     {"query": "casino chip", "max_price": 150},
     {"query": "poker chip", "max_price": 150},
     {"query": "marinella", "max_price": 60},
-    {"query": "holderness bourne", "max_price": 25},
     {"query": "zegna", "max_price": 75},
     {"query": "loro piana", "max_price": 130},
     {"query": "cucinelli", "max_price": 130},

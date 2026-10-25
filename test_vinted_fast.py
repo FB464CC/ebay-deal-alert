@@ -394,7 +394,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L", "XL"]
-    assert len(fast.enabled_vinted_searches()) == 39
+    assert len(fast.enabled_vinted_searches()) == 37
 
 
 def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
