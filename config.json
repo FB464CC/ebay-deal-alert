@@ -1665,6 +1665,174 @@
       "category": "watches"
     },
     {
+      "query": "seiko diver -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 60,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-diver",
+      "category": "watches"
+    },
+    {
+      "query": "seiko skx -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 80,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-skx",
+      "category": "watches"
+    },
+    {
+      "query": "seiko turtle -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 100,
+      "max_price": 300,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-turtle",
+      "category": "watches"
+    },
+    {
+      "query": "tissot visodate -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 60,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tissot-visodate",
+      "category": "watches"
+    },
+    {
+      "query": "tissot locle -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 70,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tissot-le-locle",
+      "category": "watches"
+    },
+    {
+      "query": "tissot gentleman -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 100,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tissot-gentleman",
+      "category": "watches"
+    },
+    {
+      "query": "tissot seastar -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 80,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tissot-seastar",
+      "category": "watches"
+    },
+    {
+      "query": "tissot powermatic -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 70,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tissot-powermatic",
+      "category": "watches"
+    },
+    {
+      "query": "tissot automatic -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 60,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tissot-automatic",
+      "category": "watches"
+    },
+    {
+      "query": "orient mako -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 40,
+      "max_price": 110,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-orient-mako",
+      "category": "watches"
+    },
+    {
+      "query": "orient kamasu -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 60,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-orient-kamasu",
+      "category": "watches"
+    },
+    {
+      "query": "hamilton intra matic -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 80,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-hamilton-intra-matic",
+      "category": "watches"
+    },
+    {
       "query": "delina exclusif -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
       "min_price": 60,

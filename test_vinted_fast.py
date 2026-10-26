@@ -440,7 +440,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 52
+    assert len(fast.enabled_vinted_searches()) == 64
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -508,6 +508,18 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-orient-star": 200,
         "vinted-longines": 400,
         "vinted-seiko-automatic": 150,
+        "vinted-seiko-diver": 250,
+        "vinted-seiko-skx": 250,
+        "vinted-seiko-turtle": 300,
+        "vinted-tissot-visodate": 200,
+        "vinted-tissot-le-locle": 250,
+        "vinted-tissot-gentleman": 250,
+        "vinted-tissot-seastar": 250,
+        "vinted-tissot-powermatic": 250,
+        "vinted-tissot-automatic": 200,
+        "vinted-orient-mako": 110,
+        "vinted-orient-kamasu": 150,
+        "vinted-hamilton-intra-matic": 250,
     }
     actual = {
         search["id"]: search["max_price"]
