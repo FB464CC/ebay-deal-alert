@@ -506,7 +506,7 @@ def _ai_lone_tailoring_reason(summary, category):
 
 
 def _seller_trust_reason(stats, strict=True):
-    """Strict (fragrance): a proven seller. Loose (menswear): Vinted holds
+    """Strict (fragrance, watches): some track record. Loose (menswear): Vinted holds
     payment until the buyer confirms, so only badly rated sellers are cut
     (owner checked the new 0-review sellers this blocked: all legit)."""
     if "feedback_count" not in stats:
@@ -521,11 +521,14 @@ def _seller_trust_reason(stats, strict=True):
                 f"{items:g} items listed/sold"
             )
         return None
-    if (
-        reviews < VINTED_MIN_SELLER_REVIEWS
-        or rating < VINTED_MIN_SELLER_RATING
-        or items < VINTED_MIN_SELLER_ITEMS
-    ):
+    # Owner (10-25): any one track-record signal is enough, but a seller with
+    # no reviews at all, or a poor rating across 3+ reviews, never is.
+    signals = (
+        (reviews >= VINTED_MIN_SELLER_REVIEWS)
+        + (rating >= VINTED_MIN_SELLER_RATING)
+        + (items >= VINTED_MIN_SELLER_ITEMS)
+    )
+    if reviews == 0 or signals == 0 or (reviews >= 3 and rating < 0.8):
         return (
             f"seller not proven: {reviews:g} reviews, {rating * 5:.1f} stars, "
             f"{items:g} items listed/sold (throwaway-account fake/scam pattern)"

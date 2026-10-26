@@ -1331,8 +1331,10 @@ def test_fragrance_ai_bar_requires_clean_great_deal(
     [
         ({"_http_status": 200, "feedback_count": 0.0, "feedback_reputation": 0.0,
           "item_count": 1.0, "given_item_count": 0.0}, "0 reviews, 0.0 stars, 1 items"),
-        (dict(TRUSTED_SELLER, feedback_reputation=0.8), "4.0 stars"),
-        (dict(TRUSTED_SELLER, item_count=1.0, given_item_count=1.0), "2 items"),
+        (dict(TRUSTED_SELLER, feedback_reputation=0.7), "3.5 stars"),
+        (dict(TRUSTED_SELLER, feedback_count=1.0, feedback_reputation=0.8,
+              item_count=1.0, given_item_count=1.0), "2 items"),
+        (dict(TRUSTED_SELLER, feedback_count=0.0, feedback_reputation=0.0), "0 reviews"),
         ({"_http_status": 500}, "history unavailable"),
     ],
 )
@@ -1498,6 +1500,15 @@ def test_watch_honest_description_not_rejected():
     assert not fast._VINTED_WATCH_DESC_EXCLUDED.search(
         "100% authentic, not a replica, comes with box and papers"
     )
+
+
+def test_strict_seller_needs_any_one_signal():
+    strict = lambda **kw: fast._seller_trust_reason(dict(TRUSTED_SELLER, **kw))
+    assert strict(feedback_count=1.0, feedback_reputation=1.0,
+                  item_count=1.0, given_item_count=0.0) is None  # 1 review, 5 stars
+    assert strict(feedback_count=2.0, feedback_reputation=0.8,
+                  item_count=10.0) is None  # few reviews but many items
+    assert strict(feedback_reputation=0.86) is None  # 4.3 stars, 3+ reviews/items
 
 
 def test_watches_need_a_proven_seller():
