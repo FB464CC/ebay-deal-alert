@@ -113,6 +113,8 @@ _VINTED_NECKTIE = re.compile(r"\b(?:neck)?ties?\b", re.IGNORECASE)
 # brand-new single-listing accounts. Designer eyewear on Vinted is fakes.
 _VINTED_EYEWEAR = re.compile(
     r"\b(?:sun ?glass(?:es)?|eye ?glass(?:es)?|glasses|eyewear|optical"
+    # Typos like "tom ford sunlgasses" slipped through (alerted 10-26).
+    r"|sun\w{0,3}g\w{0,3}s{1,2}\w{0,2}"
     r"|lentes|gafas|anteojos|[oó]culos|lunettes|occhiali|sonnenbrille)\b",
     re.IGNORECASE,
 )

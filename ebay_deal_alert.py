@@ -4620,6 +4620,23 @@ def brand_in(haystack, brands):
     return any(re.search(rf"\b{re.escape(b)}\b", haystack) for b in brands)
 
 
+# Paperwork sold alone ("Longines warranty card") is junk, but a description
+# saying "comes with box, warranty card and service booklet" is a full set:
+# three Vinted Longines Master Collection listings hard-failed on it (10-26).
+# These only fail when the title itself names the paperwork.
+WATCH_PAPERWORK_KEYWORDS = ("service booklet", "warranty card", "dustproof envelope")
+
+
+def condition_hard_fail_keyword(title, haystack):
+    """matched_keyword over CONDITION_HARD_FAIL_KEYWORDS, paperwork title-only."""
+    if matched_keyword(title, WATCH_PAPERWORK_KEYWORDS) is not None:
+        return matched_keyword(haystack, CONDITION_HARD_FAIL_KEYWORDS)
+    return matched_keyword(
+        haystack,
+        [k for k in CONDITION_HARD_FAIL_KEYWORDS if k not in WATCH_PAPERWORK_KEYWORDS],
+    )
+
+
 def matched_keyword(haystack, keywords):
     """First whole-word match from keywords found in haystack, or None.
 
@@ -5458,7 +5475,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
         # nonfunctional pattern, but historically reached the generic condition
         # gate below; checking that overlap first keeps existing watch behavior
         # and reason text unchanged while the shared pattern covers other uses.
-        hard_fail_hit = matched_keyword(haystack, CONDITION_HARD_FAIL_KEYWORDS)
+        hard_fail_hit = condition_hard_fail_keyword(title, haystack)
         if hard_fail_hit is not None:
             return {
                 "verdict": "PASS",
@@ -5531,7 +5548,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
         flags.append("fit unconfirmed — pull listing description for pit-to-pit measurement")
 
     # 4. Condition
-    hard_fail_hit = matched_keyword(haystack, CONDITION_HARD_FAIL_KEYWORDS)
+    hard_fail_hit = condition_hard_fail_keyword(title, haystack)
     if hard_fail_hit is not None:
         return {"verdict": "PASS", "reason": f"condition hard-fail keyword in title/description: {hard_fail_hit!r}", "listing": listing}
     if brand_in(haystack, CONDITION_FLAG_KEYWORDS):
@@ -12005,8 +12022,8 @@ def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
         )
         text_fail = _text_safety_hard_fails(late_haystack, category=category)
         if text_fail is None:
-            condition_hit = matched_keyword(
-                late_haystack, CONDITION_HARD_FAIL_KEYWORDS
+            condition_hit = condition_hard_fail_keyword(
+                listing.get("title", "").lower(), late_haystack
             )
             if condition_hit is not None:
                 text_fail = (

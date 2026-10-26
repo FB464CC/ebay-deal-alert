@@ -1590,6 +1590,24 @@ def test_golf_title_year_before_2012_rejected_pre_ai():
     assert engine.golf_wrong_item_title_reason("Ping G425 Iron Set 2021", "iron set") is None
 
 
+def test_paperwork_in_description_is_not_a_hard_fail():
+    assert engine.condition_hard_fail_keyword(
+        "longines master collection automatic",
+        "longines master collection automatic comes with box and warranty card",
+    ) is None
+    assert engine.condition_hard_fail_keyword(
+        "longines warranty card", "longines warranty card"
+    ) == "warranty card"
+    assert engine.condition_hard_fail_keyword(
+        "seiko watch", "seiko watch for parts"
+    ) == "for parts"
+
+
+@pytest.mark.parametrize("title", ["tom ford sunlgasses", "Tom Ford sunglases"])
+def test_eyewear_typos_blocked(title):
+    assert fast._VINTED_EYEWEAR.search(title)
+
+
 def test_watch_honest_description_not_rejected():
     assert not fast._VINTED_WATCH_DESC_EXCLUDED.search(
         "100% authentic, not a replica, comes with box and papers"
