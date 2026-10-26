@@ -236,9 +236,9 @@ GENDER_EXCLUDE_KEYWORDS = _CONFIG.get("GENDER_EXCLUDE_KEYWORDS", [])
 # is a real workwear brand (Caterpillar/"CAT boots"); kept to unambiguous
 # terms only.
 # Owner, 10-26: no sunglasses/eyewear at all, any brand (almost all fake,
-# and each one burned an AI check). Title-only so a jacket description's
-# "sunglasses pocket" doesn't kill it. Tolerates typos: a Vinted
-# "tom ford sunlgasses" walked past every "-sunglasses" query term.
+# and each one burned an AI check). Title AND description: Vinted 10548521051
+# was titled just "Tom Ford" with "francesca sunglasses" only in the text.
+# Tolerates typos: "tom ford sunlgasses" walked past every "-sunglasses" term.
 EYEWEAR_TITLE_SIGNALS = re.compile(
     r"\b(sun\s*-?\s*[gl]{1,2}[al]{1,2}s{1,2}e?s?|sunnies|eye\s*-?\s*glass(es)?|"
     r"eyewear|spectacles|optical\s+frames?|occhiali|gafas|lunettes)\b",
@@ -5452,7 +5452,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     safety_hard_fail = _text_safety_hard_fails(haystack, category=category)
     if safety_hard_fail:
         return {"verdict": "PASS", "reason": safety_hard_fail, "listing": listing}
-    if EYEWEAR_TITLE_SIGNALS.search(title):
+    if EYEWEAR_TITLE_SIGNALS.search(haystack):
         return {"verdict": "PASS", "reason": "sunglasses/eyewear not wanted", "listing": listing}
 
     # The Browse search response already tells us the seller-selected item
