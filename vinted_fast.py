@@ -1555,7 +1555,8 @@ class VintedFastLane:
             "Tags": tags,
         }
         if url:
-            headers["Click"] = url
+            headers["Click"] = engine.vinted_browser_url(url)
+            headers["Actions"] = f"view, Vinted app, {url}"
         if image_url:
             headers["Attach"] = image_url
         try:

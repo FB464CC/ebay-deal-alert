@@ -9501,6 +9501,17 @@ def append_alert_log(
     return True
 
 
+def vinted_browser_url(url):
+    """Vinted's iOS app claims every www.vinted.com path, and tapping an alert
+    there showed "Something went wrong" (owner, 10-26). Bare vinted.com has no
+    app-link file of its own (it 301s), so iOS opens it in Safari, which then
+    follows the redirect to the working item page."""
+    prefix = "https://www.vinted.com/"
+    if isinstance(url, str) and url.startswith(prefix):
+        return "https://vinted.com/" + url[len(prefix):]
+    return url
+
+
 def _ascii_safe_header(text):
     """HTTP header values must be ASCII/latin-1 - the ntfy "Title" header
     is built straight from scraped listing titles, which routinely carry
@@ -10140,17 +10151,20 @@ def send_alert(result):
 
     priority, tags = alert_urgency(result)
 
+    click_url = vinted_browser_url(url)
     headers = {
         "Title": alert_title,
-        "Click": url,
+        "Click": click_url,
         "Tags": ",".join(tags),
         "Priority": str(priority),
     }
     actions = []
     if url:
-        actions.append(f"view, Open listing, {url}")
+        actions.append(f"view, Open listing, {click_url}")
     if verify_url:
         actions.append(f"view, Check sold comps, {verify_url}")
+    if click_url != url:
+        actions.append(f"view, Vinted app, {url}")
     if actions:
         headers["Actions"] = "; ".join(actions)
     if image_url:

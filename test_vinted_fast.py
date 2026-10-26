@@ -1608,6 +1608,13 @@ def test_eyewear_typos_blocked(title):
     assert fast._VINTED_EYEWEAR.search(title)
 
 
+def test_vinted_links_open_in_browser_not_app():
+    assert engine.vinted_browser_url(
+        "https://www.vinted.com/items/10542231373-peter-millar-golf-shirt-l"
+    ) == "https://vinted.com/items/10542231373-peter-millar-golf-shirt-l"
+    assert engine.vinted_browser_url("https://www.ebay.com/itm/1") == "https://www.ebay.com/itm/1"
+
+
 def test_watch_honest_description_not_rejected():
     assert not fast._VINTED_WATCH_DESC_EXCLUDED.search(
         "100% authentic, not a replica, comes with box and papers"
