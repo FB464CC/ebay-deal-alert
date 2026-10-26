@@ -1842,6 +1842,13 @@ class VintedFastLane:
         # sunlgasses" 404'd here, skipped the seller check, and alerted a dead link.
         if detail_status in {404, 410}:
             return listing, None, f"listing already removed from Vinted (HTTP {detail_status})"
+        # Owner, 10-26: menswear only, hated getting women's stuff. The
+        # seller's own category catches what title/description words miss
+        # (10548521051 "Tom Ford" sat in Women > Accessories > Sunglasses).
+        # Perfume searches are the one women's lane he wants.
+        top_catalog = (details.get("catalog_path") or [""])[0].lower()
+        if top_catalog in {"women", "kids"} and category != "fragrance":
+            return listing, None, f"Vinted category is {top_catalog}, not menswear"
         description = details.get("description")
         if description:
             listing["description"] = description

@@ -1269,6 +1269,50 @@ def test_fragrance_fake_price_floor_and_decants_reject_before_ai(
     photo.assert_not_called()
 
 
+def test_parses_vinted_catalog_breadcrumb():
+    page = (
+        '<a href="/catalog/1904-women?referrer=item-crumbs" itemProp="url">'
+        '<span itemProp="title">Women</span></a>'
+        '<a href="/catalog/26-sunglasses?referrer=item-crumbs" itemProp="url">'
+        '<span itemProp="title">Sunglasses</span></a>'
+    )
+    resp = mock.Mock(status_code=200, text=page)
+    with mock.patch.object(engine.requests, "get", return_value=resp):
+        details = engine.fetch_vinted_item_page_details("https://www.vinted.com/items/1")
+    assert details["catalog_path"] == ["Women", "Sunglasses"]
+
+
+@pytest.mark.parametrize(
+    ("search_id", "top", "rejected"),
+    [
+        ("vinted-seiko-presage", "Women", True),
+        ("vinted-seiko-presage", "Kids", True),
+        ("vinted-seiko-presage", "Men", False),
+        ("vinted-pdm-delina-exclusif", "Women", False),
+    ],
+)
+def test_womens_and_kids_catalog_rejects_except_perfume(tmp_path, search_id, top, rejected):
+    search = _watch_search(search_id)
+    item = _fragrance_item("cat", "Seiko Presage SRPB43 automatic", 150)
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "state",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        schedule=[],
+    )
+    conn = engine.init_db(lane.seen_db_path)
+    details = {"_http_status": 200, "catalog_path": [top, "Accessories"]}
+    with (
+        mock.patch.object(engine, "fetch_vinted_item_page_details", return_value=details),
+        mock.patch.object(engine, "check_photos_with_gemini"),
+    ):
+        out = lane._cheap_result(conn, None, item, search)
+    conn.close()
+    reason = out[2] if out else None
+    assert (reason == f"Vinted category is {top.lower()}, not menswear") is rejected
+
+
 def test_removed_listing_rejects_before_ai(tmp_path):
     search = _fragrance_search()
     item = _fragrance_item("gone", "Parfums de Marly Delina Exclusif 75ml sealed", 220)

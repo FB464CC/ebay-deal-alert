@@ -2079,6 +2079,12 @@ def fetch_vinted_item_page_details(item_url):
         description = html.unescape(match.group(1)).strip()
         if description:
             details["description"] = description
+    # Seller-chosen category, e.g. ["Women", "Accessories", "Sunglasses"].
+    crumbs = re.findall(
+        r'item-crumbs"[^>]*><span itemProp="title">([^<]+)</span>', resp.text
+    )
+    if crumbs:
+        details["catalog_path"] = [html.unescape(c).strip() for c in crumbs]
     feedback = re.search(r'\\?"feedback_count\\?":(\d+)', resp.text)
     if feedback:
         details["seller_feedback_count"] = int(feedback.group(1))
