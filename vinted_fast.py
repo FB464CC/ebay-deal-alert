@@ -157,6 +157,16 @@ _VINTED_AI_LONE_TAILORING = re.compile(
 _VINTED_AI_FULL_SUIT = re.compile(
     r"\b(?:pants|trousers|slacks|(?:two|three|2|3)[\s-]?piece)\b", re.IGNORECASE
 )
+# Production 10-26: "Tom ford tobacco vanille, 100ml" at $60 alerted from
+# the Tom Ford clothing search, skipping every fragrance protection. Bottles
+# and makeup never belong to a menswear search.
+_VINTED_BEAUTY = re.compile(
+    r"\b\d+(?:\.\d+)?\s?ml\b|\b\d(?:\.\d)?\s?(?:fl\.?\s?)?oz\b"
+    r"|\b(?:edp|edt|eau|parfum|perfume|cologne|fragrances?|tobacco\s+vanille"
+    r"|lost\s+cherry|oud\s+wood|ombre\s+leather|lip(?:stick|\s+colou?r|\s+balm)?"
+    r"|makeup|mascara|foundation|concealer|bronzer|serum|moisturi[sz]er)\b",
+    re.IGNORECASE,
+)
 # Owner (10-25): watches on Vinted are mostly scams. Mods, homages, fakes,
 # parts and plated gold-tone pieces are out (owner wants steel). The title
 # gets the full list; descriptions skip words honest sellers negate
@@ -469,6 +479,8 @@ def _menswear_shape_reason(listing, brand_key):
     """Garment types/sizes the owner never buys, judged from the title."""
     title = str(listing.get("title") or "")
     sized = f"{title} {listing.get('size') or ''}"
+    if _VINTED_BEAUTY.search(title):
+        return "fragrance/beauty item in a menswear search (fakes skip perfume checks)"
     houses = [
         brand for brand in VINTED_MIN_RESALE_BY_BRAND
         if brand not in {"default", "loro piana", "zegna"}

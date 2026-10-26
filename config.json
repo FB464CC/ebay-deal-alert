@@ -1651,6 +1651,20 @@
       "category": "watches"
     },
     {
+      "query": "seiko automatic -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 30,
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-automatic",
+      "category": "watches"
+    },
+    {
       "query": "delina exclusif -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
       "min_price": 100,

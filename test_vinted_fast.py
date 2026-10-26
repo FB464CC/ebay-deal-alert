@@ -440,7 +440,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 51
+    assert len(fast.enabled_vinted_searches()) == 52
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -507,6 +507,7 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-orient-bambino": 80,
         "vinted-orient-star": 200,
         "vinted-longines": 400,
+        "vinted-seiko-automatic": 150,
     }
     actual = {
         search["id"]: search["max_price"]
@@ -1494,6 +1495,22 @@ def test_watch_scam_shapes_rejected_before_ai(tmp_path, title, description, frag
     photo.assert_not_called()
     row = json.loads(lane.log_path.read_text(encoding="utf-8"))
     assert fragment in row["reason"]
+
+
+@pytest.mark.parametrize(
+    ("title", "blocked"),
+    [
+        ("Tom ford tobacco vanille, 100ml", True),
+        ("Brunello Cucinelli Eau de Parfum Pour Homme 30ml", True),
+        ("Tom Ford Slim Lip Color Shine", True),
+        ("Tom Ford 3.4 oz cologne", True),
+        ("Tom Ford suede chelsea boots 10", False),
+        ("Zegna 100% cashmere sweater", False),
+    ],
+)
+def test_beauty_items_never_route_through_menswear(title, blocked):
+    reason = fast._menswear_shape_reason({"title": title, "size": "L"}, "tom ford")
+    assert (reason is not None) is blocked, reason
 
 
 def test_watch_honest_description_not_rejected():
