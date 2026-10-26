@@ -1289,11 +1289,14 @@ def test_parses_vinted_catalog_breadcrumb():
         ("vinted-seiko-presage", "Kids", True),
         ("vinted-seiko-presage", "Men", False),
         ("vinted-pdm-delina-exclusif", "Women", False),
+        ("poker-paulson", "Kids", False),
+        ("poker-paulson", "Women", True),
     ],
 )
 def test_womens_and_kids_catalog_rejects_except_perfume(tmp_path, search_id, top, rejected):
     search = _watch_search(search_id)
-    item = _fragrance_item("cat", "Seiko Presage SRPB43 automatic", 150)
+    title = "Paulson poker chip set" if search_id.startswith("poker") else "Seiko Presage SRPB43 automatic"
+    item = _fragrance_item("cat", title, 150)
     lane = fast.VintedFastLane(
         searches=[search],
         state_path=tmp_path / "state",

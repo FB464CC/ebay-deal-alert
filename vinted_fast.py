@@ -1845,9 +1845,11 @@ class VintedFastLane:
         # Owner, 10-26: menswear only, hated getting women's stuff. The
         # seller's own category catches what title/description words miss
         # (10548521051 "Tom Ford" sat in Women > Accessories > Sunglasses).
-        # Perfume searches are the one women's lane he wants.
+        # Perfume searches are the one women's lane he wants. Chip sets get
+        # filed under Kids > Toys/Games, so poker only skips Women (earrings).
         top_catalog = (details.get("catalog_path") or [""])[0].lower()
-        if top_catalog in {"women", "kids"} and category != "fragrance":
+        blocked_tops = {"women"} if category == "poker-chips" else {"women", "kids"}
+        if top_catalog in blocked_tops and category != "fragrance":
             return listing, None, f"Vinted category is {top_catalog}, not menswear"
         description = details.get("description")
         if description:
