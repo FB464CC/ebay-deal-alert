@@ -8275,9 +8275,34 @@ class MarketplaceAnomalyDetection(unittest.TestCase):
         self.conn = sqlite3.connect(f"{self.tmpdir}/test.db")
         self.conn.execute("CREATE TABLE marketplace_counts (platform TEXT, run_ts TEXT, count INTEGER)")
         self.conn.execute("CREATE TABLE marketplace_anomaly_notified (platform TEXT PRIMARY KEY, last_notified_ts TEXT)")
+        # These tests pin single-run detection; the repeat rule has its own test.
+        patcher = mock.patch.object(m, "MARKETPLACE_ANOMALY_REQUIRE_REPEAT", False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.conn.close()
+
+    def test_one_sick_run_waits_for_the_next_before_paging(self):
+        self._seed_history("vinted", [100] * 10)
+        now = datetime.now(timezone.utc)
+        sick = {"vinted": {"requests": 20, "rate_limits": 5}}
+        with mock.patch.object(m, "MARKETPLACE_ANOMALY_REQUIRE_REPEAT", True), \
+                mock.patch.object(m, "notify_bot_down") as mock_notify:
+            m._check_marketplace_anomalies(self.conn, now, ["vinted"], {"vinted": 100}, health=sick)
+            mock_notify.assert_not_called()
+            # A healthy run in between clears the pending blip.
+            m._check_marketplace_anomalies(
+                self.conn, now + timedelta(minutes=5), ["vinted"], {"vinted": 100}
+            )
+            m._check_marketplace_anomalies(
+                self.conn, now + timedelta(minutes=10), ["vinted"], {"vinted": 100}, health=sick
+            )
+            mock_notify.assert_not_called()
+            m._check_marketplace_anomalies(
+                self.conn, now + timedelta(minutes=15), ["vinted"], {"vinted": 100}, health=sick
+            )
+            mock_notify.assert_called_once()
 
     def _seed_history(self, platform, counts):
         """Insert prior-run rows for a platform, newest last, all strictly
@@ -11288,6 +11313,26 @@ class RunIntegration(unittest.TestCase):
                     {fresh_id: 1},
                 )
 
+    def test_golf_set_over_cap_after_tax_skips_ai(self):
+        # $329.90 + $65 ship = $394.90 untaxed but $418.59 with 6% tax.
+        saved_search = {
+            "query": "complete golf iron set -junior -youth -kids -ladies -womens",
+            "category": "golf-equipment",
+            "size": None,
+            "max_price": 400,
+            "enabled": True,
+            "profile": "fast",
+        }
+        self._serve(saved_search, [self._ebay_item(
+            "v1|xxio-set|0", "XXIO Forged Iron Set 6 Clubs 5-PW Flex Regular RH",
+            329.90, shipping=65.0,
+        )])
+
+        m.run()
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(self.alerts, [])
+
     def test_golf_wrong_item_is_logged_without_spending_ai(self):
         item_id = "v1|golf-tie|0"
         saved_search = {
@@ -12956,11 +13001,11 @@ class RunIntegration(unittest.TestCase):
         self.assertEqual(self.alerts, [])
         self.assertEqual(self._alert_log_records()[0]["disposition_code"], "NOT_STEAL_PRICE")
 
-    def test_catalog_g425_at_500_skips_before_photo_but_unmatched_is_checked(self):
+    def test_catalog_g425_at_390_skips_before_photo_but_unmatched_is_checked(self):
         expensive = self._ebay_item(
-            "v1|catalog-g425-500|0",
+            "v1|catalog-g425-390|0",
             "Ping G425 Iron Set 4-PW 7pc Right Handed",
-            500 / 1.06,
+            390 / 1.06,
         )
         unmatched = self._ebay_item(
             "v1|catalog-unmatched|0",

@@ -10888,6 +10888,11 @@ def _fetch_marketplace(saved_search, platform_name, deadline):
 # platform per day; a genuinely broken platform still gets caught same-day,
 # it just can't re-page every few minutes for a condition that hasn't changed.
 MARKETPLACE_ANOMALY_SUPPRESS_HOURS = 24
+# User report 10-26: one-run blips (a breaker cooldown on craigslist/offerup,
+# a single shopgoodwill error burst) paged "[ALERT-BOT DOWN]" while the next
+# runs fetched 200. Page only when the following run is still sick.
+MARKETPLACE_ANOMALY_REQUIRE_REPEAT = True
+MARKETPLACE_ANOMALY_REPEAT_WINDOW = timedelta(minutes=15)
 ADAPTER_FAILURE_CANARY_SUPPRESS_HOURS = 3
 
 
@@ -11124,8 +11129,27 @@ def _check_marketplace_anomalies(conn, now, active, counts, health=None):
             sick_reasons.append(
                 f"all {raw_count} raw listings matched known-garbage exclusions"
             )
+        pending_key = f"{platform}:pending"
         if not sick_reasons:
+            conn.execute(
+                "DELETE FROM marketplace_anomaly_notified WHERE platform = ?",
+                (pending_key,),
+            )
+            conn.commit()
             continue
+        if MARKETPLACE_ANOMALY_REQUIRE_REPEAT:
+            pending = conn.execute(
+                "SELECT last_notified_ts FROM marketplace_anomaly_notified WHERE platform = ?",
+                (pending_key,),
+            ).fetchone()
+            if not pending or now - datetime.fromisoformat(pending[0]) > MARKETPLACE_ANOMALY_REPEAT_WINDOW:
+                conn.execute(
+                    "INSERT OR REPLACE INTO marketplace_anomaly_notified (platform, last_notified_ts) "
+                    "VALUES (?, ?)",
+                    (pending_key, now.isoformat()),
+                )
+                conn.commit()
+                continue
         row = conn.execute(
             "SELECT last_notified_ts FROM marketplace_anomaly_notified WHERE platform = ?",
             (platform,),
@@ -12731,7 +12755,14 @@ def run():
                 mark_seen(conn, item_id, fingerprint, total_price)
                 continue
 
-            if total_price > saved_search["max_price"]:
+            # The golf bar's $400 cap is on taxed landed price; this untaxed
+            # check let $378-400 sets through to spend AI calls they could
+            # never pass (10-26: 22 of 76 golf AI checks in 90 min were one
+            # exporter's XXIO sets at ~$418 taxed). Per-search caps stay untaxed.
+            if total_price > saved_search["max_price"] or (
+                category == "golf-equipment"
+                and total_price * (1 + SALES_TAX_RATE) > GOLF_EQUIPMENT_MAX_PRICE
+            ):
                 logger.info(
                     "Skipping %s over max price: $%s (item $%s + shipping $%s) > $%s",
                     item_id,
