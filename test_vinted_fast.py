@@ -445,9 +445,9 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
     expected = {
-        "vinted-pdm-delina-exclusif": (100, 290),
-        "vinted-pdm-oriana": (90, 200),
-        "vinted-kilian-angels-share": (90, 230),
+        "vinted-pdm-delina-exclusif": (60, 290),
+        "vinted-pdm-oriana": (60, 200),
+        "vinted-kilian-angels-share": (60, 230),
     }
     searches = {search["id"]: search for search in engine.SAVED_SEARCHES}
     for search_id, (minimum, maximum) in expected.items():
@@ -1217,8 +1217,8 @@ def test_womens_fragrance_routes_ignores_gender_and_reaches_real_ai(tmp_path):
     [
         (
             "Parfums de Marly Delina Exclusif Women's EDP 75ml sealed",
-            80,
-            "below fake-price floor: $80 < $100 (almost certainly counterfeit)",
+            46,
+            "below fake-price floor: $46 < $60 (almost certainly counterfeit)",
         ),
         (
             "Delina Exclusif decant 10ml",
@@ -1511,6 +1511,71 @@ def test_watch_scam_shapes_rejected_before_ai(tmp_path, title, description, frag
 def test_beauty_items_never_route_through_menswear(title, blocked):
     reason = fast._menswear_shape_reason({"title": title, "size": "L"}, "tom ford")
     assert (reason is not None) is blocked, reason
+
+
+@pytest.mark.parametrize(
+    ("title", "size", "blocked"),
+    [
+        ("Vintage Ermenegildo Zegna Double Breasted Jacket, 42R", "42", True),
+        ("Canali sport jacket 42R", "42", True),
+        ("Canali suit jacket and pants 42R", "42", False),
+        ("Zegna quilted down jacket", "XL", False),
+        ("Zegna rusty orange button up", "L", True),
+        ("Peter Millar button down cardigan", "L", False),
+        ("Belford Mock Neck Sweater Italian Yarn Zegna Baruffa", "XL", True),
+        ("Loro piana empty shoe storage box", "", True),
+        ("Canali men all over shower gel", "", True),
+        ("Brunello Cucinelli Skinny Jeans", "M / US 8-10", True),
+        ("Boys Brunello Cucinelli loafers (12 child)", "12", True),
+        ("Peter Millar Crown Sport quarter zip", "M / US 38-40", False),
+    ],
+)
+def test_live_audit_shapes(title, size, blocked):
+    reason = fast._menswear_shape_reason({"title": title, "size": size}, None)
+    assert (reason is not None) is blocked, reason
+
+
+@pytest.mark.parametrize(
+    ("summary", "listing", "brand", "blocked"),
+    [
+        ("Canali navy sport coat; matching pants are not included", {}, "canali", True),
+        ("Canali navy two-piece suit with matching trousers", {}, "canali", False),
+        ("Peter Millar polo, navy", {"title": "Peter Millar Crown Crafted", "size": "XL"}, None, True),
+        ("Canali white button-down shirt", {}, "canali", True),
+        ("Kiton white button-down shirt", {}, "kiton", False),
+        ("Tom Ford Black Orchid 100ml bottle", {}, "tom ford", True),
+    ],
+)
+def test_ai_summary_shape_recheck(summary, listing, brand, blocked):
+    reason = fast._ai_lone_tailoring_reason(summary, "other", listing, brand)
+    assert (reason is not None) is blocked, reason
+
+
+def test_scam_text_negations_and_strap_are_not_scams():
+    assert not fast._VINTED_OFF_PLATFORM.search("No PayPal; payment only through Vinted")
+    assert fast._VINTED_OFF_PLATFORM.search("pay me on paypal")
+    assert not fast._VINTED_WATCH_DESC_EXCLUDED.search("on an aftermarket leather strap")
+    assert fast._VINTED_WATCH_DESC_EXCLUDED.search("has an aftermarket dial")
+    assert fast._VINTED_WATCH_GOLD_SUMMARY.search("steel Jazzmaster with diamond markers")
+
+
+@pytest.mark.parametrize(
+    ("title", "blocked"),
+    [
+        ("Poker chip keychains", True),
+        ("New York, New York hotel and casino five dollar chip", True),
+        ("Paulson 500 clay poker chip set", False),
+    ],
+)
+def test_poker_merch_regex(title, blocked):
+    assert bool(fast._VINTED_POKER_MERCH.search(title)) is blocked
+
+
+def test_golf_title_year_before_2012_rejected_pre_ai():
+    assert "2010" in engine.golf_wrong_item_title_reason(
+        "2010 Nike VR Pro Combo Iron Set 3-PW", "iron set"
+    )
+    assert engine.golf_wrong_item_title_reason("Ping G425 Iron Set 2021", "iron set") is None
 
 
 def test_watch_honest_description_not_rejected():

@@ -121,14 +121,19 @@ _VINTED_EYEWEAR = re.compile(
 _VINTED_POLO = re.compile(r"\bpolos?\b|\bgolf[\s-]+shirts?\b", re.IGNORECASE)
 _VINTED_XL = re.compile(r"\b(?:[2-5]?x+l|extra[\s-]+large)\b", re.IGNORECASE)
 _VINTED_WOVEN_SHIRT = re.compile(
-    r"(?<![\w-])(?<!\bt )shirts?\b(?![\s-]*jac(?:ket)?s?\b)", re.IGNORECASE
+    r"(?<![\w-])(?<!\bt )shirts?\b(?![\s-]*jac(?:ket)?s?\b)"
+    r"|\bbutton[\s-]?(?:up|down)s?\b(?!.*\b(?:cardigan|sweater|vest|jacket|coat|polo)\b)",
+    re.IGNORECASE,
 )
 _VINTED_ELITE_SHIRT_BRANDS = frozenset(
     {"brunello cucinelli", "kiton", "loro piana", "brioni"}
 )
 _VINTED_LONE_TAILORING = re.compile(
-    r"\b(?:blazers?|sports?[\s-]?coats?|dinner[\s-]+jackets?|tuxedo[\s-]+jackets?"
-    r"|jacket[\s-]+only|suit[\s-]+(?:jackets?|coats?|pants|trousers|vests?|separates?))\b",
+    r"\b(?:blazers?|sports?[\s-]?(?:coats?|jackets?)|dinner[\s-]+jackets?|tuxedo[\s-]+jackets?"
+    r"|jacket[\s-]+only|suit[\s-]+(?:jackets?|coats?|pants|trousers|vests?|separates?))\b"
+    # Live audit 10-26: "Zegna Double Breasted Jacket, 42R" / "pin stripe jacket".
+    r"|\b(?:double|single)[\s-]?breasted\b|\bpin[\s-]?stripe\s+jackets?\b"
+    r"|\bjackets?\b.{0,40}\b(?:3[6-9]|4\d|5[0-6])\s?(?:r|l|s|reg|regular|long|short)\b",
     re.IGNORECASE,
 )
 _VINTED_SUIT = re.compile(
@@ -146,16 +151,25 @@ _VINTED_MILL_FABRIC = re.compile(
     rf"\b{_VINTED_MILL}(?:\s+(?:wool|cashmere|silk|linen|super\s*\d+'?s?))*"
     r"\s+(?:fabric|cloth|textile)s?\b"
     rf"|\b(?:fabric|cloth|textile)s?\s+(?:by|from)\s+{_VINTED_MILL}\b"
-    r"|\bx\s+loro\s+piana\b",
+    r"|\bx\s+loro\s+piana\b|\bzegna\s+baruffa\b",
     re.IGNORECASE,
 )
 # The photo check names a sport coat that the title only called a "jacket".
 _VINTED_AI_LONE_TAILORING = re.compile(
-    r"\b(?:blazers?|sports?[\s-]?coats?|suit[\s-]+jackets?|tailored\s+(?:\w+\s+)?jackets?)\b",
+    r"\b(?:blazers?|sports?[\s-]?(?:coats?|jackets?)|suit[\s-]+jackets?|tailored\s+(?:\w+\s+)?jackets?)\b",
     re.IGNORECASE,
 )
 _VINTED_AI_FULL_SUIT = re.compile(
     r"\b(?:pants|trousers|slacks|(?:two|three|2|3)[\s-]?piece)\b", re.IGNORECASE
+)
+_VINTED_AI_NO_PANTS = re.compile(
+    r"\b(?:no|without|missing|lacks?)\b.{0,30}\b(?:pants|trousers|slacks)\b"
+    r"|\b(?:pants|trousers|slacks)\b.{0,30}\b(?:not\s+included|missing|absent)\b",
+    re.IGNORECASE,
+)
+# Photo summary naming a woven shirt the title never called one.
+_VINTED_AI_WOVEN_SHIRT = re.compile(
+    r"\b(?:dress|button[\s-]?(?:down|up)|oxford|woven)\s+shirts?\b", re.IGNORECASE
 )
 # Production 10-26: "Tom ford tobacco vanille, 100ml" at $60 alerted from
 # the Tom Ford clothing search, skipping every fragrance protection. Bottles
@@ -164,7 +178,26 @@ _VINTED_BEAUTY = re.compile(
     r"\b\d+(?:\.\d+)?\s?ml\b|\b\d(?:\.\d)?\s?(?:fl\.?\s?)?oz\b"
     r"|\b(?:edp|edt|eau|parfum|perfume|cologne|fragrances?|tobacco\s+vanille"
     r"|lost\s+cherry|oud\s+wood|ombre\s+leather|lip(?:stick|\s+colou?r|\s+balm)?"
-    r"|makeup|mascara|foundation|concealer|bronzer|serum|moisturi[sz]er)\b",
+    r"|makeup|mascara|foundation|concealer|bronzer|serum|moisturi[sz]er"
+    r"|shower\s+gel|body\s+wash|soap|candle|press[\s-]?on\s+nails"
+    # Live audit 10-26: empty shoe boxes, gift/garment bags, envelopes.
+    r"|(?:shoe|garment|gift|paper|shopping|dust)\s+(?:bags?|box(?:es)?)|envelopes?"
+    r"|empty\s+(?:\w+\s+){0,2}box(?:es)?|hangers?)\b",
+    re.IGNORECASE,
+)
+# Women's/kids sizing that carries no gender word: Vinted's "M / US 8-10",
+# "IT 42 USA 6", or explicit boys/girls/child sizes.
+_VINTED_NOT_MENS = re.compile(
+    r"\b(?:xxs|xs|s|m|l|xl|xxl)\s*/\s*us\s*(?:\d|1[0-8])(?:\s*-\s*\d{1,2})?\b"
+    r"|\bit\s?\d{2}\s*/?\s*usa?\s?\d{1,2}\b|\bwom[ae]n'?s?\b"
+    r"|\b(?:boys?|girls?|child(?:ren)?|kids?|toddler|youth|infant|baby)\b",
+    re.IGNORECASE,
+)
+# Poker merch and single chips the engine's identity gate lets through.
+_VINTED_POKER_MERCH = re.compile(
+    r"\b(?:key\s?chains?|key\s?rings?|plush|magnets?|ornaments?|ball\s+markers?"
+    r"|earrings?|necklace|pendant|coasters?|mugs?|shirts?)\b"
+    r"|\b(?:a|one|single|\w+\s+dollar|\$\d+)\s+(?:casino\s+)?chip\b(?!\s+(?:set|lot|case))",
     re.IGNORECASE,
 )
 # Owner (10-25): watches on Vinted are mostly scams. Mods, homages, fakes,
@@ -172,7 +205,8 @@ _VINTED_BEAUTY = re.compile(
 # gets the full list; descriptions skip words honest sellers negate
 # ("100% authentic, not a replica").
 _VINTED_WATCH_DESC_EXCLUDED = (
-    r"homages?|modded|aftermarket|redial(?:ed)?|refinished\s+dial|nh3[4-9]|franken"
+    r"homages?|modded|aftermarket\s+(?:dial|hands|bezel|insert|crystal|case|movement|crown|parts?)"
+    r"|redial(?:ed)?|refinished\s+dial|nh3[4-9]|franken"
     r"|for\s+parts|not\s+working|gold[\s-]?tone|two[\s-]?tone|gold[\s-]?plated"
     r"|gold[\s-]?filled"
 )
@@ -186,11 +220,12 @@ _VINTED_WATCH_DESC_EXCLUDED = re.compile(
 )
 _VINTED_WATCH_GOLD_SUMMARY = re.compile(
     r"\b(?:gold[\s-]?tone|two[\s-]?tone|gold[\s-]?plated|gold[\s-]?filled"
-    r"|(?:yellow|rose)\s+gold|gold\s+(?:case|bracelet))\b",
+    r"|(?:yellow|rose)\s+gold|gold\s+(?:case|bracelet)|diamonds?)\b",
     re.IGNORECASE,
 )
 # Any category: asking to pay or talk off Vinted forfeits buyer protection.
 _VINTED_OFF_PLATFORM = re.compile(
+    r"(?<!\bno )(?<!\bnot )(?<!\bnever )"
     r"\b(?:whats\s?app|telegram|zelle|cash\s?app|venmo|paypal|wire\s+transfer"
     r"|text\s+me|e-?mail\s+me|off\s+(?:the\s+)?(?:app|platform|vinted))\b",
     re.IGNORECASE,
@@ -480,7 +515,9 @@ def _menswear_shape_reason(listing, brand_key):
     title = str(listing.get("title") or "")
     sized = f"{title} {listing.get('size') or ''}"
     if _VINTED_BEAUTY.search(title):
-        return "fragrance/beauty item in a menswear search (fakes skip perfume checks)"
+        return "fragrance/beauty/packaging item in a menswear search"
+    if _VINTED_NOT_MENS.search(sized):
+        return "women's/kids sizing, not menswear"
     houses = [
         brand for brand in VINTED_MIN_RESALE_BY_BRAND
         if brand not in {"default", "loro piana", "zegna"}
@@ -491,7 +528,9 @@ def _menswear_shape_reason(listing, brand_key):
         return "another maker using Loro Piana/Zegna fabric, not the house itself"
     if _VINTED_POLO.search(title) and _VINTED_XL.search(sized):
         return "XL polo (owner wears M/L polos)"
-    if _VINTED_LONE_TAILORING.search(title):
+    if _VINTED_LONE_TAILORING.search(title) and not (
+        _VINTED_SUIT.search(title) and _VINTED_AI_FULL_SUIT.search(title)
+    ):
         return "lone blazer/sport coat/suit piece, full suits only"
     if _VINTED_SUIT.search(title):
         if not _VINTED_SUIT_SIZE.search(f"{sized} {listing.get('description') or ''}"):
@@ -506,14 +545,27 @@ def _menswear_shape_reason(listing, brand_key):
     return None
 
 
-def _ai_lone_tailoring_reason(summary, category):
+def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
+    """Shape rules re-checked against what the photos actually show."""
     summary = str(summary or "")
-    if (
-        category in VINTED_APPAREL_CATEGORIES
-        and _VINTED_AI_LONE_TAILORING.search(summary)
-        and not _VINTED_AI_FULL_SUIT.search(summary)
+    if category not in VINTED_APPAREL_CATEGORIES:
+        return None
+    if _VINTED_AI_LONE_TAILORING.search(summary) and (
+        not _VINTED_AI_FULL_SUIT.search(summary) or _VINTED_AI_NO_PANTS.search(summary)
     ):
         return "AI photos show a lone blazer/sport coat, full suits only"
+    if _VINTED_BEAUTY.search(summary):
+        return "AI photos show a fragrance/beauty item, not menswear"
+    listing = listing or {}
+    sized = f"{listing.get('title') or ''} {listing.get('size') or ''}"
+    if _VINTED_POLO.search(summary) and _VINTED_XL.search(sized):
+        return "AI photos show an XL polo (owner wears M/L polos)"
+    if (
+        brand_key not in _VINTED_ELITE_SHIRT_BRANDS
+        and _VINTED_AI_WOVEN_SHIRT.search(summary)
+        and not _VINTED_POLO.search(summary)
+    ):
+        return "AI photos show a dress shirt below Brunello/Kiton/Loro Piana/Brioni tier"
     return None
 
 
@@ -1805,6 +1857,15 @@ class VintedFastLane:
         description = str(listing.get("description") or "")
         if _VINTED_OFF_PLATFORM.search(f"{title} {description}"):
             return listing, None, "seller pushes payment/contact off Vinted (scam pattern)"
+        if category == "poker-chips":
+            poker_fail = engine.poker_pre_ai_hard_fail_reason(title, description) or (
+                "poker merch/single chip, not a chip set"
+                if _VINTED_POKER_MERCH.search(title) else None
+            )
+            if poker_fail:
+                return listing, None, f"poker pre-AI reject: {poker_fail}"
+        if category == "neckwear" and not _VINTED_NECKTIE.search(title):
+            return listing, None, "neckwear search but the title is not a tie"
         if category == "watches" and (
             _VINTED_WATCH_TITLE_EXCLUDED.search(title)
             or _VINTED_WATCH_DESC_EXCLUDED.search(description)
@@ -2039,7 +2100,9 @@ class VintedFastLane:
             _off_profile_reason(ai_result.get("summary"), schools_only=True)
             if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"
             else None
-        ) or _ai_lone_tailoring_reason(ai_result.get("summary"), category)
+        ) or _ai_lone_tailoring_reason(
+            ai_result.get("summary"), category, listing, result.get("vinted_brand_key")
+        )
         if ai_reject:
             self._finish(
                 conn, result, item_id, fingerprint, total_price, ai_reject
@@ -2141,7 +2204,10 @@ class VintedFastLane:
         # unchanged monthly guard cannot reset between hourly workflow runs.
         original_engine_db_path = engine.DB_PATH
         engine.DB_PATH = str(self.seen_db_path)
-        _repair_phantom_lane_ledger(self.seen_db_path)
+        try:
+            _repair_phantom_lane_ledger(self.seen_db_path)
+        except sqlite3.Error as exc:
+            logger.warning("vinted-fast ledger repair skipped: %s", exc)
         started = self.clock()
         deadline = started + max(0.0, self.run_seconds)
         self._summary_started = started

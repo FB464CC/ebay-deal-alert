@@ -3997,7 +3997,9 @@ def golf_wrong_item_title_reason(title, query):
     if GOLF_FULL_SET_ONLY and not component_kind:
         # The post-AI full-set gate rejects these same pre-2012 titles; the
         # vision call in between was pure waste (Ping Eye 2, Johnny Miller).
-        vintage = re.search(r"\b(?:vintage|persimmon)\b", title, re.IGNORECASE)
+        vintage = re.search(
+            r"\b(?:vintage|persimmon|19\d\d|200\d|201[01])\b", title, re.IGNORECASE
+        )
         for pattern in _golf_profile_regexes("full_set_vintage_model_patterns"):
             vintage = vintage or pattern.search(title)
         if vintage:

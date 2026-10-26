@@ -1555,7 +1555,7 @@
     {
       "query": "seiko 5 sports -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
       "size": null,
-      "min_price": 40,
+      "min_price": 25,
       "max_price": 110,
       "enabled": true,
       "profile": "fast",
@@ -1667,7 +1667,7 @@
     {
       "query": "delina exclusif -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
-      "min_price": 100,
+      "min_price": 60,
       "max_price": 290,
       "enabled": true,
       "profile": "fast",
@@ -1681,7 +1681,7 @@
     {
       "query": "oriana marly -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
-      "min_price": 90,
+      "min_price": 60,
       "max_price": 200,
       "enabled": true,
       "profile": "fast",
@@ -1695,7 +1695,7 @@
     {
       "query": "angels share kilian -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
-      "min_price": 90,
+      "min_price": 60,
       "max_price": 230,
       "enabled": true,
       "profile": "fast",
@@ -3653,7 +3653,14 @@
     "jones new york",
     "austin reed",
     "joseph & feiss",
-    "geoffrey beene"
+    "geoffrey beene",
+    "suitsupply",
+    "suit supply",
+    "indochino",
+    "spier & mackay",
+    "bonobos",
+    "charles tyrwhitt",
+    "ted baker"
   ],
   "WATCH_PRICE_BANDS": {
     "6105": [
