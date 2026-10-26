@@ -440,7 +440,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 40
+    assert len(fast.enabled_vinted_searches()) == 51
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -496,6 +496,17 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-pdm-delina-exclusif": 290,
         "vinted-pdm-oriana": 200,
         "vinted-kilian-angels-share": 230,
+        "vinted-seiko-presage": 250,
+        "vinted-seiko-cocktail-time": 220,
+        "vinted-king-seiko": 400,
+        "vinted-seiko-alpinist": 400,
+        "vinted-seiko-5-sports": 110,
+        "vinted-tissot-prx": 250,
+        "vinted-hamilton-khaki": 250,
+        "vinted-hamilton-jazzmaster": 250,
+        "vinted-orient-bambino": 80,
+        "vinted-orient-star": 200,
+        "vinted-longines": 400,
     }
     actual = {
         search["id"]: search["max_price"]
@@ -1423,6 +1434,96 @@ def test_named_fabric_makers_are_on_pass_list():
 def test_ai_summary_lone_sport_coat_is_rejected(summary, blocked):
     reason = fast._ai_lone_tailoring_reason(summary, "other")
     assert (reason is not None) is blocked, reason
+
+
+def _watch_search(search_id="vinted-seiko-presage"):
+    return next(s for s in engine.SAVED_SEARCHES if s["id"] == search_id)
+
+
+@pytest.mark.parametrize(
+    ("title", "routed"),
+    [
+        ("Seiko Presage SRPB43 automatic", "vinted-seiko-presage"),
+        ("Tissot PRX Powermatic 80 40mm", "vinted-tissot-prx"),
+        ("Seiko watch stainless", None),  # no line named: never a catch-all
+    ],
+)
+def test_watch_text_feed_routes_only_named_lines(tmp_path, title, routed):
+    lane = fast.VintedFastLane(
+        searches=fast.enabled_vinted_searches(),
+        state_path=tmp_path / "state",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        schedule=[],
+    )
+    item = _fragrance_item("watch-route", title, 60, brand=title.split()[0])
+    search = lane._route(item, source_text=title.split()[0])
+    assert (search or {}).get("id") == routed
+
+
+@pytest.mark.parametrize(
+    ("title", "description", "fragment"),
+    [
+        ("Seiko Presage NH35 custom build", "", "mod/homage"),
+        ("Seiko Presage two-tone", "", "mod/homage"),
+        ("Seiko Presage SRPB43", "Has an aftermarket dial", "mod/homage"),
+        ("Seiko Presage SRPB43", "Message me on WhatsApp for a deal", "off Vinted"),
+    ],
+)
+def test_watch_scam_shapes_rejected_before_ai(tmp_path, title, description, fragment):
+    search = _watch_search()
+    item = _fragrance_item("watch-scam", title, 150)
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "state",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        schedule=[],
+    )
+    conn = engine.init_db(lane.seen_db_path)
+    with (
+        mock.patch.object(engine, "fetch_vinted_item_page_details", return_value={
+            "_http_status": 200, "description": description, "image_urls": [],
+        }),
+        mock.patch.object(engine, "check_photos_with_gemini") as photo,
+    ):
+        lane._process_item(conn, None, item, search, None)
+    conn.close()
+    photo.assert_not_called()
+    row = json.loads(lane.log_path.read_text(encoding="utf-8"))
+    assert fragment in row["reason"]
+
+
+def test_watch_honest_description_not_rejected():
+    assert not fast._VINTED_WATCH_DESC_EXCLUDED.search(
+        "100% authentic, not a replica, comes with box and papers"
+    )
+
+
+def test_watches_need_a_proven_seller():
+    new_seller = {"feedback_count": 0.0, "feedback_reputation": 0.0,
+                  "item_count": 1.0, "given_item_count": 0.0}
+    assert "watches" in fast.VINTED_STRICT_SELLER_CATEGORIES
+    assert fast._seller_trust_reason(new_seller, strict=True) is not None
+
+
+@pytest.mark.parametrize(
+    ("updates", "fragment"),
+    [
+        ({"counterfeit_suspected": None}, "counterfeit"),
+        ({"damage_found": True}, "damage"),
+        ({"vinted_ai_summary": "Seiko Presage with two-tone gold bracelet"}, "steel"),
+        ({}, None),
+    ],
+)
+def test_vinted_watch_bar(updates, fragment):
+    result = dict(
+        {"vinted_photo_ai_checked": True, "counterfeit_suspected": False,
+         "damage_found": False, "vinted_ai_summary": "Seiko Presage SRPB43, steel case"},
+        **updates,
+    )
+    reason = fast._vinted_watch_bar_reason(result, "watches")
+    assert (reason is None) if fragment is None else (fragment in reason)
 
 
 def test_seller_stats_parse_member_page():

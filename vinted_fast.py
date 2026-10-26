@@ -157,6 +157,36 @@ _VINTED_AI_LONE_TAILORING = re.compile(
 _VINTED_AI_FULL_SUIT = re.compile(
     r"\b(?:pants|trousers|slacks|(?:two|three|2|3)[\s-]?piece)\b", re.IGNORECASE
 )
+# Owner (10-25): watches on Vinted are mostly scams. Mods, homages, fakes,
+# parts and plated gold-tone pieces are out (owner wants steel). The title
+# gets the full list; descriptions skip words honest sellers negate
+# ("100% authentic, not a replica").
+_VINTED_WATCH_DESC_EXCLUDED = (
+    r"homages?|modded|aftermarket|redial(?:ed)?|refinished\s+dial|nh3[4-9]|franken"
+    r"|for\s+parts|not\s+working|gold[\s-]?tone|two[\s-]?tone|gold[\s-]?plated"
+    r"|gold[\s-]?filled"
+)
+_VINTED_WATCH_TITLE_EXCLUDED = re.compile(
+    rf"\b(?:{_VINTED_WATCH_DESC_EXCLUDED}|mods?|custom(?:ized)?|replicas?|reps?"
+    r"|clones?|aaa|copy|inspired|broken|gold|diamonds?|smart\s?watch)\b|\b1:1\b",
+    re.IGNORECASE,
+)
+_VINTED_WATCH_DESC_EXCLUDED = re.compile(
+    rf"\b(?:{_VINTED_WATCH_DESC_EXCLUDED})\b", re.IGNORECASE
+)
+_VINTED_WATCH_GOLD_SUMMARY = re.compile(
+    r"\b(?:gold[\s-]?tone|two[\s-]?tone|gold[\s-]?plated|gold[\s-]?filled"
+    r"|(?:yellow|rose)\s+gold|gold\s+(?:case|bracelet))\b",
+    re.IGNORECASE,
+)
+# Any category: asking to pay or talk off Vinted forfeits buyer protection.
+_VINTED_OFF_PLATFORM = re.compile(
+    r"\b(?:whats\s?app|telegram|zelle|cash\s?app|venmo|paypal|wire\s+transfer"
+    r"|text\s+me|e-?mail\s+me|off\s+(?:the\s+)?(?:app|platform|vinted))\b",
+    re.IGNORECASE,
+)
+# Fakes are the norm here: only proven sellers, never brand-new accounts.
+VINTED_STRICT_SELLER_CATEGORIES = frozenset({"fragrance", "watches"})
 _VINTED_FRAGRANCE_EXCLUDED = re.compile(
     r"\b(?:decants?|samples?|vials?|minis?|miniatures?|travel[\s-]*size|testers?"
     r"|unboxed|empty|refills?|dupes?|inspired(?:\s+by)?|smells\s+like|clones?"
@@ -521,6 +551,21 @@ def _vinted_fragrance_bar_reason(result, category):
             "vinted fragrance bar: deal_rating "
             f"{result.get('deal_rating')!r} below Great Deal"
         )
+    return None
+
+
+def _vinted_watch_bar_reason(result, category):
+    """Fakes dominate Vinted watches: demand an explicitly clean photo check."""
+    if category != "watches":
+        return None
+    if result.get("vinted_photo_ai_checked") is not True:
+        return "vinted watch bar: real AI photo check missing"
+    if result.get("counterfeit_suspected") is not False:
+        return "vinted watch bar: counterfeit assessment not explicitly clear"
+    if result.get("damage_found") is not False:
+        return "vinted watch bar: damage assessment not explicitly clear"
+    if _VINTED_WATCH_GOLD_SUMMARY.search(str(result.get("vinted_ai_summary") or "")):
+        return "vinted watch bar: AI photos show gold/two-tone, owner wants steel"
     return None
 
 
@@ -1566,7 +1611,10 @@ class VintedFastLane:
                 continue
             # One house makes many scents: "Kilian Good Girl Gone Bad" must
             # not land in the Angels' Share search (production feed check).
-            if search.get("category") == "fragrance" and not set(query_words) <= title_words:
+            if (
+                search.get("category") in {"fragrance", "watches"}
+                and not set(query_words) <= title_words
+            ):
                 continue
             cap = search.get("max_price")
             if cap is not None and price is not None and price > float(cap):
@@ -1739,6 +1787,14 @@ class VintedFastLane:
         if not engine.listing_matches_size_filter(search, listing):
             return listing, None, "size mismatch for saved search"
         title = str(listing.get("title") or "")
+        description = str(listing.get("description") or "")
+        if _VINTED_OFF_PLATFORM.search(f"{title} {description}"):
+            return listing, None, "seller pushes payment/contact off Vinted (scam pattern)"
+        if category == "watches" and (
+            _VINTED_WATCH_TITLE_EXCLUDED.search(title)
+            or _VINTED_WATCH_DESC_EXCLUDED.search(description)
+        ):
+            return listing, None, "watch is a mod/homage/replica/parts/gold-tone piece"
         if category == "fragrance" and _VINTED_FRAGRANCE_EXCLUDED.search(
             f"{title} {listing.get('description') or ''}"
         ):
@@ -1859,7 +1915,7 @@ class VintedFastLane:
             )
             return
         if (
-            category == "fragrance"
+            category in VINTED_STRICT_SELLER_CATEGORIES
             or category in VINTED_APPAREL_CATEGORIES
             or category == "school-gear"
         ):
@@ -1871,15 +1927,20 @@ class VintedFastLane:
             self.statuses[str(status or "ERROR")] += 1
             if status in {401, 403, 429}:
                 raise VintedRequestBlocked(status)
-            seller_reason = _seller_trust_reason(stats, strict=category == "fragrance")
+            seller_reason = _seller_trust_reason(
+                stats, strict=category in VINTED_STRICT_SELLER_CATEGORIES
+            )
             if seller_reason:
                 self._finish(
                     conn, result, item_id, fingerprint, total_price, seller_reason
                 )
                 return
         _brand, floor = _vinted_brand_and_floor(result)
-        if category == "fragrance" and listing.get("seller_feedback_count") == 0:
-            # 0 reviews on a perfume is the throwaway-account fake shape.
+        if (
+            category in VINTED_STRICT_SELLER_CATEGORIES
+            and listing.get("seller_feedback_count") == 0
+        ):
+            # 0 reviews on a perfume/watch is the throwaway-account fake shape.
             self._finish(
                 conn, result, item_id, fingerprint, total_price,
                 "seller has 0 reviews on a luxury brand (new-account scam pattern)",
@@ -1969,9 +2030,11 @@ class VintedFastLane:
                 conn, result, item_id, fingerprint, total_price, ai_reject
             )
             return
-        vinted_bar_reason = _vinted_fragrance_bar_reason(
-            result, category
-        ) or _vinted_apparel_bar_reason(result, category)
+        vinted_bar_reason = (
+            _vinted_fragrance_bar_reason(result, category)
+            or _vinted_watch_bar_reason(result, category)
+            or _vinted_apparel_bar_reason(result, category)
+        )
         if vinted_bar_reason:
             self._finish(
                 conn,

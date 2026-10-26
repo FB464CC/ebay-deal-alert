@@ -1497,6 +1497,160 @@
       "category": "golf"
     },
     {
+      "query": "seiko presage -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 80,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-presage",
+      "category": "watches"
+    },
+    {
+      "query": "seiko cocktail time -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 80,
+      "max_price": 220,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-cocktail-time",
+      "category": "watches"
+    },
+    {
+      "query": "king seiko -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 120,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-king-seiko",
+      "category": "watches"
+    },
+    {
+      "query": "seiko alpinist -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 150,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-alpinist",
+      "category": "watches"
+    },
+    {
+      "query": "seiko 5 sports -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 40,
+      "max_price": 110,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-seiko-5-sports",
+      "category": "watches"
+    },
+    {
+      "query": "tissot prx -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 70,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tissot-prx",
+      "category": "watches"
+    },
+    {
+      "query": "hamilton khaki -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 80,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-hamilton-khaki",
+      "category": "watches"
+    },
+    {
+      "query": "hamilton jazzmaster -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 80,
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-hamilton-jazzmaster",
+      "category": "watches"
+    },
+    {
+      "query": "orient bambino -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 30,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-orient-bambino",
+      "category": "watches"
+    },
+    {
+      "query": "orient star -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 60,
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-orient-star",
+      "category": "watches"
+    },
+    {
+      "query": "longines -strap -band -box -parts -ladies -womens -women -homage -mod -replica",
+      "size": null,
+      "min_price": 120,
+      "max_price": 400,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-longines",
+      "category": "watches"
+    },
+    {
       "query": "delina exclusif -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
       "min_price": 100,
@@ -3952,7 +4106,12 @@
     {"query": "canali", "max_price": 130},
     {"query": "delina exclusif", "max_price": 290},
     {"query": "oriana marly", "max_price": 200},
-    {"query": "angels share kilian", "max_price": 230}
+    {"query": "angels share kilian", "max_price": 230},
+    {"query": "seiko", "max_price": 400},
+    {"query": "tissot", "max_price": 250},
+    {"query": "hamilton watch", "max_price": 250},
+    {"query": "orient watch", "max_price": 200},
+    {"query": "longines", "max_price": 400}
   ],
   "VINTED_FAST_MAX_AI_CALLS_PER_RUN": 200,
   "VINTED_EXPECTED_PAID_FRACTION": 0.70,
