@@ -13758,15 +13758,40 @@ def run():
                         IndexError,
                         json.JSONDecodeError,
                     ) as exc:
+                        # Same backup the one-item router uses. Production
+                        # 10-26: nearly every run's batches timed out/503'd,
+                        # so golf listings on every platform sat at "no AI
+                        # price estimate yet" and nothing could alert.
                         logger.warning(
-                            "Gemini photo batch failed; all affected listings "
-                            "will fail closed and retry later: %s",
+                            "Gemini photo batch failed; falling back to "
+                            "DeepSeek per listing: %s",
                             exc,
                         )
-                        batch_results = {
-                            request["candidate_id"]: None
-                            for request in requests_to_batch
-                        }
+                        batch_results = {}
+                        for request in requests_to_batch:
+                            fallback_result = None
+                            fallback_timeout = _deadline_timeout(
+                                hard_stop, DEEPSEEK_VISION_TIMEOUT_SECONDS
+                            )
+                            if fallback_timeout is not None:
+                                try:
+                                    fallback_result = _call_deepseek_json(
+                                        request["prompt"],
+                                        request["images"],
+                                        timeout=fallback_timeout,
+                                    )
+                                except (
+                                    requests.exceptions.RequestException,
+                                    KeyError,
+                                    IndexError,
+                                    json.JSONDecodeError,
+                                ) as fallback_exc:
+                                    logger.warning(
+                                        "DeepSeek batch fallback failed; "
+                                        "listing fails closed: %s",
+                                        fallback_exc,
+                                    )
+                            batch_results[request["candidate_id"]] = fallback_result
                     prefetched_gemini_results.update(batch_results)
                     ai_result = prefetched_gemini_results.pop(item_id)
                 elif prepared:

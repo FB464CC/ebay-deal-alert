@@ -9753,6 +9753,52 @@ class RunIntegration(unittest.TestCase):
             "one Gemini request should safely produce three independently gated outcomes",
         )
 
+    def test_failed_gemini_batch_falls_back_to_deepseek_per_listing(self):
+        self._patch("AI_PHOTO_PROVIDER", "gemini")
+        self._patch("GEMINI_CALL_LIMIT", 12)
+        self._patch("GEMINI_BATCH_SIZE", 3)
+        self._patch(
+            "_paid_ai_budget_snapshot",
+            lambda required_usd=0.0, now=None: {
+                "month": "2026-09", "reserved_usd": 1.0, "calls": 100,
+                "cap_usd": 10.0, "required_usd": required_usd,
+                "exhausted": False, "reset_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
+                "event_key": "2026-09:10.000000",
+            },
+        )
+
+        def prepare_photo(listing, category="other", current_month_name=None,
+                          hard_stop=None, search_query=None, prepare_only=False):
+            candidate_id = listing["itemId"]
+            return {"prompt": f"prompt for {candidate_id}",
+                    "images": [(candidate_id.encode(), "image/jpeg")]}
+
+        self._patch("check_photos_with_gemini", prepare_photo)
+        self._patch("_call_gemini_batch_json", mock.Mock(
+            side_effect=requests.exceptions.ReadTimeout("gemini read timed out")
+        ))
+        deepseek = self._patch(
+            "_call_deepseek_json", mock.Mock(side_effect=lambda *a, **k: dict(self.AI_STEAL))
+        )
+        listings = [
+            p.make_listing("vinted", f"fallback-{i}", f"Ermenegildo Zegna Cashmere Sweater {c}",
+                           20 + i, f"https://example.test/fallback-{i}",
+                           image_url=f"https://example.test/{i}.jpg")
+            for i, c in enumerate(("Navy", "Grey", "Green"), start=1)
+        ]
+        self._serve({
+            "query": "zegna sweater", "category": "knitwear", "max_price": 400,
+            "category_id": "260012", "enabled": True, "profile": "fast",
+        }, listings)
+
+        m.run()
+
+        self.assertEqual(deepseek.call_count, 3)
+        self.assertEqual(
+            {alert["listing"]["itemId"] for alert in self.alerts},
+            {"vinted:fallback-1", "vinted:fallback-2", "vinted:fallback-3"},
+        )
+
     def test_gemini_primary_batches_without_paid_exhaustion(self):
         self._patch("AI_PHOTO_PROVIDER", "gemini")
         self._patch("GEMINI_CALL_LIMIT", 12)
