@@ -1632,6 +1632,14 @@ def test_eyewear_typos_blocked(title):
     assert fast._VINTED_EYEWEAR.search(title)
 
 
+def test_eyewear_titles_reject_typos_included():
+    for title in ("tom ford sunlgasses", "Ray-Ban Sun Glasses", "Prada sunglases",
+                  "Oliver Peoples eyeglasses frames", "Persol eyewear"):
+        assert engine.EYEWEAR_TITLE_SIGNALS.search(title), title
+    for title in ("Peter Millar quarter zip", "Loro Piana sunless tan jacket"):
+        assert not engine.EYEWEAR_TITLE_SIGNALS.search(title), title
+
+
 def test_vinted_links_open_in_browser_not_app():
     assert engine.vinted_browser_url(
         "https://www.vinted.com/items/10542231373-peter-millar-golf-shirt-l"
