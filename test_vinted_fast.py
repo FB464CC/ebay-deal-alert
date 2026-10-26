@@ -1269,6 +1269,30 @@ def test_fragrance_fake_price_floor_and_decants_reject_before_ai(
     photo.assert_not_called()
 
 
+def test_removed_listing_rejects_before_ai(tmp_path):
+    search = _fragrance_search()
+    item = _fragrance_item("gone", "Parfums de Marly Delina Exclusif 75ml sealed", 220)
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "state",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        schedule=[],
+    )
+    conn = engine.init_db(lane.seen_db_path)
+    with (
+        mock.patch.object(
+            engine, "fetch_vinted_item_page_details", return_value={"_http_status": 404}
+        ),
+        mock.patch.object(engine, "check_photos_with_gemini") as photo,
+    ):
+        _listing, result, reason = lane._cheap_result(conn, None, item, search)
+    conn.close()
+    assert result is None
+    assert reason == "listing already removed from Vinted (HTTP 404)"
+    photo.assert_not_called()
+
+
 def test_zero_review_fragrance_seller_rejects_before_ai(tmp_path):
     search = _fragrance_search()
     item = _fragrance_item(

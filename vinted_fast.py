@@ -1838,6 +1838,10 @@ class VintedFastLane:
         self.statuses[str(detail_status or "ERROR")] += 1
         if detail_status in {401, 403, 429}:
             raise VintedRequestBlocked(detail_status)
+        # Already deleted (seller or Vinted moderation). 10-26: "tom ford
+        # sunlgasses" 404'd here, skipped the seller check, and alerted a dead link.
+        if detail_status in {404, 410}:
+            return listing, None, f"listing already removed from Vinted (HTTP {detail_status})"
         description = details.get("description")
         if description:
             listing["description"] = description
