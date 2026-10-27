@@ -11,8 +11,17 @@ on:
     # 5-min granularity is roughly GitHub's practical floor for `schedule:`
     # reliability - tighter than this needs the external-trigger bypass
     # (see README) since GitHub's own scheduler just won't hit it.
-    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
+    # Owner, 10-26: every 15 min. eBay/GW produced zero alerts worth having
+    # in a month while Vinted (its own always-on lane) has the real steals.
+    # Cadence now comes from the outside pinger + the gate job below; this
+    # hourly cron is only the fallback if that pinger dies.
+    - cron: '7 * * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even outside the 15-minute slot"
+        type: boolean
+        default: false
 
 concurrency:
   group: poll-ebay-deals
@@ -26,9 +35,28 @@ permissions:
   actions: write
 
 jobs:
-  poll:
+  # An outside pinger (owner's token, not in this repo) dispatches this
+  # every 5 min. Owner wants 15 (10-26), so dispatches only run in the first
+  # 5 minutes of each quarter hour: a 5-min cadence lands there exactly once
+  # per 15. Scheduled runs always go, so the cron still covers a dead pinger.
+  gate:
     runs-on: ubuntu-latest
-    # Runs every 5 min - a wedged network call must never be allowed to
+    outputs:
+      go: ${{ steps.slot.outputs.go }}
+    steps:
+      - id: slot
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] || [ "${{ inputs.force }}" = "true" ] || [ $(( 10#$(date -u +%M) % 15 )) -lt 5 ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  poll:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    # Runs every 15 min - a wedged network call must never be allowed to
     # hang indefinitely and eat the whole runner-minutes budget.
     timeout-minutes: 8
 

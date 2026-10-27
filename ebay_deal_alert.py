@@ -10923,7 +10923,8 @@ MARKETPLACE_ANOMALY_SUPPRESS_HOURS = 24
 # a single shopgoodwill error burst) paged "[ALERT-BOT DOWN]" while the next
 # runs fetched 200. Page only when the following run is still sick.
 MARKETPLACE_ANOMALY_REQUIRE_REPEAT = True
-MARKETPLACE_ANOMALY_REPEAT_WINDOW = timedelta(minutes=15)
+# Two consecutive polls: 15-min cron plus GitHub's scheduler delay.
+MARKETPLACE_ANOMALY_REPEAT_WINDOW = timedelta(minutes=40)
 ADAPTER_FAILURE_CANARY_SUPPRESS_HOURS = 3
 
 
