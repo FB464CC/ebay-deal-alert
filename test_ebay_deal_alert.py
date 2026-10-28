@@ -229,7 +229,7 @@ class RuntimeSearchFocus(unittest.TestCase):
 
     def test_shipped_focus_selects_37_real_enabled_searches(self):
         config, enabled = self._shipped_enabled_searches()
-        self.assertEqual(len(enabled), 161)
+        self.assertEqual(len(enabled), 186)
         self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
         enabled_by_id = {search["id"]: search for search in enabled}
         self.assertEqual(
@@ -4085,6 +4085,15 @@ class SizeMatching(unittest.TestCase):
         for search in m.SAVED_SEARCHES:
             query = search["query"].lower()
             if search.get("category_id") != "53120":
+                continue
+            if search["id"].startswith("vinted-"):
+                # Vinted US 12-13 searches (10-28): every maker, since the
+                # Italian houses tag UK/EU too. Aliases still need UK/EU.
+                self.assertEqual(
+                    search.get("size_equivalents"),
+                    ["11", "11.5", "12", "45", "45.5", "46", "46.5", "47"],
+                    query,
+                )
                 continue
             should_alias = any(maker in query for maker in aliased)
             if should_alias:

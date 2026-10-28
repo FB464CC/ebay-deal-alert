@@ -788,6 +788,21 @@ def _words(text):
     return [w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words if len(w) >= 3]
 
 
+# Owner, 10-28: "<brand> shoe" must catch loafers/sneakers and "<brand>
+# cashmere sweater" a crewneck, without a search per wording.
+_ROUTE_SYNONYMS = {
+    "shoe": {"loafer", "sneaker", "boot", "oxford", "derby", "derbie", "moccasin",
+             "driver", "trainer", "monk", "brogue", "chukka", "espadrille", "walk"},
+    "sweater": {"jumper", "cardigan", "crewneck", "crew", "pullover", "turtleneck"},
+    "quarter": {"half"},
+}
+
+
+def _route_words(title):
+    words = set(_words(re.sub(r"1/4", " quarter ", str(title or ""))))
+    return words | {canon for canon, alts in _ROUTE_SYNONYMS.items() if words & alts}
+
+
 def _web_item_to_catalog_item(entry):
     """Map a web-catalog productItem onto the svc-catalogue item shape."""
     product = entry.get("productItem") if isinstance(entry, dict) else None
@@ -1667,7 +1682,7 @@ class VintedFastLane:
         if source_text is None:
             source_text = (item.get("item_box") or {}).get("first_line") or ""
         source_words = set(_words(source_text))
-        title_words = set(_words(listing.get("title")))
+        title_words = _route_words(listing.get("title"))
         price = marketplaces._to_float(((item.get("price") or {}).get("amount")))
         best, best_score = None, 0
         for search in self._routing_order:

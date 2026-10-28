@@ -1285,6 +1285,552 @@
       "category": "golf"
     },
     {
+      "query": "zegna cashmere sweater -\"z zegna\" -\"zegna sport\" -zzegna -baruffa -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 130,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-zegna-cashmere-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "loro piana cashmere sweater -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-loro-piana-cashmere-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "brunello cucinelli cashmere sweater -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-brunello-cucinelli-cashmere-sweater",
+      "category": "knitwear"
+    },
+    {
+      "query": "zegna quarter zip -\"z zegna\" -\"zegna sport\" -zzegna -baruffa -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 110,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-zegna-quarter-zip",
+      "category": "knitwear"
+    },
+    {
+      "query": "loro piana quarter zip -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-loro-piana-quarter-zip",
+      "category": "knitwear"
+    },
+    {
+      "query": "brunello cucinelli quarter zip -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-brunello-cucinelli-quarter-zip",
+      "category": "knitwear"
+    },
+    {
+      "query": "kiton quarter zip -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-kiton-quarter-zip",
+      "category": "knitwear"
+    },
+    {
+      "query": "zegna polo -\"z zegna\" -\"zegna sport\" -zzegna -baruffa -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-zegna-polo",
+      "category": "golf"
+    },
+    {
+      "query": "loro piana polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-loro-piana-polo",
+      "category": "golf"
+    },
+    {
+      "query": "brunello cucinelli polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-brunello-cucinelli-polo",
+      "category": "golf"
+    },
+    {
+      "query": "kiton polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-kiton-polo",
+      "category": "golf"
+    },
+    {
+      "query": "brioni polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-brioni-polo",
+      "category": "golf"
+    },
+    {
+      "query": "isaia polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-isaia-polo",
+      "category": "golf"
+    },
+    {
+      "query": "tom ford polo -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-tom-ford-polo",
+      "category": "golf"
+    },
+    {
+      "query": "loro piana shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-loro-piana-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "brunello cucinelli shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-brunello-cucinelli-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "zegna shoe -\"z zegna\" -\"zegna sport\" -zzegna -baruffa -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 120,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-zegna-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "brioni shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-brioni-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "kiton shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-kiton-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "tom ford shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-tom-ford-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "berluti shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-berluti-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "\"john lobb\" shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-john-lobb-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "\"edward green\" shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-edward-green-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "gaziano girling shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 250,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-gaziano-girling-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "santoni shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-santoni-shoes",
+      "category": "footwear"
+    },
+    {
       "query": "canali suit -women -womens -ladies -girls -kids -scarf",
       "size": [
         "40",
@@ -4280,18 +4826,23 @@
   "VINTED_FAST_RUN_MINUTES": 340,
   "VINTED_FAST_POLL_SECONDS": 1.0,
   "VINTED_BRAND_FEED_IDS": [174480, 203598, 219848, 103740, 414476, 360098, 469314, 238464, 454955, 154396, 4559, 2847834],
-  "VINTED_BRAND_FEED_MAX_PRICE": 130,
+  "VINTED_BRAND_FEED_MAX_PRICE": 250,
   "VINTED_TEXT_FEEDS": [
     {"query": "poker chip", "max_price": 150},
     {"query": "casino chip", "max_price": 150},
     {"query": "poker chip", "max_price": 150},
     {"query": "marinella", "max_price": 60},
-    {"query": "zegna", "max_price": 75},
-    {"query": "loro piana", "max_price": 130},
-    {"query": "cucinelli", "max_price": 130},
-    {"query": "kiton", "max_price": 115},
-    {"query": "brioni", "max_price": 90},
-    {"query": "isaia", "max_price": 90},
+    {"query": "zegna", "max_price": 130},
+    {"query": "loro piana", "max_price": 250},
+    {"query": "cucinelli", "max_price": 250},
+    {"query": "kiton", "max_price": 200},
+    {"query": "brioni", "max_price": 200},
+    {"query": "isaia", "max_price": 150},
+    {"query": "john lobb", "max_price": 250},
+    {"query": "edward green", "max_price": 250},
+    {"query": "berluti", "max_price": 250},
+    {"query": "gaziano", "max_price": 250},
+    {"query": "santoni", "max_price": 150},
     {"query": "canali", "max_price": 130},
     {"query": "delina exclusif", "max_price": 290},
     {"query": "oriana marly", "max_price": 200},
@@ -4325,6 +4876,11 @@
     "tom ford": 100,
     "brunello cucinelli": 150,
     "loro piana": 150,
+    "john lobb": 150,
+    "edward green": 150,
+    "berluti": 150,
+    "gaziano": 150,
+    "santoni": 100,
     "parfums de marly": 150,
     "kilian": 150,
     "default": 60

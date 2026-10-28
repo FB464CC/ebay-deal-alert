@@ -440,7 +440,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 64
+    assert len(fast.enabled_vinted_searches()) == 89
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -520,6 +520,32 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-orient-mako": 110,
         "vinted-orient-kamasu": 150,
         "vinted-hamilton-intra-matic": 250,
+        # Owner, 10-28: super-luxury knitwear, polos and US 12-13 shoes.
+        "vinted-zegna-cashmere-sweater": 130,
+        "vinted-loro-piana-cashmere-sweater": 200,
+        "vinted-brunello-cucinelli-cashmere-sweater": 200,
+        "vinted-zegna-quarter-zip": 110,
+        "vinted-loro-piana-quarter-zip": 200,
+        "vinted-brunello-cucinelli-quarter-zip": 200,
+        "vinted-kiton-quarter-zip": 150,
+        "vinted-zegna-polo": 80,
+        "vinted-loro-piana-polo": 150,
+        "vinted-brunello-cucinelli-polo": 150,
+        "vinted-kiton-polo": 150,
+        "vinted-brioni-polo": 120,
+        "vinted-isaia-polo": 100,
+        "vinted-tom-ford-polo": 120,
+        "vinted-loro-piana-shoes": 200,
+        "vinted-brunello-cucinelli-shoes": 200,
+        "vinted-zegna-shoes": 120,
+        "vinted-brioni-shoes": 150,
+        "vinted-kiton-shoes": 150,
+        "vinted-tom-ford-shoes": 200,
+        "vinted-berluti-shoes": 250,
+        "vinted-john-lobb-shoes": 250,
+        "vinted-edward-green-shoes": 250,
+        "vinted-gaziano-girling-shoes": 250,
+        "vinted-santoni-shoes": 150,
     }
     actual = {
         search["id"]: search["max_price"]
@@ -2189,6 +2215,37 @@ def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
     assert lane._route(item("Casino chips lot", "unknown", "40.00"), "poker chip")["id"] == "poker"
     # Over the polo cap: must not fall through to a pricier garment search.
     assert lane._route(item("Peter Millar Polo", "Peter Millar", "40.00")) is None
+
+
+@pytest.mark.parametrize(
+    ("title", "brand", "price", "expected"),
+    [
+        ("Loro Piana Summer Walk loafers 12", "Loro Piana", "150.00", "vinted-loro-piana-shoes"),
+        ("Brunello Cucinelli suede sneakers", "Brunello Cucinelli", "120.00", "vinted-brunello-cucinelli-shoes"),
+        ("Ermenegildo Zegna cashmere crewneck", "Ermenegildo Zegna", "110.00", "vinted-zegna-cashmere-sweater"),
+        ("Zegna 1/4 zip knit", "Zegna", "90.00", "vinted-zegna-quarter-zip"),
+        ("Kiton half zip cashmere", "Kiton", "140.00", "vinted-kiton-quarter-zip"),
+        ("Zegna polo shirt", "Zegna", "60.00", "vinted-zegna-polo"),
+        ("Z Zegna polo shirt", "Zegna", "60.00", None),
+    ],
+)
+def test_luxury_brand_feed_routes_to_specific_searches(tmp_path, title, brand, price, expected):
+    lane = fast.VintedFastLane(
+        searches=[s for s in engine.SAVED_SEARCHES if "vinted" in (s.get("platforms") or [])],
+        state_path=tmp_path / "s", seen_db_path=tmp_path / "d",
+        log_path=tmp_path / "l", schedule=[],
+    )
+    item = {"id": 1, "title": title, "url": "/items/1", "price": {"amount": price},
+            "photo": {"url": "https://x/a.webp"}, "photos": [], "item_box": {"first_line": brand}}
+    routed = lane._route(item)
+    assert (routed or {}).get("id") == expected
+
+
+def test_shoe_search_accepts_us_12_to_13_and_uk_eu_equivalents():
+    search = next(s for s in engine.SAVED_SEARCHES if s["id"] == "vinted-loro-piana-shoes")
+    ok = lambda size: engine.listing_matches_size_filter(search, {"title": "Loro Piana loafers", "size": size, "platform": "vinted"})
+    assert ok("12") and ok("12.5") and ok("13") and ok("UK 11") and ok("EU 46")
+    assert not ok("11") and not ok("10.5") and not ok("14")
 
 
 @pytest.mark.parametrize(
