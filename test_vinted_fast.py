@@ -976,6 +976,33 @@ def test_generic_peter_millar_polo_below_resale_floor_never_alerts(tmp_path):
     assert "below $30 brand floor" in row["reason"]
 
 
+def test_cheap_luxury_piece_alerts_below_its_brand_floor(tmp_path):
+    # Owner, 10-28: $9.50 Zegna sweater worth $75 was rejected by the $100 floor.
+    listing, result = _apparel_listing_result(
+        "Ermenegildo Zegna Men's Sweater", 9.5, "knitwear", "zegna",
+        search_id="vinted-zegna",
+    )
+    _lane_obj, strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _apparel_ai(75),
+        strong_result=_passing_strong_result(75),
+    )
+    strong.assert_called_once()
+    send.assert_called_once()
+    assert row["delivered"] is True
+
+
+def test_brooks_brothers_keeps_full_resale_floor(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Brooks Brothers Wool Suit 42R", 15, "tailoring", "brooks brothers",
+        search_id="vinted-brooks-brothers",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _apparel_ai(80)
+    )
+    send.assert_not_called()
+    assert "below $150 brand floor" in row["reason"]
+
+
 def test_peter_millar_ten_dollar_list_at_35_resale_alerts_after_second_look(
     tmp_path,
 ):

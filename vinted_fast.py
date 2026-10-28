@@ -308,6 +308,19 @@ VINTED_MIN_RESALE_BY_BRAND = {
     ).items()
 }
 VINTED_DEFAULT_MIN_RESALE = float(VINTED_MIN_RESALE_BY_BRAND.get("default", 60))
+# Owner, 10-28: a $9.50 Zegna sweater worth $75 is a steal; the price gap
+# decides, not a $100+ resale minimum. The brand floor still sets the tier
+# (instant pings, necktie skip); the resale check caps it here. Brooks
+# Brothers keeps its floor: only expensive suits are wanted there.
+VINTED_RESALE_FLOOR_MAX = float(engine._CONFIG.get("VINTED_RESALE_FLOOR_MAX", 40))
+_VINTED_FULL_FLOOR_BRANDS = frozenset({"brooks brothers"})
+
+
+def _vinted_resale_minimum(result):
+    _brand, floor = _vinted_brand_and_floor(result)
+    if result.get("vinted_brand_key") in _VINTED_FULL_FLOOR_BRANDS:
+        return floor
+    return min(floor, VINTED_RESALE_FLOOR_MAX)
 
 _VINTED_BRAND_DISPLAY_NAMES = {
     "peter millar": "Peter Millar",
@@ -466,7 +479,7 @@ def _vinted_apparel_bar_reason(result, category):
         return "vinted menswear bar: counterfeit assessment not explicitly clear"
     if result.get("damage_found") is not False:
         return "vinted menswear bar: damage assessment not explicitly clear"
-    _brand, floor = _vinted_brand_and_floor(result)
+    floor = _vinted_resale_minimum(result)
     resale = engine._sane_ai_price(result.get("estimated_resale_value"))
     if resale is None:
         return "vinted menswear bar: AI resale estimate missing"
@@ -1497,7 +1510,7 @@ class VintedFastLane:
         if condition not in {"nwt", "excellent", "good"}:
             flaws = result.get("vinted_strong_flaws_found")
             return f"condition grade {condition or 'missing'} below good: {flaws or 'no detail'}"
-        _brand, floor = _vinted_brand_and_floor(result)
+        floor = _vinted_resale_minimum(result)
         strong_resale = result.get("vinted_strong_estimated_resale_value")
         if strong_resale is None:
             return "second-look resale estimate missing"
