@@ -320,6 +320,11 @@ COUNTERFEIT_SIGNALS = re.compile(
     r"\b1\s*:\s*1\b",
     re.IGNORECASE,
 )
+# Maison Margiela's "Replica" is a genuine line (Replica GAT sneakers), not a
+# seller disclosure (owner, 10-29). Stripped before the check above only.
+MARGIELA_REPLICA_LINE = re.compile(
+    r"\bmargiela\s+replica\b|\breplica\s+(?:gat|german\s+army)\b", re.IGNORECASE
+)
 
 # Every vision schema sees this same seller-disclosure rule. The deterministic
 # score_listing() regex above should catch it first in the poller, but prompts
@@ -331,7 +336,8 @@ COUNTERFEIT_DISCLOSURE_PROMPT = (
     "listing title or description calls the item a replica, reproduction, inspired "
     "piece, knockoff, imitation, dupe, homage, the seller's own version, or a "
     "handmade tribute, treat it as non-genuine regardless of how convincing the "
-    "photos look or how low the price is. In schemas with counterfeit_suspected, "
+    "photos look or how low the price is. Maison Margiela's 'Replica' line "
+    "(e.g. Replica GAT sneakers) is a genuine product name, not a disclosure. In schemas with counterfeit_suspected, "
     "set it true and explain the seller's wording in counterfeit_reason. For the "
     "poker-chip schema, set both is_genuine_clay and is_genuine_ceramic false "
     "and cite the disclosure in summary."
@@ -5072,6 +5078,16 @@ def listing_matches_size_filter(saved_search, listing):
             pattern = size_pattern(size_token)
             if pattern and re.search(pattern, structured_size, re.IGNORECASE):
                 return True
+    # A bare 45-47 is never a US shoe size, and Margiela/Common Projects
+    # list EU sizes without the unit (owner, 10-29). Title and size field
+    # only: descriptions carry prices ("$46 shipped").
+    if saved_search.get("category") == "footwear":
+        title_and_size = f"{listing.get('title', '')} {listing.get('size') or ''}"
+        for size_token in equivalent_tokens:
+            if re.fullmatch(r"\d+(?:\.\d+)?", str(size_token)) and float(size_token) >= 40:
+                pattern = size_pattern(size_token)
+                if re.search(rf"(?<!\$){pattern}", title_and_size, re.IGNORECASE):
+                    return True
     for size_token in equivalent_tokens:
         pattern = size_pattern(size_token, qualifier_required=True)
         if pattern and re.search(pattern, haystack, re.IGNORECASE):
@@ -5409,7 +5425,7 @@ def _text_safety_hard_fails(haystack, category=None):
         haystack, ("kiton", "brunello cucinelli", "loro piana", "brioni")
     ):
         return "button-down/button-up dress shirt not wanted (Kiton exempted)"
-    if COUNTERFEIT_SIGNALS.search(haystack):
+    if COUNTERFEIT_SIGNALS.search(MARGIELA_REPLICA_LINE.sub(" ", haystack)):
         return "counterfeit/replica listing language in title/description"
     obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
     if obfuscation_hit:

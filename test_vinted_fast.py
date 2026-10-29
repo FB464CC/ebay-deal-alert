@@ -440,7 +440,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     assert searches["vinted-e-marinella-tie"]["size"] is None
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 89
+    assert len(fast.enabled_vinted_searches()) == 93
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -546,6 +546,11 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-edward-green-shoes": 250,
         "vinted-gaziano-girling-shoes": 250,
         "vinted-santoni-shoes": 150,
+        # Owner, 10-29: designer sneakers and shell cordovan.
+        "vinted-margiela-shoes": 150,
+        "vinted-common-projects-shoes": 100,
+        "vinted-alden-shoes": 200,
+        "vinted-crockett-jones-shoes": 150,
     }
     actual = {
         search["id"]: search["max_price"]
@@ -2273,6 +2278,26 @@ def test_shoe_search_accepts_us_12_to_13_and_uk_eu_equivalents():
     ok = lambda size: engine.listing_matches_size_filter(search, {"title": "Loro Piana loafers", "size": size, "platform": "vinted"})
     assert ok("12") and ok("12.5") and ok("13") and ok("UK 11") and ok("EU 46")
     assert not ok("11") and not ok("10.5") and not ok("14")
+
+
+def test_designer_sneakers_bare_eu_size_and_margiela_replica_line(tmp_path):
+    search = next(s for s in engine.SAVED_SEARCHES if s["id"] == "vinted-margiela-shoes")
+    ok = lambda title, size=None, desc="": engine.listing_matches_size_filter(
+        search, {"title": title, "size": size, "description": desc, "platform": "vinted"})
+    assert ok("Maison Margiela Replica GAT 45") and ok("Margiela GAT", "46")
+    assert not ok("Margiela GAT 43") and not ok("Margiela GAT", desc="$46 shipped")
+    assert engine._text_safety_hard_fails("maison margiela replica gat sneakers") is None
+    assert engine._text_safety_hard_fails("margiela gat replica 1:1") is not None
+    assert engine._text_safety_hard_fails("nike dunk replica") is not None
+    lane = fast.VintedFastLane(
+        searches=[s for s in engine.SAVED_SEARCHES if "vinted" in (s.get("platforms") or [])],
+        state_path=tmp_path / "s", seen_db_path=tmp_path / "d",
+        log_path=tmp_path / "l", schedule=[],
+    )
+    item = {"id": 1, "title": "Maison Margiela Replica GAT sneakers", "url": "/items/1",
+            "price": {"amount": "90.00"}, "photo": {"url": "https://x/a.webp"}, "photos": [],
+            "item_box": {"first_line": "Maison Margiela"}}
+    assert lane._route(item, "margiela replica")["id"] == "vinted-margiela-shoes"
 
 
 @pytest.mark.parametrize(

@@ -338,6 +338,8 @@ _VINTED_BRAND_DISPLAY_NAMES = {
     "tom ford": "Tom Ford",
     "brunello cucinelli": "Brunello Cucinelli",
     "loro piana": "Loro Piana",
+    "margiela": "Maison Margiela",
+    "crockett": "Crockett & Jones",
     "parfums de marly": "Parfums de Marly",
     "kilian": "Kilian",
 }
@@ -1066,7 +1068,8 @@ def _vinted_strong_prompt(result, brand):
         f"brand_label_reason. label_shows_different_brand is true when any readable "
         f"garment label names a maker other than {brand} (for example a store brand "
         f"suit made from {brand} fabric), otherwise false. counterfeit_indicators is true for inconsistent labels, "
-        "fonts, construction, stitching, hardware, seller replica language, or other "
+        "fonts, construction, stitching, hardware, seller replica language (Maison "
+        "Margiela's Replica line name is not replica language), or other "
         "authenticity concerns. condition_grade must be exactly one of nwt, excellent, "
         "good, fair, or poor. Inspect for pilling, stains, holes, fading, and alterations, "
         "and include any description mention of odor; list every issue in flaws_found. "

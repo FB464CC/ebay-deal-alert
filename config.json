@@ -1831,6 +1831,118 @@
       "category": "footwear"
     },
     {
+      "query": "margiela replica -tabi -mm6 -perfume -fragrance -cologne -parfum -edt -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-margiela-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "\"common projects\" -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 100,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-common-projects-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "alden -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf -skechers -\"slip-ins\" -\"slip ins\" -meroe",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 200,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-alden-shoes",
+      "category": "footwear"
+    },
+    {
+      "query": "crockett jones -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "12",
+        "12.5",
+        "13"
+      ],
+      "size_equivalents": [
+        "11",
+        "11.5",
+        "12",
+        "45",
+        "45.5",
+        "46",
+        "46.5",
+        "47"
+      ],
+      "max_price": 150,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "category_id": "53120",
+      "id": "vinted-crockett-jones-shoes",
+      "category": "footwear"
+    },
+    {
       "query": "canali suit -women -womens -ladies -girls -kids -scarf",
       "size": [
         "40",
@@ -4843,6 +4955,10 @@
     {"query": "berluti", "max_price": 250},
     {"query": "gaziano", "max_price": 250},
     {"query": "santoni", "max_price": 150},
+    {"query": "margiela replica", "max_price": 150},
+    {"query": "common projects", "max_price": 100},
+    {"query": "alden", "max_price": 200},
+    {"query": "crockett jones", "max_price": 150},
     {"query": "canali", "max_price": 130},
     {"query": "delina exclusif", "max_price": 290},
     {"query": "oriana marly", "max_price": 200},
@@ -4881,6 +4997,10 @@
     "berluti": 150,
     "gaziano": 150,
     "santoni": 100,
+    "margiela": 100,
+    "common projects": 80,
+    "alden": 150,
+    "crockett": 120,
     "parfums de marly": 150,
     "kilian": 150,
     "default": 60
