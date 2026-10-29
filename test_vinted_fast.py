@@ -1131,6 +1131,8 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Zegna silk tie", 5, "other", False),
         ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", False),  # floor < $100
         ("Loro Piana cashmere crewneck", 30, "knitwear", True),
+        ("Canali two thin pullover seaters navy blue and burgundy", 20, "knitwear", True),
+        ("Zegna polo shirt", 15, "golf", True),
         ("Canali Camisa de manga larga", 8, "other", False),  # mis-tagged shirt
         ("Parfums de Marly Delina Exclusif perfume 75ml", 10, "fragrance", False),
     ]

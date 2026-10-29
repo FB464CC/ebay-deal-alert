@@ -78,6 +78,9 @@ VINTED_INSTANT_MIN_FLOOR = 100.0
 # luxury brand was a mis-tag (production, Canali "Camisa de manga larga").
 _VINTED_INSTANT_GARMENT = re.compile(
     r"\b(?:cashmere|merino|vicu.a|alpaca|camel ?hair|sweaters?|cardigans?|jumpers?"
+    # Owner, 10-29: a $20 Canali "two thin pullover seaters" missed the
+    # instant ping and the verified alert landed after it sold.
+    r"|pullovers?|seaters?|v[- ]?necks?|half[- ]?zip|polos?"
     r"|knit(?:wear)?|crew ?neck|turtle ?neck|quarter[- ]?zip|1/4[- ]?zip|blazers?"
     r"|sport ?coats?|jackets?|coats?|overcoats?|suits?|tuxedo|suede|leather|trousers)\b",
     re.IGNORECASE,
