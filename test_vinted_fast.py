@@ -1135,6 +1135,8 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Zegna polo shirt", 15, "golf", True),
         ("Canali Camisa de manga larga", 8, "other", False),  # mis-tagged shirt
         ("Parfums de Marly Delina Exclusif perfume 75ml", 10, "fragrance", False),
+        ("Tom Ford Ombré Leather Mini", 12, "other", False),
+        ("Brooks Brothers Mens suit", 22, "tailoring", False),
     ]
     for title, price, category, expected in cases:
         _listing, result = _apparel_listing_result(

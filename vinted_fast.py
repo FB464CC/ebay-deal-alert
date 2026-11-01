@@ -251,6 +251,8 @@ _VINTED_FRAGRANCE_USED_SUMMARY = re.compile(
 _VINTED_INSTANT_SKIP_WORDS = re.compile(
     r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|sunglass(?:es)?|glasses|frames?"
     r"|perfume|cologne|fragrance|parfum|eau|ml|candle|lip|balm|socks?|cufflinks?"
+    # Tom Ford "Ombre Leather" is a fragrance (production, 10-30/10-31).
+    r"|ombr[eé]|oud|edp|edt|minis?|spray|tester"
     r"|hanger|scarf|hat|cap|beanie|pocket square|keychain|card holder|box|dust ?bag"
     r"|shoes?|sneakers?|loafers?|boots?|sandals?|slippers?|trainers?|unisex"
     r"|women'?s?|ladies|girls?|kids?|boys?)\b",
@@ -1559,6 +1561,10 @@ class VintedFastLane:
         title = str(listing.get("title") or "")
         if (
             floor < VINTED_INSTANT_MIN_FLOOR
+            # Owner: Brooks Brothers only as an expensive suit, which a
+            # title can't show; 5/5 instant pings were rejected (10-30..11-01).
+            or result.get("vinted_brand_key") in _VINTED_FULL_FLOOR_BRANDS
+            or "brooks brothers" in title.casefold()
             or price is None
             or price > floor * VINTED_INSTANT_ALERT_FRACTION
             or _VINTED_INSTANT_SKIP_WORDS.search(title)
