@@ -466,6 +466,49 @@ def _off_profile_reason(text, schools_only=False):
     return None
 
 
+# Owner (11-03): tops M-XL, suits 40-44 ("i'll never be a xxxl"). Catch-all
+# brand searches carry no size list, so drop a stated size that can't fit;
+# an unstated size still passes.
+_VINTED_SIZED_CATEGORIES = {"golf", "other", "knitwear", "outerwear", "tailoring"}
+_OFF_LETTER = r"(?:XXS|XS|S|XXL|XXXL|XXXXL|[2-5]XL|[2-5]X)"
+_FIT_LETTER = r"(?:M|L|XL|medium|large)"
+_SIZE_FIELD_OFF = re.compile(rf"^\s*{_OFF_LETTER}\b", re.IGNORECASE)
+_SIZE_FIELD_FIT = re.compile(rf"\b{_FIT_LETTER}\b", re.IGNORECASE)
+_TITLE_SIZE_OFF = re.compile(
+    rf"\b(?:size|sz)\.?\s*(?:{_OFF_LETTER}|x-?small|small|xx-?large)\b"
+    r"|\bmen['’]?s\s+(?:x-?small|small)\b",
+    re.IGNORECASE,
+)
+_TITLE_LETTER_OFF = re.compile(r"\b(?:XXS|XS|XXL|XXXL|XXXXL|[2-5]XL)\b")
+_TITLE_SIZE_FIT = re.compile(rf"\b(?:size|sz)\.?\s*{_FIT_LETTER}\b", re.IGNORECASE)
+_SUIT_CHEST_OFF = re.compile(r"\b(?:3[0-9]|4[5-9]|5[0-9])\s?[RSL]\b")
+_SUIT_CHEST_FIT = re.compile(r"\b4[0-4]\s?[RSL]\b")
+
+
+def _off_size_reason(search, listing, category):
+    if search.get("size") or category not in _VINTED_SIZED_CATEGORIES:
+        return None
+    size = str(listing.get("size") or "")
+    title = str(listing.get("title") or "")
+    if size and _SIZE_FIELD_FIT.search(size):
+        return None
+    if _SIZE_FIELD_OFF.search(size):
+        return f"size {size.strip()} won't fit (owner wears M-XL)"
+    if not _TITLE_SIZE_FIT.search(title) and (
+        _TITLE_SIZE_OFF.search(title) or _TITLE_LETTER_OFF.search(title)
+    ):
+        return "title size won't fit (owner wears M-XL)"
+    text = f"{size} {title}"
+    if (
+        _SUIT_CHEST_OFF.search(text)
+        and not _SUIT_CHEST_FIT.search(text)
+        # "34R" on trousers is the waist, not a jacket chest.
+        and not re.search(r"\b(?:pants?|trousers?|slacks|jeans|chinos?)\b", title, re.I)
+    ):
+        return "suit size won't fit (owner wears 40-44)"
+    return None
+
+
 def _vinted_apparel_bar_reason(result, category):
     """Cheap-photo requirements that must pass before the strong look."""
     if category not in VINTED_APPAREL_CATEGORIES:
@@ -1617,6 +1660,7 @@ class VintedFastLane:
                     listing, target.get("query", "")
                 )
                 or not engine.listing_matches_size_filter(target, listing)
+                or _off_size_reason(target, listing, category)
                 or _off_profile_reason(title)
                 or _VINTED_EYEWEAR.search(title)
             ):
@@ -1934,6 +1978,9 @@ class VintedFastLane:
             listing, search.get("query", "")
         ):
             return listing, None, "marketplace title is not relevant to saved query"
+        size_reason = _off_size_reason(search, listing, category)
+        if size_reason:
+            return listing, None, size_reason
         # The catalogue currently exposes only the cover photo. Reuse the
         # public-page description fetch to collect its gallery preloads too,
         # and apply the same four-second floor before this Vinted request.

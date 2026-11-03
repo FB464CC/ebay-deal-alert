@@ -1209,6 +1209,31 @@ def test_brand_feed_peek_pings_without_moving_high_water(tmp_path):
         lane._peek_brand_feed()
 
 
+def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
+    catch_all = {"query": "brioni"}
+    off = [
+        ("S", ""), ("XXL", ""), ("3XL", ""), ("S / 36-38", ""), ("XS", ""),
+        ("", "Peter Millar Flannel size XXL"),
+        ("", "Peter Millar Polo Size Small"),
+        ("", "Men’s Small Zegna Sweater"),
+        ("", "Ermenegildo Zegna Trofeo EU 56 US 46L Blazer"),
+        ("", "Canali Richards Wool Blazer Men's 50R"),
+    ]
+    fits = [
+        ("S/M", ""), ("L", ""), ("XL", ""), ("M / 38-40", ""), ("One size", ""),
+        ("", "Brioni Suit 42R"), ("", "Brioni Men's Sweater"),
+        ("", "Canali Navy Wool Dress Pants – Men’s Size 34R"),
+        ("", "Jeans W34 L32"),
+    ]
+    for size, title in off:
+        assert fast._off_size_reason(catch_all, {"size": size, "title": title}, "other"), (size, title)
+    for size, title in fits:
+        assert fast._off_size_reason(catch_all, {"size": size, "title": title}, "other") is None, (size, title)
+    # Sized searches keep their own list; shoes and ties are not letter-sized.
+    assert fast._off_size_reason({"query": "x", "size": ["S"]}, {"size": "S"}, "other") is None
+    assert fast._off_size_reason(catch_all, {"size": "S"}, "footwear") is None
+
+
 def test_brand_peek_block_in_item_loop_backs_off_instead_of_crashing(tmp_path):
     ticks = iter(x / 100 for x in range(10_000))
     search = {"id": "s", "query": "peter millar polo", "platforms": ["vinted"]}
