@@ -39,8 +39,9 @@ VINTED_WEB_CATALOG_URL = "https://www.vinted.com/catalog"
 VINTED_BRAND_FEED_IDS = [int(i) for i in engine._CONFIG.get("VINTED_BRAND_FEED_IDS", [])]
 VINTED_BRAND_FEED_MAX_PRICE = engine._CONFIG.get("VINTED_BRAND_FEED_MAX_PRICE")
 VINTED_TEXT_FEEDS = list(engine._CONFIG.get("VINTED_TEXT_FEEDS", []))
-# Megasteals come from the brand feed (27 of 30 alerts, 10-31..11-03), so it
-# gets k polls per text-feed poll at the same total request rate.
+# Polls of the brand feed per text-feed poll. Keep 1: the www.vinted.com
+# catalog page allows ~30 requests/min; at 2 (~40/min, 11-03 production) it
+# answered 429 every ~45 s and the 60 s backoffs blinded the lane half the time.
 VINTED_BRAND_SLOTS_PER_TEXT = max(1, int(engine._CONFIG.get("VINTED_BRAND_SLOTS_PER_TEXT", 1)))
 VINTED_BRAND_FEED_TIMEOUT = 4
 VINTED_FAST_BACKOFF_INITIAL_SECONDS = 60
@@ -1811,9 +1812,7 @@ class VintedFastLane:
         threading.Thread(target=call, daemon=True, name="vinted-ai").start()
         while not done.wait(VINTED_FAST_POLL_SECONDS):
             try:
-                # Nothing else is requesting while AI runs, so the brand feed
-                # can take the whole 1 req/s floor.
-                self._peek_brand_feed(min_gap=VINTED_FAST_POLL_SECONDS)
+                self._peek_brand_feed()
             except VintedRequestBlocked as exc:
                 # Keep the paid AI result; the run loop backs off once this
                 # item is finished (re-running it would pay twice).
@@ -1822,7 +1821,7 @@ class VintedFastLane:
             raise box["error"]
         return box["value"]
 
-    def _peek_brand_feed(self, min_gap=None):
+    def _peek_brand_feed(self):
         """Re-poll the brand feed for instant pings while slow per-item work
         runs. Doesn't move the high-water mark, so the scheduled poll still
         processes these items fully; the shared request floor still applies."""
@@ -1831,8 +1830,8 @@ class VintedFastLane:
         conn, main_conn, state, feed = self._peek_ctx
         if (
             self._last_brand_poll is not None
-            and self.clock() - self._last_brand_poll
-            < (2 * VINTED_FAST_POLL_SECONDS if min_gap is None else min_gap)
+            # >= 2 s apart: the catalog page's ~30/min limit (see above).
+            and self.clock() - self._last_brand_poll < 2 * VINTED_FAST_POLL_SECONDS
         ):
             return
         status, items = self._brand_catalog_request(feed)

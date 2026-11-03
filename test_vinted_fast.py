@@ -1262,7 +1262,7 @@ def test_slow_ai_call_keeps_polling_the_brand_feed(tmp_path):
     lane._peek_ctx = object()
     peeked = threading.Event()
     with mock.patch.object(
-        lane, "_peek_brand_feed", side_effect=lambda **_kw: peeked.set()
+        lane, "_peek_brand_feed", side_effect=lambda: peeked.set()
     ) as peek:
         assert lane._while_peeking(lambda: 42 if peeked.wait(5) else None) == 42
     peek.assert_called()
@@ -1273,7 +1273,7 @@ def test_slow_ai_call_keeps_polling_the_brand_feed(tmp_path):
         finished.append(True)
 
     peeked.clear()
-    def blocked(**_kw):
+    def blocked():
         peeked.set()
         raise fast.VintedRequestBlocked(429)
 
@@ -2552,7 +2552,8 @@ def test_feed_schedule_gives_brand_feed_k_slots_per_text_feed():
     assert [kind for kind, _ in schedule] == ["brands", "text", "brands", "text"]
     schedule = fast.build_feed_schedule([1, 2], feeds, 130, brand_slots=2)
     assert [kind for kind, _ in schedule] == ["brands", "brands", "text"] * 2
-    assert fast.VINTED_BRAND_SLOTS_PER_TEXT == 2
+    # The web catalog page 429s above ~30 requests/min (production 11-03).
+    assert fast.VINTED_BRAND_SLOTS_PER_TEXT == 1
     assert schedule[0][1]["brand_ids"] == [1, 2]
     assert fast.build_feed_schedule([], [{"query": "poker chip"}], None)[0][0] == "text"
 
