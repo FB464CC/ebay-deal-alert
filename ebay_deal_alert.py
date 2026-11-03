@@ -8924,7 +8924,19 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         # candidate is discarded before its first AI check.
         if deal_rating is None:
             return "knitwear bar: no AI price estimate yet - needs a real AI check"
-        if deal_rating != "Steal":
+        # Owner 11-03: of six Vinted "Great Deal" sweaters only the $12 Peter
+        # Millar half-zip was worth a ping ($26-55 ones were right to skip),
+        # so a Great Deal passes at or under half the brand's resale floor.
+        floor = result.get("vinted_min_resale_floor")
+        item_price = _sane_ai_price(result.get("item_price"))
+        cheap_great_deal = (
+            deal_rating == "Great Deal"
+            and result.get("vinted_fast_lane")
+            and floor
+            and item_price is not None
+            and item_price <= floor * 0.5
+        )
+        if deal_rating != "Steal" and not cheap_great_deal:
             return f"knitwear bar: deal_rating '{deal_rating}' below Steal - only grail-or-better on sweaters"
         if discount_pct is None or discount_pct <= 0:
             return "knitwear bar: non-positive discount_pct"

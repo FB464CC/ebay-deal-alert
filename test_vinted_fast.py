@@ -2348,6 +2348,17 @@ def test_vinted_knitwear_replaces_only_grab_on_sight_tier_rule():
     assert "brand not grab_on_sight-tier" in engine.is_blocked_by_steal_quality_gate(
         main_poll, category="knitwear"
     )
+    # A Great Deal sweater passes only at <= half the brand floor ($12 vs $30).
+    great = {**base, "deal_rating": "Great Deal", "vinted_min_resale_floor": 30}
+    assert engine.is_blocked_by_steal_quality_gate(
+        {**great, "item_price": 12}, category="knitwear"
+    ) is None
+    assert "below Steal" in engine.is_blocked_by_steal_quality_gate(
+        {**great, "item_price": 26}, category="knitwear"
+    )
+    assert "below Steal" in engine.is_blocked_by_steal_quality_gate(
+        {**great, "item_price": 12, "deal_rating": "Good Deal"}, category="knitwear"
+    )
 
 
 def test_poker_chips_pipeline_is_unchanged_and_skips_strong_look(tmp_path):
