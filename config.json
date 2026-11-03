@@ -4970,7 +4970,7 @@
     {"query": "longines", "max_price": 400}
   ],
   "VINTED_FAST_MAX_AI_CALLS_PER_RUN": 200,
-  "VINTED_EXPECTED_PAID_FRACTION": 0.70,
+  "VINTED_EXPECTED_PAID_FRACTION": 1.0,
   "VINTED_PRESCREEN_MODEL": "google/gemma-3-12b-it",
   "VINTED_PRESCREEN_FALLBACK_MODEL": "google/gemini-2.5-flash-lite",
   "VINTED_PRESCREEN_MAX_PER_RUN": 2000,

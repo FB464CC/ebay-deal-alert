@@ -9430,9 +9430,7 @@ def append_alert_log(
         "vinted_brand",
         "vinted_brand_key",
         "vinted_min_resale_floor",
-        "vinted_opening_offer_fraction",
         "vinted_expected_paid_fraction",
-        "vinted_opening_offer",
         "vinted_expected_paid",
         "vinted_prescreen_model",
         "vinted_prescreen_answer",
@@ -9925,14 +9923,11 @@ def send_alert(result):
     message = f"[{source}] {price_line} - {title}"
     negotiation_line = None
     if listing.get("platform") == "vinted":
-        opening_offer = result.get("vinted_opening_offer")
         expected_paid = result.get("vinted_expected_paid")
-        if item_price is not None and opening_offer is not None and expected_paid is not None:
+        if expected_paid is not None:
             negotiation_line = (
-                f"List ${_money_without_noise(item_price)} -> "
-                f"open ${_money_without_noise(opening_offer)} (60%) -> "
-                f"expect ~${_money_without_noise(expected_paid)} "
-                "(owner median 70%)"
+                f"Buy now at list, ~${_money_without_noise(expected_paid)} all-in. "
+                "An offer risks losing it."
             )
     if result.get("vinted_strict_apparel"):
         vinted_brand = result.get("vinted_brand") or "Unknown brand"
@@ -9944,7 +9939,7 @@ def send_alert(result):
             vinted_expected = price
         message = (
             f"STEAL: {vinted_brand} {vinted_item} - "
-            f"~${_money_without_noise(vinted_expected)} expected vs "
+            f"~${_money_without_noise(vinted_expected)} all-in vs "
             f"~${_money_without_noise(vinted_resale)} resale "
             f"({vinted_pct}% off)"
         )

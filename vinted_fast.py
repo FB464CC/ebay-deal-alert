@@ -64,9 +64,8 @@ VINTED_STRONG_VISION_MODEL = engine._CONFIG.get(
     "VINTED_STRONG_VISION_MODEL", engine.GOLF_STRONG_VISION_MODEL
 )
 VINTED_EXPECTED_PAID_FRACTION = float(
-    engine._CONFIG.get("VINTED_EXPECTED_PAID_FRACTION", 0.70)
+    engine._CONFIG.get("VINTED_EXPECTED_PAID_FRACTION", 1.0)
 )
-VINTED_OPENING_OFFER_FRACTION = 0.60
 # Luxury apparel listed at or under this fraction of its brand resale floor
 # pings immediately, before the 15-30 s of AI checks; those steals sell in
 # about a minute. The verified alert still follows if it passes.
@@ -353,16 +352,11 @@ logger = logging.getLogger(__name__)
 
 
 def _set_vinted_negotiation_prices(result):
-    """Attach the owner's measured opener and expected negotiated landed price."""
-    item_price = engine._sane_ai_price(result.get("item_price"))
+    """Attach the landed price the deal is judged at. Owner (11-02): sellers
+    don't reliably accept offers and a real steal is bought at list before
+    anyone else can, so the configured fraction is 1.0 (full price)."""
     landed_list_price = engine._sane_ai_price(result.get("price"))
-    result["vinted_opening_offer_fraction"] = VINTED_OPENING_OFFER_FRACTION
     result["vinted_expected_paid_fraction"] = VINTED_EXPECTED_PAID_FRACTION
-    result["vinted_opening_offer"] = (
-        item_price * VINTED_OPENING_OFFER_FRACTION
-        if item_price is not None
-        else None
-    )
     result["vinted_expected_paid"] = (
         landed_list_price * VINTED_EXPECTED_PAID_FRACTION
         if landed_list_price is not None
@@ -1148,6 +1142,9 @@ class VintedFastLane:
         self.statuses = Counter()
         self._last_request_started = None
         self._summary_started = None
+        self._instant_pinged = set()
+        self._last_brand_poll = None
+        self._peek_ctx = None
 
     def _call_vinted_prescreen_model(self, model, content, hard_stop):
         if self.prescreen_calls >= VINTED_PRESCREEN_MAX_PER_RUN:
@@ -1559,6 +1556,9 @@ class VintedFastLane:
         price = engine._sane_ai_price(result.get("item_price"))
         listing = result.get("listing") or {}
         title = str(listing.get("title") or "")
+        if listing.get("itemId") in self._instant_pinged:
+            result["vinted_instant_alerted"] = True
+            return False
         if (
             floor < VINTED_INSTANT_MIN_FLOOR
             # Owner: Brooks Brothers only as an expensive suit, which a
@@ -1572,12 +1572,14 @@ class VintedFastLane:
         ):
             return False
         result["vinted_instant_alerted"] = True
+        self._instant_pinged.add(listing.get("itemId"))
         details = " · ".join(
             str(part) for part in (listing.get("size"), listing.get("condition")) if part
         )
         message = (
             f"${price:g} {title}\n{details}\n"
-            "Unverified: AI photo check still running. Tap to grab it."
+            "Unverified: seller and photo checks still running. Buy at list "
+            "now; an offer risks losing it."
         )
         logger.info("vinted-fast instant alert: $%g %s | %s", price, brand, title)
         self._ntfy(
@@ -1585,6 +1587,69 @@ class VintedFastLane:
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
         )
         return True
+
+    def _instant_prepass(self, conn, main_conn, items, kind, search):
+        """Instant pings straight from catalog rows, before any per-item
+        request or AI call (owner, 11-02: steals need the ping in a second or
+        two). Only network-free title/price/size gates run here; the full
+        pipeline still verifies every item afterwards."""
+        for item in items:
+            listing = marketplaces._vinted_item_to_listing(item)
+            if not listing or listing["itemId"] in self._instant_pinged:
+                continue
+            if _already_seen(conn, main_conn, listing["itemId"]):
+                continue
+            target = (
+                search if kind == "search"
+                else self._route(item, None if kind == "brands" else search["query"])
+            )
+            if target is None:
+                continue
+            category = engine.classify_search_category(target)
+            title = str(listing.get("title") or "")
+            _positive, excluded = marketplaces.split_query_exclusions(
+                target.get("query", "")
+            )
+            if (
+                marketplaces.title_matches_exclusion(title, excluded)
+                or not engine.is_relevant_marketplace_listing(
+                    listing, target.get("query", "")
+                )
+                or not engine.listing_matches_size_filter(target, listing)
+                or _off_profile_reason(title)
+                or _VINTED_EYEWEAR.search(title)
+            ):
+                continue
+            result = {
+                "listing": listing,
+                "item_price": float((listing.get("price") or {}).get("value") or 0),
+            }
+            _vinted_brand_and_floor(result)
+            if _menswear_shape_reason(listing, result.get("vinted_brand_key")):
+                continue
+            self._maybe_instant_alert(result, category)
+
+    def _peek_brand_feed(self):
+        """Re-poll the brand feed for instant pings while slow per-item work
+        runs. Doesn't move the high-water mark, so the scheduled poll still
+        processes these items fully; the shared 4 s floor still applies."""
+        if self._peek_ctx is None:
+            return
+        conn, main_conn, state, feed = self._peek_ctx
+        if (
+            self._last_brand_poll is not None
+            and self.clock() - self._last_brand_poll < 2 * VINTED_FAST_POLL_SECONDS
+        ):
+            return
+        status, items = self._brand_catalog_request(feed)
+        if status in {403, 429}:
+            raise VintedRequestBlocked(status)
+        if items is None or not 200 <= (status or 0) < 300:
+            return
+        new_items, _water = items_newer_than_high_water(
+            items, state["searches"].get(str(feed.get("id")))
+        )
+        self._instant_prepass(conn, main_conn, new_items, "brands", feed)
 
     def _ntfy(self, title, message, priority, tags, url=None, image_url=None):
         if self.dry_run or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
@@ -1663,6 +1728,7 @@ class VintedFastLane:
         if feed.get("max_price") is not None:
             params += [("price_to", feed["max_price"]), ("currency", "USD")]
         self._last_request_started = self.clock()
+        self._last_brand_poll = self._last_request_started
         self.stats["requests"] += 1
         try:
             response = self.session.get(
@@ -2133,6 +2199,7 @@ class VintedFastLane:
             )
             return
         self.ai_calls += 1
+        self._peek_brand_feed()
         ai_result = engine.check_photos_with_gemini(
             listing,
             category=category,
@@ -2269,6 +2336,11 @@ class VintedFastLane:
         self._summary_started = started
         totals = Counter()
         index = 0
+        brand_feed = next(
+            (feed for kind, feed in self.schedule if kind == "brands"), None
+        )
+        if brand_feed is not None and not self.dry_run:
+            self._peek_ctx = (lane_conn, main_conn, state, brand_feed)
         logger.info(
             "vinted-fast starting: searches=%s run_seconds=%.0f dry_run=%s",
             len(self.searches), self.run_seconds, self.dry_run,
@@ -2308,7 +2380,11 @@ class VintedFastLane:
                     totals["new_items"] += len(new_items)
                 pipeline_block_status = None
                 if not self.dry_run:
+                    self._instant_prepass(
+                        lane_conn, main_conn, new_items, kind, search
+                    )
                     for item in new_items:
+                        self._peek_brand_feed()
                         target = (
                             search if kind == "search"
                             else self._route(item, None if kind == "brands" else search["query"])

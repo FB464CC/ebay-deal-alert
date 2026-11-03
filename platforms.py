@@ -1729,7 +1729,9 @@ def search_shopgoodwill(saved_search):
 # seller reports, consistent with a live item page showing "from $0.00"). Use
 # the current paid-option price as a conservative flat estimate, ON TOP of the
 # real buyer-protection service fee below; the former $5.99 midpoint was stale.
-VINTED_ASSUMED_SHIPPING = 0.99
+# Owner (11-02): the $0.99 rate is a promo, not a given (heavier categories
+# use seller-set shipping, and the promo can end), so budget $4.99.
+VINTED_ASSUMED_SHIPPING = 4.99
 VINTED_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("vinted_rate_limit_state.json")
 VINTED_BACKOFF_INITIAL_MINUTES = 30
 VINTED_BACKOFF_MAX_MINUTES = 120

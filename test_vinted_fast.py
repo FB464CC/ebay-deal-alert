@@ -379,13 +379,13 @@ def test_only_items_newer_than_high_water_enter_pipeline():
     assert next_water["item_id"] == "4"
 
 
-def test_vinted_negotiation_price_math_uses_item_and_landed_list_prices():
+def test_vinted_deal_is_judged_at_full_landed_list_price():
+    # Owner: offers aren't reliably accepted and steals are bought at list.
     result = {"item_price": 100.0, "price": 120.0}
-    assert fast._set_vinted_negotiation_prices(result) == 84.0
-    assert result["vinted_opening_offer"] == 60.0
-    assert result["vinted_expected_paid"] == 84.0
-    assert result["vinted_opening_offer_fraction"] == 0.60
-    assert result["vinted_expected_paid_fraction"] == 0.70
+    assert fast._set_vinted_negotiation_prices(result) == 120.0
+    assert result["vinted_expected_paid"] == 120.0
+    assert result["vinted_expected_paid_fraction"] == 1.0
+    assert "vinted_opening_offer" not in result
 
 
 def test_vinted_brand_resale_floors_match_owner_profile():
@@ -1030,8 +1030,8 @@ def test_peter_millar_ten_dollar_list_at_35_resale_alerts_after_second_look(
     strong.assert_called_once()
     send.assert_called_once()
     assert row["delivered"] is True
-    assert round(row["vinted_expected_paid"], 2) == 7.42
-    assert row["deal_rating"] == "Steal"
+    assert round(row["vinted_expected_paid"], 2) == 10.6
+    assert row["deal_rating"] == "Great Deal"
 
 
 def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
@@ -1050,9 +1050,9 @@ def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
         strong_result=_passing_strong_result(35),
     )
     send.assert_not_called()
-    assert round(row["vinted_expected_paid"], 2) == 14.84
-    assert row["deal_rating"] == "Great Deal"
-    assert "exceeds 40% of conservative" in row["reason"]
+    assert round(row["vinted_expected_paid"], 2) == 21.2
+    assert row["deal_rating"] == "Good Deal"
+    assert "below Great Deal" in row["reason"]
 
 
 def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
@@ -1142,6 +1142,7 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         _listing, result = _apparel_listing_result(
             title, price, category, title.split()[0].lower(), search_id="s"
         )
+        lane._instant_pinged.clear()
         with mock.patch.object(fast.requests, "post") as post:
             assert lane._maybe_instant_alert(result, category) is expected, title
         assert post.called is expected, title
@@ -1149,6 +1150,63 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
             headers = post.call_args.kwargs["headers"]
             assert headers["Priority"] == "5"
             assert headers["Title"].startswith("FAST ")
+
+
+def test_instant_prepass_pings_from_catalog_row_before_any_item_request(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    item = _raw_item("zegna-1")
+    item["title"] = "Zegna Cashmere sweater"
+    item["price"] = {"amount": "10"}
+    search = {"id": "s", "query": "zegna", "category": "knitwear"}
+    with (
+        mock.patch.object(fast.requests, "post") as post,
+        mock.patch.object(engine, "fetch_vinted_item_page_details") as details,
+        mock.patch.object(fast, "fetch_vinted_seller_stats") as seller,
+    ):
+        lane._instant_prepass(conn, None, [item], "search", search)
+        lane._instant_prepass(conn, None, [item], "search", search)
+    conn.close()
+    details.assert_not_called()
+    seller.assert_not_called()
+    post.assert_called_once()
+    # The full pipeline's later call is a no-op but keeps the flag.
+    _listing, result = _apparel_listing_result(
+        "Zegna Cashmere sweater", 10, "knitwear", "zegna", search_id="s"
+    )
+    lane._instant_pinged.add(result["listing"]["itemId"])
+    with mock.patch.object(fast.requests, "post") as post:
+        assert lane._maybe_instant_alert(result, "knitwear") is False
+    post.assert_not_called()
+    assert result["vinted_instant_alerted"] is True
+
+
+def test_brand_feed_peek_pings_without_moving_high_water(tmp_path):
+    lane = _lane(tmp_path)
+    feed = {"id": "feed-brands", "brand_ids": [1]}
+    state = {"searches": {}}
+    lane._peek_ctx = (None, None, state, feed)
+    items = [_raw_item(5)]
+    with (
+        mock.patch.object(lane, "_brand_catalog_request", return_value=(200, items)),
+        mock.patch.object(lane, "_instant_prepass") as prepass,
+    ):
+        lane._peek_brand_feed()
+    prepass.assert_called_once()
+    assert state == {"searches": {}}
+    lane._last_brand_poll = lane.clock()
+    with mock.patch.object(lane, "_brand_catalog_request") as request:
+        lane._peek_brand_feed()  # polled moments ago: skip
+    request.assert_not_called()
+    lane._last_brand_poll = None
+    with (
+        mock.patch.object(lane, "_brand_catalog_request", return_value=(429, None)),
+        pytest.raises(fast.VintedRequestBlocked),
+    ):
+        lane._peek_brand_feed()
 
 
 def test_strong_look_uses_openrouter_when_gemini_rate_limits_everything(tmp_path, monkeypatch):
@@ -1241,7 +1299,7 @@ def test_womens_fragrance_routes_ignores_gender_and_reaches_real_ai(tmp_path):
     item = _fragrance_item(
         "delina-womens",
         "Parfums de Marly Delina Exclusif Women's EDP 75ml sealed",
-        220,
+        180,
     )
     lane = fast.VintedFastLane(
         searches=[search],
@@ -1456,7 +1514,7 @@ def test_fragrance_ai_bar_requires_clean_great_deal(
 ):
     listing, result = _apparel_listing_result(
         "Parfums de Marly Delina Exclusif Women's EDP 75ml sealed",
-        220,
+        180,
         "fragrance",
         "delina exclusif",
         search_id="vinted-pdm-delina-ai-bar",
@@ -2182,12 +2240,9 @@ def test_vinted_apparel_alert_starts_with_required_strict_summary(monkeypatch):
     lines = message.splitlines()
     assert lines[0] == (
         "STEAL: Peter Millar Crown Crafted Cashmere Quarter Zip - "
-        "~$13.36 expected vs ~$110 resale (88% off)"
+        "~$19.08 all-in vs ~$110 resale (88% off)"
     )
-    assert lines[1] == (
-        "List $18 -> open $10.80 (60%) -> expect ~$13.36 "
-        "(owner median 70%)"
-    )
+    assert lines[1] == "Buy now at list, ~$19.08 all-in. An offer risks losing it."
     assert "condition: excellent | size on tag: L" in message
     assert "premium: Crown Crafted cashmere tag is visible" in message
 
