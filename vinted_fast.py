@@ -466,9 +466,9 @@ def _off_profile_reason(text, schools_only=False):
     return None
 
 
-# Owner (11-03): tops M-XL, suits 40-44 ("i'll never be a xxxl"). Catch-all
-# brand searches carry no size list, so drop a stated size that can't fit;
-# an unstated size still passes.
+# Owner (11-03): tops M-XL (XXL only for a megasteal knit), suits 40-44,
+# pants waist 32-36 ("i'll never be a xxxl"). Catch-all brand searches carry
+# no size list, so drop a stated size that can't fit; an unstated one passes.
 _VINTED_SIZED_CATEGORIES = {"golf", "other", "knitwear", "outerwear", "tailoring"}
 _OFF_LETTER = r"(?:XXS|XS|S|XXL|XXXL|XXXXL|[2-5]XL|[2-5]X)"
 _FIT_LETTER = r"(?:M|L|XL|medium|large)"
@@ -485,11 +485,81 @@ _SUIT_CHEST_OFF = re.compile(r"\b(?:3[0-9]|4[5-9]|5[0-9])\s?[RSL]\b")
 _SUIT_CHEST_FIT = re.compile(r"\b4[0-4]\s?[RSL]\b")
 
 
-def _off_size_reason(search, listing, category):
-    if search.get("size") or category not in _VINTED_SIZED_CATEGORIES:
+_PANTS = re.compile(r"\b(?:pants?|trousers?|slacks|jeans|chinos?|shorts)\b", re.I)
+_WAIST_SURE = re.compile(r"\bW\s?(\d{2})\b|\bwaist\s*:?\s*(\d{2})\b|\b(\d{2})\s?[xX/]\s?\d{2}\b", re.I)
+_WAIST_LOOSE = re.compile(r"\b(\d{2})\s?[RSL]\b|\b(?:size|sz)\.?\s*(\d{2})\b", re.I)
+_SIZE_XXL = re.compile(r"^\s*(?:XXL|2XL|2X)\b", re.I)
+_TITLE_XXL = re.compile(r"\b(?:XXL|2XL)\b|\b(?:size|sz)\.?\s*xx-?large\b", re.I)
+_XXL_KNIT = re.compile(
+    r"\b(?:sweater|jumper|cardigan|crew\s?neck|pullover|turtleneck|knit|cashmere)\b", re.I
+)
+_XXL_FITTED = re.compile(
+    r"\b(?:polo|shirt|tee|jacket|blazer|coat|vest|gilet|suit|zip|pants?|trousers?|shorts)\b",
+    re.I,
+)
+
+
+def _stated_waists(size, title):
+    """US waists stated on a pants listing. Bare 44-58 is EU sizing, ignored."""
+    text = f"{size} {title}"
+    sure = [int(next(g for g in m.groups() if g)) for m in _WAIST_SURE.finditer(text)]
+    loose = [int(next(g for g in m.groups() if g)) for m in _WAIST_LOOSE.finditer(text)]
+    plain = re.match(r"^\s*(\d{2})\b", size)
+    if plain:
+        loose.append(int(plain.group(1)))
+    return sure + [w for w in loose if 26 <= w <= 42]
+
+
+def _pants_waist_fits(listing):
+    """True/False for a pants listing with a stated waist, else None."""
+    title = str(listing.get("title") or "")
+    if not _PANTS.search(title):
+        return None
+    waists = _stated_waists(str(listing.get("size") or ""), title)
+    if not waists:
+        return None
+    return any(32 <= waist <= 36 for waist in waists)
+
+
+def _xxl_megasteal(listing):
+    """Owner (11-03): XXL only for a cream-of-the-crop knit (instant-ping
+    price), never a polo, shirt, jacket or other fitted piece."""
+    title = str(listing.get("title") or "")
+    if (
+        not (_SIZE_XXL.search(str(listing.get("size") or "")) or _TITLE_XXL.search(title))
+        or not _XXL_KNIT.search(title)
+        or _XXL_FITTED.search(title)
+    ):
+        return False
+    price = engine._sane_ai_price((listing.get("price") or {}).get("value"))
+    _brand, floor = _vinted_brand_and_floor({"listing": listing})
+    return (
+        price is not None
+        and floor >= VINTED_INSTANT_MIN_FLOOR
+        and price <= floor * VINTED_INSTANT_ALERT_FRACTION
+    )
+
+
+def _fits_size_list(search, listing, category):
+    """The search's size list, plus a fitting pants waist or XXL megasteal
+    (letter-sized searches can't name either)."""
+    if engine.listing_matches_size_filter(search, listing):
+        return True
+    if category not in _VINTED_SIZED_CATEGORIES:
+        return False
+    return bool(_pants_waist_fits(listing)) or _xxl_megasteal(listing)
+
+
+def _off_size_reason(listing, category):
+    if category not in _VINTED_SIZED_CATEGORIES:
         return None
     size = str(listing.get("size") or "")
     title = str(listing.get("title") or "")
+    waist_fits = _pants_waist_fits(listing)
+    if waist_fits is not None:
+        return None if waist_fits else "pants waist won't fit (owner wears 32-36)"
+    if _xxl_megasteal(listing):
+        return None
     if size and _SIZE_FIELD_FIT.search(size):
         return None
     if _SIZE_FIELD_OFF.search(size):
@@ -499,12 +569,7 @@ def _off_size_reason(search, listing, category):
     ):
         return "title size won't fit (owner wears M-XL)"
     text = f"{size} {title}"
-    if (
-        _SUIT_CHEST_OFF.search(text)
-        and not _SUIT_CHEST_FIT.search(text)
-        # "34R" on trousers is the waist, not a jacket chest.
-        and not re.search(r"\b(?:pants?|trousers?|slacks|jeans|chinos?)\b", title, re.I)
-    ):
+    if _SUIT_CHEST_OFF.search(text) and not _SUIT_CHEST_FIT.search(text):
         return "suit size won't fit (owner wears 40-44)"
     return None
 
@@ -1659,8 +1724,8 @@ class VintedFastLane:
                 or not engine.is_relevant_marketplace_listing(
                     listing, target.get("query", "")
                 )
-                or not engine.listing_matches_size_filter(target, listing)
-                or _off_size_reason(target, listing, category)
+                or not _fits_size_list(target, listing, category)
+                or _off_size_reason(listing, category)
                 or _off_profile_reason(title)
                 or _VINTED_EYEWEAR.search(title)
             ):
@@ -1978,7 +2043,7 @@ class VintedFastLane:
             listing, search.get("query", "")
         ):
             return listing, None, "marketplace title is not relevant to saved query"
-        size_reason = _off_size_reason(search, listing, category)
+        size_reason = _off_size_reason(listing, category)
         if size_reason:
             return listing, None, size_reason
         # The catalogue currently exposes only the cover photo. Reuse the
@@ -2022,7 +2087,7 @@ class VintedFastLane:
             ]
         if engine.has_excluded_single_e_shoe_width(search, listing):
             return listing, None, "configured shoe size has excluded E width"
-        if not engine.listing_matches_size_filter(search, listing):
+        if not _fits_size_list(search, listing, category):
             return listing, None, "size mismatch for saved search"
         title = str(listing.get("title") or "")
         description = str(listing.get("description") or "")

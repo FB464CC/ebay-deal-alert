@@ -1210,7 +1210,6 @@ def test_brand_feed_peek_pings_without_moving_high_water(tmp_path):
 
 
 def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
-    catch_all = {"query": "brioni"}
     off = [
         ("S", ""), ("XXL", ""), ("3XL", ""), ("S / 36-38", ""), ("XS", ""),
         ("", "Peter Millar Flannel size XXL"),
@@ -1218,20 +1217,36 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
         ("", "Men’s Small Zegna Sweater"),
         ("", "Ermenegildo Zegna Trofeo EU 56 US 46L Blazer"),
         ("", "Canali Richards Wool Blazer Men's 50R"),
+        ("", "Like New Peter Millar 40/32 pants"),
+        ("W30", "Zegna chinos"), ("", "Brioni trousers 38R"),
+        ("XXL", "Loro Piana cashmere polo"),  # fitted piece: never XXL
+        ("XXL", "Peter Millar crewneck sweater"),  # $5 but floor too low
     ]
     fits = [
         ("S/M", ""), ("L", ""), ("XL", ""), ("M / 38-40", ""), ("One size", ""),
         ("", "Brioni Suit 42R"), ("", "Brioni Men's Sweater"),
         ("", "Canali Navy Wool Dress Pants – Men’s Size 34R"),
-        ("", "Jeans W34 L32"),
+        ("", "Jeans W34 L32"), ("", "Zegna trousers 33x32"), ("50", "Brioni trousers"),
+        ("XXL", "Loro Piana cashmere crewneck sweater"),  # $5: megasteal knit
     ]
+    def reason(size, title):
+        listing = {"size": size, "title": title, "price": {"value": 5}}
+        return fast._off_size_reason(listing, "other")
     for size, title in off:
-        assert fast._off_size_reason(catch_all, {"size": size, "title": title}, "other"), (size, title)
+        assert reason(size, title), (size, title)
     for size, title in fits:
-        assert fast._off_size_reason(catch_all, {"size": size, "title": title}, "other") is None, (size, title)
-    # Sized searches keep their own list; shoes and ties are not letter-sized.
-    assert fast._off_size_reason({"query": "x", "size": ["S"]}, {"size": "S"}, "other") is None
-    assert fast._off_size_reason(catch_all, {"size": "S"}, "footwear") is None
+        assert reason(size, title) is None, (size, title)
+    assert fast._off_size_reason({"size": "S"}, "footwear") is None
+    # Letter-sized searches can't name a waist or the XXL exception.
+    lettered = {"query": "peter millar pants", "size": ["M", "L", "XL"]}
+    pants = {"title": "Peter Millar pants 34x30", "price": {"value": 20}}
+    assert fast._fits_size_list(lettered, pants, "golf")
+    pants["title"] = "Peter Millar pants 40x30"
+    assert not fast._fits_size_list(lettered, pants, "golf")
+    knit = {"title": "Loro Piana cashmere sweater", "size": "XXL", "price": {"value": 30}}
+    assert fast._fits_size_list(lettered, knit, "knitwear")
+    knit["price"] = {"value": 300}
+    assert not fast._fits_size_list(lettered, knit, "knitwear")
 
 
 def test_brand_peek_block_in_item_loop_backs_off_instead_of_crashing(tmp_path):
