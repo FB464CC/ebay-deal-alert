@@ -1980,6 +1980,10 @@ class VintedFastLane:
             source_text = (item.get("item_box") or {}).get("first_line") or ""
         source_words = set(_words(source_text))
         title_words = _route_words(listing.get("title"))
+        # "Goddess EDP 100ml" tagged brand Burberry is still Burberry Goddess.
+        scent_words = title_words | set(
+            _words((item.get("item_box") or {}).get("first_line") or "")
+        )
         # Text feeds demand the garment words only where a catch-all brand
         # search exists to take everything else ("Edward Green Dover" has
         # only a shoe search; review 11-03).
@@ -2010,7 +2014,7 @@ class VintedFastLane:
             # not land in the Angels' Share search (production feed check).
             if (
                 search.get("category") in {"fragrance", "watches"}
-                and not set(query_words) <= title_words
+                and not set(query_words) <= scent_words
             ):
                 continue
             cap = search.get("max_price")

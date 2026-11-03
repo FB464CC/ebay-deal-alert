@@ -2537,6 +2537,20 @@
       "category": "fragrance"
     },
     {
+      "query": "burberry goddess -sample -decant -tester -dupe -inspired -empty -mini",
+      "size": null,
+      "min_price": 30,
+      "max_price": 100,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-burberry-goddess",
+      "category": "fragrance"
+    },
+    {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
       "max_price": 400,
@@ -4970,6 +4984,7 @@
     {"query": "delina exclusif", "max_price": 290},
     {"query": "oriana marly", "max_price": 200},
     {"query": "angels share kilian", "max_price": 230},
+    {"query": "burberry goddess", "max_price": 100},
     {"query": "seiko", "max_price": 400},
     {"query": "tissot", "max_price": 250},
     {"query": "hamilton watch", "max_price": 250},

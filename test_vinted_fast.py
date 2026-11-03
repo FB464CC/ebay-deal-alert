@@ -441,7 +441,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 93
+    assert len(fast.enabled_vinted_searches()) == 94
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -449,6 +449,8 @@ def test_fragrance_searches_and_feeds_load_with_price_floors():
         "vinted-pdm-delina-exclusif": (60, 290),
         "vinted-pdm-oriana": (60, 200),
         "vinted-kilian-angels-share": (60, 230),
+        # Owner 11-03: gf's Christmas ask; US retail $181/100ml.
+        "vinted-burberry-goddess": (30, 100),
     }
     searches = {search["id"]: search for search in engine.SAVED_SEARCHES}
     for search_id, (minimum, maximum) in expected.items():
@@ -460,7 +462,8 @@ def test_fragrance_searches_and_feeds_load_with_price_floors():
         assert search["size"] is None
         assert search["category"] == "fragrance"
         assert (search["min_price"], search["max_price"]) == (minimum, maximum)
-    assert {("delina exclusif", 290), ("oriana marly", 200), ("angels share kilian", 230)} <= {
+    assert {("delina exclusif", 290), ("oriana marly", 200), ("angels share kilian", 230),
+            ("burberry goddess", 100)} <= {
         (feed["query"], feed["max_price"]) for feed in fast.VINTED_TEXT_FEEDS
     }
     assert fast.VINTED_MIN_RESALE_BY_BRAND["parfums de marly"] == 150
@@ -497,6 +500,7 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-pdm-delina-exclusif": 290,
         "vinted-pdm-oriana": 200,
         "vinted-kilian-angels-share": 230,
+        "vinted-burberry-goddess": 100,
         "vinted-seiko-presage": 250,
         "vinted-seiko-cocktail-time": 220,
         "vinted-king-seiko": 400,
@@ -2684,6 +2688,12 @@ def test_designer_sneakers_bare_eu_size_and_margiela_replica_line(tmp_path):
             "angels share kilian",
             "By Kilian Angel's Share 100ml",
             "Kilian",
+        ),
+        (
+            "vinted-burberry-goddess",
+            "burberry goddess",
+            "Goddess Eau de Parfum Intense 100ml sealed",
+            "Burberry",
         ),
     ],
 )
