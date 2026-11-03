@@ -1209,6 +1209,38 @@ def test_brand_feed_peek_pings_without_moving_high_water(tmp_path):
         lane._peek_brand_feed()
 
 
+def test_brand_peek_block_in_item_loop_backs_off_instead_of_crashing(tmp_path):
+    ticks = iter(x / 100 for x in range(10_000))
+    search = {"id": "s", "query": "peter millar polo", "platforms": ["vinted"]}
+    lane = fast.VintedFastLane(
+        searches=[search],
+        state_path=tmp_path / "state.json",
+        seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl",
+        main_seen_db_path=tmp_path / "missing-main.db",
+        run_seconds=0.5,
+        clock=lambda: next(ticks),
+        sleeper=lambda _seconds: None,
+    )
+    old_water = fast._item_marker(_raw_item(0, timestamp=1))
+    (tmp_path / "state.json").write_text(json.dumps({"searches": {"s": old_water}}))
+    with (
+        mock.patch.object(lane, "_catalog_request", return_value=(200, [_raw_item(1)])),
+        mock.patch.object(lane, "_instant_prepass"),
+        mock.patch.object(
+            lane, "_peek_brand_feed", side_effect=fast.VintedRequestBlocked(429)
+        ),
+        mock.patch.object(lane, "_process_item") as process,
+        mock.patch.object(lane, "_backoff") as backoff,
+    ):
+        lane.run()
+    backoff.assert_called()
+    process.assert_not_called()
+    # Blocked before processing: the item stays unseen for the next poll.
+    saved = json.loads((tmp_path / "state.json").read_text())["searches"]["s"]
+    assert saved == json.loads(json.dumps(old_water))
+
+
 def test_strong_look_uses_openrouter_when_gemini_rate_limits_everything(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     lane = _lane(tmp_path)

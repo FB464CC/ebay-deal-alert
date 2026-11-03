@@ -1576,8 +1576,9 @@ class VintedFastLane:
         details = " · ".join(
             str(part) for part in (listing.get("size"), listing.get("condition")) if part
         )
+        all_in = price + engine.get_shipping_cost(listing)
         message = (
-            f"${price:g} {title}\n{details}\n"
+            f"${price:g} (~${all_in:.0f} all-in) {title}\n{details}\n"
             "Unverified: seller and photo checks still running. Buy at list "
             "now; an offer risks losing it."
         )
@@ -1632,7 +1633,7 @@ class VintedFastLane:
     def _peek_brand_feed(self):
         """Re-poll the brand feed for instant pings while slow per-item work
         runs. Doesn't move the high-water mark, so the scheduled poll still
-        processes these items fully; the shared 4 s floor still applies."""
+        processes these items fully; the shared request floor still applies."""
         if self._peek_ctx is None:
             return
         conn, main_conn, state, feed = self._peek_ctx
@@ -1936,6 +1937,7 @@ class VintedFastLane:
         # The catalogue currently exposes only the cover photo. Reuse the
         # public-page description fetch to collect its gallery preloads too,
         # and apply the same four-second floor before this Vinted request.
+        self._peek_brand_feed()
         self._respect_interval()
         self._last_request_started = self.clock()
         self.stats["requests"] += 1
@@ -2117,6 +2119,7 @@ class VintedFastLane:
             or category in VINTED_APPAREL_CATEGORIES
             or category == "school-gear"
         ):
+            self._peek_brand_feed()
             self._respect_interval()
             self._last_request_started = self.clock()
             self.stats["requests"] += 1
@@ -2384,7 +2387,6 @@ class VintedFastLane:
                         lane_conn, main_conn, new_items, kind, search
                     )
                     for item in new_items:
-                        self._peek_brand_feed()
                         target = (
                             search if kind == "search"
                             else self._route(item, None if kind == "brands" else search["query"])
@@ -2393,6 +2395,7 @@ class VintedFastLane:
                             totals["unrouted"] += 1
                             continue
                         try:
+                            self._peek_brand_feed()
                             self._process_item(
                                 lane_conn, main_conn, item, target, deadline
                             )
