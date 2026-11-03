@@ -104,7 +104,8 @@ _VINTED_WOMENS_DRESS = re.compile(
     r"\b(?:(?:t[\s-]?)?shirt|sweater|polo|slip|maxi|midi|mini|cocktail|wrap|sun"
     r"|wedding|party|evening|knit)[\s-]+dress(?:es)?\b(?![\s-]*shirts?\b)"
     r"|\bdress(?:es)?\b(?![\s-]*(?:up|code|occasions?)\b)(?!.*\b(?:shirts?|pants"
-    r"|trousers|slacks|shoes|socks|coats?|boots|belts?|watch)\b)",
+    # Production 11-03: "Canali ... double monk strap dress shoe" was a dress.
+    r"|trousers|slacks|shoes?|socks|coats?|boots?|loafers?|oxfords?|belts?|watch)\b)",
     re.IGNORECASE,
 )
 # Owner wants Gamecocks school gear only; any other school or team is out.

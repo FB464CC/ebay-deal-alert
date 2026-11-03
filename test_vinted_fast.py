@@ -1432,6 +1432,8 @@ def test_quoted_brand_shoe_searches_accept_any_shoe_title(tmp_path):
 def test_relaxed_waist_and_regex_false_positives():
     assert fast._pants_waist_fits({"title": "Peter Millar Golf Shorts Men's 34"}) is True
     assert fast._pants_waist_fits({"title": "Peter Millar Golf Shorts-40"}) is False
+    assert fast._off_profile_reason("Canali brown leather double monk strap dress shoe") is None
+    assert fast._off_profile_reason("Zegna silk wrap dress") == "women's dress, not menswear"
     assert not fast._VINTED_NOT_MENS.search("Peter Millar baby blue shorts")
     assert not fast._VINTED_NOT_MENS.search("Pinehurst Putter Boy polo")
     assert fast._VINTED_NOT_MENS.search("boys polo size 10")
