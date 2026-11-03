@@ -13,6 +13,7 @@ import math
 import os
 import re
 import sqlite3
+import threading
 import time
 from collections import Counter
 from contextlib import closing
@@ -38,6 +39,10 @@ VINTED_WEB_CATALOG_URL = "https://www.vinted.com/catalog"
 VINTED_BRAND_FEED_IDS = [int(i) for i in engine._CONFIG.get("VINTED_BRAND_FEED_IDS", [])]
 VINTED_BRAND_FEED_MAX_PRICE = engine._CONFIG.get("VINTED_BRAND_FEED_MAX_PRICE")
 VINTED_TEXT_FEEDS = list(engine._CONFIG.get("VINTED_TEXT_FEEDS", []))
+# Megasteals come from the brand feed (27 of 30 alerts, 10-31..11-03), so it
+# gets k polls per text-feed poll at the same total request rate.
+VINTED_BRAND_SLOTS_PER_TEXT = max(1, int(engine._CONFIG.get("VINTED_BRAND_SLOTS_PER_TEXT", 1)))
+VINTED_BRAND_FEED_TIMEOUT = 4
 VINTED_FAST_BACKOFF_INITIAL_SECONDS = 60
 VINTED_FAST_BACKOFF_MAX_SECONDS = 15 * 60
 VINTED_FAST_STATE_PATH = Path(__file__).resolve().with_name(
@@ -60,6 +65,11 @@ VINTED_FAST_MAX_AI_CALLS_PER_RUN = max(
 VINTED_STRONG_LOOK_MAX_PER_RUN = max(
     0, int(engine._CONFIG.get("VINTED_STRONG_LOOK_MAX_PER_RUN", 10))
 )
+# Audit 11-03: the golf 35 s timeout, tried up to three times plus a 30 s
+# OpenRouter backup, made the $30 Loro Piana alert land 116 s after detection.
+VINTED_STRONG_VISION_TIMEOUT_SECONDS = float(
+    engine._CONFIG.get("VINTED_STRONG_VISION_TIMEOUT_SECONDS", 15)
+)
 VINTED_STRONG_VISION_MODEL = engine._CONFIG.get(
     "VINTED_STRONG_VISION_MODEL", engine.GOLF_STRONG_VISION_MODEL
 )
@@ -81,7 +91,9 @@ _VINTED_INSTANT_GARMENT = re.compile(
     # instant ping and the verified alert landed after it sold.
     r"|pullovers?|seaters?|v[- ]?necks?|half[- ]?zip|polos?"
     r"|knit(?:wear)?|crew ?neck|turtle ?neck|quarter[- ]?zip|1/4[- ]?zip|blazers?"
-    r"|sport ?coats?|jackets?|coats?|overcoats?|suits?|tuxedo|suede|leather|trousers)\b",
+    r"|sport ?coats?|jackets?|coats?|overcoats?|suits?|tuxedo|suede|leather"
+    # Audit 11-03: $10-25 Canali/Zegna/Brioni trousers and jeans got no ping.
+    r"|trousers?|pants|slacks|chinos?|jeans)\b",
     re.IGNORECASE,
 )
 # Title-only: descriptions say "dress or casual" about menswear.
@@ -133,7 +145,8 @@ _VINTED_ELITE_SHIRT_BRANDS = frozenset(
     {"brunello cucinelli", "kiton", "loro piana", "brioni"}
 )
 _VINTED_LONE_TAILORING = re.compile(
-    r"\b(?:blazers?|sports?[\s-]?(?:coats?|jackets?)|dinner[\s-]+jackets?|tuxedo[\s-]+jackets?"
+    r"\b(?:blazers?|sports?[\s-]?(?:coats?|jackets?)|(?:dinner|dress)[\s-]+jackets?"
+    r"|tuxedo[\s-]+jackets?"
     r"|jacket[\s-]+only|suit[\s-]+(?:jackets?|coats?|pants|trousers|vests?|separates?))\b"
     # Live audit 10-26: "Zegna Double Breasted Jacket, 42R" / "pin stripe jacket".
     r"|\b(?:double|single)[\s-]?breasted\b|\bpin[\s-]?stripe\s+jackets?\b"
@@ -194,7 +207,9 @@ _VINTED_BEAUTY = re.compile(
 _VINTED_NOT_MENS = re.compile(
     r"\b(?:xxs|xs|s|m|l|xl|xxl)\s*/\s*us\s*(?:\d|1[0-8])(?:\s*-\s*\d{1,2})?\b"
     r"|\bit\s?\d{2}\s*/?\s*usa?\s?\d{1,2}\b|\bwom[ae]n'?s?\b"
-    r"|\b(?:boys?|girls?|child(?:ren)?|kids?|toddler|youth|infant|baby)\b",
+    # Not "baby blue" shorts or Pinehurst's "Putter Boy" logo (audit 11-03).
+    r"|\b(?:(?<!putter )boys?|girls?|child(?:ren)?|kids?|toddler|youth|infant"
+    r"|baby(?![\s-]+(?:blue|pink|cashmere|alpaca)))\b",
     re.IGNORECASE,
 )
 # Poker merch and single chips the engine's identity gate lets through.
@@ -481,13 +496,21 @@ _TITLE_SIZE_OFF = re.compile(
 )
 _TITLE_LETTER_OFF = re.compile(r"\b(?:XXS|XS|XXL|XXXL|XXXXL|[2-5]XL)\b")
 _TITLE_SIZE_FIT = re.compile(rf"\b(?:size|sz)\.?\s*{_FIT_LETTER}\b", re.IGNORECASE)
-_SUIT_CHEST_OFF = re.compile(r"\b(?:3[0-9]|4[5-9]|5[0-9])\s?[RSL]\b")
-_SUIT_CHEST_FIT = re.compile(r"\b4[0-4]\s?[RSL]\b")
+# 50-54 R/L is EU 40-44 (the suit searches accept it), so only 55+ is off.
+_SUIT_CHEST_OFF = re.compile(r"\b(?:3[0-9]|4[5-9]|5[5-9])\s?[RSL]\b")
+_SUIT_CHEST_FIT = re.compile(r"\b(?:4[0-4]|5[0-4])\s?[RSL]\b")
+_LETTER_SIZES = frozenset({"XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "2XL", "3XL"})
+_ROW_LETTER_SIZE = re.compile(r"^\s*(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b", re.I)
 
 
 _PANTS = re.compile(r"\b(?:pants?|trousers?|slacks|jeans|chinos?|shorts)\b", re.I)
 _WAIST_SURE = re.compile(r"\bW\s?(\d{2})\b|\bwaist\s*:?\s*(\d{2})\b|\b(\d{2})\s?[xX/]\s?\d{2}\b", re.I)
-_WAIST_LOOSE = re.compile(r"\b(\d{2})\s?[RSL]\b|\b(?:size|sz)\.?\s*(\d{2})\b", re.I)
+_WAIST_LOOSE = re.compile(
+    r"\b(\d{2})\s?[RSL]\b|\b(?:size|sz)\.?\s*(\d{2})\b"
+    # "Shorts Men's 34", "Golf Shorts-40" (audit 11-03).
+    r"|\bmen['’]?s?\s+(\d{2})\b|-\s*(\d{2})\s*$",
+    re.I,
+)
 _SIZE_XXL = re.compile(r"^\s*(?:XXL|2XL|2X)\b", re.I)
 _TITLE_XXL = re.compile(r"\b(?:XXL|2XL)\b|\b(?:size|sz)\.?\s*xx-?large\b", re.I)
 _XXL_KNIT = re.compile(
@@ -904,6 +927,9 @@ def items_newer_than_high_water(items, high_water):
     return newer, max((high_water, newest_marker), key=_marker_key)
 
 
+_GENDER_WORDS = frozenset({"men", "mens", "man", "women", "womens"})
+
+
 def _words(text):
     # Light plural folding so the "poker chip" feed matches "casino chips lot".
     words = re.findall(r"[a-z0-9]+", str(text or "").lower())
@@ -916,7 +942,7 @@ _ROUTE_SYNONYMS = {
     "shoe": {"loafer", "sneaker", "boot", "oxford", "derby", "derbie", "moccasin",
              "driver", "trainer", "monk", "brogue", "chukka", "espadrille", "walk"},
     "sweater": {"jumper", "cardigan", "crewneck", "crew", "pullover", "turtleneck"},
-    "quarter": {"half"},
+    "quarter": {"half", "qtr", "qzip"},
 }
 
 
@@ -975,8 +1001,8 @@ def parse_web_catalog_items(html):
     return [item for item in map(_web_item_to_catalog_item, entries) if item]
 
 
-def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None):
-    """Brand feed on every other request; text feeds share the rest."""
+def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None, brand_slots=None):
+    """Brand feed on k of every k+1 requests; text feeds share the rest."""
     brand_ids = VINTED_BRAND_FEED_IDS if brand_ids is None else brand_ids
     text_feeds = VINTED_TEXT_FEEDS if text_feeds is None else text_feeds
     brand_max_price = VINTED_BRAND_FEED_MAX_PRICE if brand_max_price is None else brand_max_price
@@ -992,8 +1018,9 @@ def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None):
     if not texts:
         return [brand]
     schedule = []
+    slots = VINTED_BRAND_SLOTS_PER_TEXT if brand_slots is None else brand_slots
     for text in texts:
-        schedule += [brand, text]
+        schedule += [brand] * slots + [text]
     return schedule
 
 
@@ -1253,6 +1280,7 @@ class VintedFastLane:
         self._instant_pinged = set()
         self._last_brand_poll = None
         self._peek_ctx = None
+        self._pending_block = None
 
     def _call_vinted_prescreen_model(self, model, content, hard_stop):
         if self.prescreen_calls >= VINTED_PRESCREEN_MAX_PER_RUN:
@@ -1459,10 +1487,13 @@ class VintedFastLane:
         )):
             if attempt == 2:
                 # Both models 503 together during Gemini overloads; a short
-                # pause usually clears it.
+                # pause usually clears it. A timeout is not an overload: a
+                # third slow try is what made verified alerts take ~2 min.
+                if _strong_http_status(last_error) not in (429, 500, 502, 503, 504):
+                    break
                 self.sleeper(3)
             timeout = engine._deadline_timeout(
-                hard_stop, engine.GOLF_STRONG_VISION_TIMEOUT_SECONDS
+                hard_stop, VINTED_STRONG_VISION_TIMEOUT_SECONDS
             )
             if timeout is None:
                 return self._strong_look_unavailable(
@@ -1498,6 +1529,7 @@ class VintedFastLane:
                 last_error = RuntimeError("strong model returned no usable JSON object")
             except Exception as exc:
                 last_error = exc
+                logger.warning("vinted-fast strong look %s failed: %s", model, exc)
                 # Timeouts, bad JSON and transient HTTP all try the fallback;
                 # only a hard 4xx (bad request/auth) stops here.
                 status = _strong_http_status(exc)
@@ -1565,7 +1597,7 @@ class VintedFastLane:
 
     def _openrouter_strong_look(self, prompt, images, hard_stop):
         api_key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
-        timeout = engine._deadline_timeout(hard_stop, 30)
+        timeout = engine._deadline_timeout(hard_stop, VINTED_STRONG_VISION_TIMEOUT_SECONDS)
         if not api_key or timeout is None:
             return None
         if not engine._reserve_paid_ai_spend(
@@ -1619,6 +1651,14 @@ class VintedFastLane:
         if result.get("vinted_strong_counterfeit_indicators") is not False:
             reason = result.get("vinted_strong_counterfeit_reason") or "assessment missing"
             return f"counterfeit indicators present or unresolved: {reason}"
+        tag_size = result.get("vinted_strong_size_on_tag")
+        if tag_size:
+            # Audit 11-03: 12 of 30 alerts had no size in the title; the tag
+            # photo is the only size evidence (a size-40 Canali got pinged).
+            listing = {**(result.get("listing") or {}), "size": tag_size}
+            size_reason = _off_size_reason(listing, result.get("category"))
+            if size_reason:
+                return f"tag size {tag_size}: {size_reason}"
         condition = result.get("vinted_strong_condition_grade")
         if condition not in {"nwt", "excellent", "good"}:
             flaws = result.get("vinted_strong_flaws_found")
@@ -1676,7 +1716,14 @@ class VintedFastLane:
             or price is None
             or price > floor * VINTED_INSTANT_ALERT_FRACTION
             or _VINTED_INSTANT_SKIP_WORDS.search(title)
-            or not _VINTED_INSTANT_GARMENT.search(title)
+            or not (
+                _VINTED_INSTANT_GARMENT.search(title)
+                # Woven shirts only from the houses the shirt rule allows.
+                or (
+                    result.get("vinted_brand_key") in _VINTED_ELITE_SHIRT_BRANDS
+                    and _VINTED_WOVEN_SHIRT.search(title)
+                )
+            )
         ):
             return False
         result["vinted_instant_alerted"] = True
@@ -1692,7 +1739,11 @@ class VintedFastLane:
         )
         logger.info("vinted-fast instant alert: $%g %s | %s", price, brand, title)
         self._ntfy(
-            f"FAST {brand} ${price:g}: {title[:50]}", message, "5", "zap",
+            # iOS push cuts long bodies, so size goes in the title.
+            f"FAST {brand} ${price:g}"
+            + (f" {listing['size']}" if listing.get("size") else "")
+            + f": {title[:50]}",
+            message, "5", "zap",
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
         )
         return True
@@ -1739,16 +1790,49 @@ class VintedFastLane:
                 continue
             self._maybe_instant_alert(result, category)
 
-    def _peek_brand_feed(self):
+    def _while_peeking(self, fn, *args, **kwargs):
+        """Run a slow AI call while the brand feed keeps being polled.
+        Audit 11-03: polling stopped for the whole 10-130 s of photo AI, so a
+        megasteal listed meanwhile got no ping (brand-feed gaps up to 133 s).
+        The call stays serial: only peeks run beside it, never other AI."""
+        if self._peek_ctx is None:
+            return fn(*args, **kwargs)
+        done, box = threading.Event(), {}
+
+        def call():
+            try:
+                box["value"] = fn(*args, **kwargs)
+            except BaseException as exc:  # re-raised on the main thread
+                box["error"] = exc
+            finally:
+                done.set()
+
+        # Daemon: a hung call must not hold the process open at exit.
+        threading.Thread(target=call, daemon=True, name="vinted-ai").start()
+        while not done.wait(VINTED_FAST_POLL_SECONDS):
+            try:
+                # Nothing else is requesting while AI runs, so the brand feed
+                # can take the whole 1 req/s floor.
+                self._peek_brand_feed(min_gap=VINTED_FAST_POLL_SECONDS)
+            except VintedRequestBlocked as exc:
+                # Keep the paid AI result; the run loop backs off once this
+                # item is finished (re-running it would pay twice).
+                self._pending_block = exc
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
+    def _peek_brand_feed(self, min_gap=None):
         """Re-poll the brand feed for instant pings while slow per-item work
         runs. Doesn't move the high-water mark, so the scheduled poll still
         processes these items fully; the shared request floor still applies."""
-        if self._peek_ctx is None:
+        if self._peek_ctx is None or self._pending_block is not None:
             return
         conn, main_conn, state, feed = self._peek_ctx
         if (
             self._last_brand_poll is not None
-            and self.clock() - self._last_brand_poll < 2 * VINTED_FAST_POLL_SECONDS
+            and self.clock() - self._last_brand_poll
+            < (2 * VINTED_FAST_POLL_SECONDS if min_gap is None else min_gap)
         ):
             return
         status, items = self._brand_catalog_request(feed)
@@ -1834,15 +1918,19 @@ class VintedFastLane:
         if self.session is None:
             return 0, None
         params = [("brand_ids[]", brand_id) for brand_id in feed["brand_ids"]]
-        params.append(("order", "newest_first"))
+        # Men's catalog only (live check 11-03: drops ~18% of rows, all women's,
+        # kids' or homeware, before they cost an item-page request).
+        params += [("catalog[]", 5), ("order", "newest_first")]
         if feed.get("max_price") is not None:
             params += [("price_to", feed["max_price"]), ("currency", "USD")]
         self._last_request_started = self.clock()
         self._last_brand_poll = self._last_request_started
         self.stats["requests"] += 1
         try:
+            # Short timeout: a stalled page (72 seen at the 8 s default) blinds
+            # the megasteal feed; the next poll is a second away anyway.
             response = self.session.get(
-                VINTED_WEB_CATALOG_URL, params=params, timeout=marketplaces.HTTP_TIMEOUT
+                VINTED_WEB_CATALOG_URL, params=params, timeout=VINTED_BRAND_FEED_TIMEOUT
             )
         except Exception as exc:
             logger.warning("vinted-fast brand feed request failed: %s", exc)
@@ -1884,6 +1972,14 @@ class VintedFastLane:
             source_text = (item.get("item_box") or {}).get("first_line") or ""
         source_words = set(_words(source_text))
         title_words = _route_words(listing.get("title"))
+        # Text feeds demand the garment words only where a catch-all brand
+        # search exists to take everything else ("Edward Green Dover" has
+        # only a shoe search; review 11-03).
+        strict = brand_feed or any(
+            (words := set(_words(marketplaces.split_query_exclusions(s.get("query", ""))[0])))
+            and words <= source_words
+            for s in self._routing_order
+        )
         price = marketplaces._to_float(((item.get("price") or {}).get("amount")))
         best, best_score = None, 0
         for search in self._routing_order:
@@ -1892,8 +1988,15 @@ class VintedFastLane:
             if not source_words & set(query_words):
                 continue
             # Every non-brand query word must be in the title, so an over-cap
-            # polo cannot fall through to the pricier jacket search.
-            if brand_feed and not set(query_words) - source_words <= title_words:
+            # polo cannot fall through to the pricier jacket search. Text feeds
+            # too (audit 11-03: a Zegna blazer over the catch-all cap landed in
+            # the Zegna shoe search and died as a size mismatch); poker
+            # wording varies too much.
+            if (
+                strict
+                and (brand_feed or engine.classify_search_category(search) != "poker-chips")
+                and not set(query_words) - source_words <= title_words
+            ):
                 continue
             # One house makes many scents: "Kilian Good Girl Gone Bad" must
             # not land in the Angels' Share search (production feed check).
@@ -1977,6 +2080,16 @@ class VintedFastLane:
         if not isinstance(items, list):
             logger.warning("vinted-fast response missing items for %s", search.get("id"))
             return status, None
+        for item in items:
+            # Titles often omit the brand ("Cashmere sweater"); the seller-picked
+            # brand rides in item_box.first_line (audit 11-03: 3 of 24 rows).
+            # Without it the item never routes or gets the default floor.
+            if not isinstance(item, dict):
+                continue
+            brand = str((item.get("item_box") or {}).get("first_line") or "").strip()
+            title = str(item.get("title") or "")
+            if brand and brand.lower() not in title.lower():
+                item["title"] = f"{brand} {title}".strip()
         return status, items
 
     def _backoff(self, deadline):
@@ -2046,6 +2159,32 @@ class VintedFastLane:
         size_reason = _off_size_reason(listing, category)
         if size_reason:
             return listing, None, size_reason
+        # Audit 11-03: ~1,000 of ~2,700 item-page requests were for listings
+        # the catalog row already rules out, each one delaying the brand feed.
+        # A seller-picked size is authoritative; only a missing one needs the
+        # description.
+        row_size = str(listing.get("size") or "")
+        row_letter = _ROW_LETTER_SIZE.match(row_size)
+        wanted = {str(s).upper() for s in search.get("size") or []}
+        if (
+            row_letter
+            and wanted
+            and wanted <= _LETTER_SIZES
+            and row_letter.group(1).upper() not in wanted
+            and not _fits_size_list(search, listing, category)
+        ):
+            # A seller-picked letter size can't be rescued by the description
+            # the way "11 (UK) / US 12" shoes or EU "50" knits can.
+            return listing, None, "size mismatch for saved search"
+        if category not in {"fragrance", "poker-chips"} and _VINTED_NOT_MENS.search(row_size):
+            return listing, None, f"women's/kids' size {row_size}, not menswear"
+        row_price = float((listing.get("price") or {}).get("value") or 0)
+        min_price = engine._sane_ai_price(search.get("min_price"))
+        if min_price is not None and row_price < min_price:
+            return listing, None, (
+                f"below fake-price floor: ${row_price:g} < ${min_price:g} "
+                "(almost certainly counterfeit)"
+            )
         # The catalogue currently exposes only the cover photo. Reuse the
         # public-page description fetch to collect its gallery preloads too,
         # and apply the same four-second floor before this Vinted request.
@@ -2198,14 +2337,39 @@ class VintedFastLane:
         category = result["category"]
         # Scam batches post the same generic title at the same price from
         # several accounts within minutes (3x "tom ford sunglasses" $69-70).
-        signature = (" ".join(_words(listing.get("title"))), round(item_price / 5))
-        if self._listing_signatures.setdefault(signature, item_id) != item_id:
-            self._finish(
-                conn, result, item_id, fingerprint, total_price,
-                "identical title and price to another listing this run "
-                "(scam batch pattern)",
-            )
-            return
+        # Audit 11-03: run-wide, seller-blind matching killed closet dumps
+        # ("mens peter millar polo" x3, one seller) yet let a Kiton relist
+        # alert twice. Same seller = relist; other seller = scam only where
+        # fakes cluster, and only within 15 minutes.
+        signature = (
+            " ".join(w for w in _words(listing.get("title")) if w not in _GENDER_WORDS),
+            round(item_price),
+        )
+        now = self.clock()
+        # Brand-feed rows carry only user.id, text-feed rows the login too.
+        seller_key = str(
+            (item.get("user") or {}).get("id")
+            or (listing.get("seller") or {}).get("username")
+            or ""
+        )
+        earlier = self._listing_signatures.get(signature)
+        if earlier is not None and earlier[0] != item_id:
+            _first_id, first_seller, first_seen = earlier
+            if first_seller and first_seller == seller_key:
+                self._finish(
+                    conn, result, item_id, fingerprint, total_price,
+                    "relist of a listing already judged this run (same seller)",
+                )
+                return
+            if category in VINTED_STRICT_SELLER_CATEGORIES and now - first_seen <= 900:
+                self._finish(
+                    conn, result, item_id, fingerprint, total_price,
+                    "identical title and price to another listing this run "
+                    "(scam batch pattern)",
+                )
+                return
+        else:
+            self._listing_signatures[signature] = (item_id, seller_key, now)
         off_profile = (
             _off_profile_reason(listing.get("title"))
             if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"
@@ -2270,7 +2434,7 @@ class VintedFastLane:
         self._maybe_instant_alert(result, category)
         if category != "fragrance":
             if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
-                jev_score = engine.jev_vinted_score(
+                jev_score = self._while_peeking(engine.jev_vinted_score,
                     listing, category, hard_stop=hard_stop
                 )
                 if jev_score is not None:
@@ -2290,7 +2454,7 @@ class VintedFastLane:
                     )
                     return
             else:
-                prescreen_answer = self._run_vinted_prescreen(result, hard_stop)
+                prescreen_answer = self._while_peeking(self._run_vinted_prescreen, result, hard_stop)
                 if prescreen_answer is False:
                     self._finish(
                         conn,
@@ -2315,7 +2479,7 @@ class VintedFastLane:
             return
         self.ai_calls += 1
         self._peek_brand_feed()
-        ai_result = engine.check_photos_with_gemini(
+        ai_result = self._while_peeking(engine.check_photos_with_gemini,
             listing,
             category=category,
             current_month_name=datetime.now(timezone.utc).strftime("%B"),
@@ -2375,7 +2539,7 @@ class VintedFastLane:
             )
             return
         if category in VINTED_APPAREL_CATEGORIES or category == "school-gear":
-            strong_result = self._run_vinted_strong_vision(result, hard_stop)
+            strong_result = self._while_peeking(self._run_vinted_strong_vision, result, hard_stop)
             if not isinstance(strong_result, dict):
                 unavailable = result.get("vinted_strong_unavailable_reason") or "unknown"
                 self._finish(
@@ -2399,7 +2563,7 @@ class VintedFastLane:
                     f"vinted strong second-look veto: {strong_veto}",
                 )
                 return
-        sanity = engine._deepseek_alert_sanity_check(
+        sanity = self._while_peeking(engine._deepseek_alert_sanity_check,
             listing, ai_result, category, hard_stop=hard_stop,
             search_query=search.get("query"),
         )
@@ -2511,6 +2675,9 @@ class VintedFastLane:
                             self._process_item(
                                 lane_conn, main_conn, item, target, deadline
                             )
+                            if self._pending_block is not None:
+                                pending, self._pending_block = self._pending_block, None
+                                raise pending
                         except VintedRequestBlocked as exc:
                             pipeline_block_status = exc.status
                             break

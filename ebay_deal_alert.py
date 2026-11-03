@@ -4648,8 +4648,25 @@ def brand_in(haystack, brands):
 WATCH_PAPERWORK_KEYWORDS = ("service booklet", "warranty card", "dustproof envelope")
 
 
+_FLAW_WORD = (
+    r"(?:stains?|stained|holes?|moth(?:\s+holes?)?|rips?|ripped|tears?|torn"
+    r"|snags?|mold|mildew|peeling|damage|flaws?|defects?)"
+)
+# Audit 11-03: all 56 Vinted 'stains' hard-fails came from descriptions, many
+# saying "no stains or holes" (a $243 Longines diver, cashmere at $5).
+_NEGATED_FLAWS = re.compile(
+    rf"\b(?:no|without|free\s+(?:of|from)|zero|not\s+any|never\s+(?:been\s+)?)\s+"
+    rf"(?:(?:visible|major|noticeable|obvious|any|signs?\s+of)\s+)*{_FLAW_WORD}"
+    rf"(?:\s*(?:,|/|&|\bor\b|\band\b)\s*(?:any\s+)?{_FLAW_WORD})*\b"
+    r"|\bstain[\s-]*(?:free|resistant|proof)\b",
+    re.IGNORECASE,
+)
+
+
 def condition_hard_fail_keyword(title, haystack):
-    """matched_keyword over CONDITION_HARD_FAIL_KEYWORDS, paperwork title-only."""
+    """matched_keyword over CONDITION_HARD_FAIL_KEYWORDS, paperwork title-only.
+    Negated flaws ("no stains or holes") don't count."""
+    haystack = _NEGATED_FLAWS.sub(" ", str(haystack or ""))
     if matched_keyword(title, WATCH_PAPERWORK_KEYWORDS) is not None:
         return matched_keyword(haystack, CONDITION_HARD_FAIL_KEYWORDS)
     return matched_keyword(
@@ -5564,7 +5581,9 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
             brand_tier = "grab_on_sight"
         elif brand_in(title_prefix, STANDARD_BRANDS):
             brand_tier = "standard"
-        if brand_in(haystack, CORPORATE_LOGO_KEYWORDS):
+        # Title only: 55 of 74 Vinted hits matched descriptions ("open to
+        # offers", "club collar"); the photo AI catches real logos (audit 11-03).
+        if brand_in(title.lower(), CORPORATE_LOGO_KEYWORDS):
             return {"verdict": "PASS", "reason": "corporate logo keyword match", "listing": listing}
         if brand_tier is None:
             flags.append("brand not recognized — manual check needed")

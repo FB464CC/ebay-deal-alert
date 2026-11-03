@@ -438,7 +438,8 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     )
     assert searches["vinted-brooks-brothers"]["size"] == ["40", "41", "42", "43", "44"]
     assert searches["vinted-e-marinella-tie"]["size"] is None
-    assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["L", "XL"]
+    # Owner (11-03): tops M-XL.
+    assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
     assert len(fast.enabled_vinted_searches()) == 93
 
@@ -1137,6 +1138,10 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Parfums de Marly Delina Exclusif perfume 75ml", 10, "fragrance", False),
         ("Tom Ford Ombré Leather Mini", 12, "other", False),
         ("Brooks Brothers Mens suit", 22, "tailoring", False),
+        # Audit 11-03: trousers/jeans and top-house shirts never pinged.
+        ("Canali navy wool dress pants", 13, "other", True),
+        ("Kiton jeans", 20, "other", True),
+        ("Brioni dress shirt", 10, "other", True),
     ]
     for title, price, category, expected in cases:
         _listing, result = _apparel_listing_result(
@@ -1150,6 +1155,7 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
             headers = post.call_args.kwargs["headers"]
             assert headers["Priority"] == "5"
             assert headers["Title"].startswith("FAST ")
+            assert " M: " in headers["Title"]  # size survives iOS body truncation
 
 
 def test_instant_prepass_pings_from_catalog_row_before_any_item_request(
@@ -1216,7 +1222,6 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
         ("", "Peter Millar Polo Size Small"),
         ("", "Men’s Small Zegna Sweater"),
         ("", "Ermenegildo Zegna Trofeo EU 56 US 46L Blazer"),
-        ("", "Canali Richards Wool Blazer Men's 50R"),
         ("", "Like New Peter Millar 40/32 pants"),
         ("W30", "Zegna chinos"), ("", "Brioni trousers 38R"),
         ("XXL", "Loro Piana cashmere polo"),  # fitted piece: never XXL
@@ -1225,6 +1230,7 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
     fits = [
         ("S/M", ""), ("L", ""), ("XL", ""), ("M / 38-40", ""), ("One size", ""),
         ("", "Brioni Suit 42R"), ("", "Brioni Men's Sweater"),
+        ("", "Canali Richards Wool Blazer Men's 50R"),  # EU 50 = US 40
         ("", "Canali Navy Wool Dress Pants – Men’s Size 34R"),
         ("", "Jeans W34 L32"), ("", "Zegna trousers 33x32"), ("50", "Brioni trousers"),
         ("XXL", "Loro Piana cashmere crewneck sweater"),  # $5: megasteal knit
@@ -1247,6 +1253,189 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
     assert fast._fits_size_list(lettered, knit, "knitwear")
     knit["price"] = {"value": 300}
     assert not fast._fits_size_list(lettered, knit, "knitwear")
+
+
+def test_slow_ai_call_keeps_polling_the_brand_feed(tmp_path):
+    import threading
+
+    lane = _lane(tmp_path)
+    lane._peek_ctx = object()
+    peeked = threading.Event()
+    with mock.patch.object(
+        lane, "_peek_brand_feed", side_effect=lambda **_kw: peeked.set()
+    ) as peek:
+        assert lane._while_peeking(lambda: 42 if peeked.wait(5) else None) == 42
+    peek.assert_called()
+    finished = []
+
+    def slow():
+        peeked.wait(5)
+        finished.append(True)
+
+    peeked.clear()
+    def blocked(**_kw):
+        peeked.set()
+        raise fast.VintedRequestBlocked(429)
+
+    with mock.patch.object(lane, "_peek_brand_feed", side_effect=blocked):
+        lane._while_peeking(slow)
+    # The paid AI result is kept; the run loop backs off after the item.
+    assert finished == [True]
+    assert isinstance(lane._pending_block, fast.VintedRequestBlocked)
+
+
+def test_brand_feed_asks_for_mens_catalog_with_short_timeout(tmp_path):
+    lane = _lane(tmp_path)
+    lane.session = mock.Mock()
+    lane.session.get.return_value = mock.Mock(status=200, body="")
+    lane._brand_catalog_request({"brand_ids": [1, 2], "max_price": 250})
+    kwargs = lane.session.get.call_args.kwargs
+    assert ("catalog[]", 5) in kwargs["params"]
+    assert kwargs["timeout"] == fast.VINTED_BRAND_FEED_TIMEOUT == 4
+
+
+def test_text_feed_titles_get_the_seller_picked_brand(tmp_path):
+    lane = _lane(tmp_path)
+    response = mock.Mock(status=200)
+    response.json.return_value = {"items": [
+        {"title": "Cashmere sweater", "item_box": {"first_line": "Loro Piana"}},
+        {"title": "Loro Piana scarf", "item_box": {"first_line": "Loro Piana"}},
+    ]}
+    lane.session = mock.Mock()
+    lane.session.get.return_value = response
+    _status, items = lane._catalog_request({"id": "t", "query": "loro piana"})
+    assert [item["title"] for item in items] == ["Loro Piana Cashmere sweater", "Loro Piana scarf"]
+
+
+def test_catalog_row_rules_reject_before_the_item_page_request(tmp_path):
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    polo = {"id": "s", "query": "peter millar polo", "size": ["L"], "category": "golf"}
+    cases = [
+        ("M", polo, "size mismatch for saved search"),
+        ("M / US 8-10", {"id": "s", "query": "peter millar", "category": "golf"}, "women's"),
+        ("L", {**polo, "min_price": 50}, "below fake-price floor"),
+    ]
+    with mock.patch.object(engine, "fetch_vinted_item_page_details") as details:
+        for index, (size, search, reason) in enumerate(cases):
+            item = _raw_item(index)
+            item["size_title"] = size
+            _listing, result, why = lane._cheap_result(conn, None, item, search)
+            assert result is None and reason in why, (size, why)
+    details.assert_not_called()
+    conn.close()
+
+
+def test_negated_flaws_and_description_only_logo_words_do_not_reject():
+    fail = engine.condition_hard_fail_keyword
+    assert fail("", "great shape, no stains or holes") is None
+    assert fail("", "no holes, stains, or tears. stain-free") is None
+    assert fail("", "small stain on the cuff") == "stain"
+    assert fail("", "seiko stainless steel") is None
+    listing = marketplaces.make_listing(
+        "vinted", "x", "Peter Millar cashmere quarter zip", 20, "https://v/x", shipping=0
+    )
+    listing["description"] = "Club collar. Open to offers!"
+    result = engine.score_listing(listing, None, shipping_cost=0, category="knitwear")
+    assert result.get("reason") != "corporate logo keyword match"
+    listing["title"] = "Peter Millar Pebble Beach Club quarter zip"
+    result = engine.score_listing(listing, None, shipping_cost=0, category="knitwear")
+    assert result.get("reason") == "corporate logo keyword match"
+
+
+def test_strong_look_timeout_is_not_retried_a_third_time(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    lane = _lane(tmp_path)
+    lane.sleeper = mock.Mock()
+    _listing, result = _apparel_listing_result(
+        "Loro Piana Cashmere Sweater", 30, "knitwear", '"loro piana"', search_id="s"
+    )
+    reply = mock.Mock()
+    reply.json.return_value = {
+        "choices": [{"message": {"content": json.dumps(_passing_strong_result(400))}}]
+    }
+    timeout = requests.exceptions.ReadTimeout("slow")
+    with (
+        mock.patch.object(engine, "_configured_gemini_api_keys", return_value=["key"]),
+        mock.patch.object(
+            engine, "_download_listing_image", return_value=(b"jpeg", "image/jpeg")
+        ),
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+        mock.patch.object(engine, "_call_gemini_json", side_effect=[timeout] * 3) as gemini,
+        mock.patch.object(fast.requests, "post", return_value=reply),
+    ):
+        assert lane._run_vinted_strong_vision(result, None)
+    assert gemini.call_count == 2
+    assert gemini.call_args.kwargs["timeout"] <= fast.VINTED_STRONG_VISION_TIMEOUT_SECONDS
+    lane.sleeper.assert_not_called()
+
+
+def test_strong_look_vetoes_a_tag_size_the_owner_cannot_wear(tmp_path):
+    lane = _lane(tmp_path)
+    result = {
+        "listing": {"title": "Peter Millar golf shirt", "price": {"value": 15}},
+        "category": "golf",
+        "vinted_strong_checked": True,
+        "vinted_strong_label_other_brand": False,
+        "vinted_strong_counterfeit_indicators": False,
+        "vinted_strong_size_on_tag": "XXL",
+    }
+    assert "tag size XXL" in lane._strong_look_veto_reason(result)
+    result["vinted_strong_size_on_tag"] = "52R"  # EU 52 = US 42
+    assert "tag size" not in (lane._strong_look_veto_reason(result) or "")
+
+
+def test_block_seen_during_ai_backs_off_after_the_item_finishes(tmp_path):
+    ticks = iter(x / 100 for x in range(10_000))
+    search = {"id": "s", "query": "peter millar polo", "platforms": ["vinted"]}
+    lane = fast.VintedFastLane(
+        searches=[search], state_path=tmp_path / "state.json",
+        seen_db_path=tmp_path / "seen.db", log_path=tmp_path / "lane.jsonl",
+        main_seen_db_path=tmp_path / "missing-main.db", run_seconds=0.5,
+        clock=lambda: next(ticks), sleeper=lambda _seconds: None,
+    )
+    old_water = fast._item_marker(_raw_item(0, timestamp=1))
+    (tmp_path / "state.json").write_text(json.dumps({"searches": {"s": old_water}}))
+
+    def process(*_args):
+        lane._pending_block = fast.VintedRequestBlocked(429)
+
+    with (
+        mock.patch.object(lane, "_catalog_request", return_value=(200, [_raw_item(1)])),
+        mock.patch.object(lane, "_instant_prepass"),
+        mock.patch.object(lane, "_peek_brand_feed"),
+        mock.patch.object(lane, "_process_item", side_effect=process) as processed,
+        mock.patch.object(lane, "_backoff") as backoff,
+    ):
+        lane.run()
+    processed.assert_called()
+    backoff.assert_called()
+    assert lane._pending_block is None
+
+
+def test_quoted_brand_shoe_searches_accept_any_shoe_title(tmp_path):
+    lane = fast.VintedFastLane(state_path=tmp_path / "s", seen_db_path=tmp_path / "d",
+                               log_path=tmp_path / "l", schedule=[])
+
+    def item(title):
+        return {"id": 1, "title": title, "url": "/items/1", "price": {"amount": "150"},
+                "photo": {"url": "https://x/a.webp"}, "photos": [], "item_box": {}}
+
+    # "shoes" was a stopword but "shoe" was not, so these needed the literal
+    # word "shoe" and the feeds produced nothing for 66 h (audit 11-03).
+    assert lane._route(item("Edward Green Dover shoes"), "edward green")["id"] == "vinted-edward-green-shoes"
+    assert lane._route(item("John Lobb City II"), "john lobb")["id"] == "vinted-john-lobb-shoes"
+    # A catch-all-backed text feed still won't drop a blazer into shoes.
+    assert lane._route(item("Zegna wool blazer 50L"), "zegna") is None
+
+
+def test_relaxed_waist_and_regex_false_positives():
+    assert fast._pants_waist_fits({"title": "Peter Millar Golf Shorts Men's 34"}) is True
+    assert fast._pants_waist_fits({"title": "Peter Millar Golf Shorts-40"}) is False
+    assert not fast._VINTED_NOT_MENS.search("Peter Millar baby blue shorts")
+    assert not fast._VINTED_NOT_MENS.search("Pinehurst Putter Boy polo")
+    assert fast._VINTED_NOT_MENS.search("boys polo size 10")
+    assert "quarter" in fast._route_words("Peter Millar Qtr Zip")
 
 
 def test_brand_peek_block_in_item_loop_backs_off_instead_of_crashing(tmp_path):
@@ -1312,16 +1501,27 @@ def test_identical_title_and_price_batch_is_rejected_before_ai(tmp_path):
     first = _listing_and_result()
     second = _listing_and_result()
     second[0]["itemId"] = "v|duplicate"
+    first[0]["seller"] = second[0]["seller"] = {"username": "vinted:closet"}
     second[1]["listing"] = second[0]
-    second[0]["price"] = {"value": float(first[0]["price"]["value"]) + 1, "currency": "USD"}
-    lane._cheap_result = mock.Mock(side_effect=[(*first, None), (*second, None)])
+    second[0]["price"] = {"value": float(first[0]["price"]["value"]) + 0.2, "currency": "USD"}
+    # Another seller's identical apparel listing is a closet dump, not a scam.
+    third = _listing_and_result()
+    third[0]["itemId"] = "v|other-seller"
+    third[0]["seller"] = {"username": "vinted:someone-else"}
+    third[1]["listing"] = third[0]
+    lane._cheap_result = mock.Mock(
+        side_effect=[(*first, None), (*second, None), (*third, None)]
+    )
     with (
         mock.patch.object(engine, "check_photos_with_gemini", return_value=None) as photo,
         mock.patch.object(lane, "_run_vinted_prescreen", return_value=None),
     ):
-        lane._process_item(conn, None, {}, {"query": first[1]["search_query"]}, None)
-        lane._process_item(conn, None, {}, {"query": first[1]["search_query"]}, None)
-    assert photo.call_count == 1
+        # Brand-feed rows carry only user.id, never the login.
+        for user_id in (7, 7, 8):
+            lane._process_item(
+                conn, None, {"user": {"id": user_id}}, {"query": first[1]["search_query"]}, None
+            )
+    assert photo.call_count == 2
     assert not engine.is_new(conn, "v|duplicate")
     conn.close()
 
@@ -2346,11 +2546,13 @@ def test_web_catalog_items_parse_route_and_brand_title(tmp_path):
     assert lane._route(pricey) is None
 
 
-def test_feed_schedule_puts_brand_feed_on_every_other_request():
-    schedule = fast.build_feed_schedule(
-        [1, 2], [{"query": "poker chip", "max_price": 150}, {"query": "marinella"}], 130
-    )
+def test_feed_schedule_gives_brand_feed_k_slots_per_text_feed():
+    feeds = [{"query": "poker chip", "max_price": 150}, {"query": "seiko"}]
+    schedule = fast.build_feed_schedule([1, 2], feeds, 130, brand_slots=1)
     assert [kind for kind, _ in schedule] == ["brands", "text", "brands", "text"]
+    schedule = fast.build_feed_schedule([1, 2], feeds, 130, brand_slots=2)
+    assert [kind for kind, _ in schedule] == ["brands", "brands", "text"] * 2
+    assert fast.VINTED_BRAND_SLOTS_PER_TEXT == 2
     assert schedule[0][1]["brand_ids"] == [1, 2]
     assert fast.build_feed_schedule([], [{"query": "poker chip"}], None)[0][0] == "text"
 

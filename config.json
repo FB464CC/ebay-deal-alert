@@ -1223,6 +1223,7 @@
     {
       "query": "peter millar quarter zip -women -womens -ladies -girls -kids -scarf",
       "size": [
+        "M",
         "L",
         "XL"
       ],
@@ -1239,6 +1240,7 @@
     {
       "query": "peter millar jacket -women -womens -ladies -girls -kids -scarf",
       "size": [
+        "M",
         "L",
         "XL"
       ],
@@ -1256,7 +1258,8 @@
       "query": "\"peter millar\" -women -womens -ladies -girls -kids -scarf",
       "size": [
         "M",
-        "L"
+        "L",
+        "XL"
       ],
       "max_price": 30,
       "enabled": true,
@@ -1271,6 +1274,7 @@
     {
       "query": "peter millar crown crafted -women -womens -ladies -girls -kids -scarf",
       "size": [
+        "M",
         "L",
         "XL"
       ],
@@ -4708,7 +4712,10 @@
     "foundation",
     "corporate",
     "insurance",
-    "open"
+    "us open",
+    "u.s. open",
+    "british open",
+    "the open"
   ],
   "CONDITION_HARD_FAIL_KEYWORDS": [
     "moth",
@@ -4872,6 +4879,7 @@
     "jacket",
     "blazer",
     "coat",
+    "shoe",
     "shoes",
     "loafers",
     "loafer",
@@ -4922,7 +4930,7 @@
   "POKER_CHIPS_SHARED_AI_SOFT_CAP": 2,
   "GEMINI_INTER_CALL_SLEEP_SECONDS": 2,
   "AI_PHOTO_PROVIDER": "gemini",
-  "GEMINI_VISION_TIMEOUT_SECONDS": 20,
+  "GEMINI_VISION_TIMEOUT_SECONDS": 12,
   "GOLF_STRONG_VISION_MODEL": "gemini-3.8-flash",
   "GOLF_STRONG_VISION_DAILY_LIMIT": 15,
   "GOLF_STRONG_VISION_TIMEOUT_SECONDS": 35,
@@ -4939,17 +4947,16 @@
   "VINTED_FAST_POLL_SECONDS": 1.0,
   "VINTED_BRAND_FEED_IDS": [174480, 203598, 219848, 103740, 414476, 360098, 469314, 238464, 454955, 154396, 4559, 2847834],
   "VINTED_BRAND_FEED_MAX_PRICE": 250,
+  "VINTED_BRAND_SLOTS_PER_TEXT": 2,
   "VINTED_TEXT_FEEDS": [
     {"query": "poker chip", "max_price": 150},
     {"query": "casino chip", "max_price": 150},
-    {"query": "poker chip", "max_price": 150},
     {"query": "marinella", "max_price": 60},
     {"query": "zegna", "max_price": 130},
     {"query": "loro piana", "max_price": 250},
     {"query": "cucinelli", "max_price": 250},
     {"query": "kiton", "max_price": 200},
     {"query": "brioni", "max_price": 200},
-    {"query": "isaia", "max_price": 150},
     {"query": "john lobb", "max_price": 250},
     {"query": "edward green", "max_price": 250},
     {"query": "berluti", "max_price": 250},
