@@ -1249,6 +1249,17 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
     assert fast._fits_size_list(lettered, pants, "golf")
     pants["title"] = "Peter Millar pants 40x30"
     assert not fast._fits_size_list(lettered, pants, "golf")
+    # Vinted sizes pants "W32" and suits "40R" whatever the title says (11-03).
+    bare = {"title": "Peter Millar size 32", "size": "W32", "price": {"value": 20}}
+    assert fast._fits_size_list(lettered, bare, "other")
+    assert fast._off_size_reason(bare, "other") is None
+    bare.update(size="W40", title="Peter Millar")
+    assert not fast._fits_size_list(lettered, bare, "other")
+    assert fast._off_size_reason(bare, "other")
+    suit = {"title": "Peter Millar charcoal Gray suit", "size": "42R", "price": {"value": 20}}
+    assert fast._fits_size_list(lettered, suit, "other")
+    suit["size"] = "48R"
+    assert not fast._fits_size_list(lettered, suit, "other")
     knit = {"title": "Loro Piana cashmere sweater", "size": "XXL", "price": {"value": 30}}
     assert fast._fits_size_list(lettered, knit, "knitwear")
     knit["price"] = {"value": 300}

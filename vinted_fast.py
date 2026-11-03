@@ -506,6 +506,7 @@ _ROW_LETTER_SIZE = re.compile(r"^\s*(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b", re.I)
 
 
 _PANTS = re.compile(r"\b(?:pants?|trousers?|slacks|jeans|chinos?|shorts)\b", re.I)
+_SIZE_WAIST = re.compile(r"\s*W\s?\d{2}\b", re.I)
 _WAIST_SURE = re.compile(r"\bW\s?(\d{2})\b|\bwaist\s*:?\s*(\d{2})\b|\b(\d{2})\s?[xX/]\s?\d{2}\b", re.I)
 _WAIST_LOOSE = re.compile(
     r"\b(\d{2})\s?[RSL]\b|\b(?:size|sz)\.?\s*(\d{2})\b"
@@ -538,9 +539,12 @@ def _stated_waists(size, title):
 def _pants_waist_fits(listing):
     """True/False for a pants listing with a stated waist, else None."""
     title = str(listing.get("title") or "")
-    if not _PANTS.search(title):
+    size = str(listing.get("size") or "")
+    # Vinted's pants sizes read "W32"; the title may not say pants
+    # (11-03 "Peter Millar size 32" was dropped as a size mismatch).
+    if not (_PANTS.search(title) or _SIZE_WAIST.match(size)):
         return None
-    waists = _stated_waists(str(listing.get("size") or ""), title)
+    waists = _stated_waists(size, title)
     if not waists:
         return None
     return any(32 <= waist <= 36 for waist in waists)
@@ -566,13 +570,17 @@ def _xxl_megasteal(listing):
 
 
 def _fits_size_list(search, listing, category):
-    """The search's size list, plus a fitting pants waist or XXL megasteal
-    (letter-sized searches can't name either)."""
+    """The search's size list, plus a fitting pants waist, suit chest
+    ("42R") or XXL megasteal (letter-sized searches can't name them)."""
     if engine.listing_matches_size_filter(search, listing):
         return True
     if category not in _VINTED_SIZED_CATEGORIES:
         return False
-    return bool(_pants_waist_fits(listing)) or _xxl_megasteal(listing)
+    return (
+        bool(_pants_waist_fits(listing))
+        or bool(_SUIT_CHEST_FIT.fullmatch(str(listing.get("size") or "").strip()))
+        or _xxl_megasteal(listing)
+    )
 
 
 def _off_size_reason(listing, category):
