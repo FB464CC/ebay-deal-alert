@@ -1269,7 +1269,15 @@ def _vinted_strong_prompt(result, brand):
         '"counterfeit_indicators": bool, "counterfeit_reason": string, '
         '"condition_grade": string, "flaws_found": [string], '
         '"premium_desirable_piece": bool, "premium_reason": string, '
-        '"estimated_resale_value": number|null, "size_on_tag": string|null}. '
+        '"estimated_resale_value": number|null, "size_on_tag": string|null, '
+        '"third_party_logo_found": bool, "logo_desc": string}. '
+        "third_party_logo_found is true for ANY embroidered or printed logo, text, "
+        "crest, or emblem on the outside of the garment (check chest, sleeves, "
+        "collar, back) that is not the maker's own mark: a golf course, country "
+        "club, resort, company, bank, tournament, or event, however small. The "
+        f"maker's own logo (e.g. {brand}'s own mark) and university/college team "
+        "logos are not third-party. Interior shop/tailor labels are not logos. If "
+        "unsure, set it true and describe the marking in logo_desc. "
         f"brand_label_visible_and_consistent is true only when a permanent label or "
         f"tag is clearly readable and consistent with genuine {brand}; a title, hangtag "
         "claim, familiar design, or logo alone is not enough. State what is readable in "
@@ -1661,6 +1669,10 @@ class VintedFastLane:
         result["vinted_strong_estimated_resale_value"] = engine._sane_ai_price(
             strong_result.get("estimated_resale_value")
         )
+        result["vinted_strong_third_party_logo"] = strong_result.get(
+            "third_party_logo_found"
+        )
+        result["vinted_strong_logo_desc"] = _one_line(strong_result.get("logo_desc"))
         size_on_tag = strong_result.get("size_on_tag")
         result["vinted_strong_size_on_tag"] = (
             _one_line(size_on_tag)
@@ -1725,6 +1737,11 @@ class VintedFastLane:
         if result.get("vinted_strong_counterfeit_indicators") is not False:
             reason = result.get("vinted_strong_counterfeit_reason") or "assessment missing"
             return f"counterfeit indicators present or unresolved: {reason}"
+        if result.get("vinted_strong_third_party_logo") is True:
+            # Owner 11-04: bad alerts with logos; only the cheap first look
+            # checked logos, so one model's miss shipped the alert.
+            desc = result.get("vinted_strong_logo_desc") or "no detail"
+            return f"third-party logo on garment: {desc}"
         tag_size = result.get("vinted_strong_size_on_tag")
         if tag_size:
             # Audit 11-03: 12 of 30 alerts had no size in the title; the tag

@@ -1442,6 +1442,23 @@ def test_strong_look_timeout_is_not_retried_a_third_time(tmp_path, monkeypatch):
     lane.sleeper.assert_not_called()
 
 
+def test_strong_look_vetoes_a_third_party_logo(tmp_path):
+    lane = _lane(tmp_path)
+    result = {
+        "listing": {"title": "Peter Millar jacket", "price": {"value": 15}},
+        "category": "outerwear",
+        "vinted_strong_checked": True,
+        "vinted_strong_label_other_brand": False,
+        "vinted_strong_counterfeit_indicators": False,
+        "vinted_strong_third_party_logo": True,
+        "vinted_strong_logo_desc": "Pebble Beach crest on chest",
+    }
+    assert "Pebble Beach" in lane._strong_look_veto_reason(result)
+    result["vinted_strong_third_party_logo"] = False
+    assert "logo" not in (lane._strong_look_veto_reason(result) or "")
+    assert "third_party_logo_found" in fast._vinted_strong_prompt(result, "Peter Millar")
+
+
 def test_strong_look_vetoes_a_tag_size_the_owner_cannot_wear(tmp_path):
     lane = _lane(tmp_path)
     result = {
