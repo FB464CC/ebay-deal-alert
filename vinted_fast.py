@@ -7,6 +7,7 @@ four-second request floor.
 
 import argparse
 import base64
+import html
 import json
 import logging
 import math
@@ -644,6 +645,17 @@ def _vinted_apparel_bar_reason(result, category):
 VINTED_MIN_SELLER_REVIEWS = 3
 VINTED_MIN_SELLER_RATING = 0.9  # Vinted 0-1 scale: 0.9 = 4.5 stars
 VINTED_MIN_SELLER_ITEMS = 3  # listed + sold
+# The member page lists the closet as img alts: "<title>, brand: ..., $42.54".
+_CLOSET_ITEM = re.compile(
+    r'alt="([^"]*?), brand: [^"]*"[^>]*?data-testid="product-item-id-(\d+)--image--img"'
+)
+_CLOSET_BOTTLE = re.compile(
+    r"\b(?:\d+(?:\.\d+)?\s?(?:ml|fl\.?\s?oz|oz)|edp|edt|eau|parfum|perfume|cologne|fragrance)",
+    re.IGNORECASE,
+)
+# Owner 11-03: the "great reviews" Goddess sellers had closets of sealed Tom
+# Ford Oud Wood / Delina Exclusif / Creed Aventus at $40-85 - fake shops.
+VINTED_PERFUME_SHOP_BOTTLES = 3
 
 
 def fetch_vinted_seller_stats(user_id):
@@ -664,7 +676,24 @@ def fetch_vinted_seller_stats(user_id):
         match = re.search(rf'"{key}":([0-9.]+)', text)
         if match:
             stats[key] = float(match.group(1))
+    closet = [(item_id, html.unescape(title)) for title, item_id in _CLOSET_ITEM.findall(text)]
+    if closet:
+        stats["closet"] = closet
     return stats
+
+
+def _perfume_shop_reason(stats, item_id):
+    """A closet of other cheap sealed bottles is a fake shop, whatever its reviews."""
+    others = [
+        title for closet_id, title in stats.get("closet", ())
+        if closet_id != str(item_id) and _CLOSET_BOTTLE.search(title)
+    ]
+    if len(others) < VINTED_PERFUME_SHOP_BOTTLES:
+        return None
+    return (
+        f"perfume-shop seller: {len(others)} other bottles in the closet "
+        f"(fake-reseller pattern), e.g. {others[0][:60]}"
+    )
 
 
 def _menswear_shape_reason(listing, brand_key):
@@ -2419,6 +2448,8 @@ class VintedFastLane:
             seller_reason = _seller_trust_reason(
                 stats, strict=category in VINTED_STRICT_SELLER_CATEGORIES
             )
+            if not seller_reason and category == "fragrance":
+                seller_reason = _perfume_shop_reason(stats, item_id)
             if seller_reason:
                 self._finish(
                     conn, result, item_id, fingerprint, total_price, seller_reason

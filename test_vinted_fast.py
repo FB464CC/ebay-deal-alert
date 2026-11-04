@@ -1829,6 +1829,9 @@ def test_fragrance_ai_bar_requires_clean_great_deal(
               item_count=1.0, given_item_count=1.0), "2 items"),
         (dict(TRUSTED_SELLER, feedback_count=0.0, feedback_reputation=0.0), "0 reviews"),
         ({"_http_status": 500}, "history unavailable"),
+        (dict(TRUSTED_SELLER, closet=[("1", "Tom Ford Oud Wood EDP 100ml"),
+                                      ("2", "Flowerbomb 3.4 oz"), ("3", "Men's EDT")]),
+         "perfume-shop"),
     ],
 )
 def test_fragrance_needs_a_proven_seller(tmp_path, monkeypatch, stats, fragment):
@@ -2169,6 +2172,27 @@ def test_seller_stats_parse_member_page():
         "given_item_count": 69.0,
     }
     assert fast._seller_trust_reason(stats) is None
+
+
+def test_member_page_closet_flags_perfume_shops():
+    def box(item_id, alt):
+        return (f'<img src="x.jpeg" alt="{alt}, brand: Tom Ford, condition: New with tags, '
+                f'$42.54, $45.37 includes Vinted fee" class="c" '
+                f'data-testid="product-item-id-{item_id}--image--img"/>')
+    page = '{\\"feedback_count\\":28}' + "".join((
+        box(10, "Burberry Goddess"),
+        box(11, "Tom Ford Oud Wood Unisex Eau de Parfum Spray, 3.4 fl oz100ml,"),
+        box(12, "Flowerbomb By Viktor &amp; Rolf 100ml"),
+        box(13, "Men&#x27;s EDT"),
+    ))
+    resp = mock.Mock(status_code=200, text=page)
+    with mock.patch.object(fast.requests, "get", return_value=resp):
+        stats = _REAL_SELLER_STATS(123)
+    assert stats["closet"][2] == ("12", "Flowerbomb By Viktor & Rolf 100ml")
+    assert "3 other bottles" in fast._perfume_shop_reason(stats, 10)
+    # A household closet with one other bottle is a real one-off seller.
+    stats["closet"] = stats["closet"][:2] + [("20", "Baby clothes"), ("21", "Puzzle")]
+    assert fast._perfume_shop_reason(stats, 10) is None
 
 
 def test_mens_apparel_with_womens_title_still_fails_gender_gate():
