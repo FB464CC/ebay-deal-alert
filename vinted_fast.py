@@ -91,6 +91,7 @@ VINTED_INSTANT_MIN_FLOOR = 100.0
 VINTED_PM_INSTANT_MAX_PRICE = float(
     engine._CONFIG.get("VINTED_PM_INSTANT_MAX_PRICE", 10)
 )
+_VINTED_PM_IN_TITLE = re.compile(r"\b(?:peter\s*)?mill?[ae]rd?\b", re.IGNORECASE)
 # Instant pings need a clearly valuable garment: an $8 "shirt" tagged with a
 # luxury brand was a mis-tag (production, Canali "Camisa de manga larga").
 _VINTED_INSTANT_GARMENT = re.compile(
@@ -1031,6 +1032,7 @@ def _web_item_to_catalog_item(entry):
         if isinstance(photo, dict) and photo.get("url")
     ]
     title = str(product.get("title") or "").strip()
+    seller_title = title
     brand = str(box.get("firstLine") or "").strip()
     # Vinted titles often omit the brand ("Cashmere sweater"); the brand
     # filter already proved it, and relevance/AI both key on the title.
@@ -1039,6 +1041,7 @@ def _web_item_to_catalog_item(entry):
     return {
         "id": product["id"],
         "title": title,
+        "seller_title": seller_title,
         "url": product.get("url"),
         "price": {"amount": (product.get("price") or {}).get("amount")},
         "total_item_price": {"amount": (product.get("totalItemPrice") or {}).get("amount")},
@@ -1777,6 +1780,12 @@ class VintedFastLane:
             return False
         pm_top = (
             result.get("vinted_brand_key") == "peter millar"
+            # The brand tag alone is seller-picked: a Greg Norman shirt
+            # tagged Peter Millar pinged (owner, 11-04). The seller's own
+            # title must name the brand (any spelling) for an unverified ping.
+            and _VINTED_PM_IN_TITLE.search(
+                str(listing.get("sellerTitle") or title)
+            )
             and price is not None
             and price <= VINTED_PM_INSTANT_MAX_PRICE
             and engine.PETER_MILLAR_TOP_SIGNALS.search(title)
@@ -2168,6 +2177,7 @@ class VintedFastLane:
                 continue
             brand = str((item.get("item_box") or {}).get("first_line") or "").strip()
             title = str(item.get("title") or "")
+            item.setdefault("seller_title", title)
             if brand and brand.lower() not in title.lower():
                 item["title"] = f"{brand} {title}".strip()
         return status, items

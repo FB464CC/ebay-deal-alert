@@ -1164,6 +1164,7 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Peter Millar polo shirt", 10, "golf", True),
         ("Peter Millar polo shirt", 12, "golf", False),
         ("Peter Millar golf shorts", 5, "other", False),  # not a PM top
+        ("Peter Millar Mens large peter miller polo shirt", 10, "golf", True),
         ("Loro Piana cashmere crewneck", 30, "knitwear", True),
         ("Canali two thin pullover seaters navy blue and burgundy", 20, "knitwear", True),
         ("Zegna polo shirt", 15, "golf", True),
@@ -1189,6 +1190,35 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
             assert headers["Priority"] == "5"
             assert headers["Title"].startswith("FAST ")
             assert " M: " in headers["Title"]  # size survives iOS body truncation
+
+
+def test_pm_instant_needs_the_brand_in_the_sellers_own_title(tmp_path, monkeypatch):
+    # Owner 11-04: a Greg Norman shirt brand-tagged Peter Millar pinged.
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    for seller_title, expected in (
+        ("Greg Norman golf polo", False),
+        ("Mens polo shirt", False),
+        ("Mens large peter miller polo shirt", True),
+    ):
+        _listing, result = _apparel_listing_result(
+            f"Peter Millar {seller_title}", 8, "golf", "peter millar polo", search_id="s"
+        )
+        result["listing"]["sellerTitle"] = seller_title
+        lane._instant_pinged.clear()
+        with mock.patch.object(fast.requests, "post") as post:
+            assert lane._maybe_instant_alert(result, "golf") is expected, seller_title
+        assert post.called is expected
+
+
+def test_web_catalog_row_keeps_the_sellers_own_title():
+    row = fast._web_item_to_catalog_item({"productItem": {
+        "id": 7, "title": "Polo shirt", "url": "/items/7", "itemBox": {"firstLine": "Peter Millar"},
+    }})
+    assert row["title"] == "Peter Millar Polo shirt"
+    assert row["seller_title"] == "Polo shirt"
+    listing = marketplaces._vinted_item_to_listing({**row, "price": {"amount": "8"}})
+    assert listing["sellerTitle"] == "Polo shirt"
 
 
 def test_instant_prepass_pings_from_catalog_row_before_any_item_request(

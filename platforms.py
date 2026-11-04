@@ -640,6 +640,7 @@ def make_listing(
     currency="USD",
     description=None,
     item_creation_date=None,
+    seller_title=None,
 ):
     """Normalize one marketplace listing into eBay Browse API item shape.
 
@@ -695,6 +696,9 @@ def make_listing(
     # malformed/missing values remain fail-open in fixed_price_listing_age_days().
     if item_creation_date:
         listing["itemCreationDate"] = item_creation_date
+    # Title as the seller typed it, before a brand tag was prepended.
+    if seller_title:
+        listing["sellerTitle"] = seller_title
     return listing
 
 
@@ -2066,6 +2070,7 @@ def _vinted_item_to_listing(item):
         ),
         image_url=photo_url(_dget(item, "photo")),
         extra_images=extra_images,
+        seller_title=item.get("seller_title"),
         size=size,
         condition=condition,
         seller=_dget(_dget(item, "user"), "login"),
