@@ -1159,12 +1159,9 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Zegna Cashmere sweater", 10, "knitwear", True),
         ("Zegna Cashmere sweater", 40, "knitwear", False),  # over 25% of $100 floor
         ("Zegna silk tie", 5, "other", False),
-        # Owner 11-04: PM tops at <= $10 ping instantly (sold within a minute).
-        ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", True),
-        ("Peter Millar polo shirt", 10, "golf", True),
-        ("Peter Millar polo shirt", 12, "golf", False),
-        ("Peter Millar golf shorts", 5, "other", False),  # not a PM top
-        ("Peter Millar Mens large peter miller polo shirt", 10, "golf", True),
+        # PM instant ping is off by default (11-04: 3/3 pings were bad).
+        ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", False),
+        ("Peter Millar polo shirt", 10, "golf", False),
         ("Loro Piana cashmere crewneck", 30, "knitwear", True),
         ("Canali two thin pullover seaters navy blue and burgundy", 20, "knitwear", True),
         ("Zegna polo shirt", 15, "golf", True),
@@ -1195,6 +1192,7 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
 def test_pm_instant_needs_the_brand_in_the_sellers_own_title(tmp_path, monkeypatch):
     # Owner 11-04: a Greg Norman shirt brand-tagged Peter Millar pinged.
     monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    monkeypatch.setattr(fast, "VINTED_PM_INSTANT_MAX_PRICE", 10.0)
     lane = _lane(tmp_path)
     for seller_title, expected in (
         ("Greg Norman golf polo", False),

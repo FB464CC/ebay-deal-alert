@@ -88,8 +88,11 @@ VINTED_INSTANT_MIN_FLOOR = 100.0
 # Owner, 11-04: a $10 Peter Millar polo (back crown) sold within a minute;
 # the $30 floor kept PM off the instant ping, and the photo AI takes 10-130 s.
 # PM tops at or under this list price ping instantly; the AI still follows.
+# OFF (0) since 11-04 evening: 3/3 pings failed the full check (club logo,
+# pass-list brand, price), and at full list + $4.99 a $10 PM top costs
+# $17.16, over the 40%-of-$35-resale veto, so it can never verify.
 VINTED_PM_INSTANT_MAX_PRICE = float(
-    engine._CONFIG.get("VINTED_PM_INSTANT_MAX_PRICE", 10)
+    engine._CONFIG.get("VINTED_PM_INSTANT_MAX_PRICE", 0)
 )
 _VINTED_PM_IN_TITLE = re.compile(r"\b(?:peter\s*)?mill?[ae]rd?\b", re.IGNORECASE)
 # Instant pings need a clearly valuable garment: an $8 "shirt" tagged with a
