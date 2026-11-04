@@ -371,12 +371,37 @@ def test_only_items_newer_than_high_water_enter_pipeline():
         [_raw_item(3, 300), _raw_item(2, 200)], None
     )
     assert baseline == []
-    assert water["item_id"] == "3"
+    assert water["ids"] == ["3", "2"]
     newer, next_water = fast.items_newer_than_high_water(
         [_raw_item(4, 400), _raw_item(3, 300), _raw_item(2, 200)], water
     )
     assert [item["id"] for item in newer] == ["4"]
-    assert next_water["item_id"] == "4"
+    assert next_water["ids"][0] == "4"
+
+
+def test_draft_published_late_with_a_low_id_still_enters_pipeline():
+    # Live 11-04: ids come from draft creation, so newest_first shows a
+    # fresh listing below ids already seen; the old high-water mark hid it.
+    _, water = fast.items_newer_than_high_water(
+        [_raw_item(900), _raw_item(800)], None
+    )
+    newer, water = fast.items_newer_than_high_water(
+        [_raw_item(500), _raw_item(900), _raw_item(800)], water
+    )
+    assert [item["id"] for item in newer] == ["500"]
+    newer, _ = fast.items_newer_than_high_water(
+        [_raw_item(500), _raw_item(900)], water
+    )
+    assert newer == []
+
+
+def test_legacy_single_marker_state_upgrades_to_id_memory():
+    legacy = fast._item_marker(_raw_item(3, 300))
+    newer, water = fast.items_newer_than_high_water(
+        [_raw_item(4, 400), _raw_item(3, 300)], legacy
+    )
+    assert [item["id"] for item in newer] == ["4"]
+    assert water == {"ids": ["4", "3"]}
 
 
 def test_vinted_deal_is_judged_at_full_landed_list_price():
@@ -1134,7 +1159,11 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Zegna Cashmere sweater", 10, "knitwear", True),
         ("Zegna Cashmere sweater", 40, "knitwear", False),  # over 25% of $100 floor
         ("Zegna silk tie", 5, "other", False),
-        ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", False),  # floor < $100
+        # Owner 11-04: PM tops at <= $10 ping instantly (sold within a minute).
+        ("Peter Millar Crown Crafted quarter zip", 5, "knitwear", True),
+        ("Peter Millar polo shirt", 10, "golf", True),
+        ("Peter Millar polo shirt", 12, "golf", False),
+        ("Peter Millar golf shorts", 5, "other", False),  # not a PM top
         ("Loro Piana cashmere crewneck", 30, "knitwear", True),
         ("Canali two thin pullover seaters navy blue and burgundy", 20, "knitwear", True),
         ("Zegna polo shirt", 15, "golf", True),

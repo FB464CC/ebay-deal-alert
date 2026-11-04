@@ -85,6 +85,12 @@ VINTED_INSTANT_ALERT_FRACTION = float(
     engine._CONFIG.get("VINTED_INSTANT_ALERT_FRACTION", 0.25)
 )
 VINTED_INSTANT_MIN_FLOOR = 100.0
+# Owner, 11-04: a $10 Peter Millar polo (back crown) sold within a minute;
+# the $30 floor kept PM off the instant ping, and the photo AI takes 10-130 s.
+# PM tops at or under this list price ping instantly; the AI still follows.
+VINTED_PM_INSTANT_MAX_PRICE = float(
+    engine._CONFIG.get("VINTED_PM_INSTANT_MAX_PRICE", 10)
+)
 # Instant pings need a clearly valuable garment: an $8 "shirt" tagged with a
 # luxury brand was a mis-tag (production, Canali "Camisa de manga larga").
 _VINTED_INSTANT_GARMENT = re.compile(
@@ -947,23 +953,46 @@ def _marker_key(marker):
     return created, _numeric_id_key(marker.get("item_id"))
 
 
+# Ids remembered per feed. A page holds at most 96 rows, so this spans
+# many pages of churn; an id that ages out still hits the seen DB later.
+_FEED_MEMORY_IDS = 500
+
+
 def items_newer_than_high_water(items, high_water):
-    """Return genuinely newer rows and the page's newest durable marker."""
-    marked = [(item, _item_marker(item)) for item in items]
-    marked = [(item, marker) for item, marker in marked if marker is not None]
-    if not marked:
+    """Rows not on any earlier page of this feed, and the updated memory.
+
+    Vinted's newest_first is publish order, not id order: ids are assigned
+    when a draft is created, so a listing can go live with an id far below
+    rows already seen (live 11-04: 74 of 192 Peter Millar rows out of id
+    order, one 34M ids low). A highest-id mark silently dropped all of
+    those; one early id blinded the brand feed for 67 minutes and a $10
+    Peter Millar polo that sold within a minute never entered the lane.
+    So the feed remembers the ids it has shown instead of a single mark.
+    """
+    ids = list(dict.fromkeys(i for i in map(_raw_vinted_item_id, items) if i))
+    if not ids:
         return [], high_water
-    newest_marker = max((marker for _item, marker in marked), key=_marker_key)
     if not high_water:
         # First observation establishes a baseline. Existing catalog inventory
         # is not "new" and must not create a deployment alert flood.
-        return [], newest_marker
-    water_key = _marker_key(high_water)
-    newer = [
-        item for item, marker in marked if _marker_key(marker) > water_key
-    ]
-    newer.sort(key=lambda item: _marker_key(_item_marker(item)))
-    return newer, max((high_water, newest_marker), key=_marker_key)
+        return [], {"ids": ids[:_FEED_MEMORY_IDS]}
+    known = high_water.get("ids") if isinstance(high_water, dict) else None
+    if isinstance(known, list):
+        seen = set(map(str, known))
+        is_new = lambda item: _raw_vinted_item_id(item) not in seen
+    else:
+        # Legacy single-marker state: apply it once, then switch to ids.
+        known, water_key = [], _marker_key(high_water)
+        is_new = lambda item: _marker_key(_item_marker(item)) > water_key
+    newer, picked = [], set()
+    for item in items:
+        item_id = _raw_vinted_item_id(item)
+        if item_id and item_id not in picked and is_new(item):
+            picked.add(item_id)
+            newer.append(item)
+    newer.sort(key=lambda item: _numeric_id_key(_raw_vinted_item_id(item)))
+    memory = list(dict.fromkeys(ids + [str(i) for i in known]))
+    return newer, {"ids": memory[:_FEED_MEMORY_IDS]}
 
 
 _GENDER_WORDS = frozenset({"men", "mens", "man", "women", "womens"})
@@ -1746,14 +1775,22 @@ class VintedFastLane:
         if listing.get("itemId") in self._instant_pinged:
             result["vinted_instant_alerted"] = True
             return False
+        pm_top = (
+            result.get("vinted_brand_key") == "peter millar"
+            and price is not None
+            and price <= VINTED_PM_INSTANT_MAX_PRICE
+            and engine.PETER_MILLAR_TOP_SIGNALS.search(title)
+        )
         if (
-            floor < VINTED_INSTANT_MIN_FLOOR
+            (not pm_top and (
+                floor < VINTED_INSTANT_MIN_FLOOR
+                or price is None
+                or price > floor * VINTED_INSTANT_ALERT_FRACTION
+            ))
             # Owner: Brooks Brothers only as an expensive suit, which a
             # title can't show; 5/5 instant pings were rejected (10-30..11-01).
             or result.get("vinted_brand_key") in _VINTED_FULL_FLOOR_BRANDS
             or "brooks brothers" in title.casefold()
-            or price is None
-            or price > floor * VINTED_INSTANT_ALERT_FRACTION
             or _VINTED_INSTANT_SKIP_WORDS.search(title)
             or not (
                 _VINTED_INSTANT_GARMENT.search(title)
@@ -1775,6 +1812,8 @@ class VintedFastLane:
             f"${price:g} (~${all_in:.0f} all-in) {title}\n{details}\n"
             "Unverified: seller and photo checks still running. Buy at list "
             "now; an offer risks losing it."
+            + ("\nCheck photos: crown under the back collar, no club logo."
+               if pm_top else "")
         )
         logger.info("vinted-fast instant alert: $%g %s | %s", price, brand, title)
         self._ntfy(
