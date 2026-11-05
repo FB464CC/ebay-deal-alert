@@ -9701,6 +9701,12 @@ def alert_urgency(result):
     # retain the ordinary urgency path below.
     if watch_extreme_discount_delivery_state(result) not in (None, "vetted"):
         return 2, ["warning", "mag"]
+    # Owner 11-05: verified Vinted alerts (brown jacket, sweater) never hit
+    # the phone while the Priority-5 instant pings did. The ntfy iOS app maps
+    # 3 to "active", which Focus/DND silences; 4-5 are time-sensitive. Vinted
+    # steals sell in minutes and these already cleared every bar, so wake him.
+    if (result.get("listing") or {}).get("platform") == "vinted":
+        return 5, ["fire", "white_check_mark"]
     if result.get("is_ending_soon_auction"):
         return 5, ["alarm_clock", "rotating_light"]
     if result.get("golf_delivery_path") == "catalog-steal":

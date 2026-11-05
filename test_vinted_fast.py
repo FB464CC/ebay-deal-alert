@@ -1442,6 +1442,19 @@ def test_strong_look_timeout_is_not_retried_a_third_time(tmp_path, monkeypatch):
     lane.sleeper.assert_not_called()
 
 
+def test_verified_vinted_alert_breaks_through_ios_focus():
+    # Medium confidence, 60% off: was Priority 3, which iOS Focus silences.
+    result = {
+        "listing": {"platform": "vinted"},
+        "discount_pct": 60,
+        "price_confidence": "medium",
+        "deal_rating": "Great Deal",
+    }
+    assert engine.alert_urgency(result)[0] == 5
+    result["listing"]["platform"] = "ebay"
+    assert engine.alert_urgency(result)[0] == 3
+
+
 def test_strong_look_vetoes_a_third_party_logo(tmp_path):
     lane = _lane(tmp_path)
     result = {
