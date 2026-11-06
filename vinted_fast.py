@@ -108,6 +108,20 @@ _VINTED_INSTANT_GARMENT = re.compile(
     r"|trousers?|pants|slacks|chinos?|jeans)\b",
     re.IGNORECASE,
 )
+_VINTED_BARE_TITLE_FILLER = {"men", "mens", "man", "ermenegildo", "authentic"}
+
+
+def _is_bare_brand_title(title, brand_key):
+    """Owner 11-06: a $20 Brunello titled just "Brunello Cucinelli" got no ping
+    and the verified alert, 15 s later, landed after it sold. The seller typed
+    the brand, so this isn't the mis-tag the garment word guards against."""
+    if not brand_key:
+        return False
+    brand_words = set(brand_key.split())
+    words = set(re.findall(r"[a-z]+", str(title).casefold().replace("\u2019", "").replace("'", "")))
+    return bool(words & brand_words) and words <= brand_words | _VINTED_BARE_TITLE_FILLER
+
+
 # Title-only: descriptions say "dress or casual" about menswear.
 _VINTED_WOMENS_DRESS = re.compile(
     # Named dress styles ("t shirt dress"), or "dress" with no menswear
@@ -1460,6 +1474,8 @@ class VintedFastLane:
         self._last_request_started = None
         self._summary_started = None
         self._instant_pinged = set()
+        self._first_seen = {}
+        self._alert_watch = {}
         self._last_brand_poll = None
         self._peek_ctx = None
         self._pending_block = None
@@ -1994,6 +2010,7 @@ class VintedFastLane:
             or _VINTED_INSTANT_SKIP_WORDS.search(title)
             or not (
                 _VINTED_INSTANT_GARMENT.search(title)
+                or _is_bare_brand_title(title, result.get("vinted_brand_key"))
                 # Woven shirts only from the houses the shirt rule allows.
                 or (
                     result.get("vinted_brand_key") in _VINTED_ELITE_SHIRT_BRANDS
@@ -2024,7 +2041,35 @@ class VintedFastLane:
             message, "5", "zap",
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
         )
+        self._watch_alert(listing)
         return True
+
+    def _watch_alert(self, listing):
+        self._alert_watch.setdefault(listing.get("itemId"), {
+            "title": listing.get("title"), "alerted": self.clock(),
+            "in_feed": False, "misses": 0,
+        })
+
+    def _update_alert_watch(self, items):
+        """Log how long an alerted listing lasted, using brand-feed polls that
+        already happen, so a lost steal shows by how many seconds it was lost."""
+        ids = {f"vinted:{_raw_vinted_item_id(item)}" for item in items}
+        now = self.clock()
+        for item_id, watch in list(self._alert_watch.items()):
+            if item_id in ids:
+                watch["in_feed"], watch["misses"] = True, 0
+            elif watch["in_feed"]:
+                watch["misses"] += 1
+            if watch["misses"] >= 2:
+                first_seen = self._first_seen.get(item_id, watch["alerted"])
+                logger.info(
+                    "vinted-fast timing: first alert %.0fs after first seen, gone "
+                    "from feed %.0fs after first seen | %s",
+                    watch["alerted"] - first_seen, now - first_seen, watch["title"],
+                )
+            # 10 min: 96 rows can't turn over that fast, and it bounds the page.
+            if watch["misses"] >= 2 or now - watch["alerted"] > 600:
+                del self._alert_watch[item_id]
 
     def _instant_prepass(self, conn, main_conn, items, kind, search):
         """Instant pings straight from catalog rows, before any per-item
@@ -2033,6 +2078,8 @@ class VintedFastLane:
         pipeline still verifies every item afterwards."""
         for item in items:
             listing = marketplaces._vinted_item_to_listing(item)
+            if listing:
+                self._first_seen.setdefault(listing["itemId"], self.clock())
             if not listing or listing["itemId"] in self._instant_pinged:
                 continue
             if _already_seen(conn, main_conn, listing["itemId"]):
@@ -2227,6 +2274,8 @@ class VintedFastLane:
         items = parse_web_catalog_items(body)
         if items is None:
             logger.warning("vinted-fast brand feed page had no item payload")
+        else:
+            self._update_alert_watch(items)
         return status, items
 
     def _route(self, item, source_text=None):
@@ -2880,6 +2929,7 @@ class VintedFastLane:
             return
         engine.mark_seen(conn, item_id, fingerprint, total_price)
         self._log_result(result, delivered=True)
+        self._watch_alert(result.get("listing") or {})
 
     def run(self):
         if not VINTED_FAST_ENABLED:

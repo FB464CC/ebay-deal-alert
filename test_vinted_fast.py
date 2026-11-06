@@ -1174,6 +1174,10 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Canali navy wool dress pants", 13, "other", True),
         ("Kiton jeans", 20, "other", True),
         ("Brioni dress shirt", 10, "other", True),
+        # Owner 11-06: titled only with the brand; the verified alert was too late.
+        ("Brunello Cucinelli", 20, "other", True),
+        ("Ermenegildo Zegna", 10, "other", True),
+        ("Brunello Cucinelli bathrobe", 4, "other", False),
     ]
     for title, price, category, expected in cases:
         _listing, result = _apparel_listing_result(
@@ -1188,6 +1192,27 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
             assert headers["Priority"] == "5"
             assert headers["Title"].startswith("FAST ")
             assert " M: " in headers["Title"]  # size survives iOS body truncation
+
+
+def test_alert_watch_times_a_listing_leaving_the_feed(tmp_path, caplog):
+    lane = _lane(tmp_path)
+    now = [100.0]
+    lane.clock = lambda: now[0]
+    lane._first_seen["vinted:7"] = 90.0
+    lane._watch_alert({"itemId": "vinted:7", "title": "Brunello Cucinelli"})
+    lane._watch_alert({"itemId": "vinted:8", "title": "text feed only"})
+    with caplog.at_level("INFO"):
+        lane._update_alert_watch([{"id": 7}])
+        now[0] = 112.0
+        lane._update_alert_watch([{"id": 1}])  # one miss can be a flaky page
+        assert "timing" not in caplog.text
+        lane._update_alert_watch([{"id": 1}])
+    assert "first alert 10s after first seen, gone from feed 22s" in caplog.text
+    assert "vinted:7" not in lane._alert_watch
+    assert "vinted:8" in lane._alert_watch  # never in this feed, so never "gone"
+    now[0] = 800.0
+    lane._update_alert_watch([{"id": 1}])
+    assert not lane._alert_watch
 
 
 def test_pm_instant_needs_the_brand_in_the_sellers_own_title(tmp_path, monkeypatch):
