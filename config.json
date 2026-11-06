@@ -1238,6 +1238,23 @@
       "category": "knitwear"
     },
     {
+      "query": "peter millar cashmere quarter zip -women -womens -ladies -girls -kids -scarf",
+      "size": [
+        "M",
+        "L",
+        "XL"
+      ],
+      "max_price": 90,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-peter-millar-cashmere-quarter-zip",
+      "category": "knitwear"
+    },
+    {
       "query": "peter millar jacket -women -womens -ladies -girls -kids -scarf",
       "size": [
         "M",

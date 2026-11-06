@@ -379,6 +379,79 @@ _VINTED_BRAND_DISPLAY_NAMES = {
 logger = logging.getLogger(__name__)
 
 
+# Owner 11-06: a near-miss can still be worth an offer. Vinted caps offers at 40%
+# under list and buyers at 25 a day (help/258), and an accepted offer charges
+# nothing until the buyer presses Buy now.
+VINTED_OFFER_FRACTION = 0.60
+# Below the offer floor he messages the seller by hand: "I can do $xx".
+VINTED_MESSAGE_FRACTION = 0.50
+VINTED_OFFER_DAILY_CAP = 10  # per tier; offers leave 15 of the 25 for ones he picks
+VINTED_OFFER_STEAL_RESERVE = 4  # last slots wait for a Steal at the asked price
+_FULL_CASHMERE = re.compile(
+    r"\b100\s*%\s*cashmere\b|\b(?:pure|full|all)\s+cashmere\b|\bcashmere\s*100\s*%",
+    re.IGNORECASE,
+)
+_QUARTER_ZIP = re.compile(r"\b(?:quarter|1/4|half|1/2)[\s-]*zip", re.IGNORECASE)
+
+
+def _is_full_cashmere_zip(result, ai_result):
+    """A Peter Millar quarter-zip whose text or tag says all cashmere."""
+    if result.get("vinted_brand_key") != "peter millar":
+        return False
+    listing = result.get("listing") or {}
+    title = str(listing.get("title") or "")
+    summary = str(ai_result.get("summary") or "")
+    return bool(_QUARTER_ZIP.search(f"{title} {summary}")) and bool(
+        _FULL_CASHMERE.search(
+            f"{title} {listing.get('description') or ''} "
+            f"{ai_result.get('fabric_from_tag') or ''} {summary}"
+        )
+    )
+
+
+def _offer_view(result, fraction=VINTED_OFFER_FRACTION):
+    """The result re-priced as if this fraction of list were accepted, for the
+    same bars. Offers go to the cent; a typed message asks in whole dollars."""
+    item = engine._sane_ai_price(result.get("item_price"))
+    if item is None:
+        return None
+    offer = math.ceil(round(item * fraction * 100, 6)) / 100
+    if fraction < VINTED_OFFER_FRACTION:
+        offer = float(math.ceil(offer))
+    # Buyer protection is 5% + $0.70, charged on the offer price.
+    landed = (offer * 1.05 + 0.70 + marketplaces.VINTED_ASSUMED_SHIPPING) * (
+        1 + engine.SALES_TAX_RATE
+    )
+    rating, discount = engine.compute_deal_rating(
+        landed, result.get("estimated_resale_value")
+    )
+    if rating is None:
+        return None
+    return {
+        **result,
+        "item_price": offer,
+        "price": landed,
+        "vinted_expected_paid": landed,
+        "deal_rating": rating,
+        "discount_pct": discount,
+    }
+
+
+def _offer_slot_open(conn, rating, kind="offer"):
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS offer_alerts "
+        "(item_id TEXT PRIMARY KEY, sent_at REAL, kind TEXT)"
+    )
+    used = conn.execute(
+        "SELECT COUNT(*) FROM offer_alerts WHERE sent_at > ? AND kind = ?",
+        (time.time() - 86400, kind),
+    ).fetchone()[0]
+    limit = VINTED_OFFER_DAILY_CAP
+    if rating != "Steal":
+        limit -= VINTED_OFFER_STEAL_RESERVE
+    return used < limit
+
+
 def _set_vinted_negotiation_prices(result):
     """Attach the landed price the deal is judged at. Owner (11-02): sellers
     don't reliably accept offers and a real steal is bought at list before
@@ -1812,6 +1885,77 @@ class VintedFastLane:
         result["vinted_alert_item"] = _vinted_item_label(result)
         return None
 
+    def _try_offer_alert(self, conn, result, category, ai_result, search, hard_stop):
+        """Alert a piece that clears every bar at a 60% offer, or failing that
+        at half of list by message, but not at list."""
+        if category not in VINTED_APPAREL_CATEGORIES:
+            return False
+        for kind, fraction in (
+            ("offer", VINTED_OFFER_FRACTION),
+            ("message", VINTED_MESSAGE_FRACTION),
+        ):
+            view = _offer_view(result, fraction)
+            if (
+                view is None
+                or _vinted_apparel_bar_reason(view, category)
+                or engine.is_blocked_by_steal_quality_gate(view, category=category)
+                or not _offer_slot_open(conn, view["deal_rating"], kind)
+            ):
+                continue
+            if result.get("vinted_strong_checked") is not True:
+                # A near-miss must never use up the looks a real steal needs.
+                if self.strong_look_calls >= VINTED_STRONG_LOOK_MAX_PER_RUN // 2:
+                    return False
+                if not isinstance(
+                    self._while_peeking(self._run_vinted_strong_vision, result, hard_stop),
+                    dict,
+                ):
+                    return False
+                view = _offer_view(result, fraction)
+            if result.get("vinted_strong_checked") is True and not self._strong_look_veto_reason(view):
+                return self._send_offer_alert(
+                    conn, result, view, kind, category, ai_result, search, hard_stop
+                )
+        return False
+
+    def _send_offer_alert(self, conn, result, view, kind, category, ai_result, search, hard_stop):
+        listing = result.get("listing") or {}
+        sanity = self._while_peeking(engine._deepseek_alert_sanity_check,
+            listing, ai_result, category, hard_stop=hard_stop,
+            search_query=search.get("query"),
+        )
+        if sanity["is_part_or_accessory"] or not sanity["is_complete_item"]:
+            return False
+        title = str(listing.get("title") or "")
+        brand = result.get("vinted_brand") or "Vinted"
+        size = listing.get("size")
+        ask = f"${view['item_price']:g}"
+        how = (
+            f"Offer {ask}" if kind == "offer"
+            else f'Below the offer limit, so message the seller: "I can do {ask}"'
+        )
+        self._ntfy(
+            f"{kind.upper()} {brand} {ask} (list ${result['item_price']:g})"
+            + (f" {size}" if size else "") + f": {title[:40]}",
+            f"{how}\n~${view['price']:.0f} all-in, resale "
+            f"~${view['vinted_conservative_resale_value']:.0f}. {title}\n"
+            "Not a steal at list. If they accept or counter, nothing is charged "
+            "until you press Buy now.",
+            "4" if kind == "offer" else "3",
+            "moneybag" if kind == "offer" else "speech_balloon",
+            listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO offer_alerts VALUES (?, ?, ?)",
+            (listing.get("itemId"), time.time(), kind),
+        )
+        conn.commit()
+        logger.info(
+            "vinted-fast %s alert: $%g of $%g %s | %s",
+            kind, view["item_price"], result["item_price"], brand, title,
+        )
+        return True
+
     def _maybe_instant_alert(self, result, category):
         """Unverified ping for a luxury piece at a give-away price."""
         if category not in VINTED_APPAREL_CATEGORIES or category in {
@@ -2032,7 +2176,7 @@ class VintedFastLane:
         if reason:
             result["verdict"] = verdict
             result["reason"] = reason
-        if result.get("vinted_instant_alerted"):
+        if result.get("vinted_instant_alerted") and verdict != "OFFER_ALERTED":
             listing = result.get("listing") or {}
             self._ntfy(
                 f"SKIP: {str(listing.get('title') or '')[:50]}",
@@ -2649,6 +2793,12 @@ class VintedFastLane:
                 conn, result, item_id, fingerprint, total_price, ai_reject
             )
             return
+        result["vinted_full_cashmere_zip"] = _is_full_cashmere_zip(result, ai_result)
+        offer_verdict = lambda: (
+            "OFFER_ALERTED"
+            if self._try_offer_alert(conn, result, category, ai_result, search, hard_stop)
+            else "REJECTED"
+        )
         vinted_bar_reason = (
             _vinted_fragrance_bar_reason(result, category)
             or _vinted_watch_bar_reason(result, category)
@@ -2662,6 +2812,7 @@ class VintedFastLane:
                 fingerprint,
                 total_price,
                 vinted_bar_reason,
+                verdict=offer_verdict(),
             )
             return
         gate_reason = engine.is_blocked_by_steal_quality_gate(
@@ -2675,6 +2826,7 @@ class VintedFastLane:
                 fingerprint,
                 total_price,
                 f"blocked by steal-quality gate: {gate_reason}",
+                verdict=offer_verdict(),
             )
             return
         if category in VINTED_APPAREL_CATEGORIES or category == "school-gear":
@@ -2700,6 +2852,7 @@ class VintedFastLane:
                     fingerprint,
                     total_price,
                     f"vinted strong second-look veto: {strong_veto}",
+                    verdict=offer_verdict(),
                 )
                 return
         sanity = self._while_peeking(engine._deepseek_alert_sanity_check,

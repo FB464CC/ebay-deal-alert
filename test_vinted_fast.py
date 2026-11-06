@@ -466,7 +466,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 94
+    assert len(fast.enabled_vinted_searches()) == 95
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -505,6 +505,7 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
     expected_caps = {
         "vinted-peter-millar-polo": 30,
         "vinted-peter-millar-quarter-zip": 45,
+        "vinted-peter-millar-cashmere-quarter-zip": 90,
         "vinted-peter-millar-jacket": 65,
         "vinted-peter-millar": 30,
         "vinted-peter-millar-crown-crafted": 50,
@@ -1496,6 +1497,149 @@ def test_moth_balls_are_not_a_garment_ping():
     assert fast._VINTED_INSTANT_SKIP_WORDS.search(
         "Loro Piana Cedar Wood Moth Protection Balls Cashmere Care"
     )
+
+
+def test_offer_view_prices_a_25_dollar_sweater_at_15():
+    view = fast._offer_view({"item_price": 25.0, "estimated_resale_value": 60.0})
+    assert view["item_price"] == 15.0
+    # (15 + 0.75 + 0.70 + 4.99) * 1.06
+    assert round(view["price"], 2) == 22.73
+    assert view["vinted_expected_paid"] == view["price"]
+    assert view["deal_rating"] == "Great Deal"
+    # Never below Vinted's 40%-off floor.
+    assert fast._offer_view({"item_price": 13.33, "estimated_resale_value": 60.0})[
+        "item_price"
+    ] == 8.0
+    assert fast._offer_view({"item_price": 25.0}) is None
+
+
+def _offer_ai(resale):
+    return {
+        "damage_found": False,
+        "weird_logo_found": False,
+        "looks_good": True,
+        "counterfeit_suspected": False,
+        "summary": "Canali wool jacket in clean condition",
+        "visible_brand_evidence": "Canali neck label",
+        "estimated_retail_price": 900,
+        "estimated_resale_value": resale,
+        "price_confidence": "high",
+        "liquidity": "fast",
+    }
+
+
+def _run_offer(tmp_path, price, resale):
+    listing, result = _apparel_listing_result(
+        "Canali wool jacket", price, "outerwear", "canali jacket"
+    )
+    with mock.patch.object(fast.VintedFastLane, "_ntfy") as ntfy:
+        _lane_obj, _strong, send, row = _run_custom_pipeline(
+            tmp_path, listing, result, _offer_ai(resale),
+            strong_result=_passing_strong_result(resale=resale),
+        )
+    return row, ntfy, send
+
+
+def test_near_miss_of_any_brand_gets_an_offer_alert_not_a_buy_alert(tmp_path):
+    # Good Deal at list; the ~$83 all-in offer is under 40% of a $210 resale.
+    row, ntfy, send = _run_offer(tmp_path, 115, 210)
+    send.assert_not_called()
+    assert row["verdict"] == "OFFER_ALERTED"
+    args = ntfy.call_args.args
+    assert args[0].startswith("OFFER Canali $69 (list $115)")
+    assert args[2] == "4"
+
+
+def test_near_miss_that_only_works_at_half_gets_a_message_alert(tmp_path):
+    row, ntfy, send = _run_offer(tmp_path, 115, 180)
+    send.assert_not_called()
+    assert row["verdict"] == "OFFER_ALERTED"
+    args = ntfy.call_args.args
+    assert args[0].startswith("MESSAGE Canali $58 (list $115)")
+    assert '"I can do $58"' in args[1]
+    assert args[2] == "3"
+
+
+def test_offer_checks_leave_half_the_strong_looks_for_buy_alerts(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Canali wool jacket", 115, "outerwear", "canali jacket"
+    )
+    lane = _lane(tmp_path)
+    lane.strong_look_calls = fast.VINTED_STRONG_LOOK_MAX_PER_RUN // 2
+    result.update(
+        {
+            "vinted_photo_ai_checked": True,
+            "counterfeit_suspected": False,
+            "damage_found": False,
+            "price_confidence": "high",
+            "estimated_resale_value": 210,
+        }
+    )
+    conn = engine.init_db(lane.seen_db_path)
+    with mock.patch.object(lane, "_run_vinted_strong_vision") as strong:
+        assert not lane._try_offer_alert(conn, result, "outerwear", {}, {"query": "x"}, None)
+    conn.close()
+    strong.assert_not_called()
+
+
+def test_offer_that_still_fails_at_half_stays_rejected(tmp_path):
+    row, ntfy, send = _run_offer(tmp_path, 115, 160)
+    send.assert_not_called()
+    ntfy.assert_not_called()
+    assert row["verdict"] == "REJECTED"
+
+
+def test_offer_alert_daily_cap_reserves_slots_for_steals():
+    conn = sqlite3.connect(":memory:")
+    assert fast._offer_slot_open(conn, "Great Deal")
+    now = fast.time.time()
+    open_slots = fast.VINTED_OFFER_DAILY_CAP - fast.VINTED_OFFER_STEAL_RESERVE
+    for n in range(open_slots):
+        conn.execute("INSERT INTO offer_alerts VALUES (?, ?, 'offer')", (str(n), now))
+    assert not fast._offer_slot_open(conn, "Great Deal")
+    # Messages aren't limited by Vinted, so they keep their own count.
+    assert fast._offer_slot_open(conn, "Great Deal", "message")
+    assert fast._offer_slot_open(conn, "Steal")
+    for n in range(open_slots, fast.VINTED_OFFER_DAILY_CAP):
+        conn.execute("INSERT INTO offer_alerts VALUES (?, ?, 'offer')", (str(n), now))
+    assert not fast._offer_slot_open(conn, "Steal")
+    conn.execute("UPDATE offer_alerts SET sent_at = ?", (now - 90000,))
+    assert fast._offer_slot_open(conn, "Great Deal")
+
+
+def test_full_cashmere_zip_needs_peter_millar_and_all_cashmere():
+    def result(title, brand="peter millar"):
+        return {"vinted_brand_key": brand, "listing": {"title": title}}
+
+    assert fast._is_full_cashmere_zip(result("Peter Millar 100% cashmere quarter zip"), {})
+    assert fast._is_full_cashmere_zip(
+        result("Peter Millar 1/4 zip"), {"fabric_from_tag": "100% Cashmere"}
+    )
+    assert not fast._is_full_cashmere_zip(
+        result("Peter Millar quarter zip"), {"fabric_from_tag": "95% cotton 5% cashmere"}
+    )
+    assert not fast._is_full_cashmere_zip(result("Peter Millar 100% cashmere crewneck"), {})
+    assert not fast._is_full_cashmere_zip(result("100% cashmere quarter zip", "zegna"), {})
+
+
+def test_full_cashmere_zip_passes_knitwear_bar_at_great_deal_only():
+    base = {
+        "vinted_fast_lane": True,
+        "vinted_min_resale_floor": 30,
+        "item_price": 40.0,
+        "discount_pct": 55,
+        "price_confidence": "medium",
+        "deal_rating": "Great Deal",
+        "peter_millar_back_crown_visible": True,
+        "listing": {"title": "Peter Millar 100% cashmere quarter zip"},
+    }
+    knit = "knitwear bar: deal_rating"
+    plain = engine.is_blocked_by_steal_quality_gate(base, category="knitwear")
+    assert plain and knit in plain
+    cashmere = {**base, "vinted_full_cashmere_zip": True}
+    assert not engine.is_blocked_by_steal_quality_gate(cashmere, category="knitwear")
+    good = {**cashmere, "deal_rating": "Good Deal", "discount_pct": 35}
+    assert knit in engine.is_blocked_by_steal_quality_gate(good, category="knitwear")
 
 
 def test_verified_vinted_alert_breaks_through_ios_focus():

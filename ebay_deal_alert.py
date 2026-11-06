@@ -8942,9 +8942,11 @@ def is_blocked_by_steal_quality_gate(result, category=None):
         cheap_great_deal = (
             deal_rating == "Great Deal"
             and result.get("vinted_fast_lane")
-            and floor
-            and item_price is not None
-            and item_price <= floor * 0.5
+            and (
+                # Owner 11-06: full-cashmere Peter Millar quarter-zips are good.
+                result.get("vinted_full_cashmere_zip")
+                or (floor and item_price is not None and item_price <= floor * 0.5)
+            )
         )
         if deal_rating != "Steal" and not cheap_great_deal:
             return f"knitwear bar: deal_rating '{deal_rating}' below Steal - only grail-or-better on sweaters"
