@@ -280,7 +280,7 @@ _VINTED_INSTANT_SKIP_WORDS = re.compile(
     r"|perfume|cologne|fragrance|parfum|eau|ml|candle|lip|balm|socks?|cufflinks?"
     # Tom Ford "Ombre Leather" is a fragrance (production, 10-30/10-31).
     r"|ombr[eé]|oud|edp|edt|minis?|spray|tester"
-    r"|hanger|scarf|hat|cap|beanie|pocket square|keychain|card holder|box|dust ?bag"
+    r"|moth|cedar\s?wood|hanger|scarf|hat|cap|beanie|pocket square|keychain|card holder|box|dust ?bag"
     r"|shoes?|sneakers?|loafers?|boots?|sandals?|slippers?|trainers?|unisex"
     r"|women'?s?|ladies|girls?|kids?|boys?)\b",
     re.IGNORECASE,
@@ -512,6 +512,11 @@ _TITLE_SIZE_FIT = re.compile(rf"\b(?:size|sz)\.?\s*{_FIT_LETTER}\b", re.IGNORECA
 # 50-54 R/L is EU 40-44 (the suit searches accept it), so only 55+ is off.
 _SUIT_CHEST_OFF = re.compile(r"\b(?:3[0-9]|4[5-9]|5[5-9])\s?[RSL]\b")
 _SUIT_CHEST_FIT = re.compile(r"\b(?:4[0-4]|5[0-4])\s?[RSL]\b")
+_STRAY_PHOTO_SENTENCE = re.compile(
+    r"[^.]*\b(?:unrelated|irrelevant|stock|personal)\b[^.]*", re.IGNORECASE
+)
+_BELT_WORD = re.compile(r"\bbelts?\b", re.IGNORECASE)
+_BELT_LENGTH = re.compile(r"\b(\d{2,3})\s*(in|inch(?:es)?|cm)\b", re.IGNORECASE)
 _LETTER_SIZES = frozenset({"XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "2XL", "3XL"})
 _ROW_LETTER_SIZE = re.compile(r"^\s*(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b", re.I)
 
@@ -587,6 +592,10 @@ def _fits_size_list(search, listing, category):
         return True
     if category not in _VINTED_SIZED_CATEGORIES:
         return False
+    # Sellers pick a letter for suits too. L is a 42; a stated off-size chest
+    # in the title was already rejected by _off_size_reason.
+    if category == "tailoring" and str(listing.get("size") or "").strip().upper() == "L":
+        return True
     return (
         bool(_pants_waist_fits(listing))
         or bool(_SUIT_CHEST_FIT.fullmatch(str(listing.get("size") or "").strip()))
@@ -594,11 +603,26 @@ def _fits_size_list(search, listing, category):
     )
 
 
+def _belt_off_size(size, title):
+    """A belt's stated length, when it can't fit a 32-36 waist."""
+    if not _BELT_WORD.search(title):
+        return False
+    found = _BELT_LENGTH.search(size) or _BELT_LENGTH.search(title)
+    if not found:
+        return False
+    length = float(found.group(1))
+    if found.group(2).casefold() == "cm":
+        length /= 2.54
+    return not 32 <= length <= 40
+
+
 def _off_size_reason(listing, category):
-    if category not in _VINTED_SIZED_CATEGORIES:
-        return None
     size = str(listing.get("size") or "")
     title = str(listing.get("title") or "")
+    if _belt_off_size(size, title):
+        return "belt length won't fit (owner wears 32-36)"
+    if category not in _VINTED_SIZED_CATEGORIES:
+        return None
     waist_fits = _pants_waist_fits(listing)
     if waist_fits is not None:
         return None if waist_fits else "pants waist won't fit (owner wears 32-36)"
@@ -1187,7 +1211,10 @@ def _merge_ai_result(result, ai_result, category):
     result["vinted_ai_summary"] = summary
     if (
         category != "fragrance"
-        and engine.brand_in(summary.lower(), engine.GENDER_EXCLUDE_KEYWORDS)
+        and engine.brand_in(
+            _STRAY_PHOTO_SENTENCE.sub(" ", summary).lower(),
+            engine.GENDER_EXCLUDE_KEYWORDS,
+        )
     ):
         return f"AI photo check found gender-excluded keyword: {summary}"
     if engine.PET_PRODUCT_SIGNALS.search(summary.lower()):

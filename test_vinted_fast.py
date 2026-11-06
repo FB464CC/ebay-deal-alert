@@ -1442,6 +1442,62 @@ def test_strong_look_timeout_is_not_retried_a_third_time(tmp_path, monkeypatch):
     lane.sleeper.assert_not_called()
 
 
+def test_common_no_flaw_wordings_do_not_hard_fail():
+    for text in (
+        "No rips, tears, or stains",
+        "no pilling, stains, or holes",
+        "No fading, stains, holes",
+        "no known stains",
+        "doesn't have any stains",
+        "does not have stains",
+        "no signs of wear or stains",
+        "stain release finish",
+        "no stains on the shirt",
+        "no stains or holes in the fabric",
+    ):
+        assert engine.condition_hard_fail_keyword("x", text) is None, text
+    for text in (
+        "small stain on cuff",
+        "no rips, stain on the cuff",
+        "no rips or tears, stain on collar",
+        "no holes but a stain on the back",
+    ):
+        assert engine.condition_hard_fail_keyword("x", text) == "stain", text
+
+
+def test_belt_length_must_fit_the_owner():
+    belt = "Tom Ford black leather belt"
+    assert fast._off_size_reason({"size": "44 in", "title": belt + " Size 110 cm"}, "other")
+    assert fast._off_size_reason({"title": belt + " 110 cm"}, "leather-goods")
+    assert fast._off_size_reason({"size": "36 in", "title": belt}, "other") is None
+    assert fast._off_size_reason({"title": belt + " 95cm"}, "other") is None
+    assert fast._off_size_reason({"title": belt}, "other") is None
+
+
+def test_lettered_suit_only_fits_at_large():
+    search = {"size": ["40", "42", "44"], "size_equivalents": ["50", "52", "54"]}
+    suit = {"title": "Canali Proposta Men's Black Tux Set", "size": "L"}
+    assert fast._fits_size_list(search, suit, "tailoring")
+    assert not fast._fits_size_list(search, {**suit, "size": "M"}, "tailoring")
+    assert not fast._fits_size_list(search, {**suit, "size": "XL"}, "tailoring")
+
+
+def test_stray_photo_of_a_woman_is_not_womenswear():
+    stray = (
+        "Peter Millar Raleigh chino, size 36. One photo appears to be an "
+        "irrelevant stock photo of a woman in a green dress."
+    )
+    assert "woman" not in fast._STRAY_PHOTO_SENTENCE.sub(" ", stray).lower()
+    real = "Photos show a women's blouse."
+    assert "women" in fast._STRAY_PHOTO_SENTENCE.sub(" ", real).lower()
+
+
+def test_moth_balls_are_not_a_garment_ping():
+    assert fast._VINTED_INSTANT_SKIP_WORDS.search(
+        "Loro Piana Cedar Wood Moth Protection Balls Cashmere Care"
+    )
+
+
 def test_verified_vinted_alert_breaks_through_ios_focus():
     # Medium confidence, 60% off: was Priority 3, which iOS Focus silences.
     result = {

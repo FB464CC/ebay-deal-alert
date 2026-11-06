@@ -4650,15 +4650,19 @@ WATCH_PAPERWORK_KEYWORDS = ("service booklet", "warranty card", "dustproof envel
 
 _FLAW_WORD = (
     r"(?:stains?|stained|holes?|moth(?:\s+holes?)?|rips?|ripped|tears?|torn"
-    r"|snags?|mold|mildew|peeling|damage|flaws?|defects?)"
+    r"|snags?|mold|mildew|peeling|damage|flaws?|defects?|fad(?:e|es|ed|ing)"
+    r"|pilling|pills?|wear|discoloration|odou?rs?|smells?)"
 )
 # Audit 11-03: all 56 Vinted 'stains' hard-fails came from descriptions, many
 # saying "no stains or holes" (a $243 Longines diver, cashmere at $5).
 _NEGATED_FLAWS = re.compile(
-    rf"\b(?:no|without|free\s+(?:of|from)|zero|not\s+any|never\s+(?:been\s+)?)\s+"
-    rf"(?:(?:visible|major|noticeable|obvious|any|signs?\s+of)\s+)*{_FLAW_WORD}"
-    rf"(?:\s*(?:,|/|&|\bor\b|\band\b)\s*(?:any\s+)?{_FLAW_WORD})*\b"
-    r"|\bstain[\s-]*(?:free|resistant|proof)\b",
+    rf"\b(?:no|without|free\s+(?:of|from)|zero|not\s+any|never\s+(?:been\s+)?"
+    r"|(?:does|did|do)(?:n['\u2019]?t|\s+not)\s+have)\s+"
+    rf"(?:(?:visible|major|noticeable|obvious|any|known|apparent|signs?\s+of)\s+)*{_FLAW_WORD}"
+    rf"(?:\s*(?:,\s*(?:or|and)\b|/|&|\bor\b|\band\b)\s*(?:any\s+)?{_FLAW_WORD}"
+    # A bare comma may start a new clause: "no rips, stain on the cuff".
+    rf"|\s*,\s*(?:any\s+)?{_FLAW_WORD}(?!\s+(?:on|near|at|in|around|by|to|under)\b))*\b"
+    r"|\bstain[\s-]*(?:free|resistant|proof|release|repellent)\b",
     re.IGNORECASE,
 )
 
@@ -4667,12 +4671,18 @@ def condition_hard_fail_keyword(title, haystack):
     """matched_keyword over CONDITION_HARD_FAIL_KEYWORDS, paperwork title-only.
     Negated flaws ("no stains or holes") don't count."""
     haystack = _NEGATED_FLAWS.sub(" ", str(haystack or ""))
-    if matched_keyword(title, WATCH_PAPERWORK_KEYWORDS) is not None:
-        return matched_keyword(haystack, CONDITION_HARD_FAIL_KEYWORDS)
-    return matched_keyword(
-        haystack,
-        [k for k in CONDITION_HARD_FAIL_KEYWORDS if k not in WATCH_PAPERWORK_KEYWORDS],
-    )
+    keywords = CONDITION_HARD_FAIL_KEYWORDS
+    if matched_keyword(title, WATCH_PAPERWORK_KEYWORDS) is None:
+        keywords = [k for k in keywords if k not in WATCH_PAPERWORK_KEYWORDS]
+    hit = matched_keyword(haystack, keywords)
+    if hit is not None:
+        # Descriptions aren't otherwise logged, so a false hit can't be audited.
+        at = haystack.lower().find(hit)
+        logger.info(
+            "condition hard-fail context: %r",
+            haystack[max(0, at - 50) : at + len(hit) + 30],
+        )
+    return hit
 
 
 def matched_keyword(haystack, keywords):
