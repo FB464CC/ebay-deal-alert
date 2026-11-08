@@ -1177,6 +1177,11 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         # Owner 11-06: titled only with the brand; the verified alert was too late.
         ("Brunello Cucinelli", 20, "other", True),
         ("Kiton", 20, "other", True),
+        # Owner 11-08: elite knitwear pings up to $60; other pieces stay at 25%.
+        ("Loro Piana cashmere sweater", 60, "knitwear", True),
+        ("Loro Piana cashmere sweater", 61, "knitwear", False),
+        ("Loro Piana wool jacket", 45, "outerwear", False),
+        ("Canali cashmere sweater", 45, "knitwear", False),
         # 11-07: sellers of many dress shirts title them only "Canali"/"Zegna".
         ("Ermenegildo Zegna", 10, "other", False),
         ("Canali", 20, "other", False),

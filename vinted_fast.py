@@ -85,6 +85,12 @@ VINTED_INSTANT_ALERT_FRACTION = float(
     engine._CONFIG.get("VINTED_INSTANT_ALERT_FRACTION", 0.25)
 )
 VINTED_INSTANT_MIN_FLOOR = 100.0
+# Owner 11-08: LP/Brunello/Kiton/Brioni are the #1 want. Their knitwear pings
+# up to this list price (25% of floor stops at $37.50), since a checked alert
+# lands 15-30 s after a listing appears and good ones last 30 s to 3 min.
+VINTED_ELITE_KNIT_INSTANT_MAX_PRICE = float(
+    engine._CONFIG.get("VINTED_ELITE_KNIT_INSTANT_MAX_PRICE", 60)
+)
 # Owner, 11-04: a $10 Peter Millar polo (back crown) sold within a minute;
 # the $30 floor kept PM off the instant ping, and the photo AI takes 10-130 s.
 # PM tops at or under this list price ping instantly; the AI still follows.
@@ -2004,11 +2010,14 @@ class VintedFastLane:
             and price <= VINTED_PM_INSTANT_MAX_PRICE
             and engine.PETER_MILLAR_TOP_SIGNALS.search(title)
         )
+        ceiling = floor * VINTED_INSTANT_ALERT_FRACTION
+        if result.get("vinted_brand_key") in _VINTED_ELITE_SHIRT_BRANDS and _XXL_KNIT.search(title):
+            ceiling = max(ceiling, VINTED_ELITE_KNIT_INSTANT_MAX_PRICE)
         if (
             (not pm_top and (
                 floor < VINTED_INSTANT_MIN_FLOOR
                 or price is None
-                or price > floor * VINTED_INSTANT_ALERT_FRACTION
+                or price > ceiling
             ))
             # Owner: Brooks Brothers only as an expensive suit, which a
             # title can't show; 5/5 instant pings were rejected (10-30..11-01).
