@@ -114,8 +114,10 @@ _VINTED_BARE_TITLE_FILLER = {"men", "mens", "man", "ermenegildo", "authentic"}
 def _is_bare_brand_title(title, brand_key):
     """Owner 11-06: a $20 Brunello titled just "Brunello Cucinelli" got no ping
     and the verified alert, 15 s later, landed after it sold. The seller typed
-    the brand, so this isn't the mis-tag the garment word guards against."""
-    if not brand_key:
+    the brand, so this isn't the mis-tag the garment word guards against.
+    Elite houses only: 11-07/08 sent 9 bare "Canali"/"Zegna" pings in 36 h,
+    all dress shirts the shirt rule rejects."""
+    if brand_key not in _VINTED_ELITE_SHIRT_BRANDS:
         return False
     brand_words = set(brand_key.split())
     words = set(re.findall(r"[a-z]+", str(title).casefold().replace("\u2019", "").replace("'", "")))
@@ -401,6 +403,9 @@ VINTED_OFFER_FRACTION = 0.60
 VINTED_MESSAGE_FRACTION = 0.50
 VINTED_OFFER_DAILY_CAP = 10  # per tier; offers leave 15 of the 25 for ones he picks
 VINTED_OFFER_STEAL_RESERVE = 4  # last slots wait for a Steal at the asked price
+# 11-07/08: 12 of 18 offer/message alerts were PM pants and shorts listed at
+# $9-$20, a few dollars of saving each. Below this list price, skip both tiers.
+VINTED_OFFER_MIN_LIST = 25
 _FULL_CASHMERE = re.compile(
     r"\b100\s*%\s*cashmere\b|\b(?:pure|full|all)\s+cashmere\b|\bcashmere\s*100\s*%",
     re.IGNORECASE,
@@ -1905,6 +1910,8 @@ class VintedFastLane:
         """Alert a piece that clears every bar at a 60% offer, or failing that
         at half of list by message, but not at list."""
         if category not in VINTED_APPAREL_CATEGORIES:
+            return False
+        if (engine._sane_ai_price(result.get("item_price")) or 0) < VINTED_OFFER_MIN_LIST:
             return False
         for kind, fraction in (
             ("offer", VINTED_OFFER_FRACTION),

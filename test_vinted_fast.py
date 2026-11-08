@@ -1176,7 +1176,10 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Brioni dress shirt", 10, "other", True),
         # Owner 11-06: titled only with the brand; the verified alert was too late.
         ("Brunello Cucinelli", 20, "other", True),
-        ("Ermenegildo Zegna", 10, "other", True),
+        ("Kiton", 20, "other", True),
+        # 11-07: sellers of many dress shirts title them only "Canali"/"Zegna".
+        ("Ermenegildo Zegna", 10, "other", False),
+        ("Canali", 20, "other", False),
         ("Brunello Cucinelli bathrobe", 4, "other", False),
     ]
     for title, price, category, expected in cases:
@@ -1605,6 +1608,15 @@ def test_offer_checks_leave_half_the_strong_looks_for_buy_alerts(tmp_path):
         assert not lane._try_offer_alert(conn, result, "outerwear", {}, {"query": "x"}, None)
     conn.close()
     strong.assert_not_called()
+
+
+def test_near_miss_below_the_list_floor_gets_no_offer_or_message(tmp_path, monkeypatch):
+    # Same near-miss as the message test above, with the floor above its $115 list.
+    monkeypatch.setattr(fast, "VINTED_OFFER_MIN_LIST", 116)
+    row, ntfy, send = _run_offer(tmp_path, 115, 180)
+    send.assert_not_called()
+    assert row["verdict"] != "OFFER_ALERTED"
+    assert not any(c.args[0].startswith(("OFFER", "MESSAGE")) for c in ntfy.call_args_list)
 
 
 def test_offer_that_still_fails_at_half_stays_rejected(tmp_path):
