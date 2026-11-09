@@ -199,6 +199,29 @@ _VINTED_SUIT_SIZE = re.compile(
 # "Jos. A. Bank Loro Piana fabric suit"); the brand floor would treat them as
 # the real house. Makers by name are in PASS_BRANDS; this catches the rest.
 _VINTED_MILL = r"(?:loro\s+piana|(?:ermenegildo\s+)?zegna|vitale\s+barberis(?:\s+canonico)?)"
+# Owner 11-08: work days are dress shirts and chinos, and mainline Zegna is a
+# top want, so Zegna woven shirts clear the shirt rule. Z Zegna/Zegna Sport
+# and other makers' shirts stay out: Vinted prefixes the seller's brand tag,
+# so "Tommy Hilfiger Ermenegildo Zegna Button Up" is a Tommy Hilfiger shirt.
+_VINTED_ZEGNA_MAINLINE_TITLE = re.compile(
+    r"^\W*(?:(?:men[’']?s?|vintage|nwt|new)\s+)*(?:ermenegildo\s+)?zegna\b",
+    re.IGNORECASE,
+)
+_VINTED_ZEGNA_DIFFUSION = re.compile(r"\bz\.?\s?zegna\b|\bzzegna\b|\bzegna\s+sport\b", re.IGNORECASE)
+
+
+def _shirt_house(brand_key, title):
+    """Whose woven/dress shirts the owner buys."""
+    if brand_key in _VINTED_ELITE_SHIRT_BRANDS:
+        return True
+    title = str(title or "")
+    return bool(
+        brand_key == "zegna"
+        and _VINTED_ZEGNA_MAINLINE_TITLE.search(title)
+        and not _VINTED_ZEGNA_DIFFUSION.search(title)
+    )
+
+
 _VINTED_MILL_FABRIC = re.compile(
     rf"\b{_VINTED_MILL}(?:\s+(?:wool|cashmere|silk|linen|super\s*\d+'?s?))*"
     r"\s+(?:fabric|cloth|textile)s?\b"
@@ -855,11 +878,11 @@ def _menswear_shape_reason(listing, brand_key):
             return "suit is not a 40-44 R/L (EU 50-54)"
         return None
     if (
-        brand_key not in _VINTED_ELITE_SHIRT_BRANDS
+        not _shirt_house(brand_key, title)
         and not _VINTED_POLO.search(title)
         and _VINTED_WOVEN_SHIRT.search(title)
     ):
-        return "dress shirt below Brunello/Kiton/Loro Piana/Brioni tier"
+        return "dress shirt below Brunello/Kiton/Loro Piana/Brioni/Zegna tier"
     return None
 
 
@@ -879,11 +902,11 @@ def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
     if _VINTED_POLO.search(summary) and _VINTED_XL.search(sized):
         return "AI photos show an XL polo (owner wears M/L polos)"
     if (
-        brand_key not in _VINTED_ELITE_SHIRT_BRANDS
+        not _shirt_house(brand_key, listing.get("title"))
         and _VINTED_AI_WOVEN_SHIRT.search(summary)
         and not _VINTED_POLO.search(summary)
     ):
-        return "AI photos show a dress shirt below Brunello/Kiton/Loro Piana/Brioni tier"
+        return "AI photos show a dress shirt below Brunello/Kiton/Loro Piana/Brioni/Zegna tier"
     return None
 
 

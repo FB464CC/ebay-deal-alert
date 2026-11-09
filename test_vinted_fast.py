@@ -2230,6 +2230,14 @@ def test_menswear_seller_rule_only_cuts_obvious_throwaways():
         ("Kiton dress shirt", "16", "kiton", False),
         ("Peter Millar T-shirt", "L", "peter millar", False),
         ("Zegna mens sweater", "L", "zegna", False),
+        # Owner 11-08: mainline Zegna dress shirts are wanted for work.
+        ("Ermenegildo Zegna Centoquaranta Lavender Check Cotton Dress Shirt L", "L", "zegna", False),
+        ("Zegna Shirt Mens Medium White Plaid Long Slv Button Up", "M", "zegna", False),
+        ("Men’s Zegna dress shirt", "L", "zegna", False),
+        ("Tommy Hilfiger Ermenegildo Zegna Button Up Shirt Mens L", "L", "zegna", True),
+        ("Z Zegna button down shirt", "L", "zegna", True),
+        ("Zegna Sport button up shirt", "L", "zegna", True),
+        ("Canali dress shirt", "L", "canali", True),
     ],
 )
 def test_menswear_shape_rule(title, size, brand, blocked):
@@ -2377,6 +2385,8 @@ def test_live_audit_shapes(title, size, blocked):
         ("Peter Millar polo, navy", {"title": "Peter Millar Crown Crafted", "size": "XL"}, None, True),
         ("Canali white button-down shirt", {}, "canali", True),
         ("Kiton white button-down shirt", {}, "kiton", False),
+        ("Zegna white dress shirt", {"title": "Ermenegildo Zegna Shirt", "size": "L"}, "zegna", False),
+        ("Zegna white dress shirt", {"title": "Z Zegna Shirt", "size": "L"}, "zegna", True),
         ("Tom Ford Black Orchid 100ml bottle", {}, "tom ford", True),
     ],
 )

@@ -5448,10 +5448,12 @@ def _text_safety_hard_fails(haystack, category=None):
         return "pet product, not menswear"
     if EMPTY_PACKAGING_SIGNALS.search(haystack):
         return "packaging/accessory-only listing, not the item"
+    # Owner 11-08: mainline Zegna shirts too; vinted_fast._shirt_house keeps
+    # Z Zegna, Zegna Sport and other makers out.
     if BUTTON_DOWN_SHIRT_SIGNALS.search(haystack) and not brand_in(
-        haystack, ("kiton", "brunello cucinelli", "loro piana", "brioni")
+        haystack, ("kiton", "brunello cucinelli", "loro piana", "brioni", "zegna")
     ):
-        return "button-down/button-up dress shirt not wanted (Kiton exempted)"
+        return "button-down/button-up dress shirt not wanted (elite houses and Zegna exempted)"
     if COUNTERFEIT_SIGNALS.search(MARGIELA_REPLICA_LINE.sub(" ", haystack)):
         return "counterfeit/replica listing language in title/description"
     obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
