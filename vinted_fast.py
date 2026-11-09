@@ -2040,7 +2040,8 @@ class VintedFastLane:
         details = " · ".join(
             str(part) for part in (listing.get("size"), listing.get("condition")) if part
         )
-        all_in = price + engine.get_shipping_cost(listing)
+        # Shipping cost already carries the buyer fee; the owner's all-in adds 6% tax.
+        all_in = (price + engine.get_shipping_cost(listing)) * (1 + engine.SALES_TAX_RATE)
         message = (
             f"${price:g} (~${all_in:.0f} all-in) {title}\n{details}\n"
             "Unverified: seller and photo checks still running. Buy at list "
@@ -2312,6 +2313,17 @@ class VintedFastLane:
         if source_text is None:
             source_text = (item.get("item_box") or {}).get("first_line") or ""
         source_words = set(_words(source_text))
+        # The "cucinelli" text feed is the "brunello cucinelli" house. Route it
+        # as that house so the garment-word rule below applies: 11-05..08 a $165
+        # shirt, $160 trousers and a $175 belt over the $130 catch-all cap fell
+        # into the shoe search and died as size mismatches, and a $150 tee
+        # spent an AI check in the polo search.
+        if not brand_feed and source_words:
+            for search in self._routing_order:
+                house = set(_words(marketplaces.split_query_exclusions(search.get("query", ""))[0]))
+                if search.get("category") == "other" and source_words < house:
+                    source_words = house
+                    break
         title_words = _route_words(listing.get("title"))
         # "Goddess EDP 100ml" tagged brand Burberry is still Burberry Goddess.
         scent_words = title_words | set(

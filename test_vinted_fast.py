@@ -1200,6 +1200,11 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
             assert headers["Priority"] == "5"
             assert headers["Title"].startswith("FAST ")
             assert " M: " in headers["Title"]  # size survives iOS body truncation
+            # The owner's all-in includes 6% tax, not just list + fee + shipping.
+            body = post.call_args.kwargs["data"]
+            body = body.decode("utf-8") if isinstance(body, bytes) else body
+            all_in = (price + fast.engine.get_shipping_cost(_listing)) * 1.06
+            assert f"(~${all_in:.0f} all-in)" in body, (title, body)
 
 
 def test_alert_watch_times_a_listing_leaving_the_feed(tmp_path, caplog):
@@ -1771,6 +1776,11 @@ def test_quoted_brand_shoe_searches_accept_any_shoe_title(tmp_path):
     assert lane._route(item("John Lobb City II"), "john lobb")["id"] == "vinted-john-lobb-shoes"
     # A catch-all-backed text feed still won't drop a blazer into shoes.
     assert lane._route(item("Zegna wool blazer 50L"), "zegna") is None
+    # "cucinelli" is a partial house name; over-cap pieces must not fall into
+    # the Brunello shoe or polo search (11-06: $165 shirt -> shoe size mismatch).
+    assert lane._route(item("Brunello Cucinelli Men's M Gingham Cotton Shirt"), "cucinelli") is None
+    assert lane._route(item("Brunello Cucinelli Crest Logo Cotton T-Shirt"), "cucinelli") is None
+    assert lane._route(item("Brunello Cucinelli suede loafers"), "cucinelli")["id"] == "vinted-brunello-cucinelli-shoes"
 
 
 def test_relaxed_waist_and_regex_false_positives():
