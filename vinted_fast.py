@@ -422,6 +422,9 @@ _VINTED_BRAND_DISPLAY_NAMES = {
 }
 
 logger = logging.getLogger(__name__)
+# Owner 11-08: see the elite pieces no saved search takes (mostly over a
+# price cap) before raising any cap. Log only; no extra requests.
+_UNROUTED_HOUSES = re.compile(r"\b(?:loro\s+piana|cucinelli|kiton|brioni|zegna)\b", re.IGNORECASE)
 
 
 # Owner 11-06: a near-miss can still be worth an offer. Vinted caps offers at 40%
@@ -1259,6 +1262,18 @@ def parse_web_catalog_items(html):
     return [item for item in map(_web_item_to_catalog_item, entries) if item]
 
 
+def _log_unrouted(item, source):
+    listing = marketplaces._vinted_item_to_listing(item) or {}
+    title = str(listing.get("title") or "")
+    if not _UNROUTED_HOUSES.search(title):
+        return
+    logger.info(
+        "vinted-fast unrouted: $%s %s | %s | size %s | %s",
+        (listing.get("price") or {}).get("value"), source or "brands",
+        title[:120], listing.get("size") or "?", listing.get("url") or "",
+    )
+
+
 def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None, brand_slots=None):
     """Brand feed on k of every k+1 requests; text feeds share the rest."""
     brand_ids = VINTED_BRAND_FEED_IDS if brand_ids is None else brand_ids
@@ -1275,9 +1290,19 @@ def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None, b
                         "max_price": brand_max_price})
     if not texts:
         return [brand]
+    # Owner 11-08, tops first: a feed with "slots": 2 (the elite houses) runs
+    # once in each half of the cycle; the rest split across the halves. Same
+    # request rate: those come round ~every 32 s instead of 54, others ~64 s.
+    weights = [max(1, int(feed.get("slots", 1))) for feed in text_feeds]
+    rounds = max(weights)
+    light = [text for text, weight in zip(texts, weights) if weight == 1]
+    order = []
+    for r in range(rounds):
+        order += [text for text, weight in zip(texts, weights) if weight > 1 and weight > r]
+        order += light[r * len(light) // rounds:(r + 1) * len(light) // rounds]
     schedule = []
     slots = VINTED_BRAND_SLOTS_PER_TEXT if brand_slots is None else brand_slots
-    for text in texts:
+    for text in order:
         schedule += [brand] * slots + [text]
     return schedule
 
@@ -3103,6 +3128,7 @@ class VintedFastLane:
                         )
                         if target is None:
                             totals["unrouted"] += 1
+                            _log_unrouted(item, None if kind == "brands" else search.get("query"))
                             continue
                         try:
                             self._peek_brand_feed()

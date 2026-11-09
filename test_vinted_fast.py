@@ -3003,6 +3003,28 @@ def test_feed_schedule_gives_brand_feed_k_slots_per_text_feed():
     assert fast.build_feed_schedule([], [{"query": "poker chip"}], None)[0][0] == "text"
 
 
+def test_elite_feeds_run_twice_per_cycle_at_the_same_request_rate():
+    # Owner 11-08, tops first: elite text feeds come round twice as often.
+    feeds = [{"query": q} for q in ("a", "b", "c", "d")] + [{"query": "lp", "slots": 2}]
+    texts = [s["query"] for kind, s in fast.build_feed_schedule([1], feeds, 250, brand_slots=1) if kind == "text"]
+    assert texts == ["lp", "a", "b", "lp", "c", "d"]
+    # Every live elite feed is weighted, so each comes round every ~32 s.
+    live = {f["query"]: f.get("slots", 1) for f in fast.VINTED_TEXT_FEEDS}
+    assert all(live[q] == 2 for q in ("zegna", "loro piana", "cucinelli", "kiton", "brioni"))
+
+
+def test_unrouted_elite_rows_are_logged(caplog):
+    def item(title):
+        return {"id": 9, "title": title, "url": "/items/9", "price": {"amount": "220"},
+                "photo": {"url": "https://x/a.webp"}, "photos": [], "item_box": {}}
+
+    with caplog.at_level("INFO"):
+        fast._log_unrouted(item("Loro Piana cashmere quarter zip L"), None)
+        fast._log_unrouted(item("Peter Millar quarter zip"), "peter millar")
+    lines = [r.getMessage() for r in caplog.records if "unrouted" in r.getMessage()]
+    assert len(lines) == 1 and "Loro Piana cashmere quarter zip L" in lines[0] and "$220" in lines[0]
+
+
 def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
     searches = [
         {"id": "pm", "query": "peter millar -women", "max_price": 30, "platforms": ["vinted"]},
