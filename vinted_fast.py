@@ -130,6 +130,21 @@ def _is_bare_brand_title(title, brand_key):
     return bool(words & brand_words) and words <= brand_words | _VINTED_BARE_TITLE_FILLER
 
 
+def _knockoff_house_tag(listing, brand_key):
+    """Owner 11-09: a $55 women's "Cardigan" seller-tagged "carlos Brioni"
+    FAST-pinged as Brioni. An unverified luxury-house ping needs the house in
+    the seller's own title or a tag that is exactly the house name."""
+    if brand_key not in _VINTED_LABEL_REQUIRED_BRANDS:
+        return False
+    title = str(listing.get("title") or "")
+    seller_title = str(listing.get("sellerTitle") or title)
+    if brand_key.split()[-1] in seller_title.casefold():
+        return False
+    tag = title[: len(title) - len(seller_title)] if title.endswith(seller_title) else title
+    words = set(re.findall(r"[a-z]+", tag.casefold()))
+    return not words <= set(brand_key.split()) | {"ermenegildo"}
+
+
 # Title-only: descriptions say "dress or casual" about menswear.
 _VINTED_WOMENS_DRESS = re.compile(
     # Named dress styles ("t shirt dress"), or "dress" with no menswear
@@ -2128,6 +2143,7 @@ class VintedFastLane:
             # Owner: Brooks Brothers only as an expensive suit, which a
             # title can't show; 5/5 instant pings were rejected (10-30..11-01).
             or result.get("vinted_brand_key") in _VINTED_FULL_FLOOR_BRANDS
+            or _knockoff_house_tag(listing, result.get("vinted_brand_key"))
             or "brooks brothers" in title.casefold()
             or _VINTED_INSTANT_SKIP_WORDS.search(title)
             or not (

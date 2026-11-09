@@ -1324,6 +1324,25 @@ def test_pm_instant_needs_the_brand_in_the_sellers_own_title(tmp_path, monkeypat
         assert post.called is expected
 
 
+def test_luxury_instant_needs_exact_house_tag_or_sellers_title(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    for tag, seller_title, expected in (
+        ("carlos Brioni", "Cardigan", False),
+        ("Brioni", "Cardigan", True),
+        ("carlos Brioni", "Brioni cashmere cardigan", True),
+        ("Ermenegildo Zegna", "Cashmere sweater", True),
+    ):
+        _listing, result = _apparel_listing_result(
+            f"{tag} {seller_title}", 20, "knitwear", "brioni", search_id="s"
+        )
+        result["listing"]["sellerTitle"] = seller_title
+        lane._instant_pinged.clear()
+        with mock.patch.object(fast.requests, "post") as post:
+            assert lane._maybe_instant_alert(result, "knitwear") is expected, tag
+        assert post.called is expected
+
+
 def test_web_catalog_row_keeps_the_sellers_own_title():
     row = fast._web_item_to_catalog_item({"productItem": {
         "id": 7, "title": "Polo shirt", "url": "/items/7", "itemBox": {"firstLine": "Peter Millar"},
