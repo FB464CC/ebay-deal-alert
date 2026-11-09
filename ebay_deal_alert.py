@@ -5088,7 +5088,9 @@ def listing_matches_size_filter(saved_search, listing):
                 )
             return numeric
         else:
-            return rf"\b{re.escape(token)}\b"
+            # Not the "s" of "Men's" or the "m" of "I'm": an S-M-L search let a
+            # "Men's ... XXL" polo through (11-08).
+            return rf"(?<![\'’])\b{re.escape(token)}\b"
 
     for size_token in size_tokens:
         pattern = size_pattern(size_token)

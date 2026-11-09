@@ -2377,6 +2377,15 @@ def test_live_audit_shapes(title, size, blocked):
     assert (reason is not None) is blocked, reason
 
 
+def test_letter_size_ignores_apostrophe_s():
+    search = {"size": ["S", "M", "L"]}
+    fits = engine.listing_matches_size_filter
+    assert not fits(search, {"title": "Peter Millar Men's Gamecocks Polo", "size": "XXL"})
+    assert not fits(search, {"title": "Peter Millar Men’s Gamecocks Polo", "size": "XL"})
+    assert fits(search, {"title": "Peter Millar Men's Gamecocks Polo", "size": "S"})
+    assert fits(search, {"title": "Peter Millar Gamecocks Polo size L"})
+
+
 def test_trousers_ping_only_as_megasteals():
     # Owner 11-08: enough trousers; only "under like $10 for something worth $100+".
     def listing(title, price):

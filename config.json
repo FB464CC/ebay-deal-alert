@@ -250,7 +250,9 @@
     {
       "query": "\"peter millar\" \"gamecocks\" polo -scarf",
       "size": [
-        "M"
+        "S",
+        "M",
+        "L"
       ],
       "max_price": 50,
       "enabled": true,
@@ -268,8 +270,8 @@
     {
       "query": "\"peter millar\" \"gamecocks\" quarter zip -scarf",
       "size": [
-        "L",
-        "XL"
+        "M",
+        "L"
       ],
       "max_price": 50,
       "enabled": true,
