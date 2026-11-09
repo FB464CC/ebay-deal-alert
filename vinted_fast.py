@@ -2414,6 +2414,15 @@ class VintedFastLane:
             result.get("reason") or "",
             listing.get("itemWebUrl") or "",
         )
+        # Owner 11-09: audit the AI's retail/resale numbers against real comps.
+        values = {
+            key: result.get(key)
+            for key in ("estimated_retail_price", "estimated_resale_value",
+                        "vinted_strong_estimated_resale_value", "vinted_expected_paid")
+            if result.get(key) is not None
+        }
+        if values:
+            logger.info("vinted-fast values: %s | %s", listing.get("itemWebUrl") or "", values)
         return engine.append_alert_log(
             result,
             delivered=delivered,
