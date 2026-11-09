@@ -270,8 +270,11 @@
     {
       "query": "\"peter millar\" \"gamecocks\" quarter zip -scarf",
       "size": [
-        "M",
-        "L"
+        "L",
+        "XL"
+      ],
+      "steal_only_size": [
+        "M"
       ],
       "max_price": 50,
       "enabled": true,
@@ -1225,9 +1228,11 @@
     {
       "query": "peter millar quarter zip -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "M",
         "L",
         "XL"
+      ],
+      "steal_only_size": [
+        "M"
       ],
       "max_price": 45,
       "enabled": true,
@@ -1242,9 +1247,11 @@
     {
       "query": "peter millar cashmere quarter zip -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "M",
         "L",
         "XL"
+      ],
+      "steal_only_size": [
+        "M"
       ],
       "max_price": 90,
       "enabled": true,
@@ -1361,9 +1368,11 @@
     {
       "query": "zegna quarter zip -\"z zegna\" -\"zegna sport\" -zzegna -baruffa -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "M",
         "L",
         "XL"
+      ],
+      "steal_only_size": [
+        "M"
       ],
       "max_price": 110,
       "enabled": true,
@@ -1378,9 +1387,11 @@
     {
       "query": "loro piana quarter zip -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "M",
         "L",
         "XL"
+      ],
+      "steal_only_size": [
+        "M"
       ],
       "max_price": 200,
       "enabled": true,
@@ -1395,9 +1406,11 @@
     {
       "query": "brunello cucinelli quarter zip -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "M",
         "L",
         "XL"
+      ],
+      "steal_only_size": [
+        "M"
       ],
       "max_price": 200,
       "enabled": true,
@@ -1412,9 +1425,11 @@
     {
       "query": "kiton quarter zip -women -womens -ladies -girls -kids -scarf",
       "size": [
-        "M",
         "L",
         "XL"
+      ],
+      "steal_only_size": [
+        "M"
       ],
       "max_price": 150,
       "enabled": true,

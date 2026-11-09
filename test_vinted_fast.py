@@ -2377,6 +2377,19 @@ def test_live_audit_shapes(title, size, blocked):
     assert (reason is not None) is blocked, reason
 
 
+def test_steal_only_size_needs_a_steal():
+    search = {"size": ["L", "XL"], "steal_only_size": ["M"]}
+    medium = {"title": "Peter Millar Gamecocks quarter zip", "size": "M"}
+    large = {"title": "Peter Millar Gamecocks quarter zip", "size": "L"}
+    small = {"title": "Peter Millar Gamecocks quarter zip", "size": "S"}
+    assert fast._fits_size_list(search, medium, "school-gear")
+    assert not fast._fits_size_list(search, small, "school-gear")
+    assert fast._steal_only_size_reason({"listing": medium, "deal_rating": "Great Deal"}, search)
+    assert fast._steal_only_size_reason({"listing": medium, "deal_rating": "Steal"}, search) is None
+    assert fast._steal_only_size_reason({"listing": large, "deal_rating": "Great Deal"}, search) is None
+    assert fast._steal_only_size_reason({"listing": medium, "deal_rating": "Great Deal"}, {"size": ["M"]}) is None
+
+
 def test_letter_size_ignores_apostrophe_s():
     search = {"size": ["S", "M", "L"]}
     fits = engine.listing_matches_size_filter

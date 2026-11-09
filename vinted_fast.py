@@ -711,10 +711,27 @@ def _xxl_megasteal(listing):
     )
 
 
+def _steal_only_size_reason(result, search):
+    """Owner 11-08: "qzips L-XL... medium can fit sometimes but sometimes not.
+    for a steallll it would be ok." A search's steal_only_size passes the size
+    check but alerts only at a Steal rating, never as an offer."""
+    steal_sizes = (search or {}).get("steal_only_size")
+    if not steal_sizes or result.get("deal_rating") == "Steal":
+        return None
+    listing = result.get("listing") or {}
+    if engine.listing_matches_size_filter(dict(search, steal_only_size=None), listing):
+        return None
+    return f"size {'/'.join(steal_sizes)} only fits sometimes: Steal only"
+
+
 def _fits_size_list(search, listing, category):
     """The search's size list, plus a fitting pants waist, suit chest
     ("42R") or XXL megasteal (letter-sized searches can't name them)."""
     if engine.listing_matches_size_filter(search, listing):
+        return True
+    if search.get("steal_only_size") and engine.listing_matches_size_filter(
+        {"size": search["steal_only_size"]}, listing
+    ):
         return True
     if category not in _VINTED_SIZED_CATEGORIES:
         return False
@@ -1971,6 +1988,7 @@ class VintedFastLane:
             view = _offer_view(result, fraction)
             if (
                 view is None
+                or _steal_only_size_reason(result, search)
                 or _vinted_apparel_bar_reason(view, category)
                 or engine.is_blocked_by_steal_quality_gate(view, category=category)
                 or not _offer_slot_open(conn, view["deal_rating"], kind)
@@ -2925,6 +2943,7 @@ class VintedFastLane:
             _vinted_fragrance_bar_reason(result, category)
             or _vinted_watch_bar_reason(result, category)
             or _vinted_apparel_bar_reason(result, category)
+            or _steal_only_size_reason(result, search)
         )
         if vinted_bar_reason:
             self._finish(
