@@ -179,6 +179,10 @@ _VINTED_WOVEN_SHIRT = re.compile(
 _VINTED_ELITE_SHIRT_BRANDS = frozenset(
     {"brunello cucinelli", "kiton", "loro piana", "brioni"}
 )
+# Owner 11-09: a $20 "Brioni Men dress shirts" alert wasn't Brioni. Cheap
+# fakes cluster at these houses, so they still need a readable maker label
+# (10-21 dropped that rule for every other brand).
+_VINTED_LABEL_REQUIRED_BRANDS = _VINTED_ELITE_SHIRT_BRANDS | {"zegna"}
 _VINTED_LONE_TAILORING = re.compile(
     r"\b(?:blazers?|sports?[\s-]?(?:coats?|jackets?)|(?:dinner|dress)[\s-]+jackets?"
     r"|tuxedo[\s-]+jackets?"
@@ -1957,6 +1961,12 @@ class VintedFastLane:
         if result.get("vinted_strong_counterfeit_indicators") is not False:
             reason = result.get("vinted_strong_counterfeit_reason") or "assessment missing"
             return f"counterfeit indicators present or unresolved: {reason}"
+        if (
+            result.get("vinted_brand_key") in _VINTED_LABEL_REQUIRED_BRANDS
+            and result.get("vinted_strong_brand_label_visible_and_consistent") is not True
+        ):
+            reason = result.get("vinted_strong_brand_label_reason") or "label not visible"
+            return f"luxury house needs a readable genuine label: {reason}"
         if result.get("vinted_strong_third_party_logo") is True:
             # Owner 11-04: bad alerts with logos; only the cheap first look
             # checked logos, so one model's miss shipped the alert.

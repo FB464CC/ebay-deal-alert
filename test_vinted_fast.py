@@ -2764,6 +2764,29 @@ def test_vinted_strong_label_not_visible_still_alerts(tmp_path):
     send.assert_called_once()
 
 
+def test_luxury_house_without_readable_label_is_vetoed(tmp_path):
+    listing, result = _apparel_listing_result(
+        "Brioni Men dress shirts",
+        20,
+        "other",
+        "brioni",
+        search_id="vinted-brioni-no-label",
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path,
+        listing,
+        result,
+        _apparel_ai(300),
+        strong_result=_passing_strong_result(
+            300,
+            brand_label_visible_and_consistent=False,
+            brand_label_reason="No readable permanent label photo",
+        ),
+    )
+    send.assert_not_called()
+    assert "luxury house needs a readable genuine label" in row["reason"]
+
+
 def test_vinted_strong_unavailable_fails_closed_and_logs_code(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip",
