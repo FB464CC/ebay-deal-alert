@@ -3084,9 +3084,9 @@ def test_elite_feeds_run_twice_per_cycle_at_the_same_request_rate():
     feeds = [{"query": q} for q in ("a", "b", "c", "d")] + [{"query": "lp", "slots": 2}]
     texts = [s["query"] for kind, s in fast.build_feed_schedule([1], feeds, 250, brand_slots=1) if kind == "text"]
     assert texts == ["lp", "a", "b", "lp", "c", "d"]
-    # Every live elite feed is weighted, so each comes round every ~32 s.
+    # Owner 11-08 "even quicker": weight 4, each elite feed every ~22 s.
     live = {f["query"]: f.get("slots", 1) for f in fast.VINTED_TEXT_FEEDS}
-    assert all(live[q] == 2 for q in ("zegna", "loro piana", "cucinelli", "kiton", "brioni"))
+    assert all(live[q] == 4 for q in ("zegna", "loro piana", "cucinelli", "kiton", "brioni"))
 
 
 def test_unrouted_elite_rows_are_logged(caplog):
