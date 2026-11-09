@@ -2763,6 +2763,12 @@ class VintedFastLane:
         blocked_tops = {"women"} if category == "poker-chips" else {"women", "kids"}
         if top_catalog in blocked_tops and category != "fragrance":
             return listing, None, f"Vinted category is {top_catalog}, not menswear"
+        if details.get("_shipping_snippets") and getattr(self, "_shipping_probes", 0) < 25:
+            self._shipping_probes = getattr(self, "_shipping_probes", 0) + 1
+            logger.info(
+                "vinted-fast shipping-probe: %s | %s",
+                listing.get("itemWebUrl"), " || ".join(details["_shipping_snippets"])[:1500],
+            )
         description = details.get("description")
         if description:
             listing["description"] = description
