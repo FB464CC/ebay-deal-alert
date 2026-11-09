@@ -2377,6 +2377,28 @@ def test_live_audit_shapes(title, size, blocked):
     assert (reason is not None) is blocked, reason
 
 
+def test_trousers_ping_only_as_megasteals():
+    # Owner 11-08: enough trousers; only "under like $10 for something worth $100+".
+    def listing(title, price):
+        return {"title": title, "size": "34", "price": {"value": price}}
+
+    assert fast._menswear_shape_reason(listing("Peter Millar chinos 34x32", 15), "peter millar")
+    assert fast._menswear_shape_reason(listing("Kiton linen shorts", 40), "kiton")
+    assert fast._menswear_shape_reason(listing("Peter Millar chinos 34x32", 10), "peter millar") is None
+    assert fast._menswear_shape_reason(listing("Brooks Brothers suit with pants 42R", 62), "brooks brothers") is None
+    assert fast._menswear_shape_reason(listing("Peter Millar cashmere quarter zip", 40), "peter millar") is None
+
+    for resale, blocked in ((80, True), (120, False)):
+        _listing, result = _apparel_listing_result("Zegna wool trousers 34", 8, "other", "zegna")
+        result.update({
+            "vinted_photo_ai_checked": True, "price_confidence": "high",
+            "counterfeit_suspected": False, "damage_found": False,
+            "estimated_resale_value": resale, "deal_rating": "Steal",
+        })
+        reason = fast._vinted_apparel_bar_reason(result, "other")
+        assert (reason is not None) is blocked, (resale, reason)
+
+
 @pytest.mark.parametrize(
     ("summary", "listing", "brand", "blocked"),
     [

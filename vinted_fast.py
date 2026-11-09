@@ -643,6 +643,11 @@ _ROW_LETTER_SIZE = re.compile(r"^\s*(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b", re.I)
 
 
 _PANTS = re.compile(r"\b(?:pants?|trousers?|slacks|jeans|chinos?|shorts)\b", re.I)
+# Owner 11-08: "i dont need many more trousers... if you see a steal i cant
+# refuse, esp under like $10 for something worth $100+ still ping me." Tops
+# are the want. Full suits are exempt.
+VINTED_BOTTOMS_MAX_LIST = float(engine._CONFIG.get("VINTED_BOTTOMS_MAX_LIST", 10))
+VINTED_BOTTOMS_MIN_RESALE = float(engine._CONFIG.get("VINTED_BOTTOMS_MIN_RESALE", 100))
 _SIZE_WAIST = re.compile(r"\s*W\s?\d{2}\b", re.I)
 _WAIST_SURE = re.compile(r"\bW\s?(\d{2})\b|\bwaist\s*:?\s*(\d{2})\b|\b(\d{2})\s?[xX/]\s?\d{2}\b", re.I)
 _WAIST_LOOSE = re.compile(
@@ -786,6 +791,16 @@ def _vinted_apparel_bar_reason(result, category):
             f"vinted menswear bar: AI resale ${resale:g} below "
             f"${floor:g} brand floor"
         )
+    title = str((result.get("listing") or {}).get("title") or "")
+    if (
+        _PANTS.search(title)
+        and not _VINTED_SUIT.search(title)
+        and resale < VINTED_BOTTOMS_MIN_RESALE
+    ):
+        return (
+            f"trousers/shorts worth ${resale:g}, under the "
+            f"${VINTED_BOTTOMS_MIN_RESALE:g} megasteal bar"
+        )
     if result.get("deal_rating") not in {"Steal", "Great Deal"}:
         return (
             "vinted menswear bar: deal_rating "
@@ -877,6 +892,13 @@ def _menswear_shape_reason(listing, brand_key):
         if not _VINTED_SUIT_SIZE.search(f"{sized} {listing.get('description') or ''}"):
             return "suit is not a 40-44 R/L (EU 50-54)"
         return None
+    if _PANTS.search(title):
+        price = marketplaces._to_float((listing.get("price") or {}).get("value"))
+        if price is not None and price > VINTED_BOTTOMS_MAX_LIST:
+            return (
+                f"trousers/shorts over ${VINTED_BOTTOMS_MAX_LIST:g} list "
+                "(owner has plenty; megasteals only)"
+            )
     if (
         not _shirt_house(brand_key, title)
         and not _VINTED_POLO.search(title)
