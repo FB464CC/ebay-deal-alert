@@ -73,6 +73,82 @@ def _lane(tmp_path):
     )
 
 
+def test_ntfy_feedback_actions_include_listing_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    with mock.patch.object(fast.requests, "post") as post:
+        lane._ntfy("Deal", "Buy now", "5", "zap", "https://vinted.test/items/123",
+                   item_id="vinted:123")
+    actions = post.call_args.kwargs["headers"]["Actions"].split("; ")
+    assert len(actions) == 3
+    assert actions[0] == "view, Vinted app, https://vinted.test/items/123"
+    assert actions[1] == ("http, Bought, https://ntfy.sh/test-topic-fb, method=POST, "
+                          "body=bought vinted:123, clear=true")
+    assert actions[2] == ("http, Gone, https://ntfy.sh/test-topic-fb, method=POST, "
+                          "body=gone vinted:123, clear=true")
+
+
+def test_verified_vinted_alert_uses_feedback_actions(monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    _listing, result = _listing_and_result()
+    with mock.patch.object(engine.requests, "post") as post:
+        engine.send_alert(result, feedback_item_id="vinted:123")
+    actions = post.call_args.kwargs["headers"]["Actions"].split("; ")
+    assert len(actions) == 3
+    assert actions[0].startswith("view, Vinted app, ")
+    assert "body=bought vinted:123" in actions[1]
+    assert "body=gone vinted:123" in actions[2]
+
+
+def test_feedback_poll_records_valid_tap_and_advances_cursor(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    lane._alert_watch["vinted:123"] = {"title": "A deal", "price": 20,
+                                        "kind": "instant", "alert_time": 1000}
+    response = mock.Mock()
+    response.text = '\n'.join(json.dumps(row) for row in (
+        {"id": "one", "time": 1012, "event": "message", "message": "bought vinted:123"},
+        {"id": "two", "time": 1013, "event": "message", "message": "bad input"},
+    ))
+    state = {"version": 1, "searches": {}}
+    with mock.patch.object(fast.requests, "get", return_value=response) as get:
+        lane._poll_feedback(state)
+    assert get.call_args.args[0] == "https://ntfy.sh/test-topic-fb/json?poll=1&since=12h"
+    assert get.call_args.kwargs["timeout"] == 5
+    assert state["feedback_cursor"] == "two"
+    rows = [json.loads(line) for line in lane.log_path.read_text().splitlines()]
+    assert rows == [{"type": "feedback", "outcome": "bought", "item_id": "vinted:123",
+                     "tap_time": 1012, "title": "A deal", "price": 20, "kind": "instant"}]
+
+
+def test_feedback_poll_network_error_does_not_change_vinted_pacing(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    lane._last_request_started = 40
+    state = {"version": 1, "searches": {}}
+    with mock.patch.object(fast.requests, "get", side_effect=requests.Timeout):
+        lane._poll_feedback(state)
+    assert lane._last_request_started == 40
+    assert "feedback_cursor" not in state
+
+
+def test_feedback_poll_runs_at_most_once_per_five_minutes(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    now = [1000]
+    lane = _lane(tmp_path)
+    lane.clock = lambda: now[0]
+    with mock.patch.object(lane, "_poll_feedback") as poll:
+        lane._maybe_poll_feedback({})
+        lane._feedback_thread.join()
+        now[0] = 1299
+        lane._maybe_poll_feedback({})
+        assert poll.call_count == 1
+        now[0] = 1300
+        lane._maybe_poll_feedback({})
+        lane._feedback_thread.join()
+        assert poll.call_count == 2
+
+
 def _prescreen_response(answer_text='{"answer": true}', *, cost=0.00002):
     response = mock.Mock(status_code=200)
     response.raise_for_status.return_value = None

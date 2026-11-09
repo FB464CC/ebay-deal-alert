@@ -9948,7 +9948,23 @@ def _pickup_alert_location(listing):
     return f"{where} pickup"
 
 
-def send_alert(result):
+def vinted_feedback_actions(url, item_id):
+    """Three ntfy actions for a Vinted listing with one-tap outcome reporting."""
+    def quoted(value):
+        value = str(value)
+        if "," in value or ";" in value:
+            return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        return value
+
+    feedback_url = f"https://ntfy.sh/{NTFY_TOPIC}-fb"
+    return "; ".join([
+        f"view, Vinted app, {quoted(url)}",
+        f"http, Bought, {quoted(feedback_url)}, method=POST, body={quoted('bought ' + item_id)}, clear=true",
+        f"http, Gone, {quoted(feedback_url)}, method=POST, body={quoted('gone ' + item_id)}, clear=true",
+    ])
+
+
+def send_alert(result, *, feedback_item_id=None):
     listing = result["listing"]
     title = listing.get("title", "")
     price = result.get("price")  # total landed cost: item + shipping
@@ -10252,7 +10268,10 @@ def send_alert(result):
         actions.append(f"view, Check sold comps, {verify_url}")
     if click_url != url:
         actions.append(f"view, Vinted app, {url}")
-    if actions:
+    if feedback_item_id and url:
+        # Owner 11-08: record whether a Vinted alert led to a buy or a lost listing.
+        headers["Actions"] = vinted_feedback_actions(url, feedback_item_id)
+    elif actions:
         headers["Actions"] = "; ".join(actions)
     if image_url:
         headers["Attach"] = image_url

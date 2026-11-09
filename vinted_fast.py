@@ -1097,7 +1097,10 @@ def _load_state(path):
     searches = state.get("searches")
     if not isinstance(searches, dict):
         searches = {}
-    return {"version": 1, "searches": searches}
+    result = {"version": 1, "searches": searches}
+    if isinstance(state.get("feedback_cursor"), str):
+        result["feedback_cursor"] = state["feedback_cursor"]
+    return result
 
 
 def _save_state(path, state):
@@ -1574,6 +1577,9 @@ class VintedFastLane:
         self._instant_pinged = set()
         self._first_seen = {}
         self._alert_watch = {}
+        self._last_feedback_poll = None
+        self._feedback_thread = None
+        self._state_lock = threading.Lock()
         self._last_brand_poll = None
         self._peek_ctx = None
         self._pending_block = None
@@ -2061,7 +2067,9 @@ class VintedFastLane:
             "4" if kind == "offer" else "3",
             "moneybag" if kind == "offer" else "speech_balloon",
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
+            item_id=listing.get("itemId"),
         )
+        self._watch_alert(listing, kind=kind)
         conn.execute(
             "INSERT OR REPLACE INTO offer_alerts VALUES (?, ?, ?)",
             (listing.get("itemId"), time.time(), kind),
@@ -2145,13 +2153,16 @@ class VintedFastLane:
             + f": {title[:50]}",
             message, "5", "zap",
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
+            item_id=listing.get("itemId"),
         )
-        self._watch_alert(listing)
+        self._watch_alert(listing, kind="instant")
         return True
 
-    def _watch_alert(self, listing):
+    def _watch_alert(self, listing, kind="verified"):
         self._alert_watch.setdefault(listing.get("itemId"), {
             "title": listing.get("title"), "alerted": self.clock(),
+            "alert_time": time.time(), "price": (listing.get("price") or {}).get("value"),
+            "kind": kind,
             "in_feed": False, "misses": 0,
         })
 
@@ -2273,7 +2284,7 @@ class VintedFastLane:
         )
         self._instant_prepass(conn, main_conn, new_items, "brands", feed)
 
-    def _ntfy(self, title, message, priority, tags, url=None, image_url=None):
+    def _ntfy(self, title, message, priority, tags, url=None, image_url=None, *, item_id=None):
         if self.dry_run or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
             return
         headers = {
@@ -2283,7 +2294,10 @@ class VintedFastLane:
         }
         if url:
             headers["Click"] = engine.vinted_browser_url(url)
-            headers["Actions"] = f"view, Vinted app, {url}"
+            headers["Actions"] = (
+                engine.vinted_feedback_actions(url, item_id)
+                if item_id else f"view, Vinted app, {url}"
+            )
         if image_url:
             headers["Attach"] = image_url
         try:
@@ -2295,6 +2309,72 @@ class VintedFastLane:
             ).raise_for_status()
         except requests.exceptions.RequestException as exc:
             logger.warning("vinted-fast ntfy post failed: %s", exc)
+
+    def _poll_feedback(self, state):
+        feedback_topic = f"{engine.NTFY_TOPIC}-fb"
+        cursor = state.get("feedback_cursor") or "12h"
+        try:
+            response = requests.get(
+                f"https://ntfy.sh/{feedback_topic}/json?poll=1&since={cursor}",
+                timeout=5,
+            )
+            response.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            logger.warning("vinted-fast feedback poll failed: %s", type(exc).__name__)
+            return
+        seen_ids = {cursor}
+        new_cursor = cursor
+        for line in response.text.splitlines():
+            try:
+                message = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(message, dict) or message.get("event", "message") != "message":
+                continue
+            message_id = message.get("id")
+            if not isinstance(message_id, str) or not message_id or message_id in seen_ids:
+                continue
+            seen_ids.add(message_id)
+            body = message.get("message")
+            match = re.fullmatch(r"(bought|gone) (vinted:[0-9]+)", body) if isinstance(body, str) else None
+            if match:
+                outcome, item_id = match.groups()
+                watch = self._alert_watch.get(item_id) or {}
+                tap_time = message.get("time")
+                record = {"type": "feedback", "outcome": outcome,
+                          "item_id": item_id, "tap_time": tap_time}
+                for field in ("title", "price", "kind"):
+                    if watch.get(field) is not None:
+                        record[field] = watch[field]
+                elapsed = (tap_time - watch["alert_time"]
+                           if isinstance(tap_time, (int, float)) and "alert_time" in watch
+                           else None)
+                logger.info("vinted-fast feedback: %s %s%s", outcome, item_id,
+                            f" {elapsed:.0f}s since alert" if elapsed is not None else "")
+                with self.log_path.open("a", encoding="utf-8", newline="") as log_file:
+                    log_file.write(json.dumps(record, separators=(",", ":")) + "\n")
+            new_cursor = message_id
+        if new_cursor != cursor:
+            # The main loop saves state every few seconds; this thread only
+            # records its cursor, under the lock, so it never serializes a
+            # dict the main loop is changing.
+            with self._state_lock:
+                state["feedback_cursor"] = new_cursor
+
+    def _maybe_poll_feedback(self, state):
+        if self.dry_run or not engine.NTFY_TOPIC or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
+            return
+        now = self.clock()
+        if self._last_feedback_poll is not None and now - self._last_feedback_poll < 300:
+            return
+        if self._feedback_thread is not None and self._feedback_thread.is_alive():
+            return
+        self._last_feedback_poll = now
+        # Owner 11-08: slow ntfy reads must not hold up Vinted's alert race.
+        self._feedback_thread = threading.Thread(
+            target=self._poll_feedback, args=(state,), daemon=True
+        )
+        self._feedback_thread.start()
 
     def _log_result(self, result, *, delivered=False, delivery_error=None):
         result["vinted_fast_lane"] = True
@@ -2334,6 +2414,7 @@ class VintedFastLane:
                 f"SKIP: {str(listing.get('title') or '')[:50]}",
                 f"Failed the full check: {result.get('reason') or verdict}",
                 "2", "x", listing.get("itemWebUrl"),
+                item_id=listing.get("itemId"),
             )
         self._log_result(result)
         engine.mark_seen(conn, item_id, fingerprint, total_price)
@@ -3037,7 +3118,7 @@ class VintedFastLane:
             )
             return
         try:
-            engine.send_alert(result)
+            engine.send_alert(result, feedback_item_id=item_id)
         except Exception as exc:
             result["verdict"] = "DELIVERY_FAILED"
             result["reason"] = f"alert delivery failed after retries: {exc}"
@@ -3085,6 +3166,7 @@ class VintedFastLane:
         )
         try:
             while self.clock() < deadline:
+                self._maybe_poll_feedback(state)
                 kind, search = self.schedule[index % len(self.schedule)]
                 index += 1
                 if kind == "brands":
@@ -3153,9 +3235,12 @@ class VintedFastLane:
                 if next_water is not None:
                     state["searches"][search_id] = next_water
                     if not self.dry_run:
-                        _save_state(self.state_path, state)
+                        with self._state_lock:
+                            _save_state(self.state_path, state)
                 self._summary()
         finally:
+            if self._feedback_thread is not None:
+                self._feedback_thread.join(timeout=5)
             self._summary(force=True)
             lane_conn.close()
             if main_conn is not None:
