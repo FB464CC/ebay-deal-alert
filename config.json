@@ -1578,7 +1578,7 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1606,7 +1606,7 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1634,7 +1634,7 @@
         "47"
       ],
       "max_price": 120,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1662,7 +1662,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1690,7 +1690,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1718,7 +1718,7 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1746,7 +1746,7 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1774,7 +1774,7 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1802,7 +1802,7 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1830,7 +1830,7 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1858,7 +1858,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1886,7 +1886,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1914,7 +1914,7 @@
         "47"
       ],
       "max_price": 100,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1942,7 +1942,7 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1970,7 +1970,7 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -3518,7 +3518,7 @@
       "query": "casino poker chips set",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3534,7 +3534,7 @@
       "query": "paulson poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3550,7 +3550,7 @@
       "query": "vintage \"casino chip\" set",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3566,7 +3566,7 @@
       "query": "clay poker chips lot",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3582,7 +3582,7 @@
       "query": "\"poker chip\" set vintage",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3598,7 +3598,7 @@
       "query": "ceramic poker chips set",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3614,7 +3614,7 @@
       "query": "casino chips lot",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3630,7 +3630,7 @@
       "query": "chipco poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3646,7 +3646,7 @@
       "query": "nevada jacks poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3662,7 +3662,7 @@
       "query": "sunfly poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3678,7 +3678,7 @@
       "query": "br pro poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3694,7 +3694,7 @@
       "query": "asm poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3710,7 +3710,7 @@
       "query": "classic poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3726,7 +3726,7 @@
       "query": "cpc poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3742,7 +3742,7 @@
       "query": "bcc poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3758,7 +3758,7 @@
       "query": "\"tr king\" poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3774,7 +3774,7 @@
       "query": "hot stamp poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -3790,7 +3790,7 @@
       "query": "top hat cane poker chips",
       "size": null,
       "max_price": 150,
-      "enabled": true,
+      "enabled": false,
       "profile": "fast",
       "platforms": [
         "shopgoodwill",
@@ -4997,23 +4997,12 @@
   "VINTED_BRAND_FEED_MAX_PRICE": 250,
   "VINTED_BRAND_SLOTS_PER_TEXT": 1,
   "VINTED_TEXT_FEEDS": [
-    {"query": "poker chip", "max_price": 150},
-    {"query": "casino chip", "max_price": 150},
     {"query": "marinella", "max_price": 60},
     {"query": "zegna", "max_price": 130, "slots": 4},
     {"query": "loro piana", "max_price": 250, "slots": 4},
     {"query": "cucinelli", "max_price": 250, "slots": 4},
     {"query": "kiton", "max_price": 200, "slots": 4},
     {"query": "brioni", "max_price": 200, "slots": 4},
-    {"query": "john lobb", "max_price": 250},
-    {"query": "edward green", "max_price": 250},
-    {"query": "berluti", "max_price": 250},
-    {"query": "gaziano", "max_price": 250},
-    {"query": "santoni", "max_price": 150},
-    {"query": "margiela replica", "max_price": 150},
-    {"query": "common projects", "max_price": 100},
-    {"query": "alden", "max_price": 200},
-    {"query": "crockett jones", "max_price": 150},
     {"query": "canali", "max_price": 130},
     {"query": "delina exclusif", "max_price": 290},
     {"query": "oriana marly", "max_price": 200},

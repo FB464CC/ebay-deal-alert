@@ -229,7 +229,7 @@ class RuntimeSearchFocus(unittest.TestCase):
 
     def test_shipped_focus_selects_37_real_enabled_searches(self):
         config, enabled = self._shipped_enabled_searches()
-        self.assertEqual(len(enabled), 192)
+        self.assertEqual(len(enabled), 159)  # owner 11-08 dropped shoe and poker searches
         self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
         enabled_by_id = {search["id"]: search for search in enabled}
         self.assertEqual(
@@ -286,7 +286,7 @@ class RuntimeSearchFocus(unittest.TestCase):
             self.assertEqual(len(health_snapshots), 1)
             return health_snapshots[0]["shopgoodwill"]["scheduled_requests"]
 
-        self.assertEqual(scheduled_count([]), 113)
+        self.assertEqual(scheduled_count([]), 95)  # owner 11-08 dropped shoe and poker searches
         self.assertEqual(scheduled_count(config["FOCUS_SEARCH_IDS"]), 33)
 
 
@@ -1220,7 +1220,8 @@ class PokerChipsConfiguration(unittest.TestCase):
                 self.assertEqual(search["category_id"], "166570")
                 self.assertIsNone(search["size"])
                 self.assertEqual(search["max_price"], 150)
-                self.assertTrue(search["enabled"])
+                # Owner 11-08 dropped poker chips; the shape stays for a revival.
+                self.assertFalse(search["enabled"])
                 self.assertEqual(search["profile"], "fast")
                 # `platforms` scopes non-eBay adapters only. The Browse API
                 # lane consumes all enabled SAVED_SEARCHES independently.

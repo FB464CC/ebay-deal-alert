@@ -542,7 +542,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 95
+    assert len(fast.enabled_vinted_searches()) == 62  # owner 11-08 dropped shoe and poker searches
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -1848,15 +1848,16 @@ def test_quoted_brand_shoe_searches_accept_any_shoe_title(tmp_path):
 
     # "shoes" was a stopword but "shoe" was not, so these needed the literal
     # word "shoe" and the feeds produced nothing for 66 h (audit 11-03).
-    assert lane._route(item("Edward Green Dover shoes"), "edward green")["id"] == "vinted-edward-green-shoes"
-    assert lane._route(item("John Lobb City II"), "john lobb")["id"] == "vinted-john-lobb-shoes"
+    # Owner 11-08 dropped the shoe searches: no shoe search takes these now.
+    assert lane._route(item("Edward Green Dover shoes"), "edward green") is None
+    assert lane._route(item("John Lobb City II"), "john lobb") is None
     # A catch-all-backed text feed still won't drop a blazer into shoes.
     assert lane._route(item("Zegna wool blazer 50L"), "zegna") is None
     # "cucinelli" is a partial house name; over-cap pieces must not fall into
     # the Brunello shoe or polo search (11-06: $165 shirt -> shoe size mismatch).
     assert lane._route(item("Brunello Cucinelli Men's M Gingham Cotton Shirt"), "cucinelli") is None
     assert lane._route(item("Brunello Cucinelli Crest Logo Cotton T-Shirt"), "cucinelli") is None
-    assert lane._route(item("Brunello Cucinelli suede loafers"), "cucinelli")["id"] == "vinted-brunello-cucinelli-shoes"
+    assert lane._route(item("Brunello Cucinelli suede loafers"), "cucinelli") is None
 
 
 def test_relaxed_waist_and_regex_false_positives():
@@ -3129,8 +3130,6 @@ def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
 @pytest.mark.parametrize(
     ("title", "brand", "price", "expected"),
     [
-        ("Loro Piana Summer Walk loafers 12", "Loro Piana", "150.00", "vinted-loro-piana-shoes"),
-        ("Brunello Cucinelli suede sneakers", "Brunello Cucinelli", "120.00", "vinted-brunello-cucinelli-shoes"),
         ("Ermenegildo Zegna cashmere crewneck", "Ermenegildo Zegna", "110.00", "vinted-zegna-cashmere-sweater"),
         ("Zegna 1/4 zip knit", "Zegna", "90.00", "vinted-zegna-quarter-zip"),
         ("Kiton half zip cashmere", "Kiton", "140.00", "vinted-kiton-quarter-zip"),
@@ -3174,7 +3173,7 @@ def test_designer_sneakers_bare_eu_size_and_margiela_replica_line(tmp_path):
     item = {"id": 1, "title": "Maison Margiela Replica GAT sneakers", "url": "/items/1",
             "price": {"amount": "90.00"}, "photo": {"url": "https://x/a.webp"}, "photos": [],
             "item_box": {"first_line": "Maison Margiela"}}
-    assert lane._route(item, "margiela replica")["id"] == "vinted-margiela-shoes"
+    assert lane._route(item, "margiela replica") is None  # owner 11-08 dropped shoe and poker searches
 
 
 @pytest.mark.parametrize(
