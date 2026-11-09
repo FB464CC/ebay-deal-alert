@@ -26,6 +26,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Restore Vinted fast-lane alerts
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            vinted_fast_seen.db
+            vinted_fast_state.json
+            vinted_fast_log.jsonl
+          key: vinted-fast-state-v1-digest-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vinted-fast-state-v1-
+
       - name: Send weekly digest
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}

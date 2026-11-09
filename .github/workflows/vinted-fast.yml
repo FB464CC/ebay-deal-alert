@@ -103,3 +103,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run vinted-fast.yml --ref main
+
+      - name: Notify on Vinted lane failure
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          printf 'Vinted lane crashed, run %s' "$GITHUB_RUN_ID" \
+            | curl --fail --silent --show-error --max-time 10 \
+                -H 'Title: Vinted lane crashed' --data-binary @- \
+                "https://ntfy.sh/${NTFY_TOPIC}"

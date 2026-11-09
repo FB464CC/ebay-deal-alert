@@ -13858,7 +13858,8 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
     alerts the user actually received."""
 
     def _digest_message(
-        self, records, weekly_spend=(0.0, 0.0), starved=(), budget_snapshot=None
+        self, records, weekly_spend=(0.0, 0.0), starved=(),
+        budget_snapshot=None, vinted_records=(),
     ):
         captured = {}
         fake_resp = mock.Mock()
@@ -13876,6 +13877,7 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
             return fake_resp
 
         with mock.patch.object(m, "_read_alert_log_records", return_value=records), \
+             mock.patch.object(m, "_read_vinted_fast_log_records", return_value=vinted_records), \
              mock.patch.object(m, "_weekly_ai_spend", return_value=weekly_spend), \
              mock.patch.object(m, "_paid_ai_budget_snapshot", return_value=budget_snapshot), \
              mock.patch.object(m, "_persist_weekly_ai_spend_snapshot"), \
@@ -13883,6 +13885,33 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
              mock.patch("requests.post", side_effect=fake_post):
             m.send_weekly_digest()
         return captured["message"]
+
+    def test_digest_includes_cached_vinted_alerts_by_type(self):
+        ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        rows = [
+            {"timestamp": ts, "vinted_fast_lane": True, "verdict": "REVIEW",
+             "delivered": True, "price": 42.5, "title": "Wool coat",
+             "url": "https://www.vinted.com/items/123"},
+            {"timestamp": ts, "vinted_fast_lane": True, "verdict": "REJECTED",
+             "delivered": False, "vinted_instant_alerted": True},
+            {"timestamp": ts, "vinted_fast_lane": True, "verdict": "OFFER_ALERTED",
+             "delivered": False},
+            {"timestamp": old_ts, "vinted_fast_lane": True, "verdict": "REVIEW",
+             "delivered": True, "title": "Old coat"},
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = pathlib.Path(tmpdir) / "vinted_fast_log.jsonl"
+            log_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+            )
+            with mock.patch.object(m, "VINTED_FAST_LOG_PATH", log_path):
+                vinted_records = m._read_vinted_fast_log_records()
+        message = self._digest_message([], vinted_records=vinted_records)
+        self.assertIn("Vinted: 1 verified, 1 FAST, 1 offer/message", message)
+        self.assertIn("$42.5 Wool coat https://vinted.com/items/123", message)
+        self.assertNotIn("Old coat", message)
+        self.assertIn("0 alerts", message)
 
     def test_blocked_records_are_not_counted_as_alerts(self):
         ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
@@ -15098,3 +15127,13 @@ class StrongVetoTests(unittest.TestCase):
         self.assertIn("strong second look: {strong_veto}", src)
         self.assertIn("GOLF_STRONG_VISION_FALLBACK_MODEL", src)
 
+
+def test_alert_log_keeps_the_fast_ping_flag(tmp_path):
+    log = tmp_path / "vinted_fast_log.jsonl"
+    result = {
+        "listing": {"itemId": "vinted:1", "title": "Loro Piana sweater", "itemWebUrl": "u", "platform": "vinted"},
+        "verdict": "REJECTED", "vinted_fast_lane": True, "vinted_instant_alerted": True,
+    }
+    m.append_alert_log(result, log_path=log)
+    record = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["vinted_instant_alerted"] is True

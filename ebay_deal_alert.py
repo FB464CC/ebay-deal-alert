@@ -526,6 +526,7 @@ _SCOUT_QUEUE_KEYS_BY_ITEM_ID = {}
 _SCOUT_QUEUE_PROCESSED_KEYS = set()
 TOKEN_CACHE_PATH = Path(__file__).resolve().with_name("ebay_token_cache.json")
 ALERTS_LOG_PATH = Path(__file__).resolve().with_name("alerts_log.jsonl")
+VINTED_FAST_LOG_PATH = Path(__file__).resolve().with_name("vinted_fast_log.jsonl")
 WEEKLY_DIGEST_STATE_PATH = Path(__file__).resolve().with_name("weekly_digest_state.json")
 SEARCH_ACTIVITY_STATE_PATH = Path(__file__).resolve().with_name("search_activity_state.json")
 QUIET_ALERT_QUEUE_PATH = Path(__file__).resolve().with_name("quiet_alert_queue.json")
@@ -9472,6 +9473,8 @@ def append_alert_log(
         "jev_image_iron_set",
         "jev_vinted_score",
         "vinted_fast_lane",
+        # The weekly digest counts FAST pings from the lane log.
+        "vinted_instant_alerted",
         "vinted_photo_ai_checked",
         "vinted_strict_apparel",
         "vinted_brand",
@@ -10271,10 +10274,11 @@ def send_alert(result):
     raise last_exc
 
 
-def _read_alert_log_records():
+def _read_alert_log_records(log_path=None):
     records = []
+    log_path = Path(log_path) if log_path is not None else ALERTS_LOG_PATH
     try:
-        with ALERTS_LOG_PATH.open("r", encoding="utf-8") as log_file:
+        with log_path.open("r", encoding="utf-8") as log_file:
             for line in log_file:
                 line = line.strip()
                 if not line:
@@ -10284,12 +10288,16 @@ def _read_alert_log_records():
                     if isinstance(record, dict):
                         records.append(record)
                 except json.JSONDecodeError as exc:
-                    logger.warning("Skipping invalid alerts_log.jsonl line: %s", exc)
+                    logger.warning("Skipping invalid %s line: %s", log_path.name, exc)
     except FileNotFoundError:
         return []
     except (OSError, UnicodeError) as exc:
-        logger.warning("Unable to read alerts_log.jsonl: %s", exc)
+        logger.warning("Unable to read %s: %s", log_path.name, exc)
     return records
+
+
+def _read_vinted_fast_log_records():
+    return _read_alert_log_records(VINTED_FAST_LOG_PATH)
 
 
 def prune_alert_log_if_oversized():
@@ -10705,6 +10713,7 @@ def send_weekly_digest():
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=7)
     all_records = _read_alert_log_records()
+    vinted_records = _read_vinted_fast_log_records()
     all_timestamps = []
     recent_records = []
     for record in all_records:
@@ -10720,6 +10729,20 @@ def send_weekly_digest():
         all_timestamps.append(parsed_timestamp)
         if parsed_timestamp >= cutoff:
             recent_records.append(record)
+
+    recent_vinted = []
+    for record in vinted_records:
+        if not record.get("vinted_fast_lane"):
+            continue
+        try:
+            parsed_timestamp = datetime.fromisoformat(record["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if parsed_timestamp.tzinfo is None:
+            parsed_timestamp = parsed_timestamp.replace(tzinfo=timezone.utc)
+        all_timestamps.append(parsed_timestamp)
+        if parsed_timestamp >= cutoff:
+            recent_vinted.append(record)
 
     # A new or externally maintained history may retain less than seven days.
     # Say what is actually covered instead of asserting a window the data
@@ -10854,6 +10877,26 @@ def send_weekly_digest():
         message += f" ({blocked_count} blocked)"
     if rating_parts:
         message += " - " + ", ".join(rating_parts)
+    if recent_vinted:
+        vinted_verified = [
+            record for record in recent_vinted if record.get("delivered")
+        ]
+        fast_pings = sum(bool(record.get("vinted_instant_alerted")) for record in recent_vinted)
+        offer_messages = sum(
+            record.get("verdict") == "OFFER_ALERTED" for record in recent_vinted
+        )
+        message += (
+            f"\nVinted: {len(vinted_verified)} verified, "
+            f"{fast_pings} FAST, {offer_messages} offer/message"
+        )
+        for record in vinted_verified:
+            price = _sane_ai_price(record.get("price"))
+            if price is None:
+                price = _sane_ai_price(record.get("item_price"))
+            price_text = f"${price:g}" if price is not None else "price n/a"
+            title = record.get("title") or "listing"
+            url = vinted_browser_url(record.get("url") or "")
+            message += f"\n{price_text} {title} {url}"
     if verdict_parts:
         message += "\nVerdicts: " + ", ".join(verdict_parts)
     if failed_count:
