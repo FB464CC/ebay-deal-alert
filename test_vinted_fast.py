@@ -1324,6 +1324,28 @@ def test_pm_instant_needs_the_brand_in_the_sellers_own_title(tmp_path, monkeypat
         assert post.called is expected
 
 
+def test_canali_over_all_in_cap_does_not_alert_at_list(tmp_path, monkeypatch):
+    listing, result = _apparel_listing_result(
+        "Canali men's sweater", 26, "knitwear", "canali", search_id="vinted-canali"
+    )
+    _lane_obj, _strong, send, row = _run_custom_pipeline(
+        tmp_path, listing, result, _apparel_ai(300),
+        strong_result=_passing_strong_result(300),
+    )
+    send.assert_not_called()
+    assert "all-in cap" in row["reason"]
+
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    for price, expected in ((26, False), (10, True)):
+        _listing, result = _apparel_listing_result(
+            "Canali men's sweater", price, "knitwear", "canali", search_id="s"
+        )
+        lane._instant_pinged.clear()
+        with mock.patch.object(fast.requests, "post"):
+            assert lane._maybe_instant_alert(result, "knitwear") is expected, price
+
+
 def test_luxury_instant_needs_exact_house_tag_or_sellers_title(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
     lane = _lane(tmp_path)

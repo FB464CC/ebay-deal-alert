@@ -409,6 +409,20 @@ VINTED_DEFAULT_MIN_RESALE = float(VINTED_MIN_RESALE_BY_BRAND.get("default", 60))
 # (instant pings, necktie skip); the resale check caps it here. Brooks
 # Brothers keeps its floor: only expensive suits are wanted there.
 VINTED_RESALE_FLOOR_MAX = float(engine._CONFIG.get("VINTED_RESALE_FLOOR_MAX", 40))
+# Owner 11-09: a $22 Canali sweater (~$30 all-in) was "ehhh"; he offered $17.
+# $30+ is for Loro Piana / Brunello / Purple Label. Above the cap a Canali
+# piece can still alert as an offer that lands under it.
+VINTED_MAX_ALL_IN_BY_BRAND = {
+    str(brand).casefold(): float(cap)
+    for brand, cap in engine._CONFIG.get("VINTED_MAX_ALL_IN_BY_BRAND", {"canali": 25}).items()
+}
+
+
+def _brand_all_in_cap(result):
+    """Tops only: a Canali suit or coat at $70 can still be a real steal."""
+    if result.get("category") not in {"knitwear", "other"}:
+        return None
+    return VINTED_MAX_ALL_IN_BY_BRAND.get(result.get("vinted_brand_key"))
 _VINTED_FULL_FLOOR_BRANDS = frozenset({"brooks brothers"})
 
 
@@ -2018,6 +2032,9 @@ class VintedFastLane:
             expected_paid = _set_vinted_negotiation_prices(result)
         if expected_paid is None:
             return "expected negotiated landed price missing"
+        cap = _brand_all_in_cap(result)
+        if cap is not None and expected_paid > cap:
+            return f"expected paid ${expected_paid:.2f} over the ${cap:g} all-in cap for this brand"
         if expected_paid > conservative_resale * 0.40:
             return (
                 f"expected paid ${expected_paid:g} exceeds 40% of conservative "
@@ -2156,6 +2173,9 @@ class VintedFastLane:
                 )
             )
         ):
+            return False
+        cap = _brand_all_in_cap({**result, "category": category})
+        if cap is not None and (price + engine.get_shipping_cost(listing)) * (1 + engine.SALES_TAX_RATE) > cap:
             return False
         result["vinted_instant_alerted"] = True
         self._instant_pinged.add(listing.get("itemId"))
