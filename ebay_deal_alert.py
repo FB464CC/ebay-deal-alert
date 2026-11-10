@@ -2116,9 +2116,11 @@ def fetch_vinted_item_page_details(item_url):
     # lives before pricing with it. No extra request.
     snippets = []
     page_text = re.sub(r"<[^>]+>", " ", resp.text)
-    for found in re.finditer(r".{0,90}(?:shipping|postage).{0,140}", page_text, re.IGNORECASE):
+    money = re.compile(r"\$\s?\d+(?:\.\d\d)?|amount\\?\"\s*:\s*\\?\"?\d|\b\d+\.\d\d\b")
+    noise = re.compile(r"flagKey|conversation\.|modal|placeholder|a11y", re.IGNORECASE)
+    for found in re.finditer(r".{0,80}(?:shipping|postage|delivery).{0,160}", page_text, re.IGNORECASE):
         snippet = re.sub(r"\s+", " ", found.group(0)).strip()
-        if re.search(r"\d", snippet) and snippet not in snippets:
+        if money.search(snippet) and not noise.search(snippet) and snippet not in snippets:
             snippets.append(snippet)
         if len(snippets) >= 6:
             break

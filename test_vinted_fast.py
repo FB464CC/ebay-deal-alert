@@ -1683,10 +1683,8 @@ def _offer_ai(resale):
     }
 
 
-def _run_offer(tmp_path, price, resale):
-    listing, result = _apparel_listing_result(
-        "Canali wool jacket", price, "outerwear", "canali jacket"
-    )
+def _run_offer(tmp_path, price, resale, title="Canali wool jacket", category="outerwear"):
+    listing, result = _apparel_listing_result(title, price, category, "canali jacket")
     with mock.patch.object(fast.VintedFastLane, "_ntfy") as ntfy:
         _lane_obj, _strong, send, row = _run_custom_pipeline(
             tmp_path, listing, result, _offer_ai(resale),
@@ -1740,8 +1738,23 @@ def test_offer_checks_leave_half_the_strong_looks_for_buy_alerts(tmp_path):
 def test_near_miss_below_the_list_floor_gets_no_offer_or_message(tmp_path, monkeypatch):
     # Same near-miss as the message test above, with the floor above its $115 list.
     monkeypatch.setattr(fast, "VINTED_OFFER_MIN_LIST", 116)
+    monkeypatch.setattr(fast, "VINTED_OFFER_MIN_LIST_TOPS", 116)
     row, ntfy, send = _run_offer(tmp_path, 115, 180)
     send.assert_not_called()
+    assert row["verdict"] != "OFFER_ALERTED"
+    assert not any(c.args[0].startswith(("OFFER", "MESSAGE")) for c in ntfy.call_args_list)
+
+
+def test_cheap_top_gets_a_message_alert_but_cheap_pants_do_not(tmp_path):
+    # Owner 11-10: polos list at $10-$20, under the $25 offer floor. A $20
+    # polo with $45 resale fails the 40% veto at list and at the $12 offer,
+    # and passes at a $10 message (~$17 all-in). Pants keep the $25 floor.
+    row, ntfy, _send = _run_offer(tmp_path, 20, 45, "Canali polo", "other")
+    assert row["verdict"] == "OFFER_ALERTED"
+    assert ntfy.call_args.args[0].startswith("MESSAGE Canali $10 (list $20)")
+
+    (tmp_path / "p").mkdir()
+    row, ntfy, _send = _run_offer(tmp_path / "p", 20, 45, "Canali pants", "other")
     assert row["verdict"] != "OFFER_ALERTED"
     assert not any(c.args[0].startswith(("OFFER", "MESSAGE")) for c in ntfy.call_args_list)
 

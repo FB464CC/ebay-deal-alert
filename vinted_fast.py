@@ -471,6 +471,10 @@ VINTED_OFFER_STEAL_RESERVE = 4  # last slots wait for a Steal at the asked price
 # 11-07/08: 12 of 18 offer/message alerts were PM pants and shorts listed at
 # $9-$20, a few dollars of saving each. Below this list price, skip both tiers.
 VINTED_OFFER_MIN_LIST = 25
+# Owner 11-10: offers are underused and polos rarely alert. PM polos list at
+# $10-$20, so tops get offers from $12; pants and shorts keep the $25 floor.
+VINTED_OFFER_MIN_LIST_TOPS = 12
+_BOTTOMS = re.compile(r"\b(?:pants?|trousers?|shorts|chinos?|jeans|slacks)\b", re.IGNORECASE)
 _FULL_CASHMERE = re.compile(
     r"\b100\s*%\s*cashmere\b|\b(?:pure|full|all)\s+cashmere\b|\bcashmere\s*100\s*%",
     re.IGNORECASE,
@@ -2052,7 +2056,9 @@ class VintedFastLane:
         at half of list by message, but not at list."""
         if category not in VINTED_APPAREL_CATEGORIES:
             return False
-        if (engine._sane_ai_price(result.get("item_price")) or 0) < VINTED_OFFER_MIN_LIST:
+        title = str((result.get("listing") or {}).get("title") or "")
+        min_list = VINTED_OFFER_MIN_LIST if _BOTTOMS.search(title) else VINTED_OFFER_MIN_LIST_TOPS
+        if (engine._sane_ai_price(result.get("item_price")) or 0) < min_list:
             return False
         for kind, fraction in (
             ("offer", VINTED_OFFER_FRACTION),
@@ -2238,6 +2244,14 @@ class VintedFastLane:
         request or AI call (owner, 11-02: steals need the ping in a second or
         two). Only network-free title/price/size gates run here; the full
         pipeline still verifies every item afterwards."""
+        if items and not getattr(self, "_row_keys_logged", False) and isinstance(items[0], dict):
+            # Once per run: does the catalog row itself carry a shipping price?
+            self._row_keys_logged = True
+            row = items[0]
+            logger.info(
+                "vinted-fast row-keys: %s | %s", sorted(row),
+                {k: row[k] for k in row if re.search(r"ship|postage|fee|price", k, re.IGNORECASE)},
+            )
         for item in items:
             listing = marketplaces._vinted_item_to_listing(item)
             if listing:
@@ -2441,6 +2455,10 @@ class VintedFastLane:
                         "vinted_strong_estimated_resale_value", "vinted_expected_paid")
             if result.get(key) is not None
         }
+        # Owner 11-10 "too slow": seconds from first sighting to this decision.
+        first_seen = getattr(self, "_first_seen", {}).get(listing.get("itemId"))
+        if first_seen is not None:
+            values["seen_s"] = round(self.clock() - first_seen)
         if values:
             logger.info("vinted-fast values: %s | %s", listing.get("itemWebUrl") or "", values)
         return engine.append_alert_log(
