@@ -72,6 +72,13 @@ VINTED_STRONG_LOOK_MAX_PER_RUN = max(
 VINTED_STRONG_VISION_TIMEOUT_SECONDS = float(
     engine._CONFIG.get("VINTED_STRONG_VISION_TIMEOUT_SECONDS", 15)
 )
+# Owner 11-10: a failed free Gemini try (429/503/timeout) used to cost 15 s,
+# then a second Gemini model, then a 3 s pause and a third try before the paid
+# OpenRouter backup; the $20 Brioni lost ~30 s that way. Now one free try with
+# this limit, then straight to the backup.
+VINTED_STRONG_PRIMARY_TIMEOUT_SECONDS = float(
+    engine._CONFIG.get("VINTED_STRONG_PRIMARY_TIMEOUT_SECONDS", 10)
+)
 VINTED_STRONG_VISION_MODEL = engine._CONFIG.get(
     "VINTED_STRONG_VISION_MODEL", engine.GOLF_STRONG_VISION_MODEL
 )
@@ -1398,6 +1405,68 @@ def _already_seen(lane_conn, main_conn, item_id):
         return False
 
 
+# Owner 11-10: the AI's resale ran ~1.5x real sold prices on PM polos and up
+# to 3x on Brioni/Zegna dress shirts ("$950" Canali retail). Typical used sold
+# price and full retail per brand and piece, researched 11-09 from eBay,
+# Poshmark, Grailed and TRR sold listings. AI numbers above these are cut to
+# them, never raised. (brand, piece): (used sold, retail)
+VINTED_PRICE_TABLE = {
+    ("peter millar", "polo"): (30, 115),
+    ("peter millar", "quarter-zip"): (42, 145),
+    ("peter millar", "vest"): (65, 245),
+    ("peter millar", "cashmere"): (45, 395),
+    ("zegna", "shirt"): (45, 500),
+    ("kiton", "shirt"): (75, 950),
+    ("brioni", "shirt"): (60, 850),
+    ("brunello cucinelli", "shirt"): (90, 750),
+    ("purple label", "polo"): (65, 450),
+    ("canali", "cashmere"): (200, 1150),
+    ("canali", "sweater"): (110, 550),
+    ("zegna", "cashmere"): (275, 1400),
+    ("zegna", "sweater"): (140, 850),
+    ("loro piana", "cashmere"): (430, 1500),
+    ("brunello cucinelli", "cashmere"): (340, 1450),
+    ("purple label", "cashmere"): (235, 1200),
+    ("isaia", "cashmere"): (325, 2100),
+    ("isaia", "sweater"): (220, 1450),
+}
+_PRICE_TABLE_BRANDS = (
+    ("loro piana", r"loro\s*piana"), ("brunello cucinelli", r"cucinelli"),
+    ("purple label", r"purple\s*label"), ("peter millar", r"peter\s*mill"),
+    ("kiton", r"\bkiton"), ("brioni", r"\bbrioni"), ("zegna", r"\bzegna"),
+    ("canali", r"\bcanali"), ("isaia", r"\bisaia"),
+)
+# First match that has a table row wins, so "polo shirt" is a polo and a Loro
+# Piana cashmere quarter-zip falls through to cashmere.
+_PRICE_TABLE_PIECES = (
+    ("vest", r"\bvest|\bgilet"),
+    ("quarter-zip", r"quarter|1/4|half[\s-]*zip|1/2[\s-]*zip"),
+    ("polo", r"\bpolo"),
+    ("shirt", r"\bshirt|button[\s-]*(?:down|up)"),
+    ("cashmere", r"cashmere"),
+    ("sweater", r"sweater|cardigan|\bknit|crew[\s-]*neck|v[\s-]*neck|jumper|pullover|turtleneck"),
+)
+_PRICE_TABLE_SKIP = re.compile(r"\b(?:pants?|trousers?|shorts|jeans|jacket|blazer|coat|suit)\b", re.I)
+
+
+def _price_table_row(result, summary=""):
+    listing = result.get("listing") or {}
+    text = f"{listing.get('title') or ''} {summary or ''} {result.get('visible_brand_evidence') or ''}"
+    if _PRICE_TABLE_SKIP.search(str(listing.get("title") or "")):
+        return None
+    brand = next((b for b, pattern in _PRICE_TABLE_BRANDS if re.search(pattern, text, re.I)), None)
+    for piece, pattern in _PRICE_TABLE_PIECES:
+        if brand and (brand, piece) in VINTED_PRICE_TABLE and re.search(pattern, text, re.I):
+            return VINTED_PRICE_TABLE[(brand, piece)]
+    return None
+
+
+def _cap_to_price_table(result, key, summary="", index=0):
+    row = _price_table_row(result, summary)
+    if row is not None and result.get(key) is not None and result[key] > row[index]:
+        result[key] = float(row[index])
+
+
 def _merge_ai_result(result, ai_result, category):
     """Merge the existing per-category vision response for the normal gate."""
     listing = result["listing"]
@@ -1501,6 +1570,9 @@ def _merge_ai_result(result, ai_result, category):
         ai_result.get("estimated_resale_value")
     )
     result["price_confidence"] = ai_result.get("price_confidence")
+    if category in VINTED_APPAREL_CATEGORIES:
+        _cap_to_price_table(result, "estimated_resale_value", summary)
+        _cap_to_price_table(result, "estimated_retail_price", summary, index=1)
     if category == "watches" and result["estimated_resale_value"] is not None:
         band = engine.watch_price_band(listing.get("title", ""))
         if band is not None:
@@ -1837,20 +1909,10 @@ class VintedFastLane:
         self.ai_calls += 1
         last_error = None
         strong_result = None
-        for attempt, model in enumerate((
-            VINTED_STRONG_VISION_MODEL,
-            engine.GOLF_STRONG_VISION_FALLBACK_MODEL,
-            VINTED_STRONG_VISION_MODEL,
-        )):
-            if attempt == 2:
-                # Both models 503 together during Gemini overloads; a short
-                # pause usually clears it. A timeout is not an overload: a
-                # third slow try is what made verified alerts take ~2 min.
-                if _strong_http_status(last_error) not in (429, 500, 502, 503, 504):
-                    break
-                self.sleeper(3)
+        started = self.clock()
+        for model in (VINTED_STRONG_VISION_MODEL,):
             timeout = engine._deadline_timeout(
-                hard_stop, VINTED_STRONG_VISION_TIMEOUT_SECONDS
+                hard_stop, VINTED_STRONG_PRIMARY_TIMEOUT_SECONDS
             )
             if timeout is None:
                 return self._strong_look_unavailable(
@@ -1906,6 +1968,10 @@ class VintedFastLane:
                 result["vinted_strong_model"] = (
                     f"openrouter:{VINTED_STRONG_OPENROUTER_MODEL}"
                 )
+        logger.info(
+            "vinted-fast strong look %s in %.1fs",
+            result.get("vinted_strong_model") or "failed", self.clock() - started,
+        )
         if last_error is not None or not isinstance(strong_result, dict):
             status = _strong_http_status(last_error)
             reason = (
@@ -1943,6 +2009,9 @@ class VintedFastLane:
         )
         result["vinted_strong_estimated_resale_value"] = engine._sane_ai_price(
             strong_result.get("estimated_resale_value")
+        )
+        _cap_to_price_table(
+            result, "vinted_strong_estimated_resale_value", result.get("vinted_ai_summary") or ""
         )
         result["vinted_strong_third_party_logo"] = strong_result.get(
             "third_party_logo_found"

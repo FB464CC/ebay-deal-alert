@@ -1158,14 +1158,16 @@ def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
     )
     send.assert_not_called()
     assert round(row["vinted_expected_paid"], 2) == 21.2
-    assert row["deal_rating"] == "Good Deal"
+    # 11-10 price table: a used PM polo sells for ~$30, so the $35 guess is cut.
+    assert row["estimated_resale_value"] == 30
+    assert row["deal_rating"] == "Fair"
     assert "below Great Deal" in row["reason"]
 
 
 def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip Size M",
-        18,
+        7,
         "knitwear",
         "peter millar crown crafted quarter zip",
         search_id="vinted-pm-crown-cashmere",
@@ -1185,7 +1187,8 @@ def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
     send.assert_called_once()
     assert row["delivered"] is True
     assert lane.ai_calls == 2
-    assert row["vinted_conservative_resale_value"] == 110
+    # The $120/$110 AI guesses are cut to the $42 table price (11-10).
+    assert row["vinted_conservative_resale_value"] == 42
 
 
 def test_vinted_strong_condition_fair_vetoes(tmp_path):
@@ -1571,17 +1574,23 @@ def test_negated_flaws_and_description_only_logo_words_do_not_reject():
     assert result.get("reason") == "corporate logo keyword match"
 
 
+def _openrouter_reply(resale=400):
+    reply = mock.Mock()
+    reply.json.return_value = {
+        "choices": [{"message": {"content": json.dumps(_passing_strong_result(resale))}}]
+    }
+    return reply
+
+
+
 def test_strong_look_timeout_is_not_retried_a_third_time(tmp_path, monkeypatch):
+    # Owner 11-10: one free Gemini try, then straight to the paid backup.
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     lane = _lane(tmp_path)
     lane.sleeper = mock.Mock()
     _listing, result = _apparel_listing_result(
         "Loro Piana Cashmere Sweater", 30, "knitwear", '"loro piana"', search_id="s"
     )
-    reply = mock.Mock()
-    reply.json.return_value = {
-        "choices": [{"message": {"content": json.dumps(_passing_strong_result(400))}}]
-    }
     timeout = requests.exceptions.ReadTimeout("slow")
     with (
         mock.patch.object(engine, "_configured_gemini_api_keys", return_value=["key"]),
@@ -1590,11 +1599,12 @@ def test_strong_look_timeout_is_not_retried_a_third_time(tmp_path, monkeypatch):
         ),
         mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
         mock.patch.object(engine, "_call_gemini_json", side_effect=[timeout] * 3) as gemini,
-        mock.patch.object(fast.requests, "post", return_value=reply),
+        mock.patch.object(fast.requests, "post", return_value=_openrouter_reply()),
     ):
         assert lane._run_vinted_strong_vision(result, None)
-    assert gemini.call_count == 2
-    assert gemini.call_args.kwargs["timeout"] <= fast.VINTED_STRONG_VISION_TIMEOUT_SECONDS
+    assert gemini.call_count == 1
+    assert gemini.call_args.kwargs["timeout"] <= fast.VINTED_STRONG_PRIMARY_TIMEOUT_SECONDS
+    assert result["vinted_strong_model"].startswith("openrouter:")
     lane.sleeper.assert_not_called()
 
 
@@ -2159,6 +2169,22 @@ def test_parses_vinted_catalog_breadcrumb():
     with mock.patch.object(engine.requests, "get", return_value=resp):
         details = engine.fetch_vinted_item_page_details("https://www.vinted.com/items/1")
     assert details["catalog_path"] == ["Women", "Sunglasses"]
+
+
+def test_price_table_cuts_inflated_resale_and_never_raises_it():
+    def capped(title, resale, summary="", key="estimated_resale_value", index=0):
+        result = {"listing": {"title": title}, key: resale}
+        fast._cap_to_price_table(result, key, summary, index)
+        return result[key]
+
+    # 11-10: the $20 "Brioni" alert's AI said $90 / strong $150; Brioni dress
+    # shirts sell used for $30-$100. The title has no piece; the summary does.
+    assert capped("Brioni", 150.0, "Brioni white cotton dress shirt") == 60
+    assert capped("Peter Millar Summer Comfort polo L", 75.0) == 30
+    assert capped("Canali merino sweater", 950.0, key="estimated_retail_price", index=1) == 550
+    assert capped("Loro Piana cashmere quarter zip", 350.0) == 350  # never raised
+    assert capped("Peter Millar pants 34", 45.0) == 45  # not in the table
+    assert capped("Brioni suit jacket", 400.0, "Brioni shirt") == 400
 
 
 def test_real_listing_shipping_replaces_the_499_assumption():
@@ -2827,7 +2853,7 @@ def test_vinted_strong_label_naming_other_brand_vetoes(tmp_path):
 def test_vinted_strong_label_not_visible_still_alerts(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip",
-        18,
+        7,
         "knitwear",
         "peter millar crown crafted quarter zip",
         search_id="vinted-pm-no-label",
@@ -3050,61 +3076,55 @@ def test_strong_look_counts_toward_shared_and_separate_cost_caps(tmp_path):
     assert "strong-look cap" in result["vinted_strong_unavailable_reason"]
 
 
-def test_strong_look_uses_golf_fallback_on_503_and_ledgers_both_attempts(tmp_path):
+def test_strong_look_goes_to_openrouter_after_one_503_and_ledgers_both(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     lane = _lane(tmp_path)
     _listing, result = _apparel_listing_result(
-        "Loro Piana Cashmere Sweater",
-        40,
-        "other",
-        '"loro piana"',
-        search_id="vinted-fallback",
+        "Loro Piana Cashmere Sweater", 40, "other", '"loro piana"', search_id="vinted-fallback",
     )
     response = mock.Mock(status_code=503)
     primary_error = requests.exceptions.HTTPError("busy", response=response)
     with (
         mock.patch.object(engine, "_configured_gemini_api_keys", return_value=["key"]),
         mock.patch.object(
-            engine,
-            "_download_listing_image",
-            return_value=(b"jpeg", "image/jpeg"),
+            engine, "_download_listing_image", return_value=(b"jpeg", "image/jpeg")
         ),
         mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True) as reserve,
-        mock.patch.object(
-            engine,
-            "_call_gemini_json",
-            side_effect=[primary_error, _passing_strong_result(400)],
-        ) as call,
+        mock.patch.object(engine, "_call_gemini_json", side_effect=[primary_error]) as call,
+        mock.patch.object(fast.requests, "post", return_value=_openrouter_reply()),
     ):
         assert lane._run_vinted_strong_vision(result, None)
     assert [entry.kwargs["model"] for entry in call.call_args_list] == [
         fast.VINTED_STRONG_VISION_MODEL,
-        engine.GOLF_STRONG_VISION_FALLBACK_MODEL,
     ]
     assert reserve.call_count == 2
-    assert result["vinted_strong_model"] == engine.GOLF_STRONG_VISION_FALLBACK_MODEL
+    assert result["vinted_strong_model"] == f"openrouter:{fast.VINTED_STRONG_OPENROUTER_MODEL}"
 
 
-def test_strong_look_falls_back_on_timeout_or_bad_json_and_unwraps_list(tmp_path):
-    for primary in (requests.exceptions.ReadTimeout("slow"), None, "not json"):
+def test_strong_look_falls_back_on_timeout_or_bad_json_and_unwraps_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    for primary in (requests.exceptions.ReadTimeout("slow"), None, "not json", "list"):
         lane = _lane(tmp_path)
         _listing, result = _apparel_listing_result(
             "Loro Piana Cashmere Sweater", 40, "other", '"loro piana"',
             search_id="vinted-fallback",
         )
+        reply = [_passing_strong_result(400)] if primary == "list" else primary
         with (
             mock.patch.object(engine, "_configured_gemini_api_keys", return_value=["key"]),
             mock.patch.object(
                 engine, "_download_listing_image", return_value=(b"jpeg", "image/jpeg")
             ),
             mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
-            mock.patch.object(
-                engine,
-                "_call_gemini_json",
-                side_effect=[primary, [_passing_strong_result(400)]],
-            ),
+            mock.patch.object(engine, "_call_gemini_json", side_effect=[reply]),
+            mock.patch.object(fast.requests, "post", return_value=_openrouter_reply()),
         ):
             assert lane._run_vinted_strong_vision(result, None)
-        assert result["vinted_strong_model"] == engine.GOLF_STRONG_VISION_FALLBACK_MODEL
+        expected = (
+            fast.VINTED_STRONG_VISION_MODEL if primary == "list"
+            else f"openrouter:{fast.VINTED_STRONG_OPENROUTER_MODEL}"
+        )
+        assert result["vinted_strong_model"] == expected
 
 
 def test_vinted_apparel_alert_starts_with_required_strict_summary(monkeypatch):
