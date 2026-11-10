@@ -2161,6 +2161,35 @@ def test_parses_vinted_catalog_breadcrumb():
     assert details["catalog_path"] == ["Women", "Sunglasses"]
 
 
+def test_real_listing_shipping_replaces_the_499_assumption():
+    # Owner 11-10: 10681756063 showed "Shipping from $0.00" (logged-out HTML).
+    page = (
+        '<div id="item-shipping-banner--suffix"><span class="web_ui__Text__text" '
+        'data-testid="item-shipping-banner-price">from $0.00</span></div>'
+    )
+    resp = mock.Mock(status_code=200, text=page)
+    with mock.patch.object(engine.requests, "get", return_value=resp):
+        details = engine.fetch_vinted_item_page_details("https://www.vinted.com/items/1")
+    assert details["shipping_price"] == 0.0
+
+    # Catalog row: $13 list, $1.35 buyer-protection fee + the $4.99 assumption.
+    listing = marketplaces.make_listing(
+        "vinted", "1", "Peter Millar polo", 13, "https://www.vinted.com/items/1",
+        shipping=1.35 + marketplaces.VINTED_ASSUMED_SHIPPING,
+    )
+    fast._set_listing_shipping(listing, details["shipping_price"])
+    assert engine.get_shipping_cost(listing) == 1.35
+    fast._set_listing_shipping(listing, 3.49)
+    assert engine.get_shipping_cost(listing) == 4.84
+
+    # The offer price uses it too: (12 + 0.60 + 0.70 + 0.00) * 1.06
+    fast._set_listing_shipping(listing, 0)
+    view = fast._offer_view(
+        {"item_price": 20.0, "estimated_resale_value": 45.0, "listing": listing}
+    )
+    assert round(view["price"], 2) == 14.10
+
+
 @pytest.mark.parametrize(
     ("search_id", "top", "rejected"),
     [

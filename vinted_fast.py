@@ -497,6 +497,24 @@ def _is_full_cashmere_zip(result, ai_result):
     )
 
 
+def _listing_shipping(listing):
+    """The listing's own cheapest shipping, else the flat US assumption."""
+    value = (listing or {}).get("vinted_shipping")
+    return marketplaces.VINTED_ASSUMED_SHIPPING if value is None else float(value)
+
+
+def _set_listing_shipping(listing, shipping):
+    """Swap the assumed $4.99 inside the listing's shipping for the real price.
+    The catalog row's shipping is buyer-protection fee + the assumption."""
+    options = listing.get("shippingOptions") or []
+    if not options:
+        return
+    old_total = engine.get_shipping_cost(listing)
+    fee = max(0.0, old_total - _listing_shipping(listing))
+    options[0].setdefault("shippingCost", {})["value"] = round(fee + float(shipping), 2)
+    listing["vinted_shipping"] = float(shipping)
+
+
 def _offer_view(result, fraction=VINTED_OFFER_FRACTION):
     """The result re-priced as if this fraction of list were accepted, for the
     same bars. Offers go to the cent; a typed message asks in whole dollars."""
@@ -507,7 +525,7 @@ def _offer_view(result, fraction=VINTED_OFFER_FRACTION):
     if fraction < VINTED_OFFER_FRACTION:
         offer = float(math.ceil(offer))
     # Buyer protection is 5% + $0.70, charged on the offer price.
-    landed = (offer * 1.05 + 0.70 + marketplaces.VINTED_ASSUMED_SHIPPING) * (
+    landed = (offer * 1.05 + 0.70 + _listing_shipping(result.get("listing"))) * (
         1 + engine.SALES_TAX_RATE
     )
     rating, discount = engine.compute_deal_rating(
@@ -2108,7 +2126,8 @@ class VintedFastLane:
         self._ntfy(
             f"{kind.upper()} {brand} {ask} (list ${result['item_price']:g})"
             + (f" {size}" if size else "") + f": {title[:40]}",
-            f"{how}\n~${view['price']:.0f} all-in, resale "
+            f"{how}\n~${view['price']:.0f} all-in "
+            f"(ship ${_listing_shipping(listing):.2f}), resale "
             f"~${view['vinted_conservative_resale_value']:.0f}. {title}\n"
             "Not a steal at list. If they accept or counter, nothing is charged "
             "until you press Buy now.",
@@ -2455,6 +2474,8 @@ class VintedFastLane:
                         "vinted_strong_estimated_resale_value", "vinted_expected_paid")
             if result.get(key) is not None
         }
+        if listing.get("vinted_shipping") is not None:
+            values["ship"] = listing["vinted_shipping"]
         # Owner 11-10 "too slow": seconds from first sighting to this decision.
         first_seen = getattr(self, "_first_seen", {}).get(listing.get("itemId"))
         if first_seen is not None:
@@ -2810,12 +2831,8 @@ class VintedFastLane:
         blocked_tops = {"women"} if category == "poker-chips" else {"women", "kids"}
         if top_catalog in blocked_tops and category != "fragrance":
             return listing, None, f"Vinted category is {top_catalog}, not menswear"
-        if details.get("_shipping_snippets") and getattr(self, "_shipping_probes", 0) < 25:
-            self._shipping_probes = getattr(self, "_shipping_probes", 0) + 1
-            logger.info(
-                "vinted-fast shipping-probe: %s | %s",
-                listing.get("itemWebUrl"), " || ".join(details["_shipping_snippets"])[:1500],
-            )
+        if details.get("shipping_price") is not None:
+            _set_listing_shipping(listing, details["shipping_price"])
         description = details.get("description")
         if description:
             listing["description"] = description

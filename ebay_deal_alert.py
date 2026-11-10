@@ -2111,21 +2111,15 @@ def fetch_vinted_item_page_details(item_url):
             gallery_urls.append(image_url)
     if gallery_urls:
         details["image_urls"] = gallery_urls
-    # Owner 11-09: shipping runs $0 to $5+ per listing ("Shipping from $0.00").
-    # Log-only probe of the page already fetched, to learn where that price
-    # lives before pricing with it. No extra request.
-    snippets = []
-    page_text = re.sub(r"<[^>]+>", " ", resp.text)
-    money = re.compile(r"\$\s?\d+(?:\.\d\d)?|amount\\?\"\s*:\s*\\?\"?\d|\b\d+\.\d\d\b")
-    noise = re.compile(r"flagKey|conversation\.|modal|placeholder|a11y", re.IGNORECASE)
-    for found in re.finditer(r".{0,80}(?:shipping|postage|delivery).{0,160}", page_text, re.IGNORECASE):
-        snippet = re.sub(r"\s+", " ", found.group(0)).strip()
-        if money.search(snippet) and not noise.search(snippet) and snippet not in snippets:
-            snippets.append(snippet)
-        if len(snippets) >= 6:
-            break
-    if snippets:
-        details["_shipping_snippets"] = snippets
+    # Owner 11-10: shipping varies per listing, $0 to $5+, and the page shows the
+    # cheapest option ("Shipping from $0.00"), which is the one he picks. It is
+    # in the logged-out HTML the lane already fetched (checked 10681756063).
+    shipping = re.search(
+        r'data-testid="item-shipping-banner-price"[^>]*>\s*(?:from\s*)?\$\s?([\d,]+(?:\.\d+)?)\s*<',
+        resp.text, re.IGNORECASE,
+    )
+    if shipping:
+        details["shipping_price"] = float(shipping.group(1).replace(",", ""))
     return details
 
 
