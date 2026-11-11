@@ -2121,13 +2121,17 @@ def fetch_vinted_item_page_details(item_url):
     banner = re.search(r'item-shipping-banner-price"[^>]*>(.{0,300})', resp.text, re.I | re.S)
     if banner:
         shown = html.unescape(re.sub(r"<[^>]+>", " ", banner.group(1)))
-        price = re.search(r"\$\s?([\d,]+(?:\.\d+)?)", shown)
-        if price:
-            details["shipping_price"] = float(price.group(1).replace(",", ""))
-        elif re.match(r"\s*free\b", shown, re.I):
+        # The banner's own first words only: a later "$" in the window can be
+        # another element (review 11-11).
+        price = re.match(r"\s*(?:from\s*)?(?:US\s?)?\$\s?([\d,]+(?:\.\d+)?)", shown, re.I)
+        if re.match(r"\s*free\b", shown, re.I):
             details["shipping_price"] = 0.0
+        elif price:
+            details["shipping_price"] = float(price.group(1).replace(",", ""))
     if "shipping_price" not in details:
-        around = re.search(r"(?i).{0,120}shipping.{0,160}", resp.text)
+        lowered = resp.text.lower()
+        at = lowered.find("shipping")
+        around = re.search(r".{0,120}shipping.{0,160}", resp.text[max(0, at - 120):at + 170], re.I | re.S) if at >= 0 else None
         logger.info(
             "Vinted shipping not parsed for %s: %s", item_url,
             re.sub(r"\s+", " ", around.group(0))[:280] if around else "no 'shipping' text",

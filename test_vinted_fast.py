@@ -2322,6 +2322,7 @@ def test_resurfaced_old_listing_is_dated_from_its_item_id(tmp_path):
     ('<div data-testid="item-shipping-banner-price" class="x">From&nbsp;$5.79</div>', 5.79),
     ('<span data-testid="item-shipping-banner-price">Free shipping</span>', 0.0),
     ("<p>no banner</p>", None),
+    ('<span data-testid="item-shipping-banner-price">Free</span><span>Fee $1.35</span>', 0.0),
 ])
 def test_shipping_banner_formats(banner, price):
     # Audit 11-11: the strict pattern read only ~35% of pages.
