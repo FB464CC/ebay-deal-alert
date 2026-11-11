@@ -2186,6 +2186,31 @@ def test_price_table_cuts_inflated_resale_and_never_raises_it():
     assert capped("Brioni suit jacket", 400.0, "Brioni shirt") == 400
 
 
+def test_first_photo_check_goes_to_paid_flash_lite_then_free_backup(tmp_path, monkeypatch):
+    # Owner 11-10: free Gemini 20 s timeouts made alerts land after the sale.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    lane = _lane(tmp_path)
+    prepared = {"prompt": "p", "images": [(b"jpeg", "image/jpeg")]}
+    with (
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=prepared),
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+        mock.patch.object(engine, "_call_photo_check") as free,
+        mock.patch.object(fast.requests, "post", return_value=_openrouter_reply()) as post,
+    ):
+        assert lane._first_photo_check({}, "knitwear", None, "q")["estimated_resale_value"]
+    free.assert_not_called()
+    assert post.call_args.kwargs["json"]["model"] == fast.VINTED_PHOTO_OPENROUTER_MODEL
+    assert post.call_args.kwargs["timeout"] <= fast.VINTED_PHOTO_OPENROUTER_TIMEOUT_SECONDS
+    with (
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=prepared),
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+        mock.patch.object(engine, "_call_photo_check", return_value={"ok": 1}) as free,
+        mock.patch.object(fast.requests, "post", side_effect=requests.exceptions.ReadTimeout("x")),
+    ):
+        assert lane._first_photo_check({}, "knitwear", None, "q") == {"ok": 1}
+    free.assert_called_once_with("p", prepared["images"], hard_stop=None)
+
+
 def test_resurfaced_old_listing_is_dated_from_its_item_id(tmp_path):
     # Owner 11-10: a zip knit jacket listed 6 h earlier alerted as if new.
     lane = _lane(tmp_path)

@@ -368,6 +368,14 @@ VINTED_PRESCREEN_MAX_PER_RUN = max(
     0, int(engine._CONFIG.get("VINTED_PRESCREEN_MAX_PER_RUN", 400))
 )
 VINTED_PRESCREEN_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Owner 11-10 "alerting stuff that sold": free Gemini timed out (20 s) or 503'd
+# on 19 first photo checks in one run and the PM zip knit alerted ~40 s after
+# first sight. First photo check now goes to OpenRouter's flash-lite (~$0.001)
+# with a short limit; the free Gemini/DeepSeek router is the backup.
+VINTED_PHOTO_OPENROUTER_MODEL = str(
+    engine._CONFIG.get("VINTED_PHOTO_OPENROUTER_MODEL", "google/gemini-2.5-flash-lite")
+)
+VINTED_PHOTO_OPENROUTER_TIMEOUT_SECONDS = 8
 # Last-resort strong look when Google rate-limits (429) both Gemini models.
 VINTED_STRONG_OPENROUTER_MODEL = str(
     engine._CONFIG.get("VINTED_STRONG_OPENROUTER_MODEL", "google/gemini-2.5-flash")
@@ -2040,9 +2048,33 @@ class VintedFastLane:
         )
         return strong_result
 
-    def _openrouter_strong_look(self, prompt, images, hard_stop):
+    def _first_photo_check(self, listing, category, hard_stop, search_query):
+        prepared = engine.check_photos_with_gemini(
+            listing,
+            category=category,
+            current_month_name=datetime.now(timezone.utc).strftime("%B"),
+            hard_stop=hard_stop,
+            search_query=search_query,
+            prepare_only=True,
+        )
+        if not (isinstance(prepared, dict) and "prompt" in prepared and "images" in prepared):
+            return prepared
+        started = self.clock()
+        result = self._openrouter_strong_look(
+            prepared["prompt"], prepared["images"], hard_stop,
+            model=VINTED_PHOTO_OPENROUTER_MODEL, limit=VINTED_PHOTO_OPENROUTER_TIMEOUT_SECONDS,
+        )
+        logger.info(
+            "vinted-fast photo check %s in %.1fs",
+            "openrouter" if isinstance(result, dict) else "backup", self.clock() - started,
+        )
+        if isinstance(result, dict):
+            return result
+        return engine._call_photo_check(prepared["prompt"], prepared["images"], hard_stop=hard_stop)
+
+    def _openrouter_strong_look(self, prompt, images, hard_stop, model=None, limit=None):
         api_key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
-        timeout = engine._deadline_timeout(hard_stop, VINTED_STRONG_VISION_TIMEOUT_SECONDS)
+        timeout = engine._deadline_timeout(hard_stop, limit or VINTED_STRONG_VISION_TIMEOUT_SECONDS)
         if not api_key or timeout is None:
             return None
         if not engine._reserve_paid_ai_spend(
@@ -2064,7 +2096,7 @@ class VintedFastLane:
                 VINTED_PRESCREEN_URL,
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={
-                    "model": VINTED_STRONG_OPENROUTER_MODEL,
+                    "model": model or VINTED_STRONG_OPENROUTER_MODEL,
                     "messages": [{"role": "user", "content": content}],
                     "max_tokens": 1500,
                     "temperature": 0,
@@ -3222,12 +3254,8 @@ class VintedFastLane:
             return
         self.ai_calls += 1
         self._peek_brand_feed()
-        ai_result = self._while_peeking(engine.check_photos_with_gemini,
-            listing,
-            category=category,
-            current_month_name=datetime.now(timezone.utc).strftime("%B"),
-            hard_stop=hard_stop,
-            search_query=search.get("query"),
+        ai_result = self._while_peeking(self._first_photo_check,
+            listing, category, hard_stop, search.get("query"),
         )
         if not isinstance(ai_result, dict):
             self._finish(
