@@ -2056,7 +2056,7 @@ def test_luxury_necktie_skips_ai_but_marinella_tie_does_not(tmp_path):
     )
     strong.assert_not_called()
     send.assert_not_called()
-    assert "necktie cannot clear the $120 brand resale floor" in row["reason"]
+    assert "ties are off" in row["reason"]  # owner 11-11
 
 
 def test_eyewear_and_zero_review_luxury_sellers_skip_ai(tmp_path):
@@ -2696,7 +2696,7 @@ def test_watch_scam_shapes_rejected_before_ai(tmp_path, title, description, frag
         ("Brunello Cucinelli Eau de Parfum Pour Homme 30ml", True),
         ("Tom Ford Slim Lip Color Shine", True),
         ("Tom Ford 3.4 oz cologne", True),
-        ("Tom Ford suede chelsea boots 10", False),
+        ("Tom Ford cashmere crewneck sweater", False),
         ("Zegna 100% cashmere sweater", False),
     ],
 )
@@ -2749,16 +2749,34 @@ def test_letter_size_ignores_apostrophe_s():
     assert fits(search, {"title": "Peter Millar Gamecocks Polo size L"})
 
 
-def test_trousers_ping_only_as_megasteals():
-    # Owner 11-08: enough trousers; only "under like $10 for something worth $100+".
-    def listing(title, price):
-        return {"title": title, "size": "34", "price": {"value": price}}
+def test_office_wardrobe_only():
+    # Owner 11-11: trousers, shoes, belts, ties off; office dress shirts only.
+    def listing(title, price=10, size="L"):
+        return {"title": title, "size": size, "price": {"value": price}}
 
-    assert fast._menswear_shape_reason(listing("Peter Millar chinos 34x32", 15), "peter millar")
-    assert fast._menswear_shape_reason(listing("Kiton linen shorts", 40), "kiton")
-    assert fast._menswear_shape_reason(listing("Peter Millar chinos 34x32", 10), "peter millar") is None
-    assert fast._menswear_shape_reason(listing("Brooks Brothers suit with pants 42R", 62), "brooks brothers") is None
-    assert fast._menswear_shape_reason(listing("Peter Millar cashmere quarter zip", 40), "peter millar") is None
+    shape = fast._menswear_shape_reason
+    assert shape(listing("Peter Millar chinos 34x32", 5), "peter millar")
+    assert shape(listing("Peter Millar", 5, "W32"), "peter millar")
+    assert shape(listing("Kiton linen shorts", 40), "kiton")
+    assert shape(listing("Crockett & Jones Size 12 men's", 52, "12"), "crockett")
+    assert shape(listing("Tom Ford black leather belt 110 cm", 70), "tom ford")
+    assert shape(listing("Brioni silk tie", 20), "brioni")
+    assert shape(listing("Canali jacket", 20), "canali", "footwear")
+    assert shape(listing("Men's Vintage Brioni French Cuff Shirt Italy L", 30), "brioni")
+    assert shape(listing("Vintage Brioni dress shirt", 30), "brioni")
+    assert shape(listing("Canali dress shirt", 20, "16 in"), "canali")
+    assert shape(listing("Canali", 20, "16 in"), "canali")
+    assert shape(listing("Kiton Napoli Dress Shirt 17 / 43", 100), "kiton")
+    assert shape(listing("Brioni dress shirt", 20, "16.5 in"), "brioni") is None
+    assert shape(listing("Brooks Brothers suit with pants 42R", 62), "brooks brothers") is None
+    assert shape(listing("Peter Millar cashmere quarter zip", 40), "peter millar") is None
+    assert shape(listing("Loro Piana cashmere sweater", 80), "loro piana") is None
+    assert shape(listing("Peter Millar Crown Crafted polo", 15, "M"), "peter millar") is None
+    assert "French cuffs" in fast._ai_lone_tailoring_reason(
+        "Brioni white shirt with French cuffs", "other", {}, "brioni")
+
+
+def test_trousers_ping_only_as_megasteals():
 
     for resale, blocked in ((80, True), (120, False)):
         _listing, result = _apparel_listing_result("Zegna wool trousers 34", 8, "other", "zegna")

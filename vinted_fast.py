@@ -1000,10 +1000,57 @@ def _perfume_shop_reason(stats, item_id):
     )
 
 
-def _menswear_shape_reason(listing, brand_key):
+# Owner 11-11, 0 orders from 2 weeks of alerts: aim at the Wells Fargo analyst
+# wardrobe. Keep knitwear/quarter-zips, office dress shirts, polos, full suits
+# (plus the fragrance and watch lanes). Shoes, belts, ties, trousers are off.
+VINTED_OFF_CATEGORIES = frozenset({"footwear", "neckwear", "leather-goods"})
+_VINTED_SHOES_BELTS = re.compile(
+    r"\b(?:shoes?|sneakers?|loafers?|boots?|derby|derbies|monk[\s-]?straps?|brogues?"
+    r"|oxford\s+shoes?|chelsea|mules?|slippers?|sandals?|belts?|ties?|neck\s?ties?|bow\s?ties?)\b",
+    re.IGNORECASE,
+)
+_VINTED_SHOE_MAKERS = frozenset(
+    {"crockett", "santoni", "john lobb", "edward green", "gaziano", "alden", "common projects"}
+)
+# French cuffs need cufflinks (not analyst wear); vintage dress shirts run boxy.
+_VINTED_FRENCH_CUFF = re.compile(r"\bfrench[\s-]?cuffs?\b|\bcuff\s?links?\b", re.IGNORECASE)
+_VINTED_VINTAGE = re.compile(r"\b(?:vintage|vtg|retro|[89]0'?s)\b", re.IGNORECASE)
+# Owner's collar is 16.5 (EU 42). "16 in" size field, "17 / 43", "16.5 34/35".
+_VINTED_COLLAR = re.compile(
+    r"^\s*(1[4-8](?:\.5)?)\s*in\b|\b(1[4-8](?:\.5|\s?1/2)?)\s*(?:\"|in\b)?\s*(?:/|x|-)\s*(?:3[0-9]|4[0-6])\b",
+    re.IGNORECASE,
+)
+
+
+def _collar_size(listing):
+    for text in (str(listing.get("size") or ""), str(listing.get("title") or "")):
+        match = _VINTED_COLLAR.search(text)
+        if match:
+            return float((match.group(1) or match.group(2)).replace(" 1/2", ".5").replace("1/2", ".5"))
+    return None
+
+
+def _menswear_shape_reason(listing, brand_key, category=None):
     """Garment types/sizes the owner never buys, judged from the title."""
     title = str(listing.get("title") or "")
     sized = f"{title} {listing.get('size') or ''}"
+    if category in VINTED_OFF_CATEGORIES:
+        return f"{category} is off (owner 11-11: office wardrobe only)"
+    if brand_key in _VINTED_SHOE_MAKERS or _VINTED_SHOES_BELTS.search(title):
+        return "shoes/belts/ties are off (owner 11-11: office wardrobe only)"
+    if _PANTS.search(title) and not _VINTED_SUIT.search(title) or (
+        _SIZE_WAIST.match(str(listing.get("size") or "")) and not _VINTED_SUIT.search(title)
+    ):
+        return "trousers/shorts are off (owner 11-11: doesn't need them)"
+    if _VINTED_FRENCH_CUFF.search(title):
+        return "French cuffs need cufflinks, not analyst wear"
+    if _VINTED_WOVEN_SHIRT.search(title) and not _VINTED_POLO.search(title):
+        if _VINTED_VINTAGE.search(title):
+            return "vintage dress shirt (dated cut), not analyst wear"
+    # A collar size means a dress shirt whatever the title says ("Canali", "16 in").
+    collar = _collar_size(listing)
+    if collar is not None and collar != 16.5:
+        return f"collar {collar:g} won't fit (owner wears 16.5)"
     if _VINTED_BEAUTY.search(title):
         return "fragrance/beauty/packaging item in a menswear search"
     if _VINTED_NOT_MENS.search(sized):
@@ -1057,6 +1104,8 @@ def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
     if any(not _VINTED_PACKAGING.fullmatch(m.group(0)) for m in _VINTED_BEAUTY.finditer(summary)):
         return "AI photos show a fragrance/beauty item, not menswear"
     listing = listing or {}
+    if _VINTED_FRENCH_CUFF.search(summary):
+        return "AI photos show French cuffs, not analyst wear"
     sized = f"{listing.get('title') or ''} {listing.get('size') or ''}"
     if _VINTED_POLO.search(summary) and _VINTED_XL.search(sized):
         return "AI photos show an XL polo (owner wears M/L polos)"
@@ -2540,7 +2589,7 @@ class VintedFastLane:
                 "item_price": float((listing.get("price") or {}).get("value") or 0),
             }
             _vinted_brand_and_floor(result)
-            if _menswear_shape_reason(listing, result.get("vinted_brand_key")):
+            if _menswear_shape_reason(listing, result.get("vinted_brand_key"), category):
                 continue
             self._maybe_instant_alert(result, category)
 
@@ -3275,7 +3324,7 @@ class VintedFastLane:
             return
         if category in VINTED_APPAREL_CATEGORIES:
             _vinted_brand_and_floor(result)
-            shape = _menswear_shape_reason(listing, result.get("vinted_brand_key"))
+            shape = _menswear_shape_reason(listing, result.get("vinted_brand_key"), category)
             if shape:
                 self._finish(conn, result, item_id, fingerprint, total_price, shape)
                 return

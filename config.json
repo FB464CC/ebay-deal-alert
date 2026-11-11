@@ -4998,7 +4998,6 @@
   "VINTED_PRESCREEN_MAX_PER_RUN": 0,
   "VINTED_BRAND_SLOTS_PER_TEXT": 1,
   "VINTED_TEXT_FEEDS": [
-    {"query": "marinella", "max_price": 60},
     {"query": "zegna", "max_price": 130, "slots": 4},
     {"query": "loro piana", "max_price": 250, "slots": 4},
     {"query": "cucinelli", "max_price": 250, "slots": 4},
