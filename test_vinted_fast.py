@@ -2771,6 +2771,9 @@ def test_office_wardrobe_only():
     assert shape(listing("Brooks Brothers suit with pants 42R", 62), "brooks brothers") is None
     assert shape(listing("Peter Millar cashmere quarter zip", 40), "peter millar") is None
     assert shape(listing("Loro Piana cashmere sweater", 80), "loro piana") is None
+    assert "diffusion" in shape(listing("Ermenegildo Zegna Zegna Sport quarter zip up fleece sweater size L", 25), "zegna")
+    assert "diffusion" in shape(listing("Z Zegna merino crewneck", 25), "zegna")
+    assert shape(listing("Ermenegildo Zegna cashmere quarter zip", 25), "zegna") is None
     assert shape(listing("Peter Millar Crown Crafted polo", 15, "M"), "peter millar") is None
     assert "French cuffs" in fast._ai_lone_tailoring_reason(
         "Brioni white shirt with French cuffs", "other", {}, "brioni")

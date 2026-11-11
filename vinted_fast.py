@@ -1036,6 +1036,9 @@ def _menswear_shape_reason(listing, brand_key, category=None):
     sized = f"{title} {listing.get('size') or ''}"
     if category in VINTED_OFF_CATEGORIES:
         return f"{category} is off (owner 11-11: office wardrobe only)"
+    # Owner 11-11: a FAST ping went out for a "Zegna Sport" fleece. Mainline only.
+    if brand_key == "zegna" and _VINTED_ZEGNA_DIFFUSION.search(title):
+        return "Z Zegna / Zegna Sport diffusion line, mainline Zegna only"
     if brand_key in _VINTED_SHOE_MAKERS or _VINTED_SHOES_BELTS.search(title):
         return "shoes/belts/ties are off (owner 11-11: office wardrobe only)"
     if _PANTS.search(title) and not _VINTED_SUIT.search(title) or (
