@@ -1,0 +1,94 @@
+name: eBay Top 5 Trial
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ebay-top5
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  ebay-top5:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trial gate
+        id: trial
+        run: |
+          if [ "$(date -u +%s)" -lt "$(date -u -d '2026-11-18T23:59:00Z' +%s)" ]; then
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Restore top 5 state
+        id: state-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ebay_top5_seen.db
+          key: ebay-top5-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ebay-top5-state-v1-
+      - name: Check summary marker
+        id: summary
+        run: |
+          if [ "${{ steps.trial.outputs.active }}" = 'true' ]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          elif python3 - <<'PY'
+          import os, sqlite3
+          path = 'ebay_top5_seen.db'
+          if not os.path.exists(path):
+              raise SystemExit(1)
+          try:
+              conn = sqlite3.connect(path)
+              sent = conn.execute("SELECT 1 FROM state WHERE key='summary_sent'").fetchone()
+              conn.close()
+          except sqlite3.DatabaseError:
+              raise SystemExit(1)
+          raise SystemExit(0 if sent else 1)
+          PY
+          then
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.summary.outputs.run == 'true'
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        if: steps.summary.outputs.run == 'true'
+        run: pip install -r requirements.txt
+      - name: Run top 5 lane
+        if: steps.summary.outputs.run == 'true'
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: python ebay_top5.py
+      - name: Save top 5 state
+        if: always() && steps.summary.outputs.run == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ebay_top5_seen.db
+          key: ebay-top5-state-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Chain next run
+        if: success() && steps.trial.outputs.active == 'true' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$(date -u +%s)" -lt "$(date -u -d '2026-11-18T23:59:00Z' +%s)" ]; then
+            gh workflow run ebay-top5.yml --ref main
+          fi
