@@ -2237,6 +2237,27 @@ def test_photo_summary_mascot_and_hanger_words_need_context():
     assert fast._ai_lone_tailoring_reason("Tom Ford 100ml EDP bottle", "other")
 
 
+def test_cloth_mill_suits_and_followup_numbers(tmp_path):
+    shape = fast._menswear_shape_reason
+    cremieux = {"title": "Daniel Cr\u00e9mieux Daniel Cremieux 40R Brown Loro Piana Wool 3Btn Suit",
+                "size": "40R", "price": {"value": 23}}
+    assert "another maker" in shape(cremieux, "loro piana")
+    assert shape({"title": "Loro Piana wool suit 42R", "size": "42R", "price": {"value": 90}},
+                 "loro piana") is None
+    lane = _lane(tmp_path)
+    text = lane._followup_numbers({
+        "listing": {"title": "x", "shippingOptions": [{"shippingCost": {"value": 5.0}}]},
+        "item_price": 23, "estimated_retail_price": 900, "estimated_resale_value": 120,
+    })
+    assert "$23 list" in text and "retail ~$900" in text and "resale ~$120" in text
+    sent = []
+    lane._ntfy = lambda *a, **k: sent.append(a)
+    lane._instant_pinged.add("vinted:55")
+    lane._followup_if_silent({"id": 55, "title": "Brioni shirt"})
+    lane._followup_if_silent({"id": 55, "title": "Brioni shirt"})
+    assert len(sent) == 1 and sent[0][0].startswith("CHECK UNFINISHED")
+
+
 def test_alert_says_when_shipping_is_assumed():
     assert "assumed $3.99" in fast._ship_note({})
     assert fast._ship_note({"vinted_shipping": 1.99}) == ""

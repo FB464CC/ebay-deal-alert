@@ -1030,6 +1030,17 @@ def _collar_size(listing):
     return None
 
 
+# Owner 11-11: "Daniel Cremieux 40R Brown Loro Piana Wool 3Btn Suit" pinged as
+# Loro Piana. A mill named mid-title before a cloth word, on tailoring, is
+# the cloth, not the maker; titles that open with the mill stay allowed.
+_VINTED_MILL_CLOTH_TITLE = re.compile(
+    rf"^(?!\W*(?:(?:men[’']?s?|vintage|vtg|nwt|new|authentic)\s+)*{_VINTED_MILL}\b)"
+    rf".*?\b{_VINTED_MILL}\s+(?:wool|cashmere|silk|linen|flannel|super\s*\d+'?s?)\b"
+    r".*\b(?:suit|blazer|sport\s*coat|jacket|coat|trousers|pants|slacks)\b",
+    re.IGNORECASE,
+)
+
+
 def _menswear_shape_reason(listing, brand_key, category=None):
     """Garment types/sizes the owner never buys, judged from the title."""
     title = str(listing.get("title") or "")
@@ -1065,6 +1076,8 @@ def _menswear_shape_reason(listing, brand_key, category=None):
     if not engine.brand_in(title.casefold(), houses) and _VINTED_MILL_FABRIC.search(
         f"{title} {listing.get('description') or ''}"
     ):
+        return "another maker using Loro Piana/Zegna fabric, not the house itself"
+    if not engine.brand_in(title.casefold(), houses) and _VINTED_MILL_CLOTH_TITLE.search(title):
         return "another maker using Loro Piana/Zegna fabric, not the house itself"
     if _VINTED_POLO.search(title) and _VINTED_XL.search(sized):
         return "XL polo (owner wears M/L polos)"
@@ -1874,6 +1887,7 @@ class VintedFastLane:
         self._last_request_started = None
         self._summary_started = None
         self._instant_pinged = set()
+        self._followed_up = set()
         self._first_seen = {}
         self._alert_watch = {}
         self._last_feedback_poll = None
@@ -2800,16 +2814,64 @@ class VintedFastLane:
         if reason:
             result["verdict"] = verdict
             result["reason"] = reason
-        if result.get("vinted_instant_alerted") and verdict != "OFFER_ALERTED":
-            listing = result.get("listing") or {}
-            self._ntfy(
-                f"SKIP: {str(listing.get('title') or '')[:50]}",
-                f"Failed the full check: {result.get('reason') or verdict}",
-                "2", "x", listing.get("itemWebUrl"),
-                item_id=listing.get("itemId"),
-            )
+        listing = result.get("listing") or {}
+        if result.get("vinted_instant_alerted") or listing.get("itemId") in self._instant_pinged:
+            self._followed_up.add(listing.get("itemId"))
+            if verdict != "OFFER_ALERTED":
+                self._ntfy(
+                    f"SKIP: {str(listing.get('title') or '')[:50]}",
+                    f"Failed the full check: {result.get('reason') or verdict}\n"
+                    + self._followup_numbers(result),
+                    "2", "x", listing.get("itemWebUrl"),
+                    item_id=listing.get("itemId"),
+                )
         self._log_result(result)
         engine.mark_seen(conn, item_id, fingerprint, total_price)
+
+    def _followup_if_silent(self, item):
+        raw_id = _raw_vinted_item_id(item)
+        key = f"vinted:{raw_id}"
+        if key not in self._instant_pinged or key in self._followed_up:
+            return
+        self._followed_up.add(key)
+        self._ntfy(
+            f"CHECK UNFINISHED: {str(item.get('title') or '')[:45]}",
+            "The full check stopped before a verdict (AI unavailable or run "
+            "ending). Judge this one yourself.",
+            "2", "warning", f"https://www.vinted.com/items/{raw_id}",
+            item_id=key,
+        )
+
+    def _followup_numbers(self, result):
+        """Owner 11-11: every FAST ping's follow-up says what the piece is
+        worth, even when a rule rejected it before any photo check."""
+        listing = result.get("listing") or {}
+        if result.get("estimated_resale_value") is None and listing.get("title"):
+            try:
+                ai = self._first_photo_check(
+                    listing, result.get("category") or "other", self.clock() + 15, None
+                )
+            except Exception as exc:  # the follow-up must still go out
+                logger.info("vinted-fast follow-up valuation failed: %s", exc)
+                ai = None
+            if isinstance(ai, dict):
+                result = {**result, **{
+                    k: ai.get(k) for k in ("estimated_retail_price", "estimated_resale_value")
+                }}
+        price = engine._sane_ai_price(result.get("item_price"))
+        parts = []
+        if price is not None:
+            all_in = (price + engine.get_shipping_cost(listing)) * (1 + engine.SALES_TAX_RATE)
+            parts.append(f"${price:g} list, ~${all_in:.0f} all-in")
+        for label, key in (
+            ("retail", "estimated_retail_price"),
+            ("resale", "estimated_resale_value"),
+            ("cautious resale", "vinted_conservative_resale_value"),
+        ):
+            value = engine._sane_ai_price(result.get(key))
+            if value:
+                parts.append(f"{label} ~${value:.0f}")
+        return " · ".join(parts) or "no price estimate available"
 
     def _brand_catalog_request(self, feed):
         """One web-catalog request covering every brand id in the feed."""
@@ -3537,6 +3599,7 @@ class VintedFastLane:
             _age_note(getattr(self, "_listed_age_m", {}).get(listing.get("itemId"))),
             _ship_note(listing),
         )))
+        self._followed_up.add(listing.get("itemId"))
         try:
             engine.send_alert(result, feedback_item_id=item_id)
         except Exception as exc:
@@ -3651,6 +3714,7 @@ class VintedFastLane:
                             self._process_item(
                                 lane_conn, main_conn, item, target, deadline
                             )
+                            self._followup_if_silent(item)
                             if self._pending_block is not None:
                                 pending, self._pending_block = self._pending_block, None
                                 raise pending
