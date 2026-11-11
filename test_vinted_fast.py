@@ -2223,6 +2223,11 @@ def test_photo_summary_mascot_and_hanger_words_need_context():
     assert fast._ai_lone_tailoring_reason("Tom Ford 100ml EDP bottle", "other")
 
 
+def test_alert_says_when_shipping_is_assumed():
+    assert "assumed $3.99" in fast._ship_note({})
+    assert fast._ship_note({"vinted_shipping": 1.99}) == ""
+
+
 def test_vtg_rare_zegna_titles_are_mainline_shirts():
     assert fast._shirt_house("zegna", "Rare Vtg Ermenegildo Zegna Dot Print Cotton L/S M")
     assert not fast._shirt_house("zegna", "Tommy Hilfiger Ermenegildo Zegna Button Up")

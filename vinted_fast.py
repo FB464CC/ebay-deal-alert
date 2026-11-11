@@ -1234,6 +1234,17 @@ VINTED_IDS_PER_MINUTE = 9000
 VINTED_OLD_LISTING_MINUTES = 60
 
 
+def _ship_note(listing):
+    """Owner 11-11: say when shipping in the total is a guess. Vinted hides
+    discounted shipping from logged-out pages; the app shows his real price."""
+    if (listing or {}).get("vinted_shipping") is not None:
+        return ""
+    return (
+        f"Shipping assumed ${marketplaces.VINTED_ASSUMED_SHIPPING:.2f}; "
+        "check the app for yours."
+    )
+
+
 def _age_note(age_m):
     if age_m is None or age_m < VINTED_OLD_LISTING_MINUTES:
         return ""
@@ -2332,7 +2343,8 @@ class VintedFastLane:
             f"(ship ${_listing_shipping(listing):.2f}), resale "
             f"~${view['vinted_conservative_resale_value']:.0f}. {title}\n"
             "Not a steal at list. If they accept or counter, nothing is charged "
-            "until you press Buy now.",
+            "until you press Buy now."
+            + (f"\n{_ship_note(listing)}" if _ship_note(listing) else ""),
             "4" if kind == "offer" else "3",
             "moneybag" if kind == "offer" else "speech_balloon",
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
@@ -2417,6 +2429,7 @@ class VintedFastLane:
             "now; an offer risks losing it."
             + ("\nCheck photos: crown under the back collar, no club logo."
                if pm_top else "")
+            + (f"\n{_ship_note(listing)}" if _ship_note(listing) else "")
         )
         logger.info("vinted-fast instant alert: $%g %s | %s", price, brand, title)
         self._ntfy(
@@ -3462,9 +3475,10 @@ class VintedFastLane:
                 + (sanity.get("reason") or "part/accessory or incomplete item"),
             )
             return
-        result["listing_age_note"] = _age_note(
-            getattr(self, "_listed_age_m", {}).get(listing.get("itemId"))
-        )
+        result["listing_age_note"] = "\n".join(filter(None, (
+            _age_note(getattr(self, "_listed_age_m", {}).get(listing.get("itemId"))),
+            _ship_note(listing),
+        )))
         try:
             engine.send_alert(result, feedback_item_id=item_id)
         except Exception as exc:
