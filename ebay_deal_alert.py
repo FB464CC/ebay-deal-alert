@@ -10054,6 +10054,8 @@ def send_alert(result, *, feedback_item_id=None):
         # currentPrice on a live auction is a floor that climbs until close,
         # not a purchase price - do not read it as the eBay-style fixed price.
         message += "\n(auction - price climbs until close)"
+    if result.get("listing_age_note"):
+        message += f"\n{result['listing_age_note']}"
     pickup_location = _pickup_alert_location(listing)
     if pickup_location:
         # Reuse one renderer for normalized marketplace descriptions and

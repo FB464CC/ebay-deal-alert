@@ -2186,6 +2186,22 @@ def test_price_table_cuts_inflated_resale_and_never_raises_it():
     assert capped("Brioni suit jacket", 400.0, "Brioni shirt") == 400
 
 
+def test_resurfaced_old_listing_is_dated_from_its_item_id(tmp_path):
+    # Owner 11-10: a zip knit jacket listed 6 h earlier alerted as if new.
+    lane = _lane(tmp_path)
+    now = [0.0]
+    lane.clock = lambda: now[0]
+    lane._note_listing_age("vinted:a", "10752000000")      # run start, frontier
+    now[0] = 1200.0                                          # 20 min, +180k ids
+    lane._note_listing_age("vinted:b", "10752180000")
+    assert lane._listed_age_m["vinted:b"] == 0
+    lane._note_listing_age("vinted:old", str(10752180000 - 6 * 60 * 9000))
+    assert lane._listed_age_m["vinted:old"] == 360
+    assert fast._age_note(360).startswith("Listed ~6h ago")
+    assert fast._age_note(25) == ""
+    assert "days" in fast._age_note(7 * 1440)
+
+
 def test_real_listing_shipping_replaces_the_499_assumption():
     # Owner 11-10: 10681756063 showed "Shipping from $0.00" (logged-out HTML).
     page = (

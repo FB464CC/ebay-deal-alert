@@ -1175,6 +1175,21 @@ def _save_state(path, state):
     os.replace(temp_path, path)
 
 
+# Owner 11-10 "posted 6 hours ago": Vinted's newest-first feeds also show old
+# listings when a seller bumps them or cuts the price under a search cap. Item
+# ids rise ~9k a minute (11-10 log), so the gap to the newest id seen dates a
+# listing with no extra request.
+VINTED_IDS_PER_MINUTE = 9000
+VINTED_OLD_LISTING_MINUTES = 60
+
+
+def _age_note(age_m):
+    if age_m is None or age_m < VINTED_OLD_LISTING_MINUTES:
+        return ""
+    when = f"~{age_m / 60:.0f}h" if age_m < 48 * 60 else f"~{age_m / 1440:.0f} days"
+    return f"Listed {when} ago, just resurfaced (bumped or price cut)"
+
+
 def _raw_vinted_item_id(item):
     return str(item.get("id") or "").strip() if isinstance(item, dict) else ""
 
@@ -2327,6 +2342,23 @@ class VintedFastLane:
             if watch["misses"] >= 2 or now - watch["alerted"] > 600:
                 del self._alert_watch[item_id]
 
+    def _note_listing_age(self, item_id, raw_id):
+        """Estimated minutes since the listing was created, at first sighting."""
+        try:
+            number = int(raw_id)
+        except (TypeError, ValueError):
+            return
+        now = self.clock()
+        if not hasattr(self, "_id_start"):
+            self._id_start, self._id_frontier, self._listed_age_m = (now, number), number, {}
+        self._id_frontier = max(self._id_frontier, number)
+        start_t, start_id = self._id_start
+        minutes = (now - start_t) / 60
+        # This run's own id rate once it has 10 minutes of data.
+        rate = (self._id_frontier - start_id) / minutes if minutes >= 10 else 0
+        rate = rate if rate > 0 else VINTED_IDS_PER_MINUTE
+        self._listed_age_m[item_id] = round((self._id_frontier - number) / rate)
+
     def _instant_prepass(self, conn, main_conn, items, kind, search):
         """Instant pings straight from catalog rows, before any per-item
         request or AI call (owner, 11-02: steals need the ping in a second or
@@ -2342,8 +2374,9 @@ class VintedFastLane:
             )
         for item in items:
             listing = marketplaces._vinted_item_to_listing(item)
-            if listing:
-                self._first_seen.setdefault(listing["itemId"], self.clock())
+            if listing and listing["itemId"] not in self._first_seen:
+                self._first_seen[listing["itemId"]] = self.clock()
+                self._note_listing_age(listing["itemId"], _raw_vinted_item_id(item))
             if not listing or listing["itemId"] in self._instant_pinged:
                 continue
             if _already_seen(conn, main_conn, listing["itemId"]):
@@ -2448,6 +2481,9 @@ class VintedFastLane:
             )
         if image_url:
             headers["Attach"] = image_url
+        note = _age_note(getattr(self, "_listed_age_m", {}).get(item_id))
+        if note:
+            message = f"{note}\n{message}"
         try:
             requests.post(
                 f"https://ntfy.sh/{engine.NTFY_TOPIC}",
@@ -2547,6 +2583,9 @@ class VintedFastLane:
             values["ship"] = listing["vinted_shipping"]
         # Owner 11-10 "too slow": seconds from first sighting to this decision.
         first_seen = getattr(self, "_first_seen", {}).get(listing.get("itemId"))
+        age_m = getattr(self, "_listed_age_m", {}).get(listing.get("itemId"))
+        if age_m is not None:
+            values["age_m"] = age_m
         if first_seen is not None:
             values["seen_s"] = round(self.clock() - first_seen)
             # Owner 11-10 "posted 2 hours prior": Vinted photo URLs end in their
@@ -3292,6 +3331,9 @@ class VintedFastLane:
                 + (sanity.get("reason") or "part/accessory or incomplete item"),
             )
             return
+        result["listing_age_note"] = _age_note(
+            getattr(self, "_listed_age_m", {}).get(listing.get("itemId"))
+        )
         try:
             engine.send_alert(result, feedback_item_id=item_id)
         except Exception as exc:
