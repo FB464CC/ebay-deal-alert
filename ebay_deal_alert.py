@@ -2129,12 +2129,19 @@ def fetch_vinted_item_page_details(item_url):
         elif price:
             details["shipping_price"] = float(price.group(1).replace(",", ""))
     if "shipping_price" not in details:
-        lowered = resp.text.lower()
-        at = lowered.find("shipping")
-        around = re.search(r".{0,120}shipping.{0,160}", resp.text[max(0, at - 120):at + 170], re.I | re.S) if at >= 0 else None
+        # Run 42969054691: the first "shipping" was always a feature-flag key
+        # (shipping_info_banner_v2_toggle), so log real shipping spots instead.
+        spots = [
+            m.start() for m in re.finditer(
+                r"item-shipping|shipping_(?:fee|price|cost)|(?<![\w-])shipping(?![\w-])",
+                resp.text, re.I,
+            )
+        ][:3]
         logger.info(
             "Vinted shipping not parsed for %s: %s", item_url,
-            re.sub(r"\s+", " ", around.group(0))[:280] if around else "no 'shipping' text",
+            " | ".join(
+                re.sub(r"\s+", " ", resp.text[max(0, at - 60):at + 140]) for at in spots
+            ) or "no shipping text",
         )
     return details
 
