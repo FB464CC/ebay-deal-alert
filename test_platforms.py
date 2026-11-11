@@ -1857,3 +1857,20 @@ class ShopGoodwillGolfShippingQuote(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_config_json_has_no_duplicate_keys():
+    # 11-11: VINTED_PRESCREEN_MAX_PER_RUN appeared twice; json keeps the last
+    # one, so "0" (off) was silently overridden by 2000.
+    import json
+    from collections import Counter
+    from pathlib import Path
+
+    dups = []
+
+    def hook(pairs):
+        dups.extend(k for k, n in Counter(k for k, _ in pairs).items() if n > 1)
+        return dict(pairs)
+
+    json.loads(Path(__file__).with_name("config.json").read_text(encoding="utf-8"), object_pairs_hook=hook)
+    assert dups == []

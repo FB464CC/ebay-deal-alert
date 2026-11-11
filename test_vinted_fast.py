@@ -779,6 +779,7 @@ def test_missing_typesafe_key_uses_openrouter_text_jev(monkeypatch):
 
 
 def test_openrouter_photo_prescreen_request_shape_resize_and_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 2000)  # off in config since 11-11
     lane = _lane(tmp_path)
     result = _prescreen_result()
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
@@ -832,6 +833,7 @@ def test_openrouter_photo_prescreen_request_shape_resize_and_log(tmp_path, monke
 
 
 def test_prescreen_falls_back_after_primary_error_or_unparseable(tmp_path, monkeypatch):
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 2000)  # off in config since 11-11
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
     primary_failures = (
@@ -868,6 +870,7 @@ def test_prescreen_falls_back_after_primary_error_or_unparseable(tmp_path, monke
 
 
 def test_prescreen_errors_and_unparseable_responses_fail_open(tmp_path, monkeypatch):
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 2000)  # off in config since 11-11
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
     attempt_sets = (
