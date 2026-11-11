@@ -489,7 +489,10 @@ VINTED_OFFER_MIN_LIST = 25
 # Owner 11-10: offers are underused and polos rarely alert. PM polos list at
 # $10-$20, so tops get offers from $12; pants and shorts keep the $25 floor.
 VINTED_OFFER_MIN_LIST_TOPS = 12
-_BOTTOMS = re.compile(r"\b(?:pants?|trousers?|shorts|chinos?|jeans|slacks)\b", re.IGNORECASE)
+_BOTTOMS = re.compile(
+    r"\b(?:pants?|trousers?|shorts|chinos?|jeans|slacks|sweatpants|joggers?|bermudas?|trunks)\b",
+    re.IGNORECASE,
+)
 _FULL_CASHMERE = re.compile(
     r"\b100\s*%\s*cashmere\b|\b(?:pure|full|all)\s+cashmere\b|\bcashmere\s*100\s*%",
     re.IGNORECASE,
@@ -1198,6 +1201,21 @@ def _age_note(age_m):
     return f"Listed {when} ago, just resurfaced (bumped or price cut)"
 
 
+_IMAGE_CACHE = {}
+_engine_download_listing_image = engine._download_listing_image
+
+
+def _cached_download_listing_image(image_url, *args, **kwargs):
+    if image_url in _IMAGE_CACHE:
+        return _IMAGE_CACHE[image_url]
+    downloaded = _engine_download_listing_image(image_url, *args, **kwargs)
+    if downloaded is not None:
+        if len(_IMAGE_CACHE) >= 48:  # ponytail: drop-all cache, ~12 items of photos
+            _IMAGE_CACHE.clear()
+        _IMAGE_CACHE[image_url] = downloaded
+    return downloaded
+
+
 def _raw_vinted_item_id(item):
     return str(item.get("id") or "").strip() if isinstance(item, dict) else ""
 
@@ -1469,7 +1487,12 @@ _PRICE_TABLE_PIECES = (
     ("cashmere", r"cashmere"),
     ("sweater", r"sweater|cardigan|\bknit|crew[\s-]*neck|v[\s-]*neck|jumper|pullover|turtleneck"),
 )
-_PRICE_TABLE_SKIP = re.compile(r"\b(?:pants?|trousers?|shorts|jeans|jacket|blazer|coat|suit)\b", re.I)
+_PRICE_TABLE_SKIP = re.compile(
+    r"\b(?:pants?|trousers?|shorts|jeans|jackets?|blazers?|\w*coats?|suits?|shoes?|"
+    r"sneakers?|loafers?|boots?|belts?|ties?|scarf|scarves|bags?|wallets?)\b", re.I,
+)
+_PRICE_TABLE_NOT_A_POLO = re.compile(r"polo\s+(?:by\s+)?ralph\s+lauren|ralph\s+lauren\s+polo", re.I)
+VINTED_PRICE_TABLE_CATEGORIES = frozenset({"other", "knitwear", "golf"})
 
 
 def _price_table_row(result, summary=""):
@@ -1478,6 +1501,7 @@ def _price_table_row(result, summary=""):
     if _PRICE_TABLE_SKIP.search(str(listing.get("title") or "")):
         return None
     brand = next((b for b, pattern in _PRICE_TABLE_BRANDS if re.search(pattern, text, re.I)), None)
+    text = _PRICE_TABLE_NOT_A_POLO.sub(" ", text)
     for piece, pattern in _PRICE_TABLE_PIECES:
         if brand and (brand, piece) in VINTED_PRICE_TABLE and re.search(pattern, text, re.I):
             return VINTED_PRICE_TABLE[(brand, piece)]
@@ -1593,7 +1617,7 @@ def _merge_ai_result(result, ai_result, category):
         ai_result.get("estimated_resale_value")
     )
     result["price_confidence"] = ai_result.get("price_confidence")
-    if category in VINTED_APPAREL_CATEGORIES:
+    if category in VINTED_PRICE_TABLE_CATEGORIES:
         _cap_to_price_table(result, "estimated_resale_value", summary)
         _cap_to_price_table(result, "estimated_retail_price", summary, index=1)
     if category == "watches" and result["estimated_resale_value"] is not None:
@@ -2070,7 +2094,10 @@ class VintedFastLane:
         )
         if isinstance(result, dict):
             return result
-        return engine._call_photo_check(prepared["prompt"], prepared["images"], hard_stop=hard_stop)
+        return engine._call_photo_check(
+            prepared["prompt"], prepared["images"],
+            timeout=VINTED_PHOTO_OPENROUTER_TIMEOUT_SECONDS, hard_stop=hard_stop,
+        )
 
     def _openrouter_strong_look(self, prompt, images, hard_stop, model=None, limit=None):
         api_key = str(os.environ.get("OPENROUTER_API_KEY") or "").strip()
@@ -2110,9 +2137,9 @@ class VintedFastLane:
                 _openrouter_usage_cost(response_payload),
             )
             text = response_payload["choices"][0]["message"]["content"]
-            parsed = json.loads(engine._strip_json_code_fence(text))
+            parsed = json.loads(engine._strip_json_code_fence(str(text or "")))
         except (requests.exceptions.RequestException, KeyError, IndexError,
-                TypeError, ValueError) as exc:
+                TypeError, ValueError, AttributeError) as exc:
             logger.warning("vinted-fast OpenRouter strong look failed: %s", exc)
             return None
         if isinstance(parsed, list) and len(parsed) == 1:
@@ -2191,7 +2218,8 @@ class VintedFastLane:
         if category not in VINTED_APPAREL_CATEGORIES:
             return False
         title = str((result.get("listing") or {}).get("title") or "")
-        min_list = VINTED_OFFER_MIN_LIST if _BOTTOMS.search(title) else VINTED_OFFER_MIN_LIST_TOPS
+        top = category in VINTED_PRICE_TABLE_CATEGORIES and not _BOTTOMS.search(title)
+        min_list = VINTED_OFFER_MIN_LIST_TOPS if top else VINTED_OFFER_MIN_LIST
         if (engine._sane_ai_price(result.get("item_price")) or 0) < min_list:
             return False
         for kind, fraction in (
@@ -2380,16 +2408,10 @@ class VintedFastLane:
             number = int(raw_id)
         except (TypeError, ValueError):
             return
-        now = self.clock()
-        if not hasattr(self, "_id_start"):
-            self._id_start, self._id_frontier, self._listed_age_m = (now, number), number, {}
+        if not hasattr(self, "_listed_age_m"):
+            self._id_frontier, self._listed_age_m = number, {}
         self._id_frontier = max(self._id_frontier, number)
-        start_t, start_id = self._id_start
-        minutes = (now - start_t) / 60
-        # This run's own id rate once it has 10 minutes of data.
-        rate = (self._id_frontier - start_id) / minutes if minutes >= 10 else 0
-        rate = rate if rate > 0 else VINTED_IDS_PER_MINUTE
-        self._listed_age_m[item_id] = round((self._id_frontier - number) / rate)
+        self._listed_age_m[item_id] = round((self._id_frontier - number) / VINTED_IDS_PER_MINUTE)
 
     def _instant_prepass(self, conn, main_conn, items, kind, search):
         """Instant pings straight from catalog rows, before any per-item
@@ -2487,11 +2509,17 @@ class VintedFastLane:
             and self.clock() - self._last_brand_poll < 2 * VINTED_FAST_POLL_SECONDS
         ):
             return
+        if self._brand_paused():
+            return
         status, items = self._brand_catalog_request(feed)
-        if status in {403, 429}:
+        if status == 429:
+            self._pause_brand_feed()
+            return
+        if status == 403:
             raise VintedRequestBlocked(status)
         if items is None or not 200 <= (status or 0) < 300:
             return
+        self._brand_streak = 0
         new_items, _water = items_newer_than_high_water(
             items, state["searches"].get(str(feed.get("id")))
         )
@@ -2862,6 +2890,28 @@ class VintedFastLane:
             if brand and brand.lower() not in title.lower():
                 item["title"] = f"{brand} {title}".strip()
         return status, items
+
+    def _pause_brand_feed(self):
+        """A www.vinted.com catalog 429 pauses only the brand slots.
+
+        Audit 11-11: 12 brand-page 429s blinded every feed for 12 min in one
+        run, though api.vinted.com (the text feeds) never refused once. Paused
+        brand slots still take their turn in the schedule without a request,
+        so the text feeds keep their usual rate."""
+        self._brand_streak = getattr(self, "_brand_streak", 0) + 1
+        delay = min(
+            VINTED_FAST_BACKOFF_INITIAL_SECONDS * (2 ** (self._brand_streak - 1)),
+            VINTED_FAST_BACKOFF_MAX_SECONDS,
+        )
+        self._brand_paused_until = self.clock() + delay
+        self.stats["backoffs"] += 1
+        logger.warning(
+            "vinted-fast brand feed 429; pausing brand slots %ss (streak %s), text feeds continue",
+            delay, self._brand_streak,
+        )
+
+    def _brand_paused(self):
+        return self.clock() < getattr(self, "_brand_paused_until", 0)
 
     def _backoff(self, deadline):
         self.backoff_streak += 1
@@ -3409,16 +3459,30 @@ class VintedFastLane:
             "vinted-fast starting: searches=%s run_seconds=%.0f dry_run=%s",
             len(self.searches), self.run_seconds, self.dry_run,
         )
+        # Only while the lane runs, so the engine's own callers/tests are untouched.
+        engine._download_listing_image = _cached_download_listing_image
         try:
             while self.clock() < deadline:
                 self._maybe_poll_feedback(state)
                 kind, search = self.schedule[index % len(self.schedule)]
                 index += 1
+                if kind == "brands" and self._brand_paused():
+                    # Keep the slot's time so text feeds don't speed up.
+                    self._respect_interval()
+                    self._last_request_started = self.clock()
+                    continue
                 if kind == "brands":
                     status, items = self._brand_catalog_request(search)
                 else:
                     status, items = self._catalog_request(search)
                 totals["requests"] += 1
+                if kind == "brands" and status == 429:
+                    totals["backoffs"] += 1
+                    self._pause_brand_feed()
+                    self._summary()
+                    continue
+                if kind == "brands" and items is not None:
+                    self._brand_streak = 0
                 if status in {403, 429}:
                     totals["backoffs"] += 1
                     self._backoff(deadline)
@@ -3484,6 +3548,7 @@ class VintedFastLane:
                             _save_state(self.state_path, state)
                 self._summary()
         finally:
+            engine._download_listing_image = _engine_download_listing_image
             if self._feedback_thread is not None:
                 self._feedback_thread.join(timeout=5)
             self._summary(force=True)

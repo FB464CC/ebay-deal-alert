@@ -1428,8 +1428,16 @@ def test_brand_feed_peek_pings_without_moving_high_water(tmp_path):
         lane._peek_brand_feed()  # polled moments ago: skip
     request.assert_not_called()
     lane._last_brand_poll = None
+    # Audit 11-11: a catalog-page 429 pauses only the brand slots.
+    with mock.patch.object(lane, "_brand_catalog_request", return_value=(429, None)):
+        lane._peek_brand_feed()
+    assert lane._brand_paused()
+    with mock.patch.object(lane, "_brand_catalog_request") as request:
+        lane._peek_brand_feed()
+    request.assert_not_called()
+    lane._brand_paused_until = 0
     with (
-        mock.patch.object(lane, "_brand_catalog_request", return_value=(429, None)),
+        mock.patch.object(lane, "_brand_catalog_request", return_value=(403, None)),
         pytest.raises(fast.VintedRequestBlocked),
     ):
         lane._peek_brand_feed()
@@ -2186,6 +2194,32 @@ def test_price_table_cuts_inflated_resale_and_never_raises_it():
     assert capped("Brioni suit jacket", 400.0, "Brioni shirt") == 400
 
 
+def test_review_fixes_price_caps_null_reply_and_age(tmp_path, monkeypatch):
+    def row(title):
+        return fast._price_table_row({"listing": {"title": title}})
+    # "Polo Ralph Lauren" is the brand, not a polo shirt.
+    assert row("Polo Ralph Lauren Purple Label cashmere sweater") == (235, 1200)
+    assert row("Ralph Lauren Purple Label polo shirt") == (65, 450)
+    for title in ("Loro Piana cashmere overcoat", "Canali cashmere sportcoat",
+                  "Zegna knit sneakers", "Brioni silk ties"):
+        assert row(title) is None, title
+    # A null OpenRouter content is a failed look, not a crashed run.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    lane = _lane(tmp_path)
+    reply = mock.Mock()
+    reply.json.return_value = {"choices": [{"message": {"content": None}}]}
+    with (
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+        mock.patch.object(fast.requests, "post", return_value=reply),
+    ):
+        assert lane._openrouter_strong_look("p", [(b"j", "image/jpeg")], None) is None
+    # A bumped first item no longer skews later ages.
+    lane._note_listing_age("vinted:old", "10700000000")
+    lane._note_listing_age("vinted:new", "10752000000")
+    lane._note_listing_age("vinted:mid", str(10752000000 - 90 * 9000))
+    assert lane._listed_age_m["vinted:mid"] == 90
+
+
 def test_first_photo_check_goes_to_paid_flash_lite_then_free_backup(tmp_path, monkeypatch):
     # Owner 11-10: free Gemini 20 s timeouts made alerts land after the sale.
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
@@ -2208,7 +2242,9 @@ def test_first_photo_check_goes_to_paid_flash_lite_then_free_backup(tmp_path, mo
         mock.patch.object(fast.requests, "post", side_effect=requests.exceptions.ReadTimeout("x")),
     ):
         assert lane._first_photo_check({}, "knitwear", None, "q") == {"ok": 1}
-    free.assert_called_once_with("p", prepared["images"], hard_stop=None)
+    free.assert_called_once_with(
+        "p", prepared["images"], timeout=fast.VINTED_PHOTO_OPENROUTER_TIMEOUT_SECONDS, hard_stop=None,
+    )
 
 
 def test_resurfaced_old_listing_is_dated_from_its_item_id(tmp_path):
