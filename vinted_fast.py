@@ -215,6 +215,10 @@ _VINTED_ELITE_SHIRT_BRANDS = frozenset(
 # fakes cluster at these houses, so they still need a readable maker label
 # (10-21 dropped that rule for every other brand).
 _VINTED_LABEL_REQUIRED_BRANDS = _VINTED_ELITE_SHIRT_BRANDS | {"zegna"}
+# Owner 11-11: 6 of 9 alerts were offers on Brooks Brothers suits and PM
+# vests/sweaters. Offers only for the top five houses; other brands alert
+# only as real steals at list.
+VINTED_OFFER_BRANDS = _VINTED_LABEL_REQUIRED_BRANDS
 _VINTED_LONE_TAILORING = re.compile(
     r"\b(?:blazers?|sports?[\s-]?(?:coats?|jackets?)|(?:dinner|dress)[\s-]+jackets?"
     r"|tuxedo[\s-]+jackets?"
@@ -2285,6 +2289,8 @@ class VintedFastLane:
         """Alert a piece that clears every bar at a 60% offer, or failing that
         at half of list by message, but not at list."""
         if category not in VINTED_APPAREL_CATEGORIES:
+            return False
+        if result.get("vinted_brand_key") not in VINTED_OFFER_BRANDS:
             return False
         title = str((result.get("listing") or {}).get("title") or "")
         top = category in VINTED_PRICE_TABLE_CATEGORIES and not _BOTTOMS.search(title)

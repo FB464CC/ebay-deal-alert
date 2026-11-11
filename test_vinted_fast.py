@@ -1700,9 +1700,11 @@ def _offer_ai(resale):
     }
 
 
-def _run_offer(tmp_path, price, resale, title="Canali wool jacket", category="outerwear"):
+def _run_offer(tmp_path, price, resale, title="Canali wool jacket", category="outerwear",
+               offer_brands=frozenset({"canali"})):
     listing, result = _apparel_listing_result(title, price, category, "canali jacket")
-    with mock.patch.object(fast.VintedFastLane, "_ntfy") as ntfy:
+    with mock.patch.object(fast.VintedFastLane, "_ntfy") as ntfy, \
+            mock.patch.object(fast, "VINTED_OFFER_BRANDS", offer_brands):
         _lane_obj, _strong, send, row = _run_custom_pipeline(
             tmp_path, listing, result, _offer_ai(resale),
             strong_result=_passing_strong_result(resale=resale),
@@ -1718,6 +1720,15 @@ def test_near_miss_of_any_brand_gets_an_offer_alert_not_a_buy_alert(tmp_path):
     args = ntfy.call_args.args
     assert args[0].startswith("OFFER Canali $69 (list $115)")
     assert args[2] == "4"
+
+
+def test_offers_only_for_the_top_five_houses(tmp_path):
+    # Owner 11-11: a near miss outside LP/BC/Kiton/Brioni/Zegna gets no offer.
+    row, ntfy, send = _run_offer(tmp_path, 115, 210, offer_brands=fast.VINTED_OFFER_BRANDS)
+    send.assert_not_called()
+    assert row["verdict"] == "REJECTED"
+    assert not any(c.args[0].startswith(("OFFER", "MESSAGE")) for c in ntfy.call_args_list)
+    assert fast.VINTED_OFFER_BRANDS == {"brunello cucinelli", "kiton", "loro piana", "brioni", "zegna"}
 
 
 def test_near_miss_that_only_works_at_half_gets_a_message_alert(tmp_path):
