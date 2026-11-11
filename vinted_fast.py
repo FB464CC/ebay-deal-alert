@@ -193,6 +193,16 @@ _VINTED_EYEWEAR = re.compile(
 # tailoring only as a full suit in 40-44 R/L (EU 50-54), never a lone jacket.
 _VINTED_POLO = re.compile(r"\bpolos?\b|\bgolf[\s-]+shirts?\b", re.IGNORECASE)
 _VINTED_XL = re.compile(r"\b(?:[2-5]?x+l|extra[\s-]+large)\b", re.IGNORECASE)
+# Audit 11-11: ~12-15 PM tops titled "pullover shirt", "collared shirt",
+# "long sleeve shirt" were rejected unseen as dress shirts. The title alone
+# rejects only with a clear woven cue; the rest go to the photo check, whose
+# summary is re-checked by _VINTED_AI_WOVEN_SHIRT.
+_VINTED_HARD_WOVEN = re.compile(
+    r"\bbutton[\s-]?(?:up|down)|\bdress[\s-]+shirt|\boxford|\bplaid|\bcheck(?:ed)?\b|"
+    r"\bgingham|\bwindowpane|\bpoplin|\bfrench[\s-]+cuff|\bflannel|\bseersucker|"
+    r"\bchambray|\bsport[\s-]+shirt|\b1[4-8](?:\.5)?\s*(?:/|x|\")",
+    re.IGNORECASE,
+)
 _VINTED_WOVEN_SHIRT = re.compile(
     r"(?<![\w-])(?<!\bt )shirts?\b(?![\s-]*jac(?:ket)?s?\b)"
     r"|\bbutton[\s-]?(?:up|down)s?\b(?!.*\b(?:cardigan|sweater|vest|jacket|coat|polo)\b)",
@@ -230,7 +240,8 @@ _VINTED_MILL = r"(?:loro\s+piana|(?:ermenegildo\s+)?zegna|vitale\s+barberis(?:\s
 # and other makers' shirts stay out: Vinted prefixes the seller's brand tag,
 # so "Tommy Hilfiger Ermenegildo Zegna Button Up" is a Tommy Hilfiger shirt.
 _VINTED_ZEGNA_MAINLINE_TITLE = re.compile(
-    r"^\W*(?:(?:men[’']?s?|vintage|nwt|new)\s+)*(?:ermenegildo\s+)?zegna\b",
+    # Audit 11-11: "Rare Vtg Ermenegildo Zegna ..." is mainline too.
+    r"^\W*(?:(?:men[’']?s?|vintage|vtg|rare|nwt|nwot|new|authentic)\s+)*(?:ermenegildo\s+)?zegna\b",
     re.IGNORECASE,
 )
 _VINTED_ZEGNA_DIFFUSION = re.compile(r"\bz\.?\s?zegna\b|\bzzegna\b|\bzegna\s+sport\b", re.IGNORECASE)
@@ -284,6 +295,11 @@ _VINTED_BEAUTY = re.compile(
     # Live audit 10-26: empty shoe boxes, gift/garment bags, envelopes.
     r"|(?:shoe|garment|gift|paper|shopping|dust)\s+(?:bags?|box(?:es)?)|envelopes?"
     r"|empty\s+(?:\w+\s+){0,2}box(?:es)?|hangers?)\b",
+    re.IGNORECASE,
+)
+_VINTED_PACKAGING = re.compile(
+    r"(?:shoe|garment|gift|paper|shopping|dust)\s+(?:bags?|box(?:es)?)|envelopes?"
+    r"|empty\s+(?:\w+\s+){0,2}box(?:es)?|hangers?",
     re.IGNORECASE,
 )
 # Women's/kids sizing that carries no gender word: Vinted's "M / US 8-10",
@@ -685,10 +701,31 @@ def _off_profile_reason(text, schools_only=False):
         and not re.search(r"\bmen(?:'?s)?\b", text, re.IGNORECASE)
     ):
         return "women's dress, not menswear"
-    school = _VINTED_OTHER_SCHOOL.search(text)
-    if school and not _VINTED_USC.search(text):
+    if _VINTED_USC.search(text):
+        return None
+    for school in _VINTED_OTHER_SCHOOL.finditer(text):
+        # Audit 11-11: an AI summary's "bulldog print" rejected a plain PM polo.
+        # In photo summaries a mascot/state word counts only beside team words.
+        if (
+            schools_only
+            and _VINTED_AMBIGUOUS_SCHOOL.fullmatch(school.group(0))
+            and not _VINTED_SCHOOL_CONTEXT.search(text)
+        ):
+            continue
         return f"other school/team gear ({school.group(0)}), Gamecocks only"
     return None
+
+
+_VINTED_AMBIGUOUS_SCHOOL = re.compile(
+    r"bulldogs?|wildcats|georgia|florida|texas|virginia|miami|tennessee|kentucky|alabama"
+    r"|mississippi|arkansas|missouri|oklahoma|michigan|duke|aggies|wolfpack|hokies",
+    re.IGNORECASE,
+)
+_VINTED_SCHOOL_CONTEXT = re.compile(
+    r"\b(?:university|college|collegiate|team|ncaa|athletics?|football|basketball|baseball"
+    r"|varsity|alumni|mascot|fan|logo)\b",
+    re.IGNORECASE,
+)
 
 
 # Owner (11-03): tops M-XL (XXL only for a megasteal knit), suits 40-44,
@@ -996,6 +1033,7 @@ def _menswear_shape_reason(listing, brand_key):
         not _shirt_house(brand_key, title)
         and not _VINTED_POLO.search(title)
         and _VINTED_WOVEN_SHIRT.search(title)
+        and _VINTED_HARD_WOVEN.search(title)
     ):
         return "dress shirt below Brunello/Kiton/Loro Piana/Brioni/Zegna tier"
     return None
@@ -1010,7 +1048,9 @@ def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
         not _VINTED_AI_FULL_SUIT.search(summary) or _VINTED_AI_NO_PANTS.search(summary)
     ):
         return "AI photos show a lone blazer/sport coat, full suits only"
-    if _VINTED_BEAUTY.search(summary):
+    # Audit 11-11: a photo summary mentioning the hanger called a polo "beauty".
+    # Packaging words only count in titles.
+    if any(not _VINTED_PACKAGING.fullmatch(m.group(0)) for m in _VINTED_BEAUTY.finditer(summary)):
         return "AI photos show a fragrance/beauty item, not menswear"
     listing = listing or {}
     sized = f"{listing.get('title') or ''} {listing.get('size') or ''}"
@@ -1501,10 +1541,27 @@ def _price_table_row(result, summary=""):
     if _PRICE_TABLE_SKIP.search(str(listing.get("title") or "")):
         return None
     brand = next((b for b, pattern in _PRICE_TABLE_BRANDS if re.search(pattern, text, re.I)), None)
-    text = _PRICE_TABLE_NOT_A_POLO.sub(" ", text)
+    if not brand:
+        return None
+    # Audit 11-11: the title decides the piece; the AI summary only when the
+    # title names none (a summary saying "shirt" capped a Zegna cashmere
+    # sweater at $45). A garment with no row of its own never borrows another
+    # garment's row (a Kiton polo is not a $75 Kiton dress shirt); it may
+    # still fall through to its fabric (cashmere) or knit (sweater) row.
+    title = _PRICE_TABLE_NOT_A_POLO.sub(" ", str(listing.get("title") or ""))
+    source = _PRICE_TABLE_NOT_A_POLO.sub(" ", text)
+    if any(re.search(pattern, title, re.I) for _piece, pattern in _PRICE_TABLE_PIECES):
+        source = title
+    garment_missed = False
     for piece, pattern in _PRICE_TABLE_PIECES:
-        if brand and (brand, piece) in VINTED_PRICE_TABLE and re.search(pattern, text, re.I):
+        if not re.search(pattern, source, re.I):
+            continue
+        garment = piece in {"vest", "quarter-zip", "polo", "shirt"}
+        if garment and garment_missed:
+            continue
+        if (brand, piece) in VINTED_PRICE_TABLE:
             return VINTED_PRICE_TABLE[(brand, piece)]
+        garment_missed = garment_missed or garment
     return None
 
 
@@ -1742,6 +1799,7 @@ class VintedFastLane:
         self.strong_look_calls = 0
         # (title words, rounded price) -> first item id seen this run.
         self._listing_signatures = {}
+        self._alerted_item_ids = set()
         self.prescreen_calls = 0
         self.samples = []
         self.stats = Counter()
@@ -2374,6 +2432,7 @@ class VintedFastLane:
         return True
 
     def _watch_alert(self, listing, kind="verified"):
+        self._alerted_item_ids.add(listing.get("itemId"))
         self._alert_watch.setdefault(listing.get("itemId"), {
             "title": listing.get("title"), "alerted": self.clock(),
             "alert_time": time.time(), "price": (listing.get("price") or {}).get("value"),
@@ -2648,16 +2707,6 @@ class VintedFastLane:
             values["age_m"] = age_m
         if first_seen is not None:
             values["seen_s"] = round(self.clock() - first_seen)
-            # Owner 11-10 "posted 2 hours prior": Vinted photo URLs end in their
-            # upload unix time, so this is how old the photos were when the
-            # feed first showed the item (no extra request).
-            stamp = re.search(
-                r"/(1[6-9]\d{8})\.(?:jpe?g|webp|png)",
-                " ".join(engine._collect_listing_image_urls(listing)),
-            )
-            if stamp:
-                seen_at = time.time() - (self.clock() - first_seen)
-                values["photo_age_m"] = round((seen_at - int(stamp.group(1))) / 60)
         if values:
             logger.info("vinted-fast values: %s | %s", listing.get("itemWebUrl") or "", values)
         return engine.append_alert_log(
@@ -2996,7 +3045,7 @@ class VintedFastLane:
         ):
             # A seller-picked letter size can't be rescued by the description
             # the way "11 (UK) / US 12" shoes or EU "50" knits can.
-            return listing, None, "size mismatch for saved search"
+            return listing, None, f"size mismatch for saved search (size {listing.get('size') or '?'})"
         if category not in {"fragrance", "poker-chips"} and _VINTED_NOT_MENS.search(row_size):
             return listing, None, f"women's/kids' size {row_size}, not menswear"
         row_price = float((listing.get("price") or {}).get("value") or 0)
@@ -3050,7 +3099,7 @@ class VintedFastLane:
         if engine.has_excluded_single_e_shoe_width(search, listing):
             return listing, None, "configured shoe size has excluded E width"
         if not _fits_size_list(search, listing, category):
-            return listing, None, "size mismatch for saved search"
+            return listing, None, f"size mismatch for saved search (size {listing.get('size') or '?'})"
         title = str(listing.get("title") or "")
         description = str(listing.get("description") or "")
         if _VINTED_OFF_PLATFORM.search(f"{title} {description}"):
@@ -3177,8 +3226,12 @@ class VintedFastLane:
         )
         earlier = self._listing_signatures.get(signature)
         if earlier is not None and earlier[0] != item_id:
-            _first_id, first_seller, first_seen = earlier
-            if first_seller and first_seller == seller_key:
+            first_id, first_seller, first_seen = earlier
+            # Audit 11-11: 21 closet-dump items ("Peter millar collared shirt"
+            # x5, "Summer Comfort Polo" x6, one seller, minutes apart) inherited
+            # the first one's rejection. A same-seller repeat is skipped only
+            # when the first one alerted, so a relist can't alert twice.
+            if first_seller and first_seller == seller_key and first_id in self._alerted_item_ids:
                 self._finish(
                     conn, result, item_id, fingerprint, total_price,
                     "relist of a listing already judged this run (same seller)",

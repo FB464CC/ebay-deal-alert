@@ -2114,12 +2114,24 @@ def fetch_vinted_item_page_details(item_url):
     # Owner 11-10: shipping varies per listing, $0 to $5+, and the page shows the
     # cheapest option ("Shipping from $0.00"), which is the one he picks. It is
     # in the logged-out HTML the lane already fetched (checked 10681756063).
-    shipping = re.search(
-        r'data-testid="item-shipping-banner-price"[^>]*>\s*(?:from\s*)?\$\s?([\d,]+(?:\.\d+)?)\s*<',
-        resp.text, re.IGNORECASE,
-    )
-    if shipping:
-        details["shipping_price"] = float(shipping.group(1).replace(",", ""))
+    # Audit 11-11: the strict pattern matched only ~35% of fetched pages (all
+    # "$0.00"), so most listings kept the $4.99 guess. Read the text after the
+    # banner marker with tags stripped ("from $3.49", "US$3.49", "Free"), and
+    # log what the page had when no price is found, to fix the next format.
+    banner = re.search(r'item-shipping-banner-price"[^>]*>(.{0,300})', resp.text, re.I | re.S)
+    if banner:
+        shown = html.unescape(re.sub(r"<[^>]+>", " ", banner.group(1)))
+        price = re.search(r"\$\s?([\d,]+(?:\.\d+)?)", shown)
+        if price:
+            details["shipping_price"] = float(price.group(1).replace(",", ""))
+        elif re.match(r"\s*free\b", shown, re.I):
+            details["shipping_price"] = 0.0
+    if "shipping_price" not in details:
+        around = re.search(r"(?i).{0,120}shipping.{0,160}", resp.text)
+        logger.info(
+            "Vinted shipping not parsed for %s: %s", item_url,
+            re.sub(r"\s+", " ", around.group(0))[:280] if around else "no 'shipping' text",
+        )
     return details
 
 
@@ -5068,13 +5080,18 @@ def listing_matches_size_filter(saved_search, listing):
     if not size_tokens and not equivalent_tokens:
         return True
 
+    # Audit 11-11: "Men's Large Peter Millar Pullover" never matched an L
+    # search. Spelled-out letter sizes count in the title and size field only;
+    # descriptions say "medium weight" and "large logo".
+    title_and_size = f"{listing.get('title', '')} {listing.get('size') or ''}"
+    for word, letter in (
+        (r"extra[\s-]*large", "XL"), (r"large", "L"), (r"medium", "M"), (r"small", "S"),
+    ):
+        title_and_size = re.sub(rf"\b{word}\b", f" {letter} ", title_and_size, flags=re.IGNORECASE)
     haystack = re.sub(
         r"\b(\d{2})\s?(R|L|S|XL|XS)\b",
         r"\1 \2",
-        (
-            f"{listing.get('title', '')} {listing.get('size') or ''} "
-            f"{listing.get('description') or ''}"
-        ),
+        f"{title_and_size} {listing.get('description') or ''}",
         flags=re.IGNORECASE,
     )
     def size_pattern(size_token, qualifier_required=False):

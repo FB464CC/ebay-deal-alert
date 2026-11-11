@@ -1999,7 +1999,10 @@ def test_strong_look_uses_openrouter_when_gemini_rate_limits_everything(tmp_path
     assert result["vinted_strong_model"].startswith("openrouter:")
 
 
-def test_identical_title_and_price_batch_is_rejected_before_ai(tmp_path):
+@pytest.mark.parametrize("first_alerted", [True, False])
+def test_identical_title_and_price_batch_is_rejected_before_ai(tmp_path, first_alerted):
+    # Audit 11-11: a same-seller repeat is a relist only if the first alerted;
+    # otherwise it is a closet-dump sibling and gets its own look.
     lane = _lane(tmp_path)
     conn = engine.init_db(lane.seen_db_path)
     first = _listing_and_result()
@@ -2016,6 +2019,8 @@ def test_identical_title_and_price_batch_is_rejected_before_ai(tmp_path):
     lane._cheap_result = mock.Mock(
         side_effect=[(*first, None), (*second, None), (*third, None)]
     )
+    if first_alerted:
+        lane._alerted_item_ids.add(first[0]["itemId"])
     with (
         mock.patch.object(engine, "check_photos_with_gemini", return_value=None) as photo,
         mock.patch.object(lane, "_run_vinted_prescreen", return_value=None),
@@ -2025,7 +2030,7 @@ def test_identical_title_and_price_batch_is_rejected_before_ai(tmp_path):
             lane._process_item(
                 conn, None, {"user": {"id": user_id}}, {"query": first[1]["search_query"]}, None
             )
-    assert photo.call_count == 2
+    assert photo.call_count == (2 if first_alerted else 3)
     assert not engine.is_new(conn, "v|duplicate")
     conn.close()
 
@@ -2194,6 +2199,45 @@ def test_price_table_cuts_inflated_resale_and_never_raises_it():
     assert capped("Brioni suit jacket", 400.0, "Brioni shirt") == 400
 
 
+@pytest.mark.parametrize(("title", "rejected"), [
+    # Real 11-10 titles. Vague "shirt" goes to the photo check; clear woven cues don't.
+    ("Peter Millar pullover shirt", False),
+    ("Peter Millar Men's collared shirt", False),
+    ("Peter Millar long sleeve men's shirt", False),
+    ("Peter Millar Shirt Mens Large Blue Multicolor Plaid Cotton", True),
+    ("Peter Millar Men's White Shirt with Brown & Blue Windowpane Check-Large", True),
+    ("Peter Millar Shirt Mens XL Blue Plaid Cotton Button Up Long Sleeve", True),
+    ("Canali Shirt Mens 16.5 / 42 Made in Italy White Striped", True),
+])
+def test_title_rejects_only_clear_dress_shirts(title, rejected):
+    reason = fast._menswear_shape_reason({"title": title, "size": "L"}, "peter millar")
+    assert (reason is not None and "dress shirt" in reason) is rejected
+
+
+def test_photo_summary_mascot_and_hanger_words_need_context():
+    # Audit 11-11: "bulldog print" and "on a hanger" rejected clean PM polos.
+    assert fast._off_profile_reason("PM polo with a small bulldog print", schools_only=True) is None
+    assert fast._off_profile_reason("polo with Georgia Bulldogs logo", schools_only=True)
+    assert fast._off_profile_reason("Georgia Bulldogs Polo, Peter Millar")
+    assert fast._ai_lone_tailoring_reason("Blue Peter Millar polo on a hanger", "other") is None
+    assert fast._ai_lone_tailoring_reason("Tom Ford 100ml EDP bottle", "other")
+
+
+def test_vtg_rare_zegna_titles_are_mainline_shirts():
+    assert fast._shirt_house("zegna", "Rare Vtg Ermenegildo Zegna Dot Print Cotton L/S M")
+    assert not fast._shirt_house("zegna", "Tommy Hilfiger Ermenegildo Zegna Button Up")
+
+
+def test_spelled_out_sizes_match_in_title_not_description():
+    # Audit 11-11: "Men's Large Peter Millar Pullover" failed an L/XL search.
+    search = {"size": ["L", "XL"]}
+    assert engine.listing_matches_size_filter(search, {"title": "Men's Large Peter Millar Pullover"})
+    assert engine.listing_matches_size_filter(search, {"title": "PM quarter zip Extra Large"})
+    assert not engine.listing_matches_size_filter(
+        search, {"title": "PM quarter zip", "size": "M", "description": "large logo, medium weight"}
+    )
+
+
 def test_review_fixes_price_caps_null_reply_and_age(tmp_path, monkeypatch):
     def row(title):
         return fast._price_table_row({"listing": {"title": title}})
@@ -2203,6 +2247,15 @@ def test_review_fixes_price_caps_null_reply_and_age(tmp_path, monkeypatch):
     for title in ("Loro Piana cashmere overcoat", "Canali cashmere sportcoat",
                   "Zegna knit sneakers", "Brioni silk ties"):
         assert row(title) is None, title
+    # Title decides the piece; garments never borrow another garment's row.
+    assert row("Kiton polo shirt") is None
+    assert row("Loro Piana cashmere quarter zip") == (430, 1500)
+    assert fast._price_table_row(
+        {"listing": {"title": "Zegna cashmere sweater"}}, "navy shirt collar visible"
+    ) == (275, 1400)
+    assert fast._price_table_row(
+        {"listing": {"title": "Brioni"}}, "white dress shirt, spread collar"
+    ) == (60, 850)
     # A null OpenRouter content is a failed look, not a crashed run.
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     lane = _lane(tmp_path)
@@ -2261,6 +2314,21 @@ def test_resurfaced_old_listing_is_dated_from_its_item_id(tmp_path):
     assert fast._age_note(360).startswith("Listed ~6h ago")
     assert fast._age_note(25) == ""
     assert "days" in fast._age_note(7 * 1440)
+
+
+@pytest.mark.parametrize(("banner", "price"), [
+    ('<span data-testid="item-shipping-banner-price">from $0.00</span>', 0.0),
+    ('<span data-testid="item-shipping-banner-price"><span>from</span> <span>US$3.49</span></span>', 3.49),
+    ('<div data-testid="item-shipping-banner-price" class="x">From&nbsp;$5.79</div>', 5.79),
+    ('<span data-testid="item-shipping-banner-price">Free shipping</span>', 0.0),
+    ("<p>no banner</p>", None),
+])
+def test_shipping_banner_formats(banner, price):
+    # Audit 11-11: the strict pattern read only ~35% of pages.
+    resp = mock.Mock(status_code=200, text=banner)
+    with mock.patch.object(engine.requests, "get", return_value=resp):
+        details = engine.fetch_vinted_item_page_details("https://www.vinted.com/items/1")
+    assert details.get("shipping_price") == price
 
 
 def test_real_listing_shipping_replaces_the_499_assumption():
