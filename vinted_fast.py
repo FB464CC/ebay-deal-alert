@@ -538,7 +538,7 @@ def _listing_shipping(listing):
 
 
 def _set_listing_shipping(listing, shipping):
-    """Swap the assumed $4.99 inside the listing's shipping for the real price.
+    """Swap the assumed shipping inside the listing's shipping for the real price.
     The catalog row's shipping is buyer-protection fee + the assumption."""
     options = listing.get("shippingOptions") or []
     if not options:

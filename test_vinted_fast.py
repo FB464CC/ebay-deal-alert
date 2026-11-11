@@ -1675,7 +1675,7 @@ def test_offer_view_prices_a_25_dollar_sweater_at_15():
     view = fast._offer_view({"item_price": 25.0, "estimated_resale_value": 60.0})
     assert view["item_price"] == 15.0
     # (15 + 0.75 + 0.70 + 4.99) * 1.06
-    assert round(view["price"], 2) == 22.73
+    assert round(view["price"], 2) == 21.67
     assert view["vinted_expected_paid"] == view["price"]
     assert view["deal_rating"] == "Great Deal"
     # Never below Vinted's 40%-off floor.
@@ -2323,6 +2323,9 @@ def test_resurfaced_old_listing_is_dated_from_its_item_id(tmp_path):
     ('<span data-testid="item-shipping-banner-price">Free shipping</span>', 0.0),
     ("<p>no banner</p>", None),
     ('<span data-testid="item-shipping-banner-price">Free</span><span>Fee $1.35</span>', 0.0),
+    # Owner 11-11: real logged-out page of a "from $1.99" listing.
+    ('<h2 data-testid="item-shipping-banner-title">Free shipping</h2></div><span '
+     'data-testid="item-shipping-banner-price"></span></div><div>$0.70 + 5%</div>', None),
 ])
 def test_shipping_banner_formats(banner, price):
     # Audit 11-11: the strict pattern read only ~35% of pages.

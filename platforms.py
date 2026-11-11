@@ -1735,7 +1735,10 @@ def search_shopgoodwill(saved_search):
 # real buyer-protection service fee below; the former $5.99 midpoint was stale.
 # Owner (11-02): the $0.99 rate is a promo, not a given (heavier categories
 # use seller-set shipping, and the promo can end), so budget $4.99.
-VINTED_ASSUMED_SHIPPING = 4.99
+# Owner 11-11: on discounted-shipping listings Vinted hides the price from
+# logged-out pages. The 7 hidden prices checked signed in were $0-$3.99
+# (1.99, 3.99, 2.99, 2.99, 0, 3.99, 2.99), so $3.99 stays at the top of them.
+VINTED_ASSUMED_SHIPPING = 3.99
 VINTED_RATE_LIMIT_STATE_PATH = Path(__file__).resolve().with_name("vinted_rate_limit_state.json")
 VINTED_BACKOFF_INITIAL_MINUTES = 30
 VINTED_BACKOFF_MAX_MINUTES = 120

@@ -2119,6 +2119,12 @@ def fetch_vinted_item_page_details(item_url):
     # banner marker with tags stripped ("from $3.49", "US$3.49", "Free"), and
     # log what the page had when no price is found, to fix the next format.
     banner = re.search(r'item-shipping-banner-price"[^>]*>(.{0,300})', resp.text, re.I | re.S)
+    # Owner 11-11 (10757988298): discounted shipping leaves this element empty
+    # for logged-out viewers ("from $1.99" only when signed in). Text after an
+    # empty element belongs to something else, so keep the assumption.
+    if banner and banner.group(1).startswith("</"):
+        logger.info("Vinted shipping hidden for logged-out viewers: %s", item_url)
+        return details
     if banner:
         shown = html.unescape(re.sub(r"<[^>]+>", " ", banner.group(1)))
         # The banner's own first words only: a later "$" in the window can be

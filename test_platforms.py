@@ -136,7 +136,7 @@ class VintedLandedCost(unittest.TestCase):
     def test_assumed_shipping_matches_current_us_paid_option(self):
         # Checked 2026-09-07: current US paid shipping is normally $0.99,
         # while some provider/listing/first-order options remain free.
-        self.assertEqual(p.VINTED_ASSUMED_SHIPPING, 4.99)
+        self.assertEqual(p.VINTED_ASSUMED_SHIPPING, 3.99)
 
     def test_shipping_is_service_fee_plus_flat_assumption(self):
         # Regression: retain Vinted's real Buyer Protection delta, but add only
@@ -165,7 +165,7 @@ class VintedLandedCost(unittest.TestCase):
         shipping = listings[0]["shippingOptions"][0]["shippingCost"]["value"]
         service_fee = 106.70 - 100.00
         self.assertAlmostEqual(shipping, service_fee + p.VINTED_ASSUMED_SHIPPING, places=6)
-        self.assertAlmostEqual(shipping, 11.69, places=6)
+        self.assertAlmostEqual(shipping, 10.69, places=6)
 
 
 class ListingCreationTimestamps(unittest.TestCase):
