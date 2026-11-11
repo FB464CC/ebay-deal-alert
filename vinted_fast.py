@@ -1910,7 +1910,14 @@ class VintedFastLane:
         last_error = None
         strong_result = None
         started = self.clock()
-        for model in (VINTED_STRONG_VISION_MODEL,):
+        # Owner 11-10: free Gemini failed all three strong looks on 11-10 (two
+        # 503s, one 10 s timeout) and made the $5 PM shorts alert ~10 s late.
+        # The paid backup answers in 1-4 s for ~$0.003, so it goes first and
+        # free Gemini is the backup.
+        strong_result = self._openrouter_strong_look(prompt, images, hard_stop)
+        if isinstance(strong_result, dict):
+            result["vinted_strong_model"] = f"openrouter:{VINTED_STRONG_OPENROUTER_MODEL}"
+        for model in (() if isinstance(strong_result, dict) else (VINTED_STRONG_VISION_MODEL,)):
             timeout = engine._deadline_timeout(
                 hard_stop, VINTED_STRONG_PRIMARY_TIMEOUT_SECONDS
             )
@@ -1960,13 +1967,6 @@ class VintedFastLane:
                 # while real October spend was $1.18 (production 2026-10-25).
                 engine._settle_paid_ai_spend(
                     engine.AI_PAID_VISION_RESERVATION_USD, 0.0
-                )
-        if last_error is not None or not isinstance(strong_result, dict):
-            backup = self._openrouter_strong_look(prompt, images, hard_stop)
-            if isinstance(backup, dict):
-                strong_result, last_error = backup, None
-                result["vinted_strong_model"] = (
-                    f"openrouter:{VINTED_STRONG_OPENROUTER_MODEL}"
                 )
         logger.info(
             "vinted-fast strong look %s in %.1fs",
@@ -2549,6 +2549,16 @@ class VintedFastLane:
         first_seen = getattr(self, "_first_seen", {}).get(listing.get("itemId"))
         if first_seen is not None:
             values["seen_s"] = round(self.clock() - first_seen)
+            # Owner 11-10 "posted 2 hours prior": Vinted photo URLs end in their
+            # upload unix time, so this is how old the photos were when the
+            # feed first showed the item (no extra request).
+            stamp = re.search(
+                r"/(1[6-9]\d{8})\.(?:jpe?g|webp|png)",
+                " ".join(engine._collect_listing_image_urls(listing)),
+            )
+            if stamp:
+                seen_at = time.time() - (self.clock() - first_seen)
+                values["photo_age_m"] = round((seen_at - int(stamp.group(1))) / 60)
         if values:
             logger.info("vinted-fast values: %s | %s", listing.get("itemWebUrl") or "", values)
         return engine.append_alert_log(
