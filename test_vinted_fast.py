@@ -2992,11 +2992,17 @@ def test_reseller_closets_of_new_stock_are_out():
     with mock.patch.object(fast.requests, "get", return_value=mock.Mock(status_code=200, text=page)):
         stats = _REAL_SELLER_STATS(123)
     assert stats["closet_brands"]["30"] == "Ermenegildo Zegna"
-    assert "4 other new Zegna hats" in fast._closet_reseller_reason(
+    assert "4 other Zegna hats" in fast._closet_reseller_reason(
         stats, "vinted:30", "Zegna cap", "zegna")
-    # The same caps listed as used are a real collector clearing out.
+    # Used caps count too: the owner's "used" 8-hat seller admitted fakes.
     used = dict(stats, closet_new=set())
-    assert fast._closet_reseller_reason(used, "vinted:30", "Zegna cap", "zegna") is None
+    assert "4 other Zegna hats" in fast._closet_reseller_reason(
+        used, "vinted:30", "Zegna cap", "zegna")
+    # Used shirts in bulk are a real closet clear-out (the $4 Zegna shirt).
+    shirts = dict(used, closet=[(str(60 + i), "Zegna dress shirt") for i in range(6)])
+    assert fast._closet_reseller_reason(shirts, "vinted:60", "Zegna shirt", "zegna") is None
+    assert "5 other Zegna shirts" in fast._closet_reseller_reason(
+        dict(shirts, closet_new={str(60 + i) for i in range(6)}), "vinted:60", "Zegna shirt", "zegna")
     # One shirt among the caps is a normal closet.
     assert fast._closet_reseller_reason(stats, "vinted:50", "Zegna dress shirt", "zegna") is None
     # Other houses' caps do not count against a Zegna listing.

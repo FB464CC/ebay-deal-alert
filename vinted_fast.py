@@ -1016,6 +1016,9 @@ _CLOSET_KIND = re.compile(
     re.IGNORECASE,
 )
 VINTED_CLOSET_SAME_PIECES = 4  # others in the closet, besides this listing
+# Owner 11-12: the "used" 8-hat Zegna closet admitted fakes when asked for
+# receipts, so for the most-faked accessories condition does not matter.
+_CLOSET_FAKED_USED = frozenset({"hat", "belt", "wallet", "sneaker"})
 
 
 def _closet_kind(match):
@@ -1032,7 +1035,8 @@ def _closet_reseller_reason(stats, item_id, title, brand_key):
     brands = stats.get("closet_brands", {})
     same = [
         other for closet_id, other in stats.get("closet", ())
-        if closet_id != own_id and closet_id in stats.get("closet_new", ())
+        if closet_id != own_id
+        and (closet_id in stats.get("closet_new", ()) or kind in _CLOSET_FAKED_USED)
         and brand_key in f"{brands.get(closet_id, '')} {other}".casefold()
         and (match := _CLOSET_KIND.search(other))
         and _closet_kind(match) == kind
@@ -1040,7 +1044,7 @@ def _closet_reseller_reason(stats, item_id, title, brand_key):
     if len(same) < VINTED_CLOSET_SAME_PIECES:
         return None
     return (
-        f"reseller closet: {len(same)} other new {brand_key.title()} {kind}s for sale "
+        f"reseller closet: {len(same)} other {brand_key.title()} {kind}s for sale "
         f"(fake-shop pattern), e.g. {same[0][:60]}"
     )
 
