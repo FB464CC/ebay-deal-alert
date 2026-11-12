@@ -2983,6 +2983,28 @@ def test_member_page_closet_flags_perfume_shops():
     assert fast._perfume_shop_reason(stats, 10) is None
 
 
+def test_reseller_closets_of_new_stock_are_out():
+    def box(item_id, alt, brand="Ermenegildo Zegna"):
+        return (f'<img src="x.jpeg" alt="{alt}, brand: {brand}, condition: New with tags, '
+                f'$40.00" class="c" data-testid="product-item-id-{item_id}--image--img"/>')
+    page = "".join(box(30 + i, f"Baseball Cap {c}") for i, c in enumerate(
+        ("Navy", "Black", "Grey", "Olive"))) + box(99, "Hat") + box(50, "Zegna shirt")
+    with mock.patch.object(fast.requests, "get", return_value=mock.Mock(status_code=200, text=page)):
+        stats = _REAL_SELLER_STATS(123)
+    assert stats["closet_brands"]["30"] == "Ermenegildo Zegna"
+    assert "4 other new Zegna hats" in fast._closet_reseller_reason(
+        stats, "vinted:30", "Zegna cap", "zegna")
+    # The same caps listed as used are a real collector clearing out.
+    used = dict(stats, closet_new=set())
+    assert fast._closet_reseller_reason(used, "vinted:30", "Zegna cap", "zegna") is None
+    # One shirt among the caps is a normal closet.
+    assert fast._closet_reseller_reason(stats, "vinted:50", "Zegna dress shirt", "zegna") is None
+    # Other houses' caps do not count against a Zegna listing.
+    stats["closet_brands"] = {k: "Nike" for k in stats["closet_brands"]}
+    stats["closet"] = [(k, "Baseball Cap") for k, _ in stats["closet"]]
+    assert fast._closet_reseller_reason(stats, "vinted:30", "Zegna cap", "zegna") is None
+
+
 def test_mens_apparel_with_womens_title_still_fails_gender_gate():
     listing = marketplaces.make_listing(
         "vinted",

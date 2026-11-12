@@ -951,7 +951,7 @@ VINTED_MIN_SELLER_RATING = 0.9  # Vinted 0-1 scale: 0.9 = 4.5 stars
 VINTED_MIN_SELLER_ITEMS = 3  # listed + sold
 # The member page lists the closet as img alts: "<title>, brand: ..., $42.54".
 _CLOSET_ITEM = re.compile(
-    r'alt="([^"]*?), brand: [^"]*"[^>]*?data-testid="product-item-id-(\d+)--image--img"'
+    r'alt="([^"]*?), brand: ([^"]*)"[^>]*?data-testid="product-item-id-(\d+)--image--img"'
 )
 _CLOSET_BOTTLE = re.compile(
     r"\b(?:\d+(?:\.\d+)?\s?(?:ml|fl\.?\s?oz|oz)|edp|edt|eau|parfum|perfume|cologne|fragrance)",
@@ -980,9 +980,16 @@ def fetch_vinted_seller_stats(user_id):
         match = re.search(rf'"{key}":([0-9.]+)', text)
         if match:
             stats[key] = float(match.group(1))
-    closet = [(item_id, html.unescape(title)) for title, item_id in _CLOSET_ITEM.findall(text)]
-    if closet:
-        stats["closet"] = closet
+    rows = _CLOSET_ITEM.findall(text)
+    if rows:
+        stats["closet"] = [(item_id, html.unescape(title)) for title, _brand, item_id in rows]
+        stats["closet_brands"] = {
+            item_id: html.unescape(rest).split(",")[0] for _t, rest, item_id in rows
+        }
+        # Fake shops list stock as new; used multiples are a real closet clear-out.
+        stats["closet_new"] = {
+            item_id for _t, rest, item_id in rows if re.search(r"condition: new", rest, re.I)
+        }
     return stats
 
 
@@ -990,13 +997,51 @@ def _perfume_shop_reason(stats, item_id):
     """A closet of other cheap sealed bottles is a fake shop, whatever its reviews."""
     others = [
         title for closet_id, title in stats.get("closet", ())
-        if closet_id != str(item_id) and _CLOSET_BOTTLE.search(title)
+        if closet_id != str(item_id).rsplit(":", 1)[-1] and _CLOSET_BOTTLE.search(title)
     ]
     if len(others) < VINTED_PERFUME_SHOP_BOTTLES:
         return None
     return (
         f"perfume-shop seller: {len(others)} other bottles in the closet "
         f"(fake-reseller pattern), e.g. {others[0][:60]}"
+    )
+
+
+# Owner 11-12: "the seller has 8 Zegna hats for sale" - several of the same
+# piece from the same house, listed as new, is a fake shop. Used multiples
+# stay allowed ("its not impossible tho"): the $4 Zegna shirt was that seller.
+_CLOSET_KIND = re.compile(
+    r"\b(hat|cap|beanie|shirt|polo|sweater|cardigan|quarter[\s-]?zip|vest|jacket|blazer"
+    r"|suit|coat|tie|belt|scarf|wallet|sneaker|loafer|watch)",
+    re.IGNORECASE,
+)
+VINTED_CLOSET_SAME_PIECES = 4  # others in the closet, besides this listing
+
+
+def _closet_kind(match):
+    kind = re.sub(r"[\s-]", "", match.group(1).casefold())
+    return "hat" if kind in {"cap", "beanie"} else kind
+
+
+def _closet_reseller_reason(stats, item_id, title, brand_key):
+    kind = _CLOSET_KIND.search(str(title or ""))
+    if not kind or not brand_key:
+        return None
+    kind = _closet_kind(kind)
+    own_id = str(item_id).rsplit(":", 1)[-1]
+    brands = stats.get("closet_brands", {})
+    same = [
+        other for closet_id, other in stats.get("closet", ())
+        if closet_id != own_id and closet_id in stats.get("closet_new", ())
+        and brand_key in f"{brands.get(closet_id, '')} {other}".casefold()
+        and (match := _CLOSET_KIND.search(other))
+        and _closet_kind(match) == kind
+    ]
+    if len(same) < VINTED_CLOSET_SAME_PIECES:
+        return None
+    return (
+        f"reseller closet: {len(same)} other new {brand_key.title()} {kind}s for sale "
+        f"(fake-shop pattern), e.g. {same[0][:60]}"
     )
 
 
@@ -3418,6 +3463,10 @@ class VintedFastLane:
             )
             if not seller_reason and category == "fragrance":
                 seller_reason = _perfume_shop_reason(stats, item_id)
+            if not seller_reason:
+                seller_reason = _closet_reseller_reason(
+                    stats, item_id, listing.get("title"), _vinted_brand_and_floor(result)[0]
+                )
             if seller_reason:
                 self._finish(
                     conn, result, item_id, fingerprint, total_price, seller_reason
