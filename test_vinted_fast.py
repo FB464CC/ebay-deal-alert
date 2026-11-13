@@ -3463,6 +3463,18 @@ def test_elite_feeds_run_twice_per_cycle_at_the_same_request_rate():
     assert all(live[q] == 4 for q in ("zegna", "loro piana", "cucinelli", "kiton", "brioni"))
 
 
+def test_background_feeds_share_one_slot_and_leave_menswear_untouched():
+    # Owner 11-12: gift feeds "in the background not affecting anything".
+    feeds = [{"query": "a"}, {"query": "lp", "slots": 2},
+             {"query": "g1", "background": True}, {"query": "g2", "background": True}]
+    texts = [s["query"] for kind, s in fast.build_feed_schedule([1], feeds, 250, brand_slots=1) if kind == "text"]
+    assert texts == ["lp", "lp", "a", "g1", "lp", "lp", "a", "g2"]
+    # The live perfume feeds (all gifts) are background; menswear and watches are not.
+    background = {f["query"] for f in fast.VINTED_TEXT_FEEDS if f.get("background")}
+    assert {"burberry goddess", "ysl libre", "delina exclusif", "eilish perfume"} <= background
+    assert not background & {"zegna", "loro piana", "cucinelli", "kiton", "brioni", "canali", "seiko"}
+
+
 def test_unrouted_elite_rows_are_logged(caplog):
     def item(title):
         return {"id": 9, "title": title, "url": "/items/9", "price": {"amount": "220"},

@@ -1549,11 +1549,31 @@ def _log_unrouted(item, source):
     )
 
 
+def _weighted_order(texts, text_feeds):
+    weights = [max(1, int(feed.get("slots", 1))) for feed in text_feeds]
+    if not weights:
+        return []
+    rounds = max(weights)
+    light = [text for text, weight in zip(texts, weights) if weight == 1]
+    order = []
+    for r in range(rounds):
+        order += [text for text, weight in zip(texts, weights) if weight > 1 and weight > r]
+        order += light[r * len(light) // rounds:(r + 1) * len(light) // rounds]
+    return order
+
+
 def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None, brand_slots=None):
     """Brand feed on k of every k+1 requests; text feeds share the rest."""
     brand_ids = VINTED_BRAND_FEED_IDS if brand_ids is None else brand_ids
     text_feeds = VINTED_TEXT_FEEDS if text_feeds is None else text_feeds
     brand_max_price = VINTED_BRAND_FEED_MAX_PRICE if brand_max_price is None else brand_max_price
+    # Owner 11-12, gifts "in the background not affecting anything": feeds
+    # marked background take turns in ONE text slot per cycle, so the
+    # menswear feeds keep their full share of the fixed request rate.
+    background = [feed for feed in text_feeds if feed.get("background")]
+    text_feeds = [feed for feed in text_feeds if not feed.get("background")]
+    if background:
+        text_feeds = [f for gift in background for f in text_feeds + [dict(gift, slots=0)]]
     texts = [
         ("text", {"id": f"feed-text-{feed['query']}", "query": feed["query"],
                   "max_price": feed.get("max_price")})
@@ -1568,13 +1588,16 @@ def build_feed_schedule(brand_ids=None, text_feeds=None, brand_max_price=None, b
     # Owner 11-08, tops first: a feed with "slots": 2 (the elite houses) runs
     # once in each half of the cycle; the rest split across the halves. Same
     # request rate: those come round ~every 32 s instead of 54, others ~64 s.
-    weights = [max(1, int(feed.get("slots", 1))) for feed in text_feeds]
-    rounds = max(weights)
-    light = [text for text, weight in zip(texts, weights) if weight == 1]
-    order = []
-    for r in range(rounds):
-        order += [text for text, weight in zip(texts, weights) if weight > 1 and weight > r]
-        order += light[r * len(light) // rounds:(r + 1) * len(light) // rounds]
+    if background:
+        # One full foreground cycle per background feed, the gift turn last.
+        cycle = len(texts) // len(background)
+        order = []
+        for start in range(0, len(texts), cycle):
+            order += _weighted_order(texts[start:start + cycle - 1],
+                                     text_feeds[start:start + cycle - 1])
+            order.append(texts[start + cycle - 1])
+    else:
+        order = _weighted_order(texts, text_feeds)
     schedule = []
     slots = VINTED_BRAND_SLOTS_PER_TEXT if brand_slots is None else brand_slots
     for text in order:
