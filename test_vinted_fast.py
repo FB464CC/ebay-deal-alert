@@ -542,7 +542,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 65  # owner 11-12 added 3 gift perfumes
+    assert len(fast.enabled_vinted_searches()) == 70  # owner 11-12 added 8 gift perfumes
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -610,6 +610,11 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-ysl-libre": 90,
         "vinted-prada-paradoxe": 90,
         "vinted-born-in-roma-donna": 90,
+        "vinted-azzaro-forever-wanted": 80,
+        "vinted-orebella-nightcap": 50,
+        "vinted-kylie-velvet-brew": 35,
+        "vinted-billie-eilish": 35,
+        "vinted-marc-jacobs-perfect-absolute": 70,
         "vinted-seiko-presage": 250,
         "vinted-seiko-cocktail-time": 220,
         "vinted-king-seiko": 400,
@@ -3581,6 +3586,14 @@ def test_designer_sneakers_bare_eu_size_and_margiela_replica_line(tmp_path):
         ("vinted-prada-paradoxe", "prada paradoxe", "Prada Paradoxe EDP 90ml", "Prada"),
         ("vinted-born-in-roma-donna", "born in roma donna",
          "Valentino Donna Born in Roma EDP 100ml", "Valentino"),
+        ("vinted-azzaro-forever-wanted", "azzaro forever wanted",
+         "Azzaro Forever Wanted Elixir 100ml", "Azzaro"),
+        ("vinted-orebella-nightcap", "orebella nightcap", "Orebella Nightcap 50ml", "Orebella"),
+        ("vinted-kylie-velvet-brew", "velvet brew kylie", "Mood Stones Velvet Brew 50ml",
+         "Kylie Cosmetics"),
+        ("vinted-billie-eilish", "eilish perfume", "Billie Eilish Eilish EDP 100ml", "Billie Eilish"),
+        ("vinted-marc-jacobs-perfect-absolute", "perfect absolute marc jacobs",
+         "Marc Jacobs Perfect Absolute 100ml", "Marc Jacobs"),
     ],
 )
 def test_fragrance_text_feeds_route_brand_and_apostrophe_variants(

@@ -2627,6 +2627,76 @@
       "category": "fragrance"
     },
     {
+      "query": "forever wanted -sample -decant -tester -dupe -inspired -empty -mini",
+      "size": null,
+      "min_price": 30,
+      "max_price": 80,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-azzaro-forever-wanted",
+      "category": "fragrance"
+    },
+    {
+      "query": "nightcap -sample -decant -tester -dupe -inspired -empty -mini",
+      "size": null,
+      "min_price": 20,
+      "max_price": 50,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-orebella-nightcap",
+      "category": "fragrance"
+    },
+    {
+      "query": "velvet brew -sample -decant -tester -dupe -inspired -empty -mini",
+      "size": null,
+      "min_price": 15,
+      "max_price": 35,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-kylie-velvet-brew",
+      "category": "fragrance"
+    },
+    {
+      "query": "eilish -sample -decant -tester -dupe -inspired -empty -mini",
+      "size": null,
+      "min_price": 15,
+      "max_price": 35,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-billie-eilish",
+      "category": "fragrance"
+    },
+    {
+      "query": "perfect absolute -sample -decant -tester -dupe -inspired -empty -mini",
+      "size": null,
+      "min_price": 25,
+      "max_price": 70,
+      "enabled": true,
+      "profile": "fast",
+      "platforms": [
+        "vinted"
+      ],
+      "ebay": false,
+      "id": "vinted-marc-jacobs-perfect-absolute",
+      "category": "fragrance"
+    },
+    {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
       "max_price": 400,
@@ -5058,6 +5128,11 @@
     {"query": "ysl libre", "max_price": 90},
     {"query": "prada paradoxe", "max_price": 90},
     {"query": "born in roma donna", "max_price": 90},
+    {"query": "azzaro forever wanted", "max_price": 80},
+    {"query": "orebella nightcap", "max_price": 50},
+    {"query": "velvet brew kylie", "max_price": 35},
+    {"query": "eilish perfume", "max_price": 35},
+    {"query": "perfect absolute marc jacobs", "max_price": 70},
     {"query": "seiko", "max_price": 400},
     {"query": "tissot", "max_price": 250},
     {"query": "hamilton watch", "max_price": 250},
@@ -5097,6 +5172,10 @@
     "crockett": 120,
     "parfums de marly": 150,
     "kilian": 150,
+    "kylie": 25,
+    "eilish": 30,
+    "orebella": 40,
+    "marc jacobs": 50,
     "default": 60
   },
   "DEEPSEEK_VISION_TIMEOUT_SECONDS": 30,
