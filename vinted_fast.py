@@ -1021,6 +1021,25 @@ VINTED_CLOSET_SAME_PIECES = 4  # others in the closet, besides this listing
 _CLOSET_FAKED_USED = frozenset({"hat", "belt", "wallet", "sneaker"})
 
 
+# Owner 11-13: fake Zegna caps from a ring of accounts ("Zegna Baseball Cap
+# with Side Metal Logo" x4 in 5 min at $42.62/$45.62/$46.85/$43.96). People
+# price round; the bot shops price to random cents and reuse one title.
+_HAT = re.compile(r"\b(?:hat|cap|beanie|snapback)s?\b", re.IGNORECASE)
+_HUMAN_CENTS = {0, 49, 50, 95, 99}
+
+
+def _fake_hat_reason(title, price, title_sellers, seller_key):
+    if not _HAT.search(str(title or "")):
+        return None
+    if round(float(price) * 100) % 100 not in _HUMAN_CENTS:
+        return f"hat priced to odd cents (${float(price):.2f}): fake-cap shop pattern"
+    key = " ".join(_words(title))
+    first = title_sellers.setdefault(key, seller_key)
+    if seller_key and first and first != seller_key:
+        return "same hat title from another seller this run (fake-cap ring)"
+    return None
+
+
 def _closet_kind(match):
     kind = re.sub(r"[\s-]", "", match.group(1).casefold())
     return "hat" if kind in {"cap", "beanie"} else kind
@@ -1951,6 +1970,7 @@ class VintedFastLane:
         self.strong_look_calls = 0
         # (title words, rounded price) -> first item id seen this run.
         self._listing_signatures = {}
+        self._hat_title_sellers = {}
         self._alerted_item_ids = set()
         self.prescreen_calls = 0
         self.samples = []
@@ -2671,6 +2691,7 @@ class VintedFastLane:
                 or _off_size_reason(listing, category)
                 or _off_profile_reason(title)
                 or _VINTED_EYEWEAR.search(title)
+                or _fake_hat_reason(title, (listing.get("price") or {}).get("value") or 0, {}, "")
             ):
                 continue
             result = {
@@ -3451,6 +3472,12 @@ class VintedFastLane:
                 return
         else:
             self._listing_signatures[signature] = (item_id, seller_key, now)
+        fake_hat = _fake_hat_reason(
+            listing.get("title"), item_price, self._hat_title_sellers, seller_key
+        )
+        if fake_hat:
+            self._finish(conn, result, item_id, fingerprint, total_price, fake_hat)
+            return
         off_profile = (
             _off_profile_reason(listing.get("title"))
             if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"

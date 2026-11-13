@@ -3650,3 +3650,14 @@ def test_off_profile_rejects_dresses_and_other_schools_only():
         assert off(fine) is None, fine
     assert off("Loro Piana t shirt dress", schools_only=True) is None
     assert engine._text_safety_hard_fails("peter millar golf skort") is not None
+
+
+def test_fake_hat_ring_odd_cents_and_cross_seller_title():
+    seen = {}
+    title = "Zegna Baseball Cap with Side Metal Logo"
+    assert "odd cents" in fast._fake_hat_reason(title, 42.62, seen, "a")
+    assert fast._fake_hat_reason(title, 40, seen, "a") is None
+    assert fast._fake_hat_reason(title, 39.99, seen, "a") is None
+    assert "another seller" in fast._fake_hat_reason(title, 40, seen, "b")
+    assert fast._fake_hat_reason("Zegna cashmere sweater", 42.62, seen, "c") is None
+    assert fast._fake_hat_reason("Capri cotton shirt", 42.62, seen, "c") is None
