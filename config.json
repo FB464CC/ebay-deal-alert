@@ -2613,20 +2613,6 @@
       "category": "fragrance"
     },
     {
-      "query": "born roma -uomo -homme -sample -decant -tester -dupe -inspired -empty -mini",
-      "size": null,
-      "min_price": 30,
-      "max_price": 90,
-      "enabled": true,
-      "profile": "fast",
-      "platforms": [
-        "vinted"
-      ],
-      "ebay": false,
-      "id": "vinted-born-in-roma-donna",
-      "category": "fragrance"
-    },
-    {
       "query": "forever wanted -sample -decant -tester -dupe -inspired -empty -mini",
       "size": null,
       "min_price": 30,
@@ -5127,7 +5113,6 @@
     {"query": "burberry goddess", "max_price": 100, "background": true},
     {"query": "ysl libre", "max_price": 90, "background": true},
     {"query": "prada paradoxe", "max_price": 90, "background": true},
-    {"query": "born in roma donna", "max_price": 90, "background": true},
     {"query": "azzaro forever wanted", "max_price": 80, "background": true},
     {"query": "orebella nightcap", "max_price": 50, "background": true},
     {"query": "velvet brew kylie", "max_price": 35, "background": true},
