@@ -1040,6 +1040,24 @@ def _fake_hat_reason(title, price, title_sellers, seller_key):
     return None
 
 
+# Owner 11-14: towel warmer for Kenzie, "new or nice used". New generic
+# buckets are $40-60 at Walmart, so a generic only pings well under that;
+# the reviewed brands (Keenray ~$100-120 new, Zadro, Brookstone) up to $60.
+_GIFT_GOOD_CONDITION = re.compile(r"^(new|very good)", re.IGNORECASE)
+_GIFT_NICE_BRANDS = re.compile(r"keenray|keenary|zadro|brookstone|ihome|serenelife", re.IGNORECASE)
+GIFT_GENERIC_MAX = 25
+GIFT_BRAND_MAX = 60
+
+
+def _gift_reason(title, brand, condition, price):
+    if not _GIFT_GOOD_CONDITION.search(str(condition or "")):
+        return f"gift watch: condition '{condition or '?'}' is not gift-ready"
+    cap = GIFT_BRAND_MAX if _GIFT_NICE_BRANDS.search(f"{title} {brand}") else GIFT_GENERIC_MAX
+    if float(price) > cap:
+        return f"gift watch: ${float(price):g} over the ${cap} cap for this brand"
+    return None
+
+
 def _closet_kind(match):
     kind = re.sub(r"[\s-]", "", match.group(1).casefold())
     return "hat" if kind in {"cap", "beanie"} else kind
@@ -2608,6 +2626,44 @@ class VintedFastLane:
         self._watch_alert(listing, kind="instant")
         return True
 
+    def _gift_alert(self, conn, item, listing, result, fingerprint, total_price):
+        """Owner 11-14 gift watch (towel warmer). Condition, brand cap and a
+        proven seller; no AI call, so the feeds never pause."""
+        item_id = listing["itemId"]
+        title = str(listing.get("title") or "")
+        condition = str(listing.get("condition") or "")
+        price = result["item_price"]
+        reason = _gift_reason(title, item.get("brand_title") or "", condition, price)
+        if reason:
+            self._finish(conn, result, item_id, fingerprint, total_price, reason)
+            return
+        self._peek_brand_feed()
+        self._respect_interval()
+        self._last_request_started = self.clock()
+        self.stats["requests"] += 1
+        stats = fetch_vinted_seller_stats((item.get("user") or {}).get("id"))
+        status = stats.get("_http_status")
+        self.statuses[str(status or "ERROR")] += 1
+        if status in {401, 403, 429}:
+            raise VintedRequestBlocked(status)
+        seller_reason = _seller_trust_reason(stats, strict=True)
+        if seller_reason:
+            self._finish(conn, result, item_id, fingerprint, total_price, seller_reason)
+            return
+        all_in = total_price * (1 + engine.SALES_TAX_RATE)
+        logger.info("vinted-fast gift alert: $%g | %s", price, title)
+        self._ntfy(
+            f"GIFT ${price:g}: {title[:50]}",
+            f"${price:g} (~${all_in:.0f} all-in) {title}\n{condition}\n"
+            "Towel warmer watch for Kenzie. New generic buckets are ~$40-60 at Walmart."
+            + (f"\n{_ship_note(listing)}" if _ship_note(listing) else ""),
+            "4", "gift", listing.get("itemWebUrl"),
+            (listing.get("image") or {}).get("imageUrl"), item_id=item_id,
+        )
+        self._watch_alert(listing, kind="gift")
+        self._finish(conn, result, item_id, fingerprint, total_price,
+                     "gift watch alert", verdict="ALERTED")
+
     def _watch_alert(self, listing, kind="verified"):
         self._alerted_item_ids.add(listing.get("itemId"))
         self._alert_watch.setdefault(listing.get("itemId"), {
@@ -3074,7 +3130,7 @@ class VintedFastLane:
             # One house makes many scents: "Kilian Good Girl Gone Bad" must
             # not land in the Angels' Share search (production feed check).
             if (
-                search.get("category") in {"fragrance", "watches"}
+                search.get("category") in {"fragrance", "watches", "gift"}
                 and not set(query_words) <= scent_words
             ):
                 continue
@@ -3272,7 +3328,7 @@ class VintedFastLane:
             # A seller-picked letter size can't be rescued by the description
             # the way "11 (UK) / US 12" shoes or EU "50" knits can.
             return listing, None, f"size mismatch for saved search (size {listing.get('size') or '?'})"
-        if category not in {"fragrance", "poker-chips"} and _VINTED_NOT_MENS.search(row_size):
+        if category not in {"fragrance", "poker-chips", "gift"} and _VINTED_NOT_MENS.search(row_size):
             return listing, None, f"women's/kids' size {row_size}, not menswear"
         row_price = float((listing.get("price") or {}).get("value") or 0)
         min_price = engine._sane_ai_price(search.get("min_price"))
@@ -3304,6 +3360,8 @@ class VintedFastLane:
         # filed under Kids > Toys/Games, so poker only skips Women (earrings).
         top_catalog = (details.get("catalog_path") or [""])[0].lower()
         blocked_tops = {"women"} if category == "poker-chips" else {"women", "kids"}
+        if category == "gift":
+            blocked_tops = {"kids"}
         if top_catalog in blocked_tops and category != "fragrance":
             return listing, None, f"Vinted category is {top_catalog}, not menswear"
         if details.get("shipping_price") is not None:
@@ -3433,6 +3491,9 @@ class VintedFastLane:
             return
 
         category = result["category"]
+        if category == "gift":
+            self._gift_alert(conn, item, listing, result, fingerprint, total_price)
+            return
         # Scam batches post the same generic title at the same price from
         # several accounts within minutes (3x "tom ford sunglasses" $69-70).
         # Audit 11-03: run-wide, seller-blind matching killed closet dumps

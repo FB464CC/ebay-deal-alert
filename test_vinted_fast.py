@@ -542,7 +542,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 69  # owner 11-13 dropped Born in Roma (scam batches)
+    assert len(fast.enabled_vinted_searches()) == 70  # owner 11-14 added the towel warmer gift watch
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -609,6 +609,7 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-ysl-libre": 90,
         "vinted-prada-paradoxe": 90,
         "vinted-azzaro-forever-wanted": 80,
+        "vinted-gift-towel-warmer": 60,
         "vinted-orebella-nightcap": 50,
         "vinted-kylie-velvet-brew": 35,
         "vinted-billie-eilish": 35,
@@ -3661,3 +3662,13 @@ def test_fake_hat_ring_odd_cents_and_cross_seller_title():
     assert "another seller" in fast._fake_hat_reason(title, 40, seen, "b")
     assert fast._fake_hat_reason("Zegna cashmere sweater", 42.62, seen, "c") is None
     assert fast._fake_hat_reason("Capri cotton shirt", 42.62, seen, "c") is None
+
+
+def test_gift_towel_warmer_caps_by_brand_and_condition():
+    r = fast._gift_reason
+    assert r("Towel Warmer Bucket", "Amazon", "New with tags", 25) is None
+    assert "cap" in r("Towel Warmer Bucket", "Kdti", "New with tags", 35)
+    assert r("Keenray Towel Warmer", "", "Very good", 55) is None
+    assert r("Luxury Towel Warmer", "zadro", "New without tags", 60) is None
+    assert "not gift-ready" in r("Zadro Towel Warmer", "zadro", "Good", 30)
+

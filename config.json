@@ -2682,6 +2682,7 @@
       "id": "vinted-marc-jacobs-perfect-absolute",
       "category": "fragrance"
     },
+    {"query": "towel warmer -rack -wall -mounted -mount -bar -hardwired -kids -baby", "size": null, "min_price": 10, "max_price": 60, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-gift-towel-warmer", "category": "gift"},
     {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
@@ -5118,6 +5119,7 @@
     {"query": "velvet brew kylie", "max_price": 35, "background": true},
     {"query": "eilish perfume", "max_price": 35, "background": true},
     {"query": "perfect absolute marc jacobs", "max_price": 70, "background": true},
+    {"query": "towel warmer", "max_price": 60, "background": true},
     {"query": "seiko", "max_price": 400},
     {"query": "tissot", "max_price": 250},
     {"query": "hamilton watch", "max_price": 250},
