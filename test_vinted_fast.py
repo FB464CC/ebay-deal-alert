@@ -3672,3 +3672,12 @@ def test_gift_towel_warmer_caps_by_brand_and_condition():
     assert r("Luxury Towel Warmer", "zadro", "New without tags", 60) is None
     assert "not gift-ready" in r("Zadro Towel Warmer", "zadro", "Good", 30)
 
+
+
+def test_one_size_cap_fits_a_letter_sized_search():
+    search = {"size": ["M", "L"]}
+    cap = {"title": "Peter Millar performance golf cap navy", "size": "One size"}
+    assert fast._fits_size_list(search, cap, "knitwear")
+    shirt = {"title": "Peter Millar polo", "size": "One size"}
+    assert not fast._fits_size_list(search, shirt, "knitwear")
+

@@ -846,6 +846,12 @@ def _fits_size_list(search, listing, category):
     ("42R") or XXL megasteal (letter-sized searches can't name them)."""
     if engine.listing_matches_size_filter(search, listing):
         return True
+    # Owner 11-11 allows hats; a cap is "One size", which no letter list names
+    # (11-14/15: five Peter Millar caps at $8-20 died here).
+    if _HAT.search(str(listing.get("title") or "")) and re.fullmatch(
+        r"one size|os|adjustable|", str(listing.get("size") or "").strip().casefold()
+    ):
+        return True
     if search.get("steal_only_size") and engine.listing_matches_size_filter(
         {"size": search["steal_only_size"]}, listing
     ):

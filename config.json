@@ -2682,7 +2682,7 @@
       "id": "vinted-marc-jacobs-perfect-absolute",
       "category": "fragrance"
     },
-    {"query": "towel warmer -rack -wall -mounted -mount -bar -hardwired -kids -baby", "size": null, "min_price": 10, "max_price": 60, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-gift-towel-warmer", "category": "gift"},
+    {"query": "towel warmer -rack -wall -mounted -mount -bar -hardwired -kids -baby -steamer -facial -sterilizer -cabinet -mini -nano -nanosteamer -salon -barber", "size": null, "min_price": 10, "max_price": 60, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-gift-towel-warmer", "category": "gift"},
     {
       "query": "golf club set -junior -youth -kids -ladies -womens -\"only\" -\"left hand\" -lefty -\"left handed\" -scarf",
       "size": null,
