@@ -269,7 +269,7 @@ EMPTY_PACKAGING_SIGNALS = re.compile(
     # resale and the \s+ version silently never matched it at all, only
     # the spaced "dust bag only" did. The secondary branches below already
     # used \s* for this same reason; the primary branch was inconsistent.
-    r"\b(box\s+only|empty\s+box|just\s+the\s+box|box\s+and\s+dust\s*bag\s+only|"
+    r"\b(box\s+only(?!\s+(?:been\s+)?opened)|empty\s+box|just\s+the\s+box|box\s+and\s+dust\s*bag\s+only|"
     r"dust\s*bag\s+only|packaging\s+only|authenticity\s+card\s+only|receipt\s+only|"
     r"no\s+item\s+included)\b"
     r"|\b(box|dust\s*bag)\b[^.]{0,60}\bbag\s+only\b"
@@ -4706,10 +4706,76 @@ _NEGATED_FLAWS = re.compile(
 )
 
 
+# Owner 11-16: a $15 Zegna polo whose description said "no stains" was
+# rejected for 'stains', and a 4-day audit found the same flaw in every
+# description rule: "golf-inspired style" read as counterfeit language, "dog
+# free home" and a "Scotty Cameron dog logo" as pet products, "wear it over a
+# button-down" as a dress shirt, "stain and tear free" as a stain. Description
+# rules read _benign_text(), which drops what a seller denies or only
+# mentions. Negations that ARE the red flag ("not working", "not authentic",
+# "no guarantee") and hedges ("not sure if the stain comes out", "not very
+# noticeable stain") are kept.
+_NEGATOR = re.compile(
+    r"\b(?:no|not|never|without|zero|nor|free\s+(?:of|from)"
+    r"|(?:is|are|was|were|does|do|did|has|have)n['\u2019]?t"
+    r"|(?:does|do|did)\s+not\s+have|has\s+no|have\s+no)\b"
+    r"(?!\s+(?:working|running|functioning|works?|runs?|tested|authentic|genuine"
+    r"|original|guarantee\w*|included|sure|certain|positive|very|too|that|so|really"
+    r"|super|much|bad|keep\w*\s+time)\b)",
+    re.IGNORECASE,
+)
+_CLAUSE_END = re.compile(
+    r"[.;:!?\n\u2013\u2014]|\s-\s|\b(?:but|except|however|although|though|besides"
+    r"|aside\s+from|other\s+than|unless)\b"
+    # "no holes and one small stain": the stain is asserted.
+    r"|\b(?:and|plus|with)\s+(?:only\s+|just\s+)?(?:a|an|one|some|small|tiny|minor"
+    r"|slight|light|faint|few|couple|little)\b",
+    re.IGNORECASE,
+)
+# "no rips, stain on the cuff" / "no holes, a small stain": the comma starts
+# a new clause that asserts a flaw.
+_NEW_CLAUSE_COMMA = re.compile(
+    r",\s*(?:(?:a|an|one|some|small|tiny|minor|slight|light|faint|few|couple|little"
+    r"|has|have|there|it|its)\b|\w+(?:\s+\w+)?\s+(?:on|near|at|in|around|by|to|under"
+    r"|is|are|was)\b)",
+    re.IGNORECASE,
+)
+_BENIGN_MENTIONS = re.compile(
+    r"\b\w+(?:\s*(?:,|/|&|\band\b|\bor\b)\s*\w+)*[\s-]+free\b"  # stain and tear free, dog-free
+    r"|\b\w+(?:\s*/\s*\w+)*\s*[:\u2013-]\s*(?:none|n/?a)\b"  # "Stains: none"
+    r"|\b\w+-inspired\b"  # golf-inspired, vintage-inspired
+    r"|\binspired\s+(?:design|look|style|styling|pattern|print|motif|details?"
+    r"|colou?r\w*|fit|feel|aesthetic)\b"
+    r"|\bdogs?\s+(?:logo|print|motif|graphic|pattern|embroidery|design|emblem"
+    r"|head\s*cover|headcover)\b",
+    re.IGNORECASE,
+)
+
+
+def _benign_text(text):
+    text = _BENIGN_MENTIONS.sub(" ", str(text or ""))
+    out, pos = [], 0
+    for neg in _NEGATOR.finditer(text):
+        if neg.start() < pos:
+            continue
+        end = _CLAUSE_END.search(text, neg.end())
+        stop = end.start() if end else len(text)
+        comma = _NEW_CLAUSE_COMMA.search(text, neg.end(), stop)
+        if comma:
+            stop = comma.start()
+        words = list(re.finditer(r"\S+", text[neg.end():stop]))
+        if len(words) > 8:
+            stop = neg.end() + words[7].end()
+        out += [text[pos:neg.start()], " "]
+        pos = stop
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def condition_hard_fail_keyword(title, haystack):
     """matched_keyword over CONDITION_HARD_FAIL_KEYWORDS, paperwork title-only.
     Negated flaws ("no stains or holes") don't count."""
-    haystack = _NEGATED_FLAWS.sub(" ", str(haystack or ""))
+    haystack = _NEGATED_FLAWS.sub(" ", _benign_text(haystack))
     keywords = CONDITION_HARD_FAIL_KEYWORDS
     if matched_keyword(title, WATCH_PAPERWORK_KEYWORDS) is None:
         keywords = [k for k in keywords if k not in WATCH_PAPERWORK_KEYWORDS]
@@ -5476,31 +5542,52 @@ def is_relevant_marketplace_listing(listing, query):
     return any(re.search(rf"\b{re.escape(token)}\b", title) for token in query_tokens)
 
 
-def _text_safety_hard_fails(haystack, category=None):
+# "wear it over a button-down" in a sweater/shorts description is styling
+# advice, not the item.
+_NON_SHIRT_TITLE = re.compile(
+    r"\b(?:sweaters?|vests?|gilets?|zip|pullovers?|cardigans?|jackets?|coats?|blazers?"
+    r"|shorts|pants|trousers|chinos|jeans|polos?|tees?|t-shirts?|hoodies?|sweatshirts?"
+    r"|knits?|ties?)\b",
+    re.IGNORECASE,
+)
+
+
+def _text_safety_hard_fails(haystack, category=None, title=None):
     """Deterministic, free (no AI call) gender/pet/packaging/counterfeit
     text signals - score_listing()'s "block 0", factored out so other call
     sites can re-run the exact same checks against text score_listing()
     hadn't seen yet (see the eBay Browse path's late-description re-check
     for why that matters). Returns a reason string, or None."""
-    if category != "fragrance" and brand_in(haystack, GENDER_EXCLUDE_KEYWORDS):
+    # The gift watch (towel warmer) is not menswear: "kids bathroom" is fine.
+    unisex = category in {"fragrance", "gift"}
+    text = _benign_text(haystack)
+    if not unisex and brand_in(text, GENDER_EXCLUDE_KEYWORDS):
         return "excluded gender keyword in title/description"
     if (
-        category != "fragrance"
-        and WOMENS_SIZE_CROSSREF_SIGNAL.search(haystack)
-        and not UK_SIZE_CROSSREF_EXCEPTION.search(haystack)
+        not unisex
+        and WOMENS_SIZE_CROSSREF_SIGNAL.search(text)
+        and not UK_SIZE_CROSSREF_EXCEPTION.search(text)
     ):
         return "women's size cross-reference in title/description"
-    if PET_PRODUCT_SIGNALS.search(haystack):
+    if PET_PRODUCT_SIGNALS.search(text):
         return "pet product, not menswear"
     if EMPTY_PACKAGING_SIGNALS.search(haystack):
         return "packaging/accessory-only listing, not the item"
     # Owner 11-08: mainline Zegna shirts too; vinted_fast._shirt_house keeps
     # Z Zegna, Zegna Sport and other makers out.
-    if BUTTON_DOWN_SHIRT_SIGNALS.search(haystack) and not brand_in(
-        haystack, ("kiton", "brunello cucinelli", "loro piana", "brioni", "zegna")
+    if (
+        BUTTON_DOWN_SHIRT_SIGNALS.search(text)
+        and not brand_in(
+            haystack, ("kiton", "brunello cucinelli", "loro piana", "brioni", "zegna")
+        )
+        and not (
+            title
+            and _NON_SHIRT_TITLE.search(title)
+            and not BUTTON_DOWN_SHIRT_SIGNALS.search(title)
+        )
     ):
         return "button-down/button-up dress shirt not wanted (elite houses and Zegna exempted)"
-    if COUNTERFEIT_SIGNALS.search(MARGIELA_REPLICA_LINE.sub(" ", haystack)):
+    if COUNTERFEIT_SIGNALS.search(MARGIELA_REPLICA_LINE.sub(" ", text)):
         return "counterfeit/replica listing language in title/description"
     obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
     if obfuscation_hit:
@@ -5546,7 +5633,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     # 0. Gender - hard disqualifier, checked before anything else. Backstop
     # for search_ebay()'s query-level exclusion, in case a listing slips
     # through eBay's own "-term" matching.
-    safety_hard_fail = _text_safety_hard_fails(haystack, category=category)
+    safety_hard_fail = _text_safety_hard_fails(haystack, category=category, title=title)
     if safety_hard_fail:
         return {"verdict": "PASS", "reason": safety_hard_fail, "listing": listing}
     if EYEWEAR_TITLE_SIGNALS.search(haystack):
@@ -5661,7 +5748,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
     hard_fail_hit = condition_hard_fail_keyword(title, haystack)
     if hard_fail_hit is not None:
         return {"verdict": "PASS", "reason": f"condition hard-fail keyword in title/description: {hard_fail_hit!r}", "listing": listing}
-    if brand_in(haystack, CONDITION_FLAG_KEYWORDS):
+    if brand_in(_benign_text(haystack), CONDITION_FLAG_KEYWORDS):
         flags.append("condition keyword flagged — check description")
 
     # 5. Gap check (live)
@@ -12250,7 +12337,9 @@ def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
         late_haystack = (
             f"{listing.get('title', '').lower()} {listing['description'].lower()}"
         )
-        text_fail = _text_safety_hard_fails(late_haystack, category=category)
+        text_fail = _text_safety_hard_fails(
+            late_haystack, category=category, title=listing.get("title", "").lower()
+        )
         if text_fail is None:
             condition_hit = condition_hard_fail_keyword(
                 listing.get("title", "").lower(), late_haystack

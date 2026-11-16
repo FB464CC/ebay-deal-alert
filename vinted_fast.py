@@ -351,7 +351,10 @@ _VINTED_WATCH_GOLD_SUMMARY = re.compile(
 _VINTED_OFF_PLATFORM = re.compile(
     r"(?<!\bno )(?<!\bnot )(?<!\bnever )"
     r"\b(?:whats\s?app|telegram|zelle|cash\s?app|venmo|paypal|wire\s+transfer"
-    r"|text\s+me|e-?mail\s+me|off\s+(?:the\s+)?(?:app|platform|vinted))\b",
+    r"|text\s+me|e-?mail\s+me"
+    # "i bought it off vinted" is history, not a pitch (owner 11-16 audit).
+    r"|(?:pay|paid|payment|deal|talk|chat|contact|message|text|transaction|trade)\w*"
+    r"\s+(?:\w+\s+){0,3}?off\s+(?:the\s+)?(?:app|platform|vinted))\b",
     re.IGNORECASE,
 )
 # Fakes are the norm here: only proven sellers, never brand-new accounts.
@@ -437,6 +440,30 @@ _VINTED_FRAGRANCE_EXCLUDED = re.compile(
     r"|alternatives?|body\s+mist|hair\s+mist|lotions?|shower\s+gels?)\b",
     re.IGNORECASE,
 )
+
+
+def _fragrance_excluded_reason(title, description=""):
+    """A refillable bottle's "refill mark" or "not a tester" is not a decant."""
+    hit = _VINTED_FRAGRANCE_EXCLUDED.search(str(title or "")) or next(
+        (
+            m for m in _VINTED_FRAGRANCE_EXCLUDED.finditer(engine._benign_text(description))
+            if not m.group(0).casefold().startswith("refill")
+        ),
+        None,
+    )
+    if hit is None:
+        return None
+    return (
+        "fragrance listing is a decant/sample/tester/dupe/empty, "
+        f"not a sealed full bottle ('{hit.group(0)}')"
+    )
+
+
+def _watch_desc_excluded(description):
+    """ "all original, no aftermarket parts, never redialed" is the good case."""
+    return _VINTED_WATCH_DESC_EXCLUDED.search(engine._benign_text(description))
+
+
 _VINTED_FRAGRANCE_USED_SUMMARY = re.compile(
     r"\b(?:partially[\s-]+used|partially[\s-]+full|half[\s-]+full"
     r"|used[\s-]+bottle|\d{1,3}\s*%\s*full)\b",
@@ -2013,6 +2040,8 @@ def _vinted_strong_prompt(result, brand):
         "authenticity concerns. condition_grade must be exactly one of nwt, excellent, "
         "good, fair, or poor. Inspect for pilling, stains, holes, fading, and alterations, "
         "and include any description mention of odor; list every issue in flaws_found. "
+        "A description that denies a flaw (\"no stains\", \"stain-free\", \"no holes "
+        "or odor\") means that flaw is absent: never list it from the description. "
         "Use nwt only when tags and unworn condition are visible. Use excellent only for "
         "no meaningful flaw beyond extremely light wear. premium_desirable_piece is true "
         "only for a genuinely premium/desirable piece for this brand, such as visibly "
@@ -3381,13 +3410,11 @@ class VintedFastLane:
         if _already_seen(conn, main_conn, item_id):
             return None
         category = engine.classify_search_category(search)
-        if category == "fragrance" and _VINTED_FRAGRANCE_EXCLUDED.search(
-            str(listing.get("title") or "")
-        ):
-            return listing, None, (
-                "fragrance listing is a decant/sample/tester/dupe/empty, "
-                "not a sealed full bottle"
-            )
+        fragrance_reason = category == "fragrance" and _fragrance_excluded_reason(
+            listing.get("title")
+        )
+        if fragrance_reason:
+            return listing, None, fragrance_reason
         _positive, excluded = marketplaces.split_query_exclusions(
             search.get("query", "")
         )
@@ -3488,19 +3515,17 @@ class VintedFastLane:
             return listing, None, "neckwear search but the title is not a tie"
         mod = category == "watches" and (
             _VINTED_WATCH_TITLE_EXCLUDED.search(title)
-            or _VINTED_WATCH_DESC_EXCLUDED.search(description)
+            or _watch_desc_excluded(description)
         )
         if mod:
             return listing, None, (
                 f"watch is a mod/homage/replica/parts/gold-tone piece ('{mod.group(0)}')"
             )
-        if category == "fragrance" and _VINTED_FRAGRANCE_EXCLUDED.search(
-            f"{title} {listing.get('description') or ''}"
-        ):
-            return listing, None, (
-                "fragrance listing is a decant/sample/tester/dupe/empty, "
-                "not a sealed full bottle"
-            )
+        fragrance_reason = category == "fragrance" and _fragrance_excluded_reason(
+            title, listing.get("description")
+        )
+        if fragrance_reason:
+            return listing, None, fragrance_reason
         if category == "watches":
             if engine.WATCH_NOT_A_WATCH_SIGNALS.search(title):
                 return listing, None, "watch title describes packaging/parts, not a timepiece"

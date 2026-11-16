@@ -2161,7 +2161,7 @@ def test_womens_fragrance_routes_ignores_gender_and_reaches_real_ai(tmp_path):
         (
             "Delina Exclusif decant 10ml",
             220,
-            "fragrance listing is a decant/sample/tester/dupe/empty, not a sealed full bottle",
+            "fragrance listing is a decant/sample/tester/dupe/empty, not a sealed full bottle ('decant')",
         ),
     ],
 )
@@ -3724,4 +3724,104 @@ def test_new_watch_seller_needs_full_steal_and_real_title():
     assert "70%-off" in fast._vinted_watch_bar_reason(
         {**ok, "deal_rating": "Great Deal", "vinted_new_seller": True}, "watches")
     assert fast._vinted_watch_bar_reason({**ok, "deal_rating": "Steal", "vinted_new_seller": True}, "watches") is None
+
+
+
+# Owner 11-16: a $15 Zegna polo said "no stains" and was rejected for 'stains'.
+# Every case below is a real Vinted description from the 11-12..11-16 logs
+# that a red-flag word rejected although it asserted no such thing.
+@pytest.mark.parametrize("text", [
+    "all listed products are in good shape and are stain and tear free unless specified",
+    "No holes rips or stains",
+    "no marks or stains",
+    "no snags/pulls/stains, smoke free home",
+    "Stains: none",
+    "Not stained at all",
+    "zero stains or holes",
+    "Great condition. No pilling, holes or stains whatsoever!",
+])
+def test_negated_flaw_wordings_never_hard_fail(text):
+    assert engine.condition_hard_fail_keyword("x", text.lower()) is None, text
+
+
+@pytest.mark.parametrize("text", [
+    "small stain on cuff",
+    "no rips, stain on the cuff",
+    "no holes but a stain on the back",
+    "not sure if the stain will come out",
+    "no returns. small stain on front",
+    "never worn much, has a stain near the collar",
+    "not very noticeable stain on the sleeve",
+])
+def test_real_flaws_still_hard_fail(text):
+    assert engine.condition_hard_fail_keyword("x", text) == "stain", text
+
+
+@pytest.mark.parametrize("title,desc", [
+    ("Peter Millar Pemberton Hybrid Full Zip Jacket", "a versatile performance-inspired design. premium golf outerwear"),
+    ("Light Blue Peter Millar Cocktail Shaker Polo", "classic golf-inspired style with a comfortable fit"),
+    ("Ermenegildo Zegna 100% Silk Tie", "give this tie a classic vintage inspired look"),
+    ("Brioni Men's Navy and Black Accessory", "features a striking chinoiserie-inspired design"),
+    ("Peter Millar polo", "100% authentic, not a replica or knockoff"),
+    ("Peter Millar Summer Comfort Polo", "no flaws\nsmoke free, dog free home"),
+    ("No.77 Peter Millar Shirt Polo", "embroidered scotty cameron dog logo on right sleeve"),
+    ("Peter Millar Merino Wool Silk V-Neck Sweater", "a sweater that works well over a button-down or polo"),
+    ("Peter Millar Men's Golf Shorts", "these shorts pair perfectly with golf polos, button-down shirts"),
+])
+def test_benign_description_mentions_do_not_hard_fail(title, desc):
+    assert engine._text_safety_hard_fails(f"{title} {desc}".lower(), category="knitwear", title=title.lower()) is None
+
+
+@pytest.mark.parametrize("title,desc,reason", [
+    ("BOTTEGA INSPIRED WALLET MADE BY ME", "", "counterfeit"),
+    ("Peter Millar polo", "this is a replica", "counterfeit"),
+    ("Peter Millar polo", "not authentic, sold as is", "counterfeit"),
+    ("Barbour waxed dog jacket", "", "pet"),
+    ("Peter Millar shirt", "mens button down shirt", "button"),
+])
+def test_real_red_flags_still_hard_fail(title, desc, reason):
+    assert reason in engine._text_safety_hard_fails(
+        f"{title} {desc}".lower(), category="knitwear", title=title.lower()
+    ).lower()
+
+
+def test_gift_watch_ignores_gender_words_and_off_platform_needs_a_deal_verb():
+    assert engine._text_safety_hard_fails(
+        "towel warmer works fine. didn't have room in the kids bathroom for it", category="gift"
+    ) is None
+    assert not fast._VINTED_OFF_PLATFORM.search("i bought it off vinted but it did not work for my son")
+    assert fast._VINTED_OFF_PLATFORM.search("we can deal off the app")
+    assert fast._VINTED_OFF_PLATFORM.search("pay me off vinted and save the fee")
+
+
+def test_fragrance_and_watch_description_negations():
+    assert fast._fragrance_excluded_reason(
+        "burberry goddess intense 100ml sealed",
+        "back vegan note, refill mark and capacity edge. not a tester, not a decant",
+    ) is None
+    assert fast._fragrance_excluded_reason("ysl libre", "2 mini parfum")
+    assert fast._fragrance_excluded_reason("ysl libre tester", "")
+    assert fast._watch_desc_excluded("all original, no aftermarket parts, never redialed, not modded") is None
+    assert fast._watch_desc_excluded("has an aftermarket dial")
+    assert fast._watch_desc_excluded("sold for parts, not working")
+
+
+@pytest.mark.parametrize("text,hit", [
+    ("never washed — stain on the collar", "stain"),
+    ("not perfect - small stain", "stain"),
+    ("there are no holes and only one small stain", "stain"),
+    ("no smoke, no pets, one small stain on sleeve", "stain"),
+    ("no stains, no holes, no smells", None),
+    ("free from holes and stains", None),
+    ("i didn't notice any stains", None),
+    ("no stains or tears - like new", None),
+    ("sold for parts or not working", "for parts"),
+])
+def test_negation_red_team_wordings(text, hit):
+    assert engine.condition_hard_fail_keyword("x", text) == hit, text
+
+
+def test_box_only_opened_is_a_sealed_bottle_not_an_empty_box():
+    assert engine._text_safety_hard_fails("born in roma box only opened to prove authenticity", category="fragrance") is None
+    assert engine._text_safety_hard_fails("tom ford watch box only", category="watches")
 
