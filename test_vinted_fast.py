@@ -3664,13 +3664,18 @@ def test_fake_hat_ring_odd_cents_and_cross_seller_title():
     assert fast._fake_hat_reason("Capri cotton shirt", 42.62, seen, "c") is None
 
 
-def test_gift_towel_warmer_caps_by_brand_and_condition():
+def test_gift_towel_warmer_needs_half_off_new_all_in():
     r = fast._gift_reason
-    assert r("Towel Warmer Bucket", "Amazon", "New with tags", 25) is None
-    assert "cap" in r("Towel Warmer Bucket", "Kdti", "New with tags", 35)
-    assert r("Keenray Towel Warmer", "", "Very good", 55) is None
-    assert r("Luxury Towel Warmer", "zadro", "New without tags", 60) is None
-    assert "not gift-ready" in r("Zadro Towel Warmer", "zadro", "Good", 30)
+    # Owner 11-16: a ~$50-new warmer listed at $50 alerted. Steal = all-in
+    # (list + 5% + $0.70 + ship, + 6% tax) at most half the new price.
+    assert "steal" in r("SereneLife Towel Warmer", "", "New with tags", 50, 0)
+    assert "steal" in r("Keenray Towel Warmer", "", "Very good", 55, 0)
+    assert "steal" in r("Towel Warmer Bucket", "Kdti", "New with tags", 25, 0)
+    assert r("Towel Warmer Bucket", "Amazon", "New with tags", 12, 5) is None
+    assert r("Keenray Towel Warmer", "", "Very good", 35, 6) is None
+    assert r("Luxury Towel Warmer", "zadro", "New without tags", 38, 0) is None
+    assert r("SL&F 20L towel warmer", "", "New with tags", 19, 7) is None
+    assert "not gift-ready" in r("Zadro Towel Warmer", "zadro", "Good", 30, 0)
 
 
 

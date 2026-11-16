@@ -1149,21 +1149,30 @@ def _fake_hat_reason(title, price, title_sellers, seller_key):
     return None
 
 
-# Owner 11-14: towel warmer for Kenzie, "new or nice used". New generic
-# buckets are $40-60 at Walmart, so a generic only pings well under that;
-# the reviewed brands (Keenray ~$100-120 new, Zadro, Brookstone) up to $60.
+# Owner 11-14: towel warmer for Kenzie, "new or nice used". Owner 11-16: a
+# ~$50-new warmer listed at $50 alerted ("not a steal obv"). Steals only:
+# all-in (list + 5% + $0.70 + ship, + 6% tax) at most half the typical new
+# price. ponytail: rough Amazon/Walmart new prices, refresh if they move.
 _GIFT_GOOD_CONDITION = re.compile(r"^(new|very good)", re.IGNORECASE)
-_GIFT_NICE_BRANDS = re.compile(r"keenray|keenary|zadro|brookstone|ihome|serenelife", re.IGNORECASE)
-GIFT_GENERIC_MAX = 25
-GIFT_BRAND_MAX = 60
+_GIFT_NEW_PRICES = (
+    (re.compile(r"brookstone", re.IGNORECASE), 120),
+    (re.compile(r"keenray|keenary|zadro", re.IGNORECASE), 100),
+    (re.compile(r"sl\s*&\s*f|sl\s+and\s+f", re.IGNORECASE), 80),
+    (re.compile(r"ihome", re.IGNORECASE), 60),
+    (re.compile(r"serenelife", re.IGNORECASE), 55),
+)
+GIFT_GENERIC_NEW = 50
+GIFT_STEAL_FRACTION = 0.5
 
 
-def _gift_reason(title, brand, condition, price):
+def _gift_reason(title, brand, condition, price, shipping):
     if not _GIFT_GOOD_CONDITION.search(str(condition or "")):
         return f"gift watch: condition '{condition or '?'}' is not gift-ready"
-    cap = GIFT_BRAND_MAX if _GIFT_NICE_BRANDS.search(f"{title} {brand}") else GIFT_GENERIC_MAX
-    if float(price) > cap:
-        return f"gift watch: ${float(price):g} over the ${cap} cap for this brand"
+    text = f"{title} {brand}"
+    new = next((p for rx, p in _GIFT_NEW_PRICES if rx.search(text)), GIFT_GENERIC_NEW)
+    all_in = (float(price) * 1.05 + 0.70 + float(shipping)) * (1 + engine.SALES_TAX_RATE)
+    if all_in > new * GIFT_STEAL_FRACTION:
+        return f"gift watch: ~${all_in:.0f} all-in is not a steal vs ~${new} new"
     return None
 
 
@@ -2751,7 +2760,9 @@ class VintedFastLane:
         title = str(listing.get("title") or "")
         condition = str(listing.get("condition") or "")
         price = result["item_price"]
-        reason = _gift_reason(title, item.get("brand_title") or "", condition, price)
+        reason = _gift_reason(
+            title, item.get("brand_title") or "", condition, price, total_price - price
+        )
         if reason:
             self._finish(conn, result, item_id, fingerprint, total_price, reason)
             return
@@ -2768,12 +2779,12 @@ class VintedFastLane:
         if seller_reason:
             self._finish(conn, result, item_id, fingerprint, total_price, seller_reason)
             return
-        all_in = total_price * (1 + engine.SALES_TAX_RATE)
+        all_in = (price * 1.05 + 0.70 + total_price - price) * (1 + engine.SALES_TAX_RATE)
         logger.info("vinted-fast gift alert: $%g | %s", price, title)
         self._ntfy(
             f"GIFT ${price:g}: {title[:50]}",
             f"${price:g} (~${all_in:.0f} all-in) {title}\n{condition}\n"
-            "Towel warmer watch for Kenzie. New generic buckets are ~$40-60 at Walmart."
+            "Towel warmer watch for Kenzie: half off new or better, all-in."
             + (f"\n{_ship_note(listing)}" if _ship_note(listing) else ""),
             "4", "gift", listing.get("itemWebUrl"),
             (listing.get("image") or {}).get("imageUrl"), item_id=item_id,
