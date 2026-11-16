@@ -3681,3 +3681,47 @@ def test_one_size_cap_fits_a_letter_sized_search():
     shirt = {"title": "Peter Millar polo", "size": "One size"}
     assert not fast._fits_size_list(search, shirt, "knitwear")
 
+
+
+def test_watch_steal_needs_half_the_real_used_value():
+    r = fast._watch_steal_reason
+    assert "can't be a steal" in r("vinted-seiko-automatic", 89.78)  # the 11-16 7009 Seiko
+    assert r("vinted-seiko-automatic", 70) is None
+    assert r("vinted-hamilton-khaki", 250) is None
+    assert r("vinted-unknown", 999) is None
+
+
+def test_new_watch_seller_lane_blocks_scam_shapes_only():
+    r = lambda title, desc="", closet=(): fast._new_watch_seller_reason(
+        {"closet": list(closet), "closet_brands": {}}, "vinted:1", {"title": title, "description": desc})
+    assert r("Hamilton khaki field watch 39mm", "Comes with original papers. Works perfectly.") is None
+    assert r("seiko automatic watch", closet=[("1", "seiko automatic watch"), ("2", "Levi's jeans")]) is None
+    for scam in (
+        "Tissot Le Locle Automatic Men's Watch, Black Dial, Roman Numerals, 39.3mm Steel Bracelet",
+        "Tissot Classic T063.428.11.058 Automatic Watch 98% New",
+        "Longines Full Set Online Exclusive",
+        "Authentic Tissot Seastar Automatic Diver Watch",
+        "Tissot Le Locle Swiss Automatic 38mm ETA 2824",
+    ):
+        assert "scam-shop" in r(scam), scam
+    assert "other watches" in r("Longines conquest blue dial", closet=[("2", "Longines conquest 38")])
+
+
+def test_watch_title_filter_keeps_gold_dials_and_orient_aaa():
+    x = fast._VINTED_WATCH_TITLE_EXCLUDED.search
+    assert not x("Vintage Seiko 5 6309-8840 Automatic Watch Gold Dial Day Date Runs")
+    assert not x("Vintage Orient AAA Crystal 3-Star Automatic Watch - Blue Dial")
+    assert x("Vintage 1976 Seiko Automatic Mens Gold Watch")
+    assert x("AAA replica submariner")
+    assert x("Seiko 5 gold tone")
+
+
+
+def test_new_watch_seller_needs_full_steal_and_real_title():
+    assert "bare brand-name" in fast._new_watch_seller_reason({}, "x", {"title": "Longines"})
+    ok = {"vinted_photo_ai_checked": True, "counterfeit_suspected": False, "damage_found": False}
+    assert fast._vinted_watch_bar_reason({**ok, "deal_rating": "Great Deal"}, "watches") is None
+    assert "70%-off" in fast._vinted_watch_bar_reason(
+        {**ok, "deal_rating": "Great Deal", "vinted_new_seller": True}, "watches")
+    assert fast._vinted_watch_bar_reason({**ok, "deal_rating": "Steal", "vinted_new_seller": True}, "watches") is None
+

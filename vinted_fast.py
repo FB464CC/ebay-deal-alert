@@ -335,7 +335,8 @@ _VINTED_WATCH_DESC_EXCLUDED = (
 )
 _VINTED_WATCH_TITLE_EXCLUDED = re.compile(
     rf"\b(?:{_VINTED_WATCH_DESC_EXCLUDED}|mods?|custom(?:ized)?|replicas?|reps?"
-    r"|clones?|aaa|copy|inspired|broken|gold|diamonds?|smart\s?watch)\b|\b1:1\b",
+    r"|clones?|(?<!orient\s)aaa|copy|inspired|broken"
+    r"|gold(?!\s+(?:dial|face|hands|indices|markers|accents))|diamonds?|smart\s?watch)\b|\b1:1\b",
     re.IGNORECASE,
 )
 _VINTED_WATCH_DESC_EXCLUDED = re.compile(
@@ -355,6 +356,81 @@ _VINTED_OFF_PLATFORM = re.compile(
 )
 # Fakes are the norm here: only proven sellers, never brand-new accounts.
 VINTED_STRICT_SELLER_CATEGORIES = frozenset({"fragrance", "watches"})
+# Owner 11-16: "tighten watch alerts to steals only". The AI valued a ~$90
+# vintage 7009 Seiko at $250, so each search's value is capped at what that
+# family really resells for used (estimated, Nov 2026), and a steal is paying
+# half of that or less, all-in.
+VINTED_WATCH_VALUE_CAPS = {
+    "vinted-seiko-automatic": 150, "vinted-seiko-5-sports": 200,
+    "vinted-seiko-presage": 350, "vinted-seiko-cocktail-time": 300,
+    "vinted-king-seiko": 1200, "vinted-seiko-alpinist": 600,
+    "vinted-seiko-diver": 450, "vinted-seiko-skx": 400, "vinted-seiko-turtle": 400,
+    "vinted-tissot-prx": 450, "vinted-tissot-visodate": 450,
+    "vinted-tissot-le-locle": 350, "vinted-tissot-gentleman": 500,
+    "vinted-tissot-seastar": 500, "vinted-tissot-powermatic": 500,
+    "vinted-tissot-automatic": 450, "vinted-hamilton-khaki": 500,
+    "vinted-hamilton-jazzmaster": 550, "vinted-hamilton-intra-matic": 700,
+    "vinted-orient-bambino": 130, "vinted-orient-star": 350,
+    "vinted-orient-mako": 150, "vinted-orient-kamasu": 220, "vinted-longines": 1500,
+}
+VINTED_WATCH_STEAL_FRACTION = 0.5
+
+
+def _watch_steal_reason(search_id, expected_paid):
+    cap = VINTED_WATCH_VALUE_CAPS.get(search_id)
+    if cap is None or expected_paid is None or expected_paid <= cap * VINTED_WATCH_STEAL_FRACTION:
+        return None
+    return (
+        f"watch can't be a steal: ~${expected_paid:.0f} all-in is over half the "
+        f"~${cap} this model resells for used"
+    )
+
+
+# Owner 11-16: a way around fakes that still lets fire deals through. Blocking
+# every 0-review seller also blocked people clearing out one watch. The scam
+# stock reads like a spec sheet ("Men's Watch, 90% New, ETA 2824 Movement,
+# 38mm", "Full Set Online Exclusive", full T063.428 refs) or comes from a
+# closet of other watches; a person writes "Hamilton khaki field".
+_WATCH_SCAM_COPY = re.compile(
+    r"\b\d{2,3}\s?%\+?\s?(?:new|condition)\b|\bnear[\s-]mint\b|\bfull\s+(?:set|accessories)\b"
+    r"|\bonline\s+exclusive\b|\bunopened\b|\bunder\s+warranty\b|\b316l\b|\beta\s?\d{4}\b"
+    r"|\bt\d{3}\.?\d{3}",
+    re.IGNORECASE,
+)
+_WATCH_SCAM_TITLE = re.compile(r"\b(?:authentic|genuine|100%)", re.IGNORECASE)
+_CLOSET_WATCH = re.compile(
+    r"\bwatch(?:es)?\b|seiko|tissot|hamilton|longines|orient|omega|rolex|tudor|citizen"
+    r"|bulova|breitling|cartier|heuer|invicta",
+    re.IGNORECASE,
+)
+NEW_WATCH_SELLER_NOTE = (
+    "NEW SELLER (0 reviews): pay only in the app and check it within 2 days of "
+    "delivery; a fake is refunded under buyer protection."
+)
+
+
+def _new_watch_seller_reason(stats, item_id, listing):
+    title = str(listing.get("title") or "")
+    text = f"{title} {listing.get('description') or ''}"
+    if title.count(",") >= 2 or _WATCH_SCAM_COPY.search(text) or _WATCH_SCAM_TITLE.search(title):
+        return "new seller with spec-sheet listing copy (watch scam-shop pattern)"
+    if len(re.findall(r"[a-z0-9]+", title.casefold())) <= 2:
+        # 11-15: seven "Longines" listings at $180-200 from fresh accounts.
+        return "new seller with a bare brand-name title (watch scam-batch pattern)"
+    own_id = str(item_id).rsplit(":", 1)[-1]
+    brands = stats.get("closet_brands", {})
+    others = [
+        other for closet_id, other in stats.get("closet", ())
+        if closet_id != own_id and _CLOSET_WATCH.search(f"{other} {brands.get(closet_id, '')}")
+    ]
+    if others:
+        return (
+            "new seller with other watches for sale (watch-flipper/fake-shop "
+            f"pattern), e.g. {others[0][:60]}"
+        )
+    return None
+
+
 _VINTED_FRAGRANCE_EXCLUDED = re.compile(
     r"\b(?:decants?|samples?|vials?|minis?|miniatures?|travel[\s-]*size|testers?"
     r"|unboxed|empty|refills?|dupes?|inspired(?:\s+by)?|smells\s+like|clones?"
@@ -1290,6 +1366,10 @@ def _vinted_watch_bar_reason(result, category):
         return "vinted watch bar: damage assessment not explicitly clear"
     if _VINTED_WATCH_GOLD_SUMMARY.search(str(result.get("vinted_ai_summary") or "")):
         return "vinted watch bar: AI photos show gold/two-tone, owner wants steel"
+    if result.get("vinted_new_seller") and result.get("deal_rating") != "Steal":
+        # Scam stock is priced 40-60% under to look believable; a person who
+        # doesn't know what they have lists far lower.
+        return "vinted watch bar: new seller needs a 70%-off steal (scam prices sit 40-60% off)"
     return None
 
 
@@ -1878,6 +1958,9 @@ def _merge_ai_result(result, ai_result, category):
             result["estimated_resale_value"] = engine.clamp_watch_resale_estimate(
                 result["estimated_resale_value"], band
             )
+        cap = VINTED_WATCH_VALUE_CAPS.get(result.get("search_id"))
+        if cap is not None:
+            result["estimated_resale_value"] = min(result["estimated_resale_value"], cap)
     expected_paid = result.get("vinted_expected_paid")
     if expected_paid is None:
         expected_paid = _set_vinted_negotiation_prices(result)
@@ -3403,11 +3486,14 @@ class VintedFastLane:
                 return listing, None, f"poker pre-AI reject: {poker_fail}"
         if category == "neckwear" and not _VINTED_NECKTIE.search(title):
             return listing, None, "neckwear search but the title is not a tie"
-        if category == "watches" and (
+        mod = category == "watches" and (
             _VINTED_WATCH_TITLE_EXCLUDED.search(title)
             or _VINTED_WATCH_DESC_EXCLUDED.search(description)
-        ):
-            return listing, None, "watch is a mod/homage/replica/parts/gold-tone piece"
+        )
+        if mod:
+            return listing, None, (
+                f"watch is a mod/homage/replica/parts/gold-tone piece ('{mod.group(0)}')"
+            )
         if category == "fragrance" and _VINTED_FRAGRANCE_EXCLUDED.search(
             f"{title} {listing.get('description') or ''}"
         ):
@@ -3456,6 +3542,10 @@ class VintedFastLane:
             }
         )
         _set_vinted_negotiation_prices(result)
+        if category == "watches":
+            steal_reason = _watch_steal_reason(search.get("id"), result.get("vinted_expected_paid"))
+            if steal_reason:
+                return listing, None, steal_reason
         return listing, result, None
 
     def _process_item(self, conn, main_conn, item, search, hard_stop):
@@ -3582,6 +3672,9 @@ class VintedFastLane:
             seller_reason = _seller_trust_reason(
                 stats, strict=category in VINTED_STRICT_SELLER_CATEGORIES
             )
+            if seller_reason and category == "watches" and stats.get("feedback_count") == 0:
+                seller_reason = _new_watch_seller_reason(stats, item_id, listing)
+                result["vinted_new_seller"] = seller_reason is None
             if not seller_reason and category == "fragrance":
                 seller_reason = _perfume_shop_reason(stats, item_id)
             if not seller_reason:
@@ -3597,6 +3690,7 @@ class VintedFastLane:
         if (
             category in VINTED_STRICT_SELLER_CATEGORIES
             and listing.get("seller_feedback_count") == 0
+            and not result.get("vinted_new_seller")
         ):
             # 0 reviews on a perfume/watch is the throwaway-account fake shape.
             self._finish(
@@ -3768,6 +3862,7 @@ class VintedFastLane:
         result["listing_age_note"] = "\n".join(filter(None, (
             _age_note(getattr(self, "_listed_age_m", {}).get(listing.get("itemId"))),
             _ship_note(listing),
+            NEW_WATCH_SELLER_NOTE if result.get("vinted_new_seller") else None,
         )))
         self._followed_up.add(listing.get("itemId"))
         try:

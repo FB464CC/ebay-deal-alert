@@ -5619,7 +5619,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
         else:
             flags.append("fragrance authenticity, fill level, and bottle condition require photo check")
     else:
-        if brand_in(haystack, PASS_BRANDS):
+        if category != "watches" and brand_in(haystack, PASS_BRANDS):
             return {"verdict": "PASS", "reason": "brand on pass list", "listing": listing}
         # Only count a grab_on_sight/standard match if it appears near the START
         # of the title. Every real listing title observed this session, across
