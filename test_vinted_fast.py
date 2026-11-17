@@ -1229,10 +1229,9 @@ def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
     )
     send.assert_not_called()
     assert round(row["vinted_expected_paid"], 2) == 21.2
-    # 11-10 price table: a used PM polo sells for ~$30, so the $35 guess is cut.
-    assert row["estimated_resale_value"] == 30
-    assert row["deal_rating"] == "Fair"
-    assert "below Great Deal" in row["reason"]
+    # 11-10 price table: a used PM polo sells for ~$30, so any AI guess is cut
+    # to it and $21 can't be a Great Deal; since 11-17 no AI call is spent.
+    assert row["reason"].startswith("price table: ~$21 all-in is over half the $30")
 
 
 def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
@@ -4258,6 +4257,58 @@ def test_price_table_covers_suits_tom_ford_and_brioni_kiton_knits():
     assert capped("Kiton cashmere cardigan", 600.0) == (200, True)
     assert capped("Kiton knit polo", 300.0) == (130, True)  # falls through to its knit row
     assert capped("Peter Millar polo", 20.0) == (20, True)  # table-backed, not raised
+
+
+def test_price_table_brand_is_the_house_not_the_mill_cloth():
+    # Audit 11-17: "Canali Milano Loro Piana Super 100s 42 R" reached the AI;
+    # Loro Piana (first in the brand list, no suit row) matched before Canali,
+    # so a suit in mill cloth kept the AI's uncapped resale.
+    def capped(title, resale, summary=""):
+        result = {"listing": {"title": title}, "estimated_resale_value": resale}
+        fast._cap_to_price_table(result, "estimated_resale_value", summary)
+        return result["estimated_resale_value"], result.get("vinted_price_table")
+
+    assert capped("Canali Milano Loro Piana Super 100s wool suit 42R", 600.0) == (140, True)
+    assert capped("Brooks Brothers Zegna fabric 2pc suit 42R", 300.0) == (90, True)
+    assert capped("Canali wool suit 42R", 600.0, "Loro Piana cloth label inside") == (140, True)
+    # The title names the house; the photo summary only when it names none.
+    assert capped("Peter Millar polo", 60.0, "Purple Label style polo") == (30, True)
+    assert capped("Loro Piana cashmere sweater", 900.0) == (430, True)
+    assert capped("Men's cashmere sweater", 900.0, "Kiton label") == (200, True)
+
+
+def test_no_ai_call_when_the_price_table_already_rules_out_a_great_deal(tmp_path):
+    # Audit 11-17: 105 of 236 first looks were PM polos/quarter-zips whose
+    # table row (the most the AI's resale can be) was under twice the price.
+    def run(title, price):
+        listing, result = _apparel_listing_result(title, price, "golf", "peter millar polo")
+        folder = tmp_path / f"{len(list(tmp_path.iterdir()))}"
+        folder.mkdir()
+        lane, _strong, _send, row = _run_custom_pipeline(folder, listing, result, _apparel_ai(100))
+        return lane.ai_calls, row["reason"]
+
+    calls, reason = run("Peter Millar pima cotton polo", 25)
+    assert calls == 0 and reason.startswith("price table:")
+    assert run("Peter Millar pima cotton polo", 9)[0] >= 1
+    # Gamecocks are valued up (row x1.5), so $20 can still be a Great Deal.
+    assert run("Peter Millar Gamecocks pima cotton polo", 20)[0] >= 1
+    assert run("Peter Millar pima cotton quarter zip", 30)[0] == 0
+    assert run("Peter Millar pima cotton quarter zip", 15)[0] >= 1
+
+
+def test_tom_ford_scent_titles_in_menswear_feeds_skip_the_ai():
+    # Audit 11-17: "Tom Ford Ombré Leather" (accent) x3, Bitter Peach, Fucking
+    # Fabulous x2 and Neroli Portofino each spent a first look in the Tom Ford
+    # clothing feed before "AI photos show a fragrance/beauty item".
+    for title in (
+        "Tom Ford Ombré Leather", "Tom Ford Bitter Peach", "Tom Ford Fucking Fabulous",
+        "Tom Ford Neroli Portofino Travel Size", "Tom Ford Tobacco Vanilla ( Unisex )",
+    ):
+        reason = fast._menswear_shape_reason({"title": title}, "tom ford", "other")
+        assert reason == "fragrance/beauty/packaging item in a menswear search", title
+    assert fast._menswear_shape_reason(
+        {"title": "Tom Ford Men's Black Zip Mock-Neck Sweater"}, "tom ford", "other"
+    ) is None
 
 
 def test_hats_have_their_own_resale_floor():
