@@ -6158,23 +6158,14 @@ class PeterMillarBackCrownRequired(unittest.TestCase):
         )
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
 
-    def test_crown_confirmed_absent_blocks_regardless_of_deal_rating(self):
-        result = self._pm_result(
-            deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
-            peter_millar_back_crown_visible=False,
-        )
-        reason = m.is_blocked_by_steal_quality_gate(result, category="other")
-        self.assertIsNotNone(reason)
-        self.assertNotIn("no AI price", reason)  # permanent, not retry-eligible
-
-    def test_crown_unconfirmed_after_a_real_check_still_blocks(self):
-        # AI ran and looked, but couldn't tell either way (null) - still a
-        # hard block, not a pass-by-default.
-        result = self._pm_result(
-            deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
-            peter_millar_back_crown_visible=None,
-        )
-        self.assertIsNotNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
+    def test_priced_piece_without_a_crown_is_no_longer_blocked(self):
+        # Owner 11-17: "not all need a crown but crown is better".
+        for crown in (False, None):
+            result = self._pm_result(
+                deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
+                peter_millar_back_crown_visible=crown,
+            )
+            self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
 
     def test_non_peter_millar_item_unaffected(self):
         result = self._pm_result(
@@ -6198,15 +6189,28 @@ class PeterMillarBackCrownRequired(unittest.TestCase):
         )
         self.assertIsNone(m.is_blocked_by_steal_quality_gate(result, category="other"))
 
-    def test_quarter_zip_and_mid_layer_still_require_the_crown(self):
+    def test_quarter_zip_and_mid_layer_still_wait_for_a_crown_look(self):
         for title in ("Peter Millar Quarter Zip Pullover L", "Peter Millar 1/4 Zip Mid Layer L"):
             result = self._pm_result(
-                title=title, deal_rating="Great Deal", discount_pct=50, brand_tier="grab_on_sight",
+                title=title, deal_rating=None, brand_tier="grab_on_sight",
                 peter_millar_back_crown_visible=None,
             )
             reason = m.is_blocked_by_steal_quality_gate(result, category="other")
             self.assertIsNotNone(reason, title)
             self.assertIn("back-crown", reason)
+
+    def test_crew_neck_pullover_sweater_skips_the_crown_gate(self):
+        # Live miss 11-17: a $20 merino/silk crew neck (resale $75) was
+        # blocked because "pullover" matched. Sweaters never carry the back
+        # crown and the AI is never asked about it for them.
+        result = self._pm_result(
+            title="Peter Millar Merino Wool & Silk LS Crew Neck Pullover Sweater in Blue size L",
+            deal_rating=None, brand_tier="grab_on_sight",
+            peter_millar_back_crown_visible=None,
+        )
+        self.assertNotIn("back-crown", m.is_blocked_by_steal_quality_gate(result, category="other") or "")
+        result["listing"]["title"] = "Peter Millar Quarter Zip Sweater L"
+        self.assertIn("back-crown", m.is_blocked_by_steal_quality_gate(result, category="other"))
 
 
 class MarketplaceRelevanceTokenMatching(unittest.TestCase):

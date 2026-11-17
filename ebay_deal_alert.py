@@ -8887,13 +8887,19 @@ def is_blocked_by_steal_quality_gate(result, category=None):
     # gear is bought to REPRESENT, not to signal the brand - per the
     # standing "if theres a steal for my school, gotta buy it" rule and
     # the explicit "any peter millar gamecocks at all below $50."
+    # A crew/v-neck sweater titled "pullover" is knitwear, not a mid-layer:
+    # it has no back crown and the AI prompt never checks one (live miss
+    # 11-17, a $20 merino/silk crew neck). A quarter-zip sweater still counts.
+    pm_top_title = listing_title_lower
+    if re.search(r"\b(sweater|crew[\s-]?neck|v[\s-]?neck|cardigan)\b", pm_top_title):
+        pm_top_title = pm_top_title.replace("pullover", "")
     if (brand_in(listing_title_lower, ("peter millar",))
-            and PETER_MILLAR_TOP_SIGNALS.search(listing_title_lower)
+            and PETER_MILLAR_TOP_SIGNALS.search(pm_top_title)
             and not brand_in(listing_title_lower, ("gamecocks",))):
-        if result.get("peter_millar_back_crown_visible") is not True:
-            if result.get("deal_rating") is None:
-                return "peter millar back-crown requirement: no AI price estimate - crown visibility unconfirmed"
-            return "peter millar back-crown requirement: crown not confirmed visible in photos"
+        # Owner 11-17: "not all need a crown but crown is better" - no longer
+        # a block once a price exists; the alert text says what was seen.
+        if result.get("peter_millar_back_crown_visible") is not True and result.get("deal_rating") is None:
+            return "peter millar back-crown requirement: no AI price estimate - crown visibility unconfirmed"
 
     # UNIVERSITY OF SOUTH CAROLINA GAMECOCKS - Peter Millar collegiate line
     # specifically, not any USC merch from any brand (explicit user

@@ -1988,6 +1988,10 @@ def _alert_details(result):
         f"listed size {listing['size']}" if listing.get("size") else None,
         f"seller {result['vinted_seller_note']}" if result.get("vinted_seller_note") else None,
         f"tag: {result['vinted_fabric_tag']}" if result.get("vinted_fabric_tag") else None,
+        {True: "back crown: yes", False: "back crown: NO"}.get(
+            result.get("peter_millar_back_crown_visible"), "back crown: not shown")
+        if re.search(r"peter\s*millar", str(listing.get("title") or ""), re.I)
+        and engine.PETER_MILLAR_TOP_SIGNALS.search(str(listing.get("title") or "").lower()) else None,
         "resale: sold-price table" if result.get("vinted_price_table")
         else "resale: AI estimate only",
     )))

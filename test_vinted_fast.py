@@ -4056,8 +4056,11 @@ def test_alert_details_line_names_seller_size_fabric_and_resale_basis():
         "vinted_price_table": True,
     }
     assert fast._alert_details(result) == (
-        "listed size L | seller 4.9/5 (12 reviews) | tag: 100% cashmere | resale: sold-price table"
+        "listed size L | seller 4.9/5 (12 reviews) | tag: 100% cashmere"
+        " | back crown: not shown | resale: sold-price table"
     )
+    result["peter_millar_back_crown_visible"] = False
+    assert "back crown: NO" in fast._alert_details(result)
     assert fast._alert_details({"listing": {}}) == "resale: AI estimate only"
 
 
