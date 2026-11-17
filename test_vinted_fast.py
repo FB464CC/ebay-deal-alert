@@ -1434,6 +1434,32 @@ def test_web_catalog_row_keeps_the_sellers_own_title():
     assert listing["sellerTitle"] == "Polo shirt"
 
 
+def test_instant_prepass_skips_same_seller_relist_of_an_alerted_item(tmp_path, monkeypatch):
+    # Log 11-17 03:11-03:14: "Brioni mens dress shirt" $25 got FAST + OFFER;
+    # the seller relisted it (new id) and it pinged FAST again, then SKIP
+    # ("relist of a listing already judged this run"): 4 pushes, one shirt.
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    search = {"id": "s", "query": "zegna", "category": "knitwear"}
+    first, relist, other_seller = (_raw_item(i) for i in ("zegna-1", "zegna-2", "zegna-3"))
+    for item in (first, relist, other_seller):
+        item.update(title="Zegna Cashmere sweater", price={"amount": "10"})
+        item["user"] = {"id": 7, "login": "seller"}
+    other_seller["user"] = {"id": 8, "login": "someone-else"}
+    signature, seller_key = lane._relist_key(
+        marketplaces._vinted_item_to_listing(first), first
+    )
+    lane._listing_signatures[signature] = ("vinted:zegna-1", seller_key, 0)
+    lane._alerted_item_ids.add("vinted:zegna-1")
+    with mock.patch.object(fast.requests, "post") as post:
+        lane._instant_prepass(conn, None, [relist], "search", search)
+        assert not post.called
+        lane._instant_prepass(conn, None, [other_seller], "search", search)
+    conn.close()
+    post.assert_called_once()
+
+
 def test_instant_prepass_pings_from_catalog_row_before_any_item_request(
     tmp_path, monkeypatch
 ):
