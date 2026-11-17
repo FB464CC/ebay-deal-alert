@@ -565,8 +565,15 @@ def _brand_all_in_cap(result):
 _VINTED_FULL_FLOOR_BRANDS = frozenset({"brooks brothers"})
 
 
+VINTED_HAT_RESALE_FLOOR = 15
+
+
 def _vinted_resale_minimum(result):
     _brand, floor = _vinted_brand_and_floor(result)
+    # Owner 11-17: hats resell for $15-25, so the $30 apparel floor meant no
+    # hat could ever alert. The 40%-of-resale steal bar still applies.
+    if _HAT.search(str((result.get("listing") or {}).get("title") or "")):
+        return min(floor, VINTED_HAT_RESALE_FLOOR)
     if result.get("vinted_brand_key") in _VINTED_FULL_FLOOR_BRANDS:
         return floor
     return min(floor, VINTED_RESALE_FLOOR_MAX)
@@ -1858,12 +1865,29 @@ VINTED_PRICE_TABLE = {
     ("purple label", "cashmere"): (235, 1200),
     ("isaia", "cashmere"): (325, 2100),
     ("isaia", "sweater"): (220, 1450),
+    # Owner 11-17: these alerted on the AI's number alone. Researched 11-17
+    # (thin: TRR sold Brioni cashmere $62-171, one eBay Brioni cashmere at
+    # $75, eBay asks of $199-450 for Tom Ford wool, $80-200 for Brooks
+    # Brothers and Canali suits, $150-600 for Brioni suits; StyleForum
+    # "$200-300 buys Zegna/Canali/Brioni"). Set low on purpose: a cap only
+    # cuts. Kiton and Isaia suits have no sold data, so the AI stands there.
+    ("tom ford", "cashmere"): (275, 2000),
+    ("tom ford", "sweater"): (175, 1300),
+    ("brioni", "cashmere"): (130, 1500),
+    ("brioni", "sweater"): (90, 950),
+    ("kiton", "cashmere"): (200, 2000),
+    ("kiton", "sweater"): (130, 1200),
+    ("brooks brothers", "suit"): (90, 900),
+    ("canali", "suit"): (140, 1900),
+    ("zegna", "suit"): (200, 3000),
+    ("brioni", "suit"): (275, 6000),
 }
 _PRICE_TABLE_BRANDS = (
     ("loro piana", r"loro\s*piana"), ("brunello cucinelli", r"cucinelli"),
     ("purple label", r"purple\s*label"), ("peter millar", r"peter\s*mill"),
     ("kiton", r"\bkiton"), ("brioni", r"\bbrioni"), ("zegna", r"\bzegna"),
     ("canali", r"\bcanali"), ("isaia", r"\bisaia"),
+    ("tom ford", r"tom\s*ford"), ("brooks brothers", r"brooks\s*bro"),
 )
 # First match that has a table row wins, so "polo shirt" is a polo and a Loro
 # Piana cashmere quarter-zip falls through to cashmere.
@@ -1886,9 +1910,17 @@ VINTED_PRICE_TABLE_CATEGORIES = frozenset({"other", "knitwear", "golf"})
 def _price_table_row(result, summary=""):
     listing = result.get("listing") or {}
     text = f"{listing.get('title') or ''} {summary or ''} {result.get('visible_brand_evidence') or ''}"
+    brand = next((b for b, pattern in _PRICE_TABLE_BRANDS if re.search(pattern, text, re.I)), None)
+    if _VINTED_SUIT.search(str(listing.get("title") or "")) and not re.search(
+        # A suit jacket or suit trousers alone is not a suit.
+        r"suits?\s+(?:jackets?|coats?|pants?|trousers?|vests?|separates?)", str(listing.get("title")), re.I
+    ):
+        # Golden Fleece is the Brooks Brothers line that does resell high.
+        if re.search(r"golden\s*fleece", text, re.I):
+            return None
+        return VINTED_PRICE_TABLE.get((brand, "suit"))
     if _PRICE_TABLE_SKIP.search(str(listing.get("title") or "")):
         return None
-    brand = next((b for b, pattern in _PRICE_TABLE_BRANDS if re.search(pattern, text, re.I)), None)
     if not brand:
         return None
     # Audit 11-11: the title decides the piece; the AI summary only when the
@@ -1915,8 +1947,22 @@ def _price_table_row(result, summary=""):
 
 def _cap_to_price_table(result, key, summary="", index=0):
     row = _price_table_row(result, summary)
+    if row is not None:
+        result["vinted_price_table"] = True
     if row is not None and result.get(key) is not None and result[key] > row[index]:
         result[key] = float(row[index])
+
+
+def _alert_details(result):
+    """Owner 11-17: what a 10-second buy decision still lacked."""
+    listing = result.get("listing") or {}
+    return " | ".join(filter(None, (
+        f"listed size {listing['size']}" if listing.get("size") else None,
+        f"seller {result['vinted_seller_note']}" if result.get("vinted_seller_note") else None,
+        f"tag: {result['vinted_fabric_tag']}" if result.get("vinted_fabric_tag") else None,
+        "resale: sold-price table" if result.get("vinted_price_table")
+        else "resale: AI estimate only",
+    )))
 
 
 def _merge_ai_result(result, ai_result, category):
@@ -1993,6 +2039,7 @@ def _merge_ai_result(result, ai_result, category):
 
     fabric = ai_result.get("fabric_from_tag")
     if fabric:
+        result["vinted_fabric_tag"] = _one_line(fabric)
         result.setdefault("flags", []).append(f"AI fabric tag: {fabric}")
     liquidity = ai_result.get("liquidity")
     if liquidity in {"fast", "medium", "slow"}:
@@ -2022,7 +2069,7 @@ def _merge_ai_result(result, ai_result, category):
         ai_result.get("estimated_resale_value")
     )
     result["price_confidence"] = ai_result.get("price_confidence")
-    if category in VINTED_PRICE_TABLE_CATEGORIES:
+    if category in VINTED_PRICE_TABLE_CATEGORIES or category == "tailoring":
         _cap_to_price_table(result, "estimated_resale_value", summary)
         _cap_to_price_table(result, "estimated_retail_price", summary, index=1)
     if category == "watches" and result["estimated_resale_value"] is not None:
@@ -2704,6 +2751,7 @@ class VintedFastLane:
             f"~${view['vinted_conservative_resale_value']:.0f}. {title}\n"
             "Not a steal at list. If they accept or counter, nothing is charged "
             "until you press Buy now."
+            f"\n{_alert_details(result)}"
             + (f"\n{_ship_note(listing)}" if _ship_note(listing) else ""),
             "4" if kind == "offer" else "3",
             "moneybag" if kind == "offer" else "speech_balloon",
@@ -3773,6 +3821,12 @@ class VintedFastLane:
             self.statuses[str(status or "ERROR")] += 1
             if status in {401, 403, 429}:
                 raise VintedRequestBlocked(status)
+            if "feedback_count" in stats:
+                result["vinted_seller_note"] = (
+                    f"{stats.get('feedback_reputation', 0.0) * 5:.1f}/5 "
+                    f"({stats['feedback_count']:g} reviews)"
+                    if stats["feedback_count"] else "new, 0 reviews"
+                )
             seller_reason = _seller_trust_reason(
                 stats, strict=category in VINTED_STRICT_SELLER_CATEGORIES
             )
@@ -3974,6 +4028,7 @@ class VintedFastLane:
             NEW_WATCH_SELLER_NOTE if result.get("vinted_new_seller") else None,
         )))
         self._followed_up.add(listing.get("itemId"))
+        result["vinted_alert_details"] = _alert_details(result)
         try:
             engine.send_alert(result, feedback_item_id=item_id)
         except Exception as exc:

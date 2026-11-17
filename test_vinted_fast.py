@@ -4013,3 +4013,62 @@ def test_owner_is_told_when_a_run_was_blind(tmp_path):
 
 def test_purple_label_has_its_own_feed():
     assert any(feed["query"] == "purple label" for feed in fast.VINTED_TEXT_FEEDS)
+
+
+def test_price_table_covers_suits_tom_ford_and_brioni_kiton_knits():
+    # Owner 11-17: these alerted on an AI guess alone (a $59 Tom Ford sweater
+    # at "$250", two $75 Brooks Brothers suits at "$150").
+    def capped(title, resale, summary=""):
+        result = {"listing": {"title": title}, "estimated_resale_value": resale}
+        fast._cap_to_price_table(result, "estimated_resale_value", summary)
+        return result["estimated_resale_value"], result.get("vinted_price_table")
+
+    assert capped("Brooks Brothers 2pc suit 42L", 150.0) == (90, True)
+    assert capped("Brooks Brothers Golden Fleece suit 42R", 300.0) == (300, None)
+    assert capped("Canali wool suit 42R", 400.0) == (140, True)
+    assert capped("Zegna suit 42R", 500.0) == (200, True)
+    assert capped("Brioni suit 44R", 900.0) == (275, True)
+    assert capped("Kiton suit 42R", 900.0) == (900, None)  # no sold data: AI stands
+    assert capped("Nike track suit", 80.0) == (80, None)
+    assert capped("Tom Ford zip mock neck sweater", 250.0) == (175, True)
+    assert capped("Tom Ford cashmere crewneck", 500.0) == (275, True)
+    assert capped("Brioni cashmere v-neck sweater", 400.0) == (130, True)
+    assert capped("Brioni wool sweater", 250.0) == (90, True)
+    assert capped("Kiton cashmere cardigan", 600.0) == (200, True)
+    assert capped("Kiton knit polo", 300.0) == (130, True)  # falls through to its knit row
+    assert capped("Peter Millar polo", 20.0) == (20, True)  # table-backed, not raised
+
+
+def test_hats_have_their_own_resale_floor():
+    # Owner 11-17: a $15 Peter Millar hat died as "resale $25 below $30 brand floor".
+    hat = {"listing": {"title": "Peter Millar Hat"}, "vinted_brand_key": "peter millar"}
+    polo = {"listing": {"title": "Peter Millar polo"}, "vinted_brand_key": "peter millar"}
+    with mock.patch.object(fast, "_vinted_brand_and_floor", return_value=("Peter Millar", 30)):
+        assert fast._vinted_resale_minimum(hat) == 15
+        assert fast._vinted_resale_minimum(polo) == 30
+
+
+def test_alert_details_line_names_seller_size_fabric_and_resale_basis():
+    result = {
+        "listing": {"title": "Peter Millar polo", "size": "L"},
+        "vinted_seller_note": "4.9/5 (12 reviews)",
+        "vinted_fabric_tag": "100% cashmere",
+        "vinted_price_table": True,
+    }
+    assert fast._alert_details(result) == (
+        "listed size L | seller 4.9/5 (12 reviews) | tag: 100% cashmere | resale: sold-price table"
+    )
+    assert fast._alert_details({"listing": {}}) == "resale: AI estimate only"
+
+
+def test_buy_alert_carries_the_details_line(monkeypatch):
+    listing, result = _listing_and_result()
+    result["vinted_alert_details"] = "listed size M | resale: AI estimate only"
+    response = mock.Mock(status_code=200)
+    response.raise_for_status.return_value = None
+    monkeypatch.setenv("NTFY_TOPIC", "test-topic")
+    with mock.patch.object(engine.requests, "post", return_value=response) as post:
+        engine.send_alert(result)
+    assert post.call_args.kwargs["data"].decode("utf-8").splitlines()[-1] == (
+        "listed size M | resale: AI estimate only"
+    )

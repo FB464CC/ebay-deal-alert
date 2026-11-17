@@ -10160,6 +10160,8 @@ def send_alert(result, *, feedback_item_id=None):
         )
     elif negotiation_line:
         message += f"\n{negotiation_line}"
+    if result.get("vinted_alert_details"):
+        message += f"\n{result['vinted_alert_details']}"
     if result.get("golf_delivery_path") == "catalog-steal":
         ratio = result.get("golf_steal_ratio")
         off_pct = round((1 - float(ratio)) * 100) if _finite_number(ratio) else 0
