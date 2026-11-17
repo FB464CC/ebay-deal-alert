@@ -398,8 +398,20 @@ def _watch_steal_reason(search_id, expected_paid):
 _WATCH_SCAM_COPY = re.compile(
     r"\b\d{2,3}\s?%\+?\s?(?:new|condition)\b|\bnear[\s-]mint\b|\bfull\s+(?:set|accessories)\b"
     r"|\bonline\s+exclusive\b|\bunopened\b|\bunder\s+warranty\b|\b316l\b|\beta\s?\d{4}\b"
-    r"|\bt\d{3}\.?\d{3}",
+    r"|\bt\d{3}\.?\d{3}|\bl\d\.\d{3}\.\d",
     re.IGNORECASE,
+)
+# Live check 11-17 (owner: fakes "sell for about the same price"): the Longines
+# batch at $179-199 came from 0-review accounts with machine-made names
+# ("8eanqarp", "jw5ya3ee") whose closets also held cheap iPhones and MacBooks.
+_SCAM_LOGIN = re.compile(r"(?=[a-z0-9]{8}$)[a-z0-9]*\d[a-z][a-z0-9]*")
+_CLOSET_ELECTRONICS = re.compile(
+    r"\b(?:iphone|macbook|ipad|airpods|apple\s+watch|playstation|ps5|dyson|nintendo)\b",
+    re.IGNORECASE,
+)
+VINTED_NEW_SELLER_WATCH_VALUE_MAX = 400
+_WATCH_NOT_A_WATCH_ROW = re.compile(
+    r"symphonette|\bvinyl\b|\blps?\b|\brecords?\b|\bmedallion\b", re.IGNORECASE
 )
 _WATCH_SCAM_TITLE = re.compile(r"\b(?:authentic|genuine|100%)", re.IGNORECASE)
 _CLOSET_WATCH = re.compile(
@@ -437,8 +449,15 @@ def _cheap_watch_reason(stats, listing, floor):
     return None
 
 
-def _new_watch_seller_reason(stats, item_id, listing):
+def _new_watch_seller_reason(stats, item_id, listing, value_cap=None):
     title = str(listing.get("title") or "")
+    if value_cap and value_cap >= VINTED_NEW_SELLER_WATCH_VALUE_MAX:
+        return (
+            f"a ~${value_cap:g} watch from a seller with no reviews "
+            "(the fake batches are all this: needs a track record)"
+        )
+    if _SCAM_LOGIN.fullmatch(str(stats.get("login") or "")):
+        return f"new seller with a machine-made username ('{stats['login']}', scam-account pattern)"
     text = f"{title} {listing.get('description') or ''}"
     if title.count(",") >= 2 or _WATCH_SCAM_COPY.search(text) or _WATCH_SCAM_TITLE.search(title):
         return "new seller with spec-sheet listing copy (watch scam-shop pattern)"
@@ -456,6 +475,12 @@ def _new_watch_seller_reason(stats, item_id, listing):
             "new seller with other watches for sale (watch-flipper/fake-shop "
             f"pattern), e.g. {others[0][:60]}"
         )
+    gadgets = [
+        other for closet_id, other in stats.get("closet", ())
+        if closet_id != own_id and _CLOSET_ELECTRONICS.search(other)
+    ]
+    if gadgets:
+        return f"new seller also listing electronics (scam-account pattern), e.g. {gadgets[0][:60]}"
     return None
 
 
@@ -1117,6 +1142,9 @@ def fetch_vinted_seller_stats(user_id):
     if resp.status_code != 200:
         return stats
     text = resp.text.replace('\\"', '"')
+    login = re.search(r'"login":"([^"]+)"', text)
+    if login:
+        stats["login"] = login.group(1)
     for key in ("feedback_count", "feedback_reputation", "item_count", "given_item_count"):
         match = re.search(rf'"{key}":([0-9.]+)', text)
         if match:
@@ -3639,6 +3667,8 @@ class VintedFastLane:
             return listing, None, f"size mismatch for saved search (size {listing.get('size') or '?'})"
         if category not in {"fragrance", "poker-chips", "gift"} and _VINTED_NOT_MENS.search(row_size):
             return listing, None, f"women's/kids' size {row_size}, not menswear"
+        if category == "watches" and _WATCH_NOT_A_WATCH_ROW.search(str(listing.get("title") or "")):
+            return listing, None, "record/medallion, not a watch"
         row_price = float((listing.get("price") or {}).get("value") or 0)
         min_price = engine._sane_ai_price(search.get("min_price"))
         if min_price is not None and row_price < min_price and category != "watches":
@@ -3898,7 +3928,9 @@ class VintedFastLane:
                 stats, strict=category in VINTED_STRICT_SELLER_CATEGORIES
             )
             if seller_reason and category == "watches" and stats.get("feedback_count") == 0:
-                seller_reason = _new_watch_seller_reason(stats, item_id, listing)
+                seller_reason = _new_watch_seller_reason(
+                    stats, item_id, listing, VINTED_WATCH_VALUE_CAPS.get(search.get("id"))
+                )
                 result["vinted_new_seller"] = seller_reason is None
             if not seller_reason and category == "watches":
                 seller_reason = _cheap_watch_reason(

@@ -4146,3 +4146,30 @@ def test_cheap_watch_needs_an_established_seller_and_no_scam_copy(tmp_path):
         _listing, _result, reason = lane._cheap_result(conn, None, item, search)
     conn.close()
     assert "fake-price floor" not in (reason or "")
+
+
+def test_new_watch_seller_scam_shop_tells():
+    # Live check 11-17: the $179-199 Longines batch came from 0-review accounts
+    # named like "8eanqarp"/"jw5ya3ee" whose closets also held iPhones/MacBooks.
+    listing = {"title": "Longines conquest my old watch", "description": "worn a few years"}
+    clean = {"feedback_count": 0.0, "closet": [("1", "Longines conquest my old watch")]}
+    assert fast._new_watch_seller_reason(clean, "1", listing) is None
+    assert "username" in fast._new_watch_seller_reason(dict(clean, login="jw5ya3ee"), "1", listing)
+    assert fast._new_watch_seller_reason(dict(clean, login="mike1987"), "1", listing) is None
+    gadgets = dict(clean, closet=clean["closet"] + [("2", "Apple MacBook Air 2023")])
+    assert "electronics" in fast._new_watch_seller_reason(gadgets, "1", listing)
+    assert "no reviews" in fast._new_watch_seller_reason(clean, "1", listing, value_cap=1500)
+    assert fast._new_watch_seller_reason(clean, "1", listing, value_cap=150) is None
+    ref = {"title": "Longines Master Collection L2.893.5.77.7", "description": ""}
+    assert "spec-sheet" in fast._new_watch_seller_reason(clean, "1", ref)
+
+
+def test_watch_search_skips_longines_records_before_any_fetch():
+    assert fast._WATCH_NOT_A_WATCH_ROW.search("The Longines Symphonette Society Vinyl LP")
+    assert fast._WATCH_NOT_A_WATCH_ROW.search("Longines Symphonette Sterling Medallion")
+    assert not fast._WATCH_NOT_A_WATCH_ROW.search("Longines Conquest automatic")
+
+
+def test_watch_prompt_names_factory_plastic_wrap_as_a_fake_sign():
+    import inspect
+    assert "plastic" in inspect.getsource(engine).split("watch_prompt = (")[1][:6000]
