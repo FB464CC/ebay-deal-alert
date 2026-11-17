@@ -5587,8 +5587,10 @@ def _text_safety_hard_fails(haystack, category=None, title=None):
         )
     ):
         return "button-down/button-up dress shirt not wanted (elite houses and Zegna exempted)"
-    if COUNTERFEIT_SIGNALS.search(MARGIELA_REPLICA_LINE.sub(" ", text)):
-        return "counterfeit/replica listing language in title/description"
+    counterfeit_hit = COUNTERFEIT_SIGNALS.search(MARGIELA_REPLICA_LINE.sub(" ", text))
+    if counterfeit_hit:
+        # The word is logged so an audit can spot honest uses ("golf-inspired").
+        return f"counterfeit/replica listing language in title/description: {counterfeit_hit.group(0)!r}"
     obfuscation_hit = OBFUSCATED_BRAND_SIGNALS.search(haystack)
     if obfuscation_hit:
         return f"obfuscated/split brand name (counterfeit-listing pattern): {obfuscation_hit.group(0)!r}"
