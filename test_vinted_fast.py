@@ -1173,10 +1173,9 @@ def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
     )
     send.assert_not_called()
     assert round(row["vinted_expected_paid"], 2) == 21.2
-    # 11-10 price table: a used PM polo sells for ~$30, so the $35 guess is cut.
-    assert row["estimated_resale_value"] == 30
-    assert row["deal_rating"] == "Fair"
-    assert "below Great Deal" in row["reason"]
+    # 11-10 price table: a used PM polo sells for ~$30, so any AI guess is cut
+    # to it and $21 can't be a Great Deal; since 11-17 no AI call is spent.
+    assert row["reason"].startswith("price table: ~$21 all-in is over half the $30")
 
 
 def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
@@ -4055,6 +4054,25 @@ def test_price_table_brand_is_the_house_not_the_mill_cloth():
     assert capped("Peter Millar polo", 60.0, "Purple Label style polo") == (30, True)
     assert capped("Loro Piana cashmere sweater", 900.0) == (430, True)
     assert capped("Men's cashmere sweater", 900.0, "Kiton label") == (200, True)
+
+
+def test_no_ai_call_when_the_price_table_already_rules_out_a_great_deal(tmp_path):
+    # Audit 11-17: 105 of 236 first looks were PM polos/quarter-zips whose
+    # table row (the most the AI's resale can be) was under twice the price.
+    def run(title, price):
+        listing, result = _apparel_listing_result(title, price, "golf", "peter millar polo")
+        folder = tmp_path / f"{len(list(tmp_path.iterdir()))}"
+        folder.mkdir()
+        lane, _strong, _send, row = _run_custom_pipeline(folder, listing, result, _apparel_ai(100))
+        return lane.ai_calls, row["reason"]
+
+    calls, reason = run("Peter Millar pima cotton polo", 25)
+    assert calls == 0 and reason.startswith("price table:")
+    assert run("Peter Millar pima cotton polo", 9)[0] >= 1
+    # Gamecocks are valued up (row x1.5), so $20 can still be a Great Deal.
+    assert run("Peter Millar Gamecocks pima cotton polo", 20)[0] >= 1
+    assert run("Peter Millar pima cotton quarter zip", 30)[0] == 0
+    assert run("Peter Millar pima cotton quarter zip", 15)[0] >= 1
 
 
 def test_hats_have_their_own_resale_floor():

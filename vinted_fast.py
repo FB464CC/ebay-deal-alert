@@ -2048,6 +2048,52 @@ def _cap_to_price_table(result, key, summary="", index=0):
         result[key] = float(VINTED_PM_SWEATER_VEST_VALUE)
 
 
+def _price_table_ceiling_reason(result, category):
+    """Audit 11-17: 105 of 236 first looks went to pieces whose table row,
+    the most the AI's resale can become after _cap_to_price_table, already
+    rules out a Great Deal at list, offer and message prices. The title fixes
+    the row (brand and piece), so these die at the menswear bar whatever the
+    photos show; skip the AI call."""
+    listing = result.get("listing") or {}
+    if (
+        category not in VINTED_PRICE_TABLE_CATEGORIES
+        or _VINTED_SUIT.search(str(listing.get("title") or ""))  # Golden Fleece shows only in photos
+        or result.get("vinted_instant_alerted")  # its SKIP follow-up runs its own AI check
+    ):
+        return None
+    probe = {"listing": listing, "estimated_resale_value": 1e9}
+    _cap_to_price_table(probe, "estimated_resale_value")
+    if not probe.get("vinted_price_table"):
+        return None
+    ceiling = probe["estimated_resale_value"]
+    paid = result.get("vinted_expected_paid")
+    if paid is None:
+        paid = _set_vinted_negotiation_prices(result)
+    ratings = [engine.compute_deal_rating(paid, ceiling)[0]]
+    # Offers go to the top houses only. The photo check's brand evidence can
+    # still make one the brand key, so check each house it could become and
+    # whether the row even clears that house's resale floor.
+    offer_possible = False
+    for house in VINTED_OFFER_BRANDS:
+        probe = {"listing": listing, "visible_brand_evidence": house}
+        floor = _vinted_resale_minimum(probe)
+        offer_possible = offer_possible or (
+            probe["vinted_brand_key"] in VINTED_OFFER_BRANDS and ceiling >= floor
+        )
+    if offer_possible:
+        ceiling_view = {**result, "estimated_resale_value": ceiling}
+        ratings += [
+            (_offer_view(ceiling_view, fraction) or {}).get("deal_rating")
+            for fraction in (VINTED_OFFER_FRACTION, VINTED_MESSAGE_FRACTION)
+        ]
+    if None in ratings or any(r in {"Steal", "Great Deal"} for r in ratings):
+        return None
+    return (
+        f"price table: ~${paid:.0f} all-in is over half the ${ceiling:g} "
+        "this sells for used (no AI check)"
+    )
+
+
 def _alert_details(result):
     """Owner 11-17: what a 10-second buy decision still lacked."""
     listing = result.get("listing") or {}
@@ -3974,6 +4020,10 @@ class VintedFastLane:
             )
             return
         self._maybe_instant_alert(result, category)
+        ceiling_reason = _price_table_ceiling_reason(result, category)
+        if ceiling_reason:
+            self._finish(conn, result, item_id, fingerprint, total_price, ceiling_reason)
+            return
         if category != "fragrance":
             if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
                 jev_score = self._while_peeking(engine.jev_vinted_score,
