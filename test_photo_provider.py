@@ -292,6 +292,17 @@ class CallDeepseekJson(unittest.TestCase):
             with mock.patch("requests.post", return_value=fake_resp):
                 self.assertEqual(m._call_deepseek_json("prompt JSON", []), {"b": 2})
 
+    def test_trailing_text_after_the_object_is_ignored(self):
+        # Live 11-11: "Extra data: line 2 column 1" dropped the photo check on a
+        # $12 Peter Millar quarter-zip (NO_AI_BUDGET) though line 1 was valid.
+        fake_resp = mock.Mock()
+        fake_resp.raise_for_status.return_value = None
+        fake_resp.json.return_value = {"choices": [{"message": {"content": '{"b": 2}\n{"b": 2}'}}]}
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": "k"}):
+            with mock.patch("requests.post", return_value=fake_resp):
+                self.assertEqual(m._call_deepseek_json("prompt JSON", []), {"b": 2})
+                self.assertEqual(m._call_deepseek_text_json("prompt JSON"), {"b": 2})
+
 
 class PaidAiSpendGuard(unittest.TestCase):
     def setUp(self):

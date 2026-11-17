@@ -4181,3 +4181,20 @@ def test_logo_checks_ignore_hangers_and_photo_watermarks():
     first = inspect.getsource(engine).split("Examine every photo closely")[1][:3000]
     for prompt in (strong, first):
         assert "hanger" in prompt and "watermark" in prompt
+
+
+def test_openrouter_look_keeps_a_valid_object_followed_by_junk(tmp_path, monkeypatch):
+    # Live 11-11 "Extra data: line 2 column 1": a whole valid answer was
+    # thrown away because the model added a second line after it.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    lane = _lane(tmp_path)
+    reply = mock.Mock()
+    reply.json.return_value = {
+        "choices": [{"message": {"content": '{"looks_good": true}\nNote: label photo is blurry.'}}]
+    }
+    with (
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+        mock.patch.object(engine, "_settle_paid_ai_spend"),
+        mock.patch.object(fast.requests, "post", return_value=reply),
+    ):
+        assert lane._openrouter_strong_look("p", [(b"j", "image/jpeg")], None) == {"looks_good": True}

@@ -2345,7 +2345,7 @@ class VintedFastLane:
             response_payload = response.json()
             cost = _openrouter_usage_cost(response_payload)
             response_text = response_payload["choices"][0]["message"]["content"]
-            parsed = json.loads(engine._strip_json_code_fence(response_text))
+            parsed = engine._load_ai_json(response_text)
             answer = parsed.get("answer")
             if type(answer) is not bool:
                 raise ValueError("prescreen JSON answer is not boolean")
@@ -2698,7 +2698,7 @@ class VintedFastLane:
                 _openrouter_usage_cost(response_payload),
             )
             text = response_payload["choices"][0]["message"]["content"]
-            parsed = json.loads(engine._strip_json_code_fence(str(text or "")))
+            parsed = engine._load_ai_json(str(text or ""))
         except (requests.exceptions.RequestException, KeyError, IndexError,
                 TypeError, ValueError, AttributeError) as exc:
             logger.warning("vinted-fast OpenRouter strong look failed: %s", exc)

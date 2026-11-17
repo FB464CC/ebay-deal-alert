@@ -6329,6 +6329,13 @@ def _strip_json_code_fence(text):
     return cleaned
 
 
+def _load_ai_json(text):
+    """The model's JSON answer. Anything after the first complete value (a
+    repeated object, a trailing note) is ignored: live 11-11 a valid photo
+    check died on "Extra data" and a $12 Peter Millar went unchecked."""
+    return json.JSONDecoder().raw_decode(_strip_json_code_fence(text))[0]
+
+
 def _make_gemini_inline_part(content, mime_type):
     return {
         "inline_data": {
@@ -6525,7 +6532,7 @@ def _call_gemini_parts_json(
         resp.raise_for_status()
         parts = resp.json()["candidates"][0]["content"]["parts"]
         text = "".join(part.get("text", "") for part in parts)
-        result = json.loads(_strip_json_code_fence(text))
+        result = _load_ai_json(text)
         _record_gemini_key_outcome(fingerprint, "success")
         return result
     if raise_on_http_error and last_http_error is not None:
@@ -7153,7 +7160,7 @@ def _call_deepseek_json(prompt, images, timeout=30):
     if actual_usd is not None:
         _settle_paid_ai_spend(AI_PAID_VISION_RESERVATION_USD, actual_usd)
     text = response_payload["choices"][0]["message"]["content"]
-    return json.loads(_strip_json_code_fence(text))
+    return _load_ai_json(text)
 
 
 def _call_deepseek_text_json(prompt, timeout=15):
@@ -7192,7 +7199,7 @@ def _call_deepseek_text_json(prompt, timeout=15):
     if actual_usd is not None:
         _settle_paid_ai_spend(AI_PAID_TEXT_RESERVATION_USD, actual_usd)
     text = response_payload["choices"][0]["message"]["content"]
-    return json.loads(_strip_json_code_fence(text))
+    return _load_ai_json(text)
 
 
 def _deepseek_alert_sanity_check(
