@@ -3,6 +3,7 @@ import io
 import json
 import os
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3830,3 +3831,54 @@ def test_box_only_opened_is_a_sealed_bottle_not_an_empty_box():
     assert engine._text_safety_hard_fails("born in roma box only opened to prove authenticity", category="fragrance") is None
     assert engine._text_safety_hard_fails("tom ford watch box only", category="watches")
 
+
+
+def test_rate_limited_photo_check_retries_on_the_strong_model_before_free_backup(tmp_path, monkeypatch):
+    # Audit 11-16: 5 of 36 flash-lite checks got an instant 429 and then waited
+    # 8 s on a free Gemini timeout (alerts 12-17 s after first sight, not 9).
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    lane = _lane(tmp_path)
+    prepared = {"prompt": "p", "images": [(b"jpeg", "image/jpeg")]}
+    limited = mock.Mock()
+    limited.raise_for_status.side_effect = requests.exceptions.HTTPError("429 Too Many Requests")
+    with (
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=prepared),
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+        mock.patch.object(engine, "_call_photo_check") as free,
+        mock.patch.object(fast.requests, "post", side_effect=[limited, _openrouter_reply()]) as post,
+    ):
+        assert lane._first_photo_check({}, "knitwear", None, "q")["estimated_resale_value"]
+    free.assert_not_called()
+    assert [c.kwargs["json"]["model"] for c in post.call_args_list] == [
+        fast.VINTED_PHOTO_OPENROUTER_MODEL, fast.VINTED_STRONG_OPENROUTER_MODEL,
+    ]
+
+
+def test_sanity_check_runs_beside_the_strong_look_not_after_it(tmp_path):
+    # Audit 11-16: the text sanity pass waited for the strong look (~2 s of
+    # every alert) though it only needs the first photo check's answer.
+    lane = _lane(tmp_path)
+    listing, result = _listing_and_result()
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    sanity_started, seen = threading.Event(), []
+
+    def sanity(*_args, **_kwargs):
+        sanity_started.set()
+        return {"is_complete_item": True, "is_part_or_accessory": False, "reason": ""}
+
+    def strong(merged, _hard_stop):
+        seen.append(sanity_started.wait(2))
+        return _record_mock_strong(lane, merged, _passing_strong_result())
+
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"}),
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=_apparel_ai(100)),
+        mock.patch.object(engine, "_deepseek_alert_sanity_check", side_effect=sanity),
+        mock.patch.object(engine, "send_alert") as send,
+        mock.patch.object(lane, "_run_vinted_strong_vision", side_effect=strong),
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    assert seen == [True]
+    send.assert_called_once()

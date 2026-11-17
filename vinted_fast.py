@@ -17,6 +17,7 @@ import sqlite3
 import threading
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timezone
 from io import BytesIO
@@ -2464,6 +2465,14 @@ class VintedFastLane:
             prepared["prompt"], prepared["images"], hard_stop,
             model=VINTED_PHOTO_OPENROUTER_MODEL, limit=VINTED_PHOTO_OPENROUTER_TIMEOUT_SECONDS,
         )
+        if not isinstance(result, dict) and self.clock() - started < 2:
+            # Audit 11-16: flash-lite 429s in under a second on ~15% of checks
+            # and the free backup then burned 8 s. The strong model sits on a
+            # different pool and answers in ~1.6 s.
+            result = self._openrouter_strong_look(
+                prepared["prompt"], prepared["images"], hard_stop,
+                limit=VINTED_PHOTO_OPENROUTER_TIMEOUT_SECONDS,
+            )
         logger.info(
             "vinted-fast photo check %s in %.1fs",
             "openrouter" if isinstance(result, dict) else "backup", self.clock() - started,
@@ -3854,6 +3863,15 @@ class VintedFastLane:
                 verdict=offer_verdict(),
             )
             return
+        # Audit 11-16: the sanity pass only needs the first photo check, so it
+        # runs beside the strong look (~2 s off every alert); a veto drops it.
+        sanity_pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-sanity")
+        sanity_future = sanity_pool.submit(
+            engine._deepseek_alert_sanity_check,
+            listing, ai_result, category, hard_stop=hard_stop,
+            search_query=search.get("query"),
+        )
+        sanity_pool.shutdown(wait=False)
         if category in VINTED_APPAREL_CATEGORIES or category == "school-gear":
             strong_result = self._while_peeking(self._run_vinted_strong_vision, result, hard_stop)
             if not isinstance(strong_result, dict):
@@ -3880,10 +3898,7 @@ class VintedFastLane:
                     verdict=offer_verdict(),
                 )
                 return
-        sanity = self._while_peeking(engine._deepseek_alert_sanity_check,
-            listing, ai_result, category, hard_stop=hard_stop,
-            search_query=search.get("query"),
-        )
+        sanity = self._while_peeking(sanity_future.result)
         if sanity["is_part_or_accessory"] or not sanity["is_complete_item"]:
             self._finish(
                 conn,
