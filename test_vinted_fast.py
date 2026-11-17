@@ -965,7 +965,9 @@ def test_prescreen_errors_and_unparseable_responses_fail_open(tmp_path, monkeypa
         assert result["vinted_prescreen_answer"] is None
 
 
-def test_prescreen_only_explicit_false_drops_before_real_ai(tmp_path):
+def test_prescreen_only_explicit_false_drops_before_real_ai(tmp_path, monkeypatch):
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 1)  # prescreen on
+
     def run_case(case_name, answer):
         case_path = tmp_path / case_name
         case_path.mkdir()
@@ -4442,3 +4444,122 @@ def test_failed_session_bootstrap_keeps_the_request_floor(tmp_path):
     with mock.patch.object(marketplaces, "_get_vinted_session", return_value=None) as boot:
         lane.run()
     assert boot.call_count <= 11
+
+
+def test_photo_check_starts_without_a_brand_poll_in_front_of_it(tmp_path, monkeypatch):
+    # Audit 11-17: a synchronous brand peek sat between the seller lookup and
+    # the photo check on every AI item (~1-1.5 s of each alert); the peeks
+    # beside the AI call keep the brand feed polled anyway.
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 1)  # serial path
+    lane = _lane(tmp_path)
+    lane._run_vinted_prescreen = mock.Mock(return_value=None)
+    listing, result = _listing_and_result()
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    order = []
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"}),
+        mock.patch.object(lane, "_peek_brand_feed", side_effect=lambda: order.append("peek")),
+        mock.patch.object(
+            fast, "fetch_vinted_seller_stats",
+            side_effect=lambda _u: order.append("seller") or dict(TRUSTED_SELLER),
+        ),
+        mock.patch.object(lane, "_first_photo_check", side_effect=lambda *_a: order.append("photo")),
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    assert order[order.index("seller") + 1] == "photo"
+
+
+def test_apparel_photo_check_runs_beside_the_seller_lookup(tmp_path, monkeypatch):
+    # Audit 11-17: apparel sellers were rejected 0 times today, yet every
+    # apparel alert waited for the seller request before its photo check.
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 0)
+    lane = _lane(tmp_path)
+    listing, result = _listing_and_result()
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    photo_started, seen = threading.Event(), []
+
+    def photo(*_args):
+        photo_started.set()
+
+    def seller(_user_id):
+        seen.append(photo_started.wait(2))
+        return dict(TRUSTED_SELLER)
+
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"}),
+        mock.patch.object(fast, "fetch_vinted_seller_stats", side_effect=seller),
+        mock.patch.object(lane, "_first_photo_check", side_effect=photo) as check,
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    assert seen == [True]
+    assert check.call_count == 1 and lane.ai_calls == 1
+
+
+def test_poll_batch_runs_the_likeliest_steal_first(tmp_path):
+    # 11-17 12:55 ET: a $10 PM golf shirt came in one poll with a $15 and a
+    # $10 polo and went last by id (11 s of its 22 s); it sold minutes later.
+    ticks = iter(x / 100 for x in range(10_000))
+    polo = {"id": "polo", "query": "peter millar polo", "max_price": 30, "platforms": ["vinted"]}
+    suit = {"id": "suit", "query": "peter millar suit", "max_price": 150, "platforms": ["vinted"]}
+    lane = fast.VintedFastLane(
+        searches=[polo, suit], state_path=tmp_path / "state.json",
+        seen_db_path=tmp_path / "seen.db", log_path=tmp_path / "lane.jsonl",
+        main_seen_db_path=tmp_path / "missing-main.db", run_seconds=0.5,
+        clock=lambda: next(ticks), sleeper=lambda _seconds: None,
+        schedule=[("text", {"id": "feed-text-peter millar", "query": "peter millar"})],
+    )
+    old_water = fast._item_marker(_raw_item(0, timestamp=1))
+    (tmp_path / "state.json").write_text(
+        json.dumps({"searches": {"feed-text-peter millar": old_water}})
+    )
+    rows = []
+    for item_id, title, price in ((1, "polo", "20"), (2, "suit", "60"), (3, "polo", "10"), (4, "polo", "10")):
+        row = _raw_item(item_id)
+        row.update(title=f"Peter Millar {title}", price={"amount": price})
+        rows.append(row)
+    done = []
+    with (
+        mock.patch.object(lane, "_catalog_request", return_value=(200, rows)),
+        mock.patch.object(lane, "_instant_prepass"),
+        mock.patch.object(lane, "_peek_brand_feed"),
+        mock.patch.object(lane, "_route", side_effect=lambda item, _src: polo if "polo" in item["title"] else suit),
+        mock.patch.object(lane, "_process_item", side_effect=lambda _c, _m, item, *_a: done.append(item["id"])),
+    ):
+        lane.run()
+    # $10/$30 polos (oldest id first on a tie), then $60/$150 suit, then $20/$30.
+    assert done == ["3", "4", "2", "1"]
+
+
+def test_brand_catalog_stays_under_30_requests_a_minute(tmp_path):
+    # Audit 11-17 run 44140989244: all 14 brand 429s (60 s pauses each, 9%
+    # of the run brand-blind) followed a minute with 30-31 brand requests at
+    # exactly 2.0 s; minutes with 27-29 never drew one.
+    now = [0.0]
+    lane = fast.VintedFastLane(
+        searches=[], state_path=tmp_path / "state.json", seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl", main_seen_db_path=tmp_path / "missing-main.db",
+        run_seconds=1, clock=lambda: now[0],
+        sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    lane.session = mock.Mock()
+    lane.session.get.return_value = mock.Mock(status=500)
+    starts = []
+    feed = {"id": "feed-brands", "brand_ids": [1]}
+    for _ in range(40):
+        lane._brand_catalog_request(feed)
+        starts.append(lane._last_brand_poll)
+        now[0] += 0.4  # response time
+        lane._respect_interval()  # a text request takes the next slot
+        lane._last_request_started = now[0]
+        now[0] += 0.2
+    assert max(sum(1 for s in starts if t <= s < t + 60) for t in starts) <= 29
+    # The peek skips (rather than waits) inside the same spacing.
+    lane._peek_ctx = (None, None, {"searches": {}}, feed)
+    lane._last_brand_poll = now[0] - 2.05
+    with mock.patch.object(lane, "_brand_catalog_request") as request:
+        lane._peek_brand_feed()
+    request.assert_not_called()

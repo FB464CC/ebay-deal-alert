@@ -46,6 +46,10 @@ VINTED_TEXT_FEEDS = list(engine._CONFIG.get("VINTED_TEXT_FEEDS", []))
 # answered 429 every ~45 s and the 60 s backoffs blinded the lane half the time.
 VINTED_BRAND_SLOTS_PER_TEXT = max(1, int(engine._CONFIG.get("VINTED_BRAND_SLOTS_PER_TEXT", 1)))
 VINTED_BRAND_FEED_TIMEOUT = 4
+# Audit 11-17: every brand 429 (14 in 2.6 h, 60 s pause each) followed a
+# minute of 30-31 brand requests at exactly 2.0 s; 27-29 never drew one.
+# 2.1 s keeps any 60 s window at <= 29 (a rate cut, not a raise).
+VINTED_BRAND_MIN_GAP_SECONDS = 2.1
 VINTED_FAST_BACKOFF_INITIAL_SECONDS = 60
 VINTED_FAST_BACKOFF_MAX_SECONDS = 15 * 60
 VINTED_FAST_STATE_PATH = Path(__file__).resolve().with_name(
@@ -1620,15 +1624,19 @@ def _cached_download_listing_image(image_url, *args, **kwargs):
     return downloaded
 
 
+def _in_background(fn, *args, **kwargs):
+    pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-bg")
+    future = pool.submit(fn, *args, **kwargs)
+    pool.shutdown(wait=False)
+    return future
+
+
 def _start_sanity(listing, ai_result, category, search, hard_stop):
-    pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-sanity")
-    future = pool.submit(
+    return _in_background(
         engine._deepseek_alert_sanity_check,
         listing, ai_result, category, hard_stop=hard_stop,
         search_query=search.get("query"),
     )
-    pool.shutdown(wait=False)
-    return future
 
 
 def _prewarm_listing_images(listing, hard_stop):
@@ -1648,6 +1656,13 @@ def _prewarm_listing_images(listing, hard_stop):
             _engine_download_listing_image, url, hard_stop=hard_stop
         )
     pool.shutdown(wait=False)
+
+
+def _share_of_cap(item, search):
+    """Row price over its search's list-price cap: lowest = likeliest steal."""
+    price = marketplaces._to_float((item.get("price") or {}).get("amount"))
+    cap = marketplaces._to_float(search.get("max_price"))
+    return price / cap if price and cap else 1.0
 
 
 def _raw_vinted_item_id(item):
@@ -3197,8 +3212,8 @@ class VintedFastLane:
         conn, main_conn, state, feed = self._peek_ctx
         if (
             self._last_brand_poll is not None
-            # >= 2 s apart: the catalog page's ~30/min limit (see above).
-            and self.clock() - self._last_brand_poll < 2 * VINTED_FAST_POLL_SECONDS
+            # The catalog page's ~30/min limit (see VINTED_BRAND_MIN_GAP_SECONDS).
+            and self.clock() - self._last_brand_poll < VINTED_BRAND_MIN_GAP_SECONDS
         ):
             return
         if self._brand_paused():
@@ -3431,6 +3446,10 @@ class VintedFastLane:
 
     def _brand_catalog_request(self, feed):
         """One web-catalog request covering every brand id in the feed."""
+        if self._last_brand_poll is not None:
+            wait = self._last_brand_poll + VINTED_BRAND_MIN_GAP_SECONDS - self.clock()
+            if wait > 0:
+                self.sleeper(wait)
         self._respect_interval()
         if self.session is None:
             # The bootstrap is a Vinted request too: a failed one must not
@@ -3971,6 +3990,20 @@ class VintedFastLane:
             )
             return
         _prewarm_listing_images(listing, hard_stop)
+        early_photo = None
+        if (
+            # Audit 11-17: 0 apparel seller rejects in a day, so the photo
+            # check runs beside the seller lookup (~1 s of every alert). Not
+            # when a pre-photo screen (Jev/prescreen) could still skip it.
+            (category in VINTED_APPAREL_CATEGORIES or category == "school-gear")
+            and VINTED_PRESCREEN_MAX_PER_RUN == 0
+            and not str(os.environ.get("TYPESAFE_API_KEY") or "").strip()
+            and self.ai_calls < VINTED_FAST_MAX_AI_CALLS_PER_RUN
+        ):
+            self.ai_calls += 1
+            early_photo = _in_background(
+                self._first_photo_check, listing, category, hard_stop, search.get("query")
+            )
         if (
             category in VINTED_STRICT_SELLER_CATEGORIES
             or category in VINTED_APPAREL_CATEGORIES
@@ -4067,7 +4100,9 @@ class VintedFastLane:
                     )
                     return
 
-        if self.ai_calls >= VINTED_FAST_MAX_AI_CALLS_PER_RUN:
+        if early_photo is not None:
+            ai_result = self._while_peeking(early_photo.result)
+        elif self.ai_calls >= VINTED_FAST_MAX_AI_CALLS_PER_RUN:
             self._finish(
                 conn,
                 result,
@@ -4078,11 +4113,13 @@ class VintedFastLane:
                 verdict="NO_AI_BUDGET",
             )
             return
-        self.ai_calls += 1
-        self._peek_brand_feed()
-        ai_result = self._while_peeking(self._first_photo_check,
-            listing, category, hard_stop, search.get("query"),
-        )
+        else:
+            self.ai_calls += 1
+            # No brand peek here: _while_peeking polls beside the AI call (audit
+            # 11-17: a peek here put ~1-1.5 s in front of every photo check).
+            ai_result = self._while_peeking(self._first_photo_check,
+                listing, category, hard_stop, search.get("query"),
+            )
         if not isinstance(ai_result, dict):
             self._finish(
                 conn,
@@ -4297,6 +4334,7 @@ class VintedFastLane:
                     self._instant_prepass(
                         lane_conn, main_conn, new_items, kind, search
                     )
+                    batch = []
                     for item in new_items:
                         target = (
                             search if kind == "search"
@@ -4306,6 +4344,11 @@ class VintedFastLane:
                             totals["unrouted"] += 1
                             _log_unrouted(item, None if kind == "brands" else search.get("query"))
                             continue
+                        batch.append((item, target))
+                    # Audit 11-17: a $10 PM shirt waited 11 s behind two pricier
+                    # rows from its own poll. Stable sort: ties keep id order.
+                    batch.sort(key=lambda pair: _share_of_cap(*pair))
+                    for item, target in batch:
                         try:
                             self._peek_brand_feed()
                             self._process_item(
