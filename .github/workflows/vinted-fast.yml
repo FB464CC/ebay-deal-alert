@@ -70,6 +70,15 @@ jobs:
           SHOPGOODWILL_PROXY_URL: ${{ secrets.SHOPGOODWILL_PROXY_URL }}
         run: python vinted_fast.py
 
+      # Audit 11-17: a cancelled run left python writing the seen DB while the
+      # cache saved it. Ctrl-C lets its finally blocks close the DB first.
+      - name: Stop the lane before saving state
+        if: always()
+        run: |
+          pkill -INT -f "python vinted_fast.py" || exit 0
+          for _ in $(seq 1 20); do pgrep -f "python vinted_fast.py" >/dev/null || exit 0; sleep 1; done
+          pkill -KILL -f "python vinted_fast.py" || true
+
       - name: Save Vinted fast-lane state
         id: vinted-fast-cache-save
         if: always()
