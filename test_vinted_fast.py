@@ -4241,3 +4241,28 @@ def test_openrouter_look_keeps_a_valid_object_followed_by_junk(tmp_path, monkeyp
         mock.patch.object(fast.requests, "post", return_value=reply),
     ):
         assert lane._openrouter_strong_look("p", [(b"j", "image/jpeg")], None) == {"looks_good": True}
+
+
+def test_failed_session_bootstrap_keeps_the_request_floor(tmp_path):
+    # Each bootstrap is a GET to vinted.com. When it failed (e.g. homepage 403
+    # right after a 403 discarded the session), the request functions returned
+    # without stamping the request time, so the loop retried with no pause.
+    now = [0.0]
+
+    def clock():
+        now[0] += 0.01
+        return now[0]
+
+    def sleeper(seconds):
+        now[0] += seconds
+
+    search = {"id": "s", "query": "peter millar polo", "platforms": ["vinted"], "max_price": 30}
+    lane = fast.VintedFastLane(
+        searches=[search], state_path=tmp_path / "state.json",
+        seen_db_path=tmp_path / "seen.db", log_path=tmp_path / "lane.jsonl",
+        main_seen_db_path=tmp_path / "missing-main.db", run_seconds=10,
+        clock=clock, sleeper=sleeper, dry_run=True,
+    )
+    with mock.patch.object(marketplaces, "_get_vinted_session", return_value=None) as boot:
+        lane.run()
+    assert boot.call_count <= 11

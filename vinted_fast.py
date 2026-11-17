@@ -3371,6 +3371,9 @@ class VintedFastLane:
         """One web-catalog request covering every brand id in the feed."""
         self._respect_interval()
         if self.session is None:
+            # The bootstrap is a Vinted request too: a failed one must not
+            # let the next slot fire at once (a tight homepage loop in a block).
+            self._last_request_started = self.clock()
             self.session = marketplaces._get_vinted_session()
         if self.session is None:
             return 0, None
@@ -3505,6 +3508,9 @@ class VintedFastLane:
     def _catalog_request(self, search):
         self._respect_interval()
         if self.session is None:
+            # The bootstrap is a Vinted request too: a failed one must not
+            # let the next slot fire at once (a tight homepage loop in a block).
+            self._last_request_started = self.clock()
             self.session = marketplaces._get_vinted_session()
         if self.session is None:
             return 0, None
