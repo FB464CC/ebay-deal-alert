@@ -3679,6 +3679,29 @@ def test_gift_towel_warmer_needs_half_off_new_all_in():
     assert "not gift-ready" in r("Zadro Towel Warmer", "zadro", "Good", 30, 0)
 
 
+def test_gift_alert_counts_the_buyer_fee_once(tmp_path):
+    # The listing's shipping cost already carries the 5% + $0.70 fee; the gift
+    # check added it again (live 11-17: "$25 ... ~$31 all-in", real $28.57).
+    # $21 free-ship generic warmer: (21*1.05 + 0.70) * 1.06 = $24.12 <= $25.
+    lane = _lane(tmp_path)
+    conn = engine.init_db(tmp_path / "gift.db")
+    listing = {
+        "itemId": "vinted:1", "title": "Towel Warmer Bucket", "condition": "New with tags",
+        "price": {"value": "21"}, "shippingOptions": [{"shippingCost": {"value": 1.75}}],
+        "vinted_shipping": 0.0, "itemWebUrl": "https://www.vinted.com/items/1",
+    }
+    result = {"listing": listing, "item_price": 21.0}
+    stats = {"_http_status": 200, "feedback_count": 20, "feedback_reputation": 1.0, "item_count": 30}
+    with (
+        mock.patch.object(fast, "fetch_vinted_seller_stats", return_value=stats),
+        mock.patch.object(lane, "_ntfy") as ntfy,
+    ):
+        lane._gift_alert(conn, {"user": {"id": 5}}, listing, result, "fp", 22.75)
+    conn.close()
+    assert result.get("verdict") == "ALERTED", result.get("reason")
+    assert "~$24 all-in" in ntfy.call_args.args[1]
+
+
 
 def test_one_size_cap_fits_a_letter_sized_search():
     search = {"size": ["M", "L"]}

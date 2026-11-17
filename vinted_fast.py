@@ -2956,8 +2956,10 @@ class VintedFastLane:
         title = str(listing.get("title") or "")
         condition = str(listing.get("condition") or "")
         price = result["item_price"]
+        # total_price - price already holds the buyer fee; the formula adds it.
+        shipping = _listing_shipping(listing)
         reason = _gift_reason(
-            title, item.get("brand_title") or "", condition, price, total_price - price
+            title, item.get("brand_title") or "", condition, price, shipping
         )
         if reason:
             self._finish(conn, result, item_id, fingerprint, total_price, reason)
@@ -2975,7 +2977,7 @@ class VintedFastLane:
         if seller_reason:
             self._finish(conn, result, item_id, fingerprint, total_price, seller_reason)
             return
-        all_in = (price * 1.05 + 0.70 + total_price - price) * (1 + engine.SALES_TAX_RATE)
+        all_in = (price * 1.05 + 0.70 + shipping) * (1 + engine.SALES_TAX_RATE)
         logger.info("vinted-fast gift alert: $%g | %s", price, title)
         self._ntfy(
             f"GIFT ${price:g}: {title[:50]}",
