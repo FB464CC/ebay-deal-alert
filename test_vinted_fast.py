@@ -1509,6 +1509,22 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
     assert not fast._fits_size_list(lettered, knit, "knitwear")
 
 
+def test_suit_chest_size_is_not_a_pants_waist():
+    # 11-17: "Brooks Brothers suit : jacket 42 pants 36" ($1) died as
+    # "pants waist won't fit" - the 42 chest was read as the waist.
+    title = "Brooks Brothers Brook brothers suit : jacket 42 pants 36"
+    for size in ("42", "42R", ""):
+        listing = {"title": title, "size": size, "price": {"value": 1}}
+        assert fast._off_size_reason(listing, "tailoring") is None, size
+    assert fast._off_size_reason(
+        {"title": "Zegna wool suit 42R, pants 34", "size": "", "price": {"value": 50}}, "tailoring"
+    ) is None
+    # A stated suit-pants waist still counts.
+    assert fast._off_size_reason(
+        {"title": "Canali suit 42R, pants 40x30", "size": "42R", "price": {"value": 50}}, "tailoring"
+    )
+
+
 def test_slow_ai_call_keeps_polling_the_brand_feed(tmp_path):
     import threading
 
@@ -2624,6 +2640,10 @@ def test_menswear_seller_rule_only_cuts_obvious_throwaways():
         ("Z Zegna button down shirt", "L", "zegna", True),
         ("Zegna Sport button up shirt", "L", "zegna", True),
         ("Canali dress shirt", "L", "canali", True),
+        # 11-12: a $33 "Brooks Brothers double breasted suit" died as a lone piece.
+        ("Brooks Brothers double breasted suit", "42R", "brooks brothers", False),
+        ("Zegna Double Breasted Jacket, 42R", "42R", "zegna", True),
+        ("Canali double breasted suit jacket 42R", "42R", "canali", True),
     ],
 )
 def test_menswear_shape_rule(title, size, brand, blocked):

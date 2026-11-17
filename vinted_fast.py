@@ -944,6 +944,9 @@ def _stated_waists(size, title):
     """US waists stated on a pants listing. Bare 44-58 is EU sizing, ignored."""
     text = f"{size} {title}"
     sure = [int(next(g for g in m.groups() if g)) for m in _WAIST_SURE.finditer(text)]
+    # 11-17: a suit's "42"/"42R" is the chest ("suit : jacket 42 pants 36").
+    if _VINTED_SUIT.search(title):
+        return sure
     loose = [int(next(g for g in m.groups() if g)) for m in _WAIST_LOOSE.finditer(text)]
     plain = re.match(r"^\s*(\d{2})\b", size)
     if plain:
@@ -1341,9 +1344,12 @@ def _menswear_shape_reason(listing, brand_key, category=None):
         return "another maker using Loro Piana/Zegna fabric, not the house itself"
     if _VINTED_POLO.search(title) and _VINTED_XL.search(sized):
         return "XL polo (owner wears M/L polos)"
-    if _VINTED_LONE_TAILORING.search(title) and not (
-        _VINTED_SUIT.search(title) and _VINTED_AI_FULL_SUIT.search(title)
-    ):
+    lone = [m.group(0) for m in _VINTED_LONE_TAILORING.finditer(title)]
+    if _VINTED_SUIT.search(title):
+        # 11-12: "double breasted suit" is a suit; the photo check still
+        # wants the pants in frame.
+        lone = [w for w in lone if not re.search(r"breasted", w, re.IGNORECASE)]
+    if lone and not (_VINTED_SUIT.search(title) and _VINTED_AI_FULL_SUIT.search(title)):
         return "lone blazer/sport coat/suit piece, full suits only"
     if _VINTED_SUIT.search(title):
         if not _VINTED_SUIT_SIZE.search(f"{sized} {listing.get('description') or ''}"):
