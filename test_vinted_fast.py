@@ -4204,3 +4204,38 @@ def test_photo_check_starts_without_a_brand_poll_in_front_of_it(tmp_path):
         lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
     conn.close()
     assert order[order.index("seller") + 1] == "photo"
+
+
+def test_poll_batch_runs_the_likeliest_steal_first(tmp_path):
+    # 11-17 12:55 ET: a $10 PM golf shirt came in one poll with a $15 and a
+    # $10 polo and went last by id (11 s of its 22 s); it sold minutes later.
+    ticks = iter(x / 100 for x in range(10_000))
+    polo = {"id": "polo", "query": "peter millar polo", "max_price": 30, "platforms": ["vinted"]}
+    suit = {"id": "suit", "query": "peter millar suit", "max_price": 150, "platforms": ["vinted"]}
+    lane = fast.VintedFastLane(
+        searches=[polo, suit], state_path=tmp_path / "state.json",
+        seen_db_path=tmp_path / "seen.db", log_path=tmp_path / "lane.jsonl",
+        main_seen_db_path=tmp_path / "missing-main.db", run_seconds=0.5,
+        clock=lambda: next(ticks), sleeper=lambda _seconds: None,
+        schedule=[("text", {"id": "feed-text-peter millar", "query": "peter millar"})],
+    )
+    old_water = fast._item_marker(_raw_item(0, timestamp=1))
+    (tmp_path / "state.json").write_text(
+        json.dumps({"searches": {"feed-text-peter millar": old_water}})
+    )
+    rows = []
+    for item_id, title, price in ((1, "polo", "20"), (2, "suit", "60"), (3, "polo", "10"), (4, "polo", "10")):
+        row = _raw_item(item_id)
+        row.update(title=f"Peter Millar {title}", price={"amount": price})
+        rows.append(row)
+    done = []
+    with (
+        mock.patch.object(lane, "_catalog_request", return_value=(200, rows)),
+        mock.patch.object(lane, "_instant_prepass"),
+        mock.patch.object(lane, "_peek_brand_feed"),
+        mock.patch.object(lane, "_route", side_effect=lambda item, _src: polo if "polo" in item["title"] else suit),
+        mock.patch.object(lane, "_process_item", side_effect=lambda _c, _m, item, *_a: done.append(item["id"])),
+    ):
+        lane.run()
+    # $10/$30 polos (oldest id first on a tie), then $60/$150 suit, then $20/$30.
+    assert done == ["3", "4", "2", "1"]

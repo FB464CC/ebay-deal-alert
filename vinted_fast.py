@@ -1636,6 +1636,13 @@ def _prewarm_listing_images(listing, hard_stop):
     pool.shutdown(wait=False)
 
 
+def _share_of_cap(item, search):
+    """Row price over its search's list-price cap: lowest = likeliest steal."""
+    price = marketplaces._to_float((item.get("price") or {}).get("amount"))
+    cap = marketplaces._to_float(search.get("max_price"))
+    return price / cap if price and cap else 1.0
+
+
 def _raw_vinted_item_id(item):
     return str(item.get("id") or "").strip() if isinstance(item, dict) else ""
 
@@ -4230,6 +4237,7 @@ class VintedFastLane:
                     self._instant_prepass(
                         lane_conn, main_conn, new_items, kind, search
                     )
+                    batch = []
                     for item in new_items:
                         target = (
                             search if kind == "search"
@@ -4239,6 +4247,11 @@ class VintedFastLane:
                             totals["unrouted"] += 1
                             _log_unrouted(item, None if kind == "brands" else search.get("query"))
                             continue
+                        batch.append((item, target))
+                    # Audit 11-17: a $10 PM shirt waited 11 s behind two pricier
+                    # rows from its own poll. Stable sort: ties keep id order.
+                    batch.sort(key=lambda pair: _share_of_cap(*pair))
+                    for item, target in batch:
                         try:
                             self._peek_brand_feed()
                             self._process_item(
