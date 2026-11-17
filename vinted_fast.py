@@ -1953,6 +1953,7 @@ def _price_table_row(result, summary=""):
 # the $30 polo row had priced out. Gamecock pieces are valued at 1.5x the row
 # and may cost up to half of resale (the Great Deal line) instead of 40%.
 VINTED_GAMECOCK_PREMIUM = 1.5
+VINTED_GAMECOCK_PM_POLO_VALUE = 40
 
 
 def _steal_fraction(result):
@@ -1966,6 +1967,18 @@ def _cap_to_price_table(result, key, summary="", index=0):
         result["vinted_price_table"] = True
     if row is not None and result.get(key) is not None and result[key] > row[index]:
         result[key] = float(row[index])
+    # Owner 11-17: "yes, $12 gamecock PM polo" (M best, L fine); he values one
+    # at $40+ used. The one place the table raises an AI number.
+    title = str((result.get("listing") or {}).get("title") or "")
+    if (
+        index == 0
+        and result.get(key) is not None
+        and result[key] < VINTED_GAMECOCK_PM_POLO_VALUE
+        and _VINTED_USC.search(title)
+        and re.search(r"peter\s*mill", title, re.I)
+        and re.search(r"\bpolo", title, re.I)
+    ):
+        result[key] = float(VINTED_GAMECOCK_PM_POLO_VALUE)
 
 
 def _alert_details(result):

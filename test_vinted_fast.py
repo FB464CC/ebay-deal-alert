@@ -4087,3 +4087,16 @@ def test_gamecock_pieces_are_worth_more_and_may_cost_up_to_half_of_resale():
     assert capped("Peter Millar Clemson Polo") == 30
     assert fast._steal_fraction({"listing": {"title": "Peter Millar Gamecock Polo"}}) == 0.5
     assert fast._steal_fraction({"listing": {"title": "Peter Millar Polo"}}) == 0.4
+
+
+def test_gamecock_peter_millar_polo_is_worth_at_least_forty():
+    # Owner 11-17: "yes, $12 gamecock PM polo" must alert; he values one at $40+.
+    def valued(title, ai):
+        result = {"listing": {"title": title}, "estimated_resale_value": ai}
+        fast._cap_to_price_table(result, "estimated_resale_value")
+        return result["estimated_resale_value"]
+
+    assert valued("Peter Millar Gamecock Polo", 30.0) == 40
+    assert valued("Peter Millar Gamecock Polo", 60.0) == 45
+    assert valued("Peter Millar Polo", 25.0) == 25
+    assert valued("Peter Millar Gamecock quarter zip", 30.0) == 30
