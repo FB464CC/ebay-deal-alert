@@ -3882,3 +3882,92 @@ def test_sanity_check_runs_beside_the_strong_look_not_after_it(tmp_path):
     conn.close()
     assert seen == [True]
     send.assert_called_once()
+
+
+def test_listing_photos_prewarm_four_at_a_time_and_download_once():
+    # Audit 11-16: the photo check fetched up to 8 photos one after another
+    # (2.5-3.5 s of every alert). Same photos, fetched while the seller lookup runs.
+    urls = [f"https://images.example/{n}.jpg" for n in range(4)]
+    listing = {
+        "image": {"imageUrl": urls[0]},
+        "additionalImages": [{"imageUrl": u} for u in urls[1:]],
+    }
+    together, calls = threading.Barrier(4, timeout=2), []
+
+    def download(url, **_kwargs):
+        calls.append(url)
+        together.wait()  # breaks unless all four are in flight at once
+        return url.encode(), "image/jpeg"
+
+    fast._IMAGE_CACHE.clear()
+    with (
+        mock.patch.object(fast, "_engine_download_listing_image", side_effect=download),
+        mock.patch.object(engine, "_download_listing_image", fast._cached_download_listing_image),
+    ):
+        fast._prewarm_listing_images(listing, None)
+        got = [engine._download_listing_image(u, hard_stop=None) for u in urls]
+    fast._IMAGE_CACHE.clear()
+    assert got == [(u.encode(), "image/jpeg") for u in urls]
+    assert sorted(calls) == urls
+
+
+def test_failed_prewarm_download_is_retried_by_the_photo_check():
+    url = "https://images.example/flaky.jpg"
+    answers = [None, (b"ok", "image/jpeg")]
+    fast._IMAGE_CACHE.clear()
+    with (
+        mock.patch.object(fast, "_engine_download_listing_image", side_effect=lambda *_a, **_k: answers.pop(0)),
+        mock.patch.object(engine, "_download_listing_image", fast._cached_download_listing_image),
+    ):
+        fast._prewarm_listing_images({"image": {"imageUrl": url}}, None)
+        assert engine._download_listing_image(url) == (b"ok", "image/jpeg")
+    fast._IMAGE_CACHE.clear()
+
+
+def test_photos_start_downloading_before_the_seller_lookup(tmp_path):
+    lane = _lane(tmp_path)
+    listing, result = _listing_and_result()
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    order = []
+    with (
+        mock.patch.object(fast, "_prewarm_listing_images", side_effect=lambda *_a: order.append("photos")),
+        mock.patch.object(
+            fast, "fetch_vinted_seller_stats",
+            side_effect=lambda *_a: order.append("seller") or {"_http_status": 500},
+        ),
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    assert order[:2] == ["photos", "seller"]
+
+
+def test_offer_alert_sanity_check_runs_beside_the_strong_look(tmp_path):
+    lane = _lane(tmp_path)
+    listing, result = _apparel_listing_result("Canali wool jacket", 115, "outerwear", "canali jacket")
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    sanity_started, seen = threading.Event(), []
+
+    def sanity(*_args, **_kwargs):
+        sanity_started.set()
+        return {"is_complete_item": True, "is_part_or_accessory": False, "reason": ""}
+
+    def strong(merged, _hard_stop):
+        seen.append(sanity_started.wait(2))
+        return _record_mock_strong(lane, merged, _passing_strong_result(resale=210))
+
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"}),
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=_offer_ai(210)),
+        mock.patch.object(engine, "_deepseek_alert_sanity_check", side_effect=sanity) as sanity_mock,
+        mock.patch.object(engine, "send_alert"),
+        mock.patch.object(fast.VintedFastLane, "_ntfy") as ntfy,
+        mock.patch.object(fast, "VINTED_OFFER_BRANDS", frozenset({"canali"})),
+        mock.patch.object(lane, "_run_vinted_strong_vision", side_effect=strong),
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    assert seen == [True]
+    assert sanity_mock.call_count == 1
+    assert ntfy.call_args.args[0].startswith("OFFER Canali")

@@ -17,7 +17,7 @@ import sqlite3
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timezone
 from io import BytesIO
@@ -1535,14 +1535,50 @@ _engine_download_listing_image = engine._download_listing_image
 
 
 def _cached_download_listing_image(image_url, *args, **kwargs):
-    if image_url in _IMAGE_CACHE:
-        return _IMAGE_CACHE[image_url]
+    hit = _IMAGE_CACHE.get(image_url)
+    if isinstance(hit, Future):  # prewarmed, maybe still in flight
+        try:
+            hit = hit.result()
+        except Exception:
+            hit = None
+    if hit is not None:
+        return hit
     downloaded = _engine_download_listing_image(image_url, *args, **kwargs)
     if downloaded is not None:
         if len(_IMAGE_CACHE) >= 48:  # ponytail: drop-all cache, ~12 items of photos
             _IMAGE_CACHE.clear()
         _IMAGE_CACHE[image_url] = downloaded
     return downloaded
+
+
+def _start_sanity(listing, ai_result, category, search, hard_stop):
+    pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-sanity")
+    future = pool.submit(
+        engine._deepseek_alert_sanity_check,
+        listing, ai_result, category, hard_stop=hard_stop,
+        search_query=search.get("query"),
+    )
+    pool.shutdown(wait=False)
+    return future
+
+
+def _prewarm_listing_images(listing, hard_stop):
+    """Audit 11-16: the photo check fetched a listing's photos (up to 8) one
+    after another, 2.5-3.5 s of every alert. The same photos, each still
+    fetched once, now load four at a time while the seller lookup runs."""
+    if engine._download_listing_image is not _cached_download_listing_image:
+        return  # cache not installed (outside run()): nothing would reuse them
+    urls = [u for u in engine._collect_listing_image_urls(listing) if u not in _IMAGE_CACHE]
+    if not urls:
+        return
+    if len(_IMAGE_CACHE) >= 48:
+        _IMAGE_CACHE.clear()
+    pool = ThreadPoolExecutor(4, thread_name_prefix="vinted-img")
+    for url in urls:
+        _IMAGE_CACHE[url] = pool.submit(
+            _engine_download_listing_image, url, hard_stop=hard_stop
+        )
+    pool.shutdown(wait=False)
 
 
 def _raw_vinted_item_id(item):
@@ -2609,6 +2645,7 @@ class VintedFastLane:
         min_list = VINTED_OFFER_MIN_LIST_TOPS if top else VINTED_OFFER_MIN_LIST
         if (engine._sane_ai_price(result.get("item_price")) or 0) < min_list:
             return False
+        sanity_future = None
         for kind, fraction in (
             ("offer", VINTED_OFFER_FRACTION),
             ("message", VINTED_MESSAGE_FRACTION),
@@ -2626,6 +2663,9 @@ class VintedFastLane:
                 # A near-miss must never use up the looks a real steal needs.
                 if self.strong_look_calls >= VINTED_STRONG_LOOK_MAX_PER_RUN // 2:
                     return False
+                sanity_future = _start_sanity(
+                    result.get("listing") or {}, ai_result, category, search, hard_stop
+                )
                 if not isinstance(
                     self._while_peeking(self._run_vinted_strong_vision, result, hard_stop),
                     dict,
@@ -2634,16 +2674,18 @@ class VintedFastLane:
                 view = _offer_view(result, fraction)
             if result.get("vinted_strong_checked") is True and not self._strong_look_veto_reason(view):
                 return self._send_offer_alert(
-                    conn, result, view, kind, category, ai_result, search, hard_stop
+                    conn, result, view, kind, category, ai_result, search, hard_stop,
+                    sanity_future,
                 )
         return False
 
-    def _send_offer_alert(self, conn, result, view, kind, category, ai_result, search, hard_stop):
+    def _send_offer_alert(self, conn, result, view, kind, category, ai_result, search, hard_stop,
+                          sanity_future=None):
         listing = result.get("listing") or {}
-        sanity = self._while_peeking(engine._deepseek_alert_sanity_check,
-            listing, ai_result, category, hard_stop=hard_stop,
-            search_query=search.get("query"),
+        sanity_future = sanity_future or _start_sanity(
+            listing, ai_result, category, search, hard_stop
         )
+        sanity = self._while_peeking(sanity_future.result)
         if sanity["is_part_or_accessory"] or not sanity["is_complete_item"]:
             return False
         title = str(listing.get("title") or "")
@@ -3700,6 +3742,7 @@ class VintedFastLane:
                 "designer eyewear on Vinted is fakes/scams",
             )
             return
+        _prewarm_listing_images(listing, hard_stop)
         if (
             category in VINTED_STRICT_SELLER_CATEGORIES
             or category in VINTED_APPAREL_CATEGORIES
@@ -3865,13 +3908,7 @@ class VintedFastLane:
             return
         # Audit 11-16: the sanity pass only needs the first photo check, so it
         # runs beside the strong look (~2 s off every alert); a veto drops it.
-        sanity_pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-sanity")
-        sanity_future = sanity_pool.submit(
-            engine._deepseek_alert_sanity_check,
-            listing, ai_result, category, hard_stop=hard_stop,
-            search_query=search.get("query"),
-        )
-        sanity_pool.shutdown(wait=False)
+        sanity_future = _start_sanity(listing, ai_result, category, search, hard_stop)
         if category in VINTED_APPAREL_CATEGORIES or category == "school-gear":
             strong_result = self._while_peeking(self._run_vinted_strong_vision, result, hard_stop)
             if not isinstance(strong_result, dict):
