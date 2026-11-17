@@ -114,6 +114,20 @@ def test_verified_alert_price_line_is_rounded_to_cents(monkeypatch):
     assert "$10 + $1.20 + tax = $11.87" in body, body
 
 
+def test_verified_vinted_alert_title_leads_with_rating_price_size_and_all_in(monkeypatch):
+    # The lock screen shows the title line; the size sat 5+ lines down the
+    # body ("listed size M"), past where iOS cuts it. FAST pings already lead
+    # with price and size; the verified alert said only "[VINTED] <title>".
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    _listing, result = _listing_and_result()
+    result.update({"deal_rating": "Great Deal", "vinted_brand": "Peter Millar",
+                   "vinted_expected_paid": 24.4})
+    with mock.patch.object(engine.requests, "post") as post:
+        engine.send_alert(result, feedback_item_id="vinted:123")
+    title = post.call_args.kwargs["headers"]["Title"]
+    assert title.startswith("GREAT DEAL Peter Millar $20 M ~$24 all-in: Peter Millar")
+
+
 def test_feedback_poll_records_valid_tap_and_advances_cursor(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
     lane = _lane(tmp_path)
@@ -133,6 +147,33 @@ def test_feedback_poll_records_valid_tap_and_advances_cursor(tmp_path, monkeypat
     rows = [json.loads(line) for line in lane.log_path.read_text().splitlines()]
     assert rows == [{"type": "feedback", "outcome": "bought", "item_id": "vinted:123",
                      "tap_time": 1012, "title": "A deal", "price": 20, "kind": "instant"}]
+
+
+def test_feedback_poll_logs_same_second_taps_once_across_polls_and_runs(tmp_path, monkeypatch):
+    # Log 11-12 19:05 -> 11-13 04:14: two Bought taps in the same second were
+    # re-logged every 5 min for 9 h. ntfy's since=<id> replays the marker's
+    # whole second except the marker, so each poll returned the other tap.
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    taps = [{"id": mid, "time": 1012, "event": "message", "message": "bought vinted:123"}
+            for mid in ("a", "b")]
+
+    def replay(url, timeout):
+        since = url.rsplit("since=", 1)[1]
+        rows = taps if since == "12h" else [t for t in taps if t["id"] != since]
+        return mock.Mock(text="\n".join(json.dumps(t) for t in rows))
+
+    state_path = tmp_path / "state.json"
+    with mock.patch.object(fast.requests, "get", side_effect=replay):
+        lane = _lane(tmp_path)
+        state = fast._load_state(state_path)
+        for _ in range(3):
+            lane._poll_feedback(state)
+        fast._save_state(state_path, state)
+        next_run = _lane(tmp_path)
+        next_state = fast._load_state(state_path)
+        next_run._poll_feedback(next_state)
+    rows = [json.loads(line) for line in lane.log_path.read_text().splitlines()]
+    assert len(rows) == 2  # the two real taps, nothing replayed
 
 
 def test_feedback_poll_network_error_does_not_change_vinted_pacing(tmp_path, monkeypatch):
@@ -1407,6 +1448,32 @@ def test_web_catalog_row_keeps_the_sellers_own_title():
     assert row["seller_title"] == "Polo shirt"
     listing = marketplaces._vinted_item_to_listing({**row, "price": {"amount": "8"}})
     assert listing["sellerTitle"] == "Polo shirt"
+
+
+def test_instant_prepass_skips_same_seller_relist_of_an_alerted_item(tmp_path, monkeypatch):
+    # Log 11-17 03:11-03:14: "Brioni mens dress shirt" $25 got FAST + OFFER;
+    # the seller relisted it (new id) and it pinged FAST again, then SKIP
+    # ("relist of a listing already judged this run"): 4 pushes, one shirt.
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    search = {"id": "s", "query": "zegna", "category": "knitwear"}
+    first, relist, other_seller = (_raw_item(i) for i in ("zegna-1", "zegna-2", "zegna-3"))
+    for item in (first, relist, other_seller):
+        item.update(title="Zegna Cashmere sweater", price={"amount": "10"})
+        item["user"] = {"id": 7, "login": "seller"}
+    other_seller["user"] = {"id": 8, "login": "someone-else"}
+    signature, seller_key = lane._relist_key(
+        marketplaces._vinted_item_to_listing(first), first
+    )
+    lane._listing_signatures[signature] = ("vinted:zegna-1", seller_key, 0)
+    lane._alerted_item_ids.add("vinted:zegna-1")
+    with mock.patch.object(fast.requests, "post") as post:
+        lane._instant_prepass(conn, None, [relist], "search", search)
+        assert not post.called
+        lane._instant_prepass(conn, None, [other_seller], "search", search)
+    conn.close()
+    post.assert_called_once()
 
 
 def test_instant_prepass_pings_from_catalog_row_before_any_item_request(
@@ -3526,6 +3593,9 @@ def test_unrouted_elite_rows_are_logged(caplog):
         fast._log_unrouted(item("Peter Millar quarter zip"), "peter millar")
     lines = [r.getMessage() for r in caplog.records if "unrouted" in r.getMessage()]
     assert len(lines) == 1 and "Loro Piana cashmere quarter zip L" in lines[0] and "$220" in lines[0]
+    # Audit 11-17: every unrouted line ended in an empty "| " - the listing's
+    # link is itemWebUrl, so no near-miss could be opened from the log.
+    assert lines[0].rstrip().endswith("/items/9")
 
 
 def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):

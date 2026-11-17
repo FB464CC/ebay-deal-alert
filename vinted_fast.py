@@ -1547,6 +1547,8 @@ def _load_state(path):
     result = {"version": 1, "searches": searches}
     if isinstance(state.get("feedback_cursor"), str):
         result["feedback_cursor"] = state["feedback_cursor"]
+    if isinstance(state.get("feedback_seen"), list):
+        result["feedback_seen"] = [s for s in state["feedback_seen"] if isinstance(s, str)]
     return result
 
 
@@ -1812,7 +1814,7 @@ def _log_unrouted(item, source):
     logger.info(
         "vinted-fast unrouted: $%s %s | %s | size %s | %s",
         (listing.get("price") or {}).get("value"), source or "brands",
-        title[:120], listing.get("size") or "?", listing.get("url") or "",
+        title[:120], listing.get("size") or "?", listing.get("itemWebUrl") or "",
     )
 
 
@@ -3080,6 +3082,10 @@ class VintedFastLane:
                 continue
             if _already_seen(conn, main_conn, listing["itemId"]):
                 continue
+            # Audit 11-17: a relist of an alerted item pinged FAST again, then
+            # the full check sent SKIP for it as a relist. One push is enough.
+            if self._is_relist_of_alerted(listing, item):
+                continue
             target = (
                 search if kind == "search"
                 else self._route(item, None if kind == "brands" else search["query"])
@@ -3118,6 +3124,29 @@ class VintedFastLane:
                 self._listing_signatures.setdefault(
                     signature, (listing["itemId"], seller, self.clock())
                 )
+
+    @staticmethod
+    def _relist_key(listing, item):
+        """(title+price signature, seller) that marks a same-seller relist."""
+        signature = (
+            " ".join(w for w in _words(listing.get("title")) if w not in _GENDER_WORDS),
+            round(float((listing.get("price") or {}).get("value") or 0)),
+        )
+        # Brand-feed rows carry only user.id, text-feed rows the login too.
+        seller_key = str(
+            (item.get("user") or {}).get("id")
+            or (listing.get("seller") or {}).get("username")
+            or ""
+        )
+        return signature, seller_key
+
+    def _is_relist_of_alerted(self, listing, item):
+        signature, seller_key = self._relist_key(listing, item)
+        earlier = self._listing_signatures.get(signature)
+        return bool(
+            earlier and earlier[0] != listing.get("itemId") and seller_key
+            and earlier[1] == seller_key and earlier[0] in self._alerted_item_ids
+        )
 
     def _health_ping(self):
         """Audit 11-16: a run of 401s/empty pages, or dead AI keys, ended
@@ -3235,7 +3264,11 @@ class VintedFastLane:
         except requests.exceptions.RequestException as exc:
             logger.warning("vinted-fast feedback poll failed: %s", type(exc).__name__)
             return
-        seen_ids = {cursor}
+        # ntfy's since=<id> replays the marker's whole second except the
+        # marker, so two taps in one second came back on every poll (log
+        # 11-12: one Bought re-logged every 5 min for 9 h). Remember handled ids.
+        handled = list(state.get("feedback_seen") or [])
+        seen_ids = {cursor, *handled}
         new_cursor = cursor
         for line in response.text.splitlines():
             try:
@@ -3248,6 +3281,7 @@ class VintedFastLane:
             if not isinstance(message_id, str) or not message_id or message_id in seen_ids:
                 continue
             seen_ids.add(message_id)
+            handled.append(message_id)
             body = message.get("message")
             match = re.fullmatch(r"(bought|gone) (vinted:[0-9]+)", body) if isinstance(body, str) else None
             if match:
@@ -3273,6 +3307,7 @@ class VintedFastLane:
             # dict the main loop is changing.
             with self._state_lock:
                 state["feedback_cursor"] = new_cursor
+                state["feedback_seen"] = handled[-50:]
 
     def _maybe_poll_feedback(self, state):
         if self.dry_run or not engine.NTFY_TOPIC or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
