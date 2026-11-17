@@ -2939,6 +2939,20 @@ class VintedFastLane:
                 continue
             self._maybe_instant_alert(result, category)
 
+    def _health_ping(self):
+        """Audit 11-16: a run of 401s/empty pages, or dead AI keys, ended
+        green and silent. One push when a run could not have alerted."""
+        total = sum(self.statuses.values())
+        ok = sum(n for status, n in self.statuses.items() if status.startswith("2"))
+        problems = []
+        if total >= 100 and ok < total / 2:
+            worst = max((s for s in self.statuses if not s.startswith("2")), key=self.statuses.get)
+            problems.append(f"only {ok} of {total} Vinted requests worked (mostly {worst})")
+        if self.stats["ai_unavailable"] >= 3:
+            problems.append(f"{self.stats['ai_unavailable']} items had no AI check available")
+        if problems:
+            self._ntfy("Vinted bot ran blind", "Last run: " + "; ".join(problems), "4", "warning")
+
     def _while_peeking(self, fn, *args, **kwargs):
         """Run a slow AI call while the brand feed keeps being polled.
         Audit 11-03: polling stopped for the whole 10-130 s of photo AI, so a
@@ -3143,6 +3157,8 @@ class VintedFastLane:
         if reason:
             result["verdict"] = verdict
             result["reason"] = reason
+        if verdict in {"NO_AI_BUDGET", "STRONG_LOOK_UNAVAILABLE"}:
+            self.stats["ai_unavailable"] += 1
         listing = result.get("listing") or {}
         if result.get("vinted_instant_alerted") or listing.get("itemId") in self._instant_pinged:
             self._followed_up.add(listing.get("itemId"))
@@ -3858,7 +3874,12 @@ class VintedFastLane:
             return
         ai_reject = _merge_ai_result(result, ai_result, category) or (
             # The photo summary names logos the title never mentions.
-            _off_profile_reason(ai_result.get("summary"), schools_only=True)
+            # With the title: a "Gamecock Polo" whose photo summary only says
+            # "collegiate" is still Gamecocks (audit 11-16).
+            _off_profile_reason(
+                f"{listing.get('title') or ''} {ai_result.get('summary') or ''}",
+                schools_only=True,
+            )
             if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"
             else None
         ) or _ai_lone_tailoring_reason(
@@ -4094,6 +4115,7 @@ class VintedFastLane:
             if self._feedback_thread is not None:
                 self._feedback_thread.join(timeout=5)
             self._summary(force=True)
+            self._health_ping()
             lane_conn.close()
             if main_conn is not None:
                 main_conn.close()

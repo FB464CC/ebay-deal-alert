@@ -5108,6 +5108,7 @@
     {"query": "kiton", "max_price": 200, "slots": 4},
     {"query": "brioni", "max_price": 200, "slots": 4},
     {"query": "canali", "max_price": 130},
+    {"query": "purple label", "max_price": 80},
     {"query": "delina exclusif", "max_price": 290, "background": true},
     {"query": "oriana marly", "max_price": 200, "background": true},
     {"query": "angels share kilian", "max_price": 230, "background": true},

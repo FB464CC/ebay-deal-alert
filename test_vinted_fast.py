@@ -3971,3 +3971,45 @@ def test_offer_alert_sanity_check_runs_beside_the_strong_look(tmp_path):
     assert seen == [True]
     assert sanity_mock.call_count == 1
     assert ntfy.call_args.args[0].startswith("OFFER Canali")
+
+
+def test_gamecock_title_is_not_rejected_for_a_generic_collegiate_photo_summary(tmp_path):
+    # Audit 11-16: "$12 Peter Millar Gamecock Polo" died as "other school/team
+    # gear (collegiate)" because the photo summary never said "Gamecock".
+    lane = _lane(tmp_path)
+    listing, result = _listing_and_result()
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    ai = dict(_apparel_ai(100), summary="Peter Millar collegiate polo in clean condition")
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"}),
+        mock.patch.object(engine, "check_photos_with_gemini", return_value=ai),
+        mock.patch.object(engine, "_deepseek_alert_sanity_check", return_value={
+            "is_complete_item": True, "is_part_or_accessory": False, "reason": ""}),
+        mock.patch.object(engine, "send_alert") as send,
+        mock.patch.object(lane, "_run_vinted_strong_vision", side_effect=lambda merged, _h: _record_mock_strong(lane, merged, _passing_strong_result())),
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    send.assert_called_once()
+
+
+def test_owner_is_told_when_a_run_was_blind(tmp_path):
+    # Audit 11-16: a run of 401s/empty pages or dead AI keys ended green and silent.
+    lane = _lane(tmp_path)
+    with mock.patch.object(lane, "_ntfy") as ntfy:
+        lane.statuses.update({"200": 900, "429": 10, "ERROR": 3})
+        lane._health_ping()
+        ntfy.assert_not_called()
+        lane.stats["ai_unavailable"] = 3
+        lane._health_ping()
+        assert "AI" in ntfy.call_args.args[1]
+        lane.stats["ai_unavailable"] = 0
+        lane.statuses.update({"401": 2000})
+        lane._health_ping()
+        assert "401" in ntfy.call_args.args[1]
+    assert ntfy.call_count == 2
+
+
+def test_purple_label_has_its_own_feed():
+    assert any(feed["query"] == "purple label" for feed in fast.VINTED_TEXT_FEEDS)
