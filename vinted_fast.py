@@ -945,6 +945,9 @@ def _stated_waists(size, title):
     """US waists stated on a pants listing. Bare 44-58 is EU sizing, ignored."""
     text = f"{size} {title}"
     sure = [int(next(g for g in m.groups() if g)) for m in _WAIST_SURE.finditer(text)]
+    # 11-17: a suit's "42"/"42R" is the chest ("suit : jacket 42 pants 36").
+    if _VINTED_SUIT.search(title):
+        return sure
     loose = [int(next(g for g in m.groups() if g)) for m in _WAIST_LOOSE.finditer(text)]
     plain = re.match(r"^\s*(\d{2})\b", size)
     if plain:
@@ -1342,9 +1345,12 @@ def _menswear_shape_reason(listing, brand_key, category=None):
         return "another maker using Loro Piana/Zegna fabric, not the house itself"
     if _VINTED_POLO.search(title) and _VINTED_XL.search(sized):
         return "XL polo (owner wears M/L polos)"
-    if _VINTED_LONE_TAILORING.search(title) and not (
-        _VINTED_SUIT.search(title) and _VINTED_AI_FULL_SUIT.search(title)
-    ):
+    lone = [m.group(0) for m in _VINTED_LONE_TAILORING.finditer(title)]
+    if _VINTED_SUIT.search(title):
+        # 11-12: "double breasted suit" is a suit; the photo check still
+        # wants the pants in frame.
+        lone = [w for w in lone if not re.search(r"breasted", w, re.IGNORECASE)]
+    if lone and not (_VINTED_SUIT.search(title) and _VINTED_AI_FULL_SUIT.search(title)):
         return "lone blazer/sport coat/suit piece, full suits only"
     if _VINTED_SUIT.search(title):
         if not _VINTED_SUIT_SIZE.search(f"{sized} {listing.get('description') or ''}"):
@@ -1384,7 +1390,12 @@ def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
     if _VINTED_FRENCH_CUFF.search(summary):
         return "AI photos show French cuffs, not analyst wear"
     sized = f"{listing.get('title') or ''} {listing.get('size') or ''}"
-    if _VINTED_POLO.search(summary) and _VINTED_XL.search(sized):
+    if (
+        _VINTED_POLO.search(summary)
+        and _VINTED_XL.search(sized)
+        # 11-17: an XL "Peter Millar Quarter Zip" (wanted in L-XL) read as a polo.
+        and not _QUARTER_ZIP.search(str(listing.get("title") or ""))
+    ):
         return "AI photos show an XL polo (owner wears M/L polos)"
     if (
         not _shirt_house(brand_key, listing.get("title"))
@@ -2259,6 +2270,12 @@ def _vinted_strong_prompt(result, brand):
     )
 
 
+_INSIDE_MARK = re.compile(r"\b(?:inside|interior|inner|underside)\b", re.IGNORECASE)
+_OUTSIDE_SPOT = re.compile(
+    r"\b(?:chest|sleeves?|front|back|shoulders?|hem|pocket|placket|outside)\b", re.IGNORECASE
+)
+
+
 def _strong_http_status(exc):
     return getattr(getattr(exc, "response", None), "status_code", None)
 
@@ -2743,11 +2760,15 @@ class VintedFastLane:
         ):
             reason = result.get("vinted_strong_brand_label_reason") or "label not visible"
             return f"luxury house needs a readable genuine label: {reason}"
-        if result.get("vinted_strong_third_party_logo") is True:
+        desc = str(result.get("vinted_strong_logo_desc") or "")
+        if result.get("vinted_strong_third_party_logo") is True and not (
+            # 11-12: initials inside a $4 Zegna shirt's collar; the prompt
+            # counts only the outside of the garment.
+            _INSIDE_MARK.search(desc) and not _OUTSIDE_SPOT.search(desc)
+        ):
             # Owner 11-04: bad alerts with logos; only the cheap first look
             # checked logos, so one model's miss shipped the alert.
-            desc = result.get("vinted_strong_logo_desc") or "no detail"
-            return f"third-party logo on garment: {desc}"
+            return f"third-party logo on garment: {desc or 'no detail'}"
         tag_size = result.get("vinted_strong_size_on_tag")
         if tag_size:
             # Audit 11-03: 12 of 30 alerts had no size in the title; the tag

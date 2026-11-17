@@ -1617,6 +1617,22 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
     assert not fast._fits_size_list(lettered, knit, "knitwear")
 
 
+def test_suit_chest_size_is_not_a_pants_waist():
+    # 11-17: "Brooks Brothers suit : jacket 42 pants 36" ($1) died as
+    # "pants waist won't fit" - the 42 chest was read as the waist.
+    title = "Brooks Brothers Brook brothers suit : jacket 42 pants 36"
+    for size in ("42", "42R", ""):
+        listing = {"title": title, "size": size, "price": {"value": 1}}
+        assert fast._off_size_reason(listing, "tailoring") is None, size
+    assert fast._off_size_reason(
+        {"title": "Zegna wool suit 42R, pants 34", "size": "", "price": {"value": 50}}, "tailoring"
+    ) is None
+    # A stated suit-pants waist still counts.
+    assert fast._off_size_reason(
+        {"title": "Canali suit 42R, pants 40x30", "size": "42R", "price": {"value": 50}}, "tailoring"
+    )
+
+
 def test_slow_ai_call_keeps_polling_the_brand_feed(tmp_path):
     import threading
 
@@ -1998,6 +2014,13 @@ def test_strong_look_vetoes_a_third_party_logo(tmp_path):
     result["vinted_strong_third_party_logo"] = False
     assert "logo" not in (lane._strong_look_veto_reason(result) or "")
     assert "third_party_logo_found" in fast._vinted_strong_prompt(result, "Peter Millar")
+    # 11-12: a $4 Zegna dress shirt was vetoed for a past owner's initials
+    # inside the collar; the prompt only counts the outside of the garment.
+    result["vinted_strong_third_party_logo"] = True
+    result["vinted_strong_logo_desc"] = "Embroidered initials 'CRC' on the inside of the collar."
+    assert "logo" not in (lane._strong_look_veto_reason(result) or "")
+    result["vinted_strong_logo_desc"] = "Club crest on the chest; initials inside the collar"
+    assert "logo" in lane._strong_look_veto_reason(result)
 
 
 def test_strong_look_vetoes_a_tag_size_the_owner_cannot_wear(tmp_path):
@@ -2355,6 +2378,17 @@ def test_photo_summary_mascot_and_hanger_words_need_context():
     assert fast._off_profile_reason("Georgia Bulldogs Polo, Peter Millar")
     assert fast._ai_lone_tailoring_reason("Blue Peter Millar polo on a hanger", "other") is None
     assert fast._ai_lone_tailoring_reason("Tom Ford 100ml EDP bottle", "other")
+
+
+def test_xl_quarter_zip_is_not_an_xl_polo():
+    # 11-17: an XL "Peter Millar Quarter Zip" was rejected as an XL polo;
+    # quarter-zips are wanted in L-XL.
+    qzip = {"title": "Peter Millar Quarter Zip", "size": "XL"}
+    summary = "Peter Millar quarter-zip golf pullover with a polo-style collar, size XL"
+    assert fast._ai_lone_tailoring_reason(summary, "knitwear", qzip) is None
+    polo = {"title": "Peter Millar Shirt", "size": "XL"}
+    assert fast._ai_lone_tailoring_reason("Peter Millar polo shirt", "golf", polo)
+    assert fast._menswear_shape_reason({"title": "Peter Millar polo", "size": "XL"}, None)
 
 
 def test_cloth_mill_suits_and_followup_numbers(tmp_path):
@@ -2732,6 +2766,10 @@ def test_menswear_seller_rule_only_cuts_obvious_throwaways():
         ("Z Zegna button down shirt", "L", "zegna", True),
         ("Zegna Sport button up shirt", "L", "zegna", True),
         ("Canali dress shirt", "L", "canali", True),
+        # 11-12: a $33 "Brooks Brothers double breasted suit" died as a lone piece.
+        ("Brooks Brothers double breasted suit", "42R", "brooks brothers", False),
+        ("Zegna Double Breasted Jacket, 42R", "42R", "zegna", True),
+        ("Canali double breasted suit jacket 42R", "42R", "canali", True),
     ],
 )
 def test_menswear_shape_rule(title, size, brand, blocked):
