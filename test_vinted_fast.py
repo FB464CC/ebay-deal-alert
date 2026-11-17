@@ -3747,6 +3747,29 @@ def test_gift_alert_counts_the_buyer_fee_once(tmp_path, monkeypatch):
     assert "(~$49 all-in)" in body  # (43 + 2.85 fee) * 1.06 = 48.60
 
 
+def test_gift_alert_free_ship_warmer_counts_fee_once(tmp_path):
+    # The listing's shipping cost already carries the 5% + $0.70 fee; the gift
+    # check added it again (live 11-17: "$25 ... ~$31 all-in", real $28.57).
+    # $21 free-ship generic warmer: (21*1.05 + 0.70) * 1.06 = $24.12 <= $25.
+    lane = _lane(tmp_path)
+    conn = engine.init_db(tmp_path / "gift.db")
+    listing = {
+        "itemId": "vinted:1", "title": "Towel Warmer Bucket", "condition": "New with tags",
+        "price": {"value": "21"}, "shippingOptions": [{"shippingCost": {"value": 1.75}}],
+        "vinted_shipping": 0.0, "itemWebUrl": "https://www.vinted.com/items/1",
+    }
+    result = {"listing": listing, "item_price": 21.0}
+    stats = {"_http_status": 200, "feedback_count": 20, "feedback_reputation": 1.0, "item_count": 30}
+    with (
+        mock.patch.object(fast, "fetch_vinted_seller_stats", return_value=stats),
+        mock.patch.object(lane, "_ntfy") as ntfy,
+    ):
+        lane._gift_alert(conn, {"user": {"id": 5}}, listing, result, "fp", 22.75)
+    conn.close()
+    assert result.get("verdict") == "ALERTED", result.get("reason")
+    assert "~$24 all-in" in ntfy.call_args.args[1]
+
+
 
 def test_one_size_cap_fits_a_letter_sized_search():
     search = {"size": ["M", "L"]}
@@ -4079,6 +4102,26 @@ def test_owner_is_told_when_a_run_was_blind(tmp_path):
     assert ntfy.call_count == 2
 
 
+def test_blind_run_ping_counts_the_whole_run_not_the_last_minute(tmp_path):
+    # run() calls _summary(force=True) right before _health_ping(), and every
+    # minute summary clears the counters, so the ping saw zeros and never fired.
+    clock = iter(range(0, 100000, 61))
+    lane = fast.VintedFastLane(
+        searches=[], state_path=tmp_path / "s.json", seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "log.jsonl", main_seen_db_path=tmp_path / "missing.db",
+        clock=lambda: next(clock), sleeper=lambda _s: None,
+    )
+    with mock.patch.object(lane, "_ntfy") as ntfy:
+        for _minute in range(3):
+            lane.statuses.update({"401": 60, "200": 2})
+            lane.stats["ai_unavailable"] += 1
+            lane._summary()
+        lane._summary(force=True)
+        lane._health_ping()
+    ntfy.assert_called_once()
+    assert "401" in ntfy.call_args.args[1] and "3 items" in ntfy.call_args.args[1]
+
+
 def test_purple_label_has_its_own_feed():
     assert any(feed["query"] == "purple label" for feed in fast.VINTED_TEXT_FEEDS)
 
@@ -4249,3 +4292,45 @@ def test_logo_checks_ignore_hangers_and_photo_watermarks():
     first = inspect.getsource(engine).split("Examine every photo closely")[1][:3000]
     for prompt in (strong, first):
         assert "hanger" in prompt and "watermark" in prompt
+
+
+def test_openrouter_look_keeps_a_valid_object_followed_by_junk(tmp_path, monkeypatch):
+    # Live 11-11 "Extra data: line 2 column 1": a whole valid answer was
+    # thrown away because the model added a second line after it.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    lane = _lane(tmp_path)
+    reply = mock.Mock()
+    reply.json.return_value = {
+        "choices": [{"message": {"content": '{"looks_good": true}\nNote: label photo is blurry.'}}]
+    }
+    with (
+        mock.patch.object(engine, "_reserve_paid_ai_spend", return_value=True),
+        mock.patch.object(engine, "_settle_paid_ai_spend"),
+        mock.patch.object(fast.requests, "post", return_value=reply),
+    ):
+        assert lane._openrouter_strong_look("p", [(b"j", "image/jpeg")], None) == {"looks_good": True}
+
+
+def test_failed_session_bootstrap_keeps_the_request_floor(tmp_path):
+    # Each bootstrap is a GET to vinted.com. When it failed (e.g. homepage 403
+    # right after a 403 discarded the session), the request functions returned
+    # without stamping the request time, so the loop retried with no pause.
+    now = [0.0]
+
+    def clock():
+        now[0] += 0.01
+        return now[0]
+
+    def sleeper(seconds):
+        now[0] += seconds
+
+    search = {"id": "s", "query": "peter millar polo", "platforms": ["vinted"], "max_price": 30}
+    lane = fast.VintedFastLane(
+        searches=[search], state_path=tmp_path / "state.json",
+        seen_db_path=tmp_path / "seen.db", log_path=tmp_path / "lane.jsonl",
+        main_seen_db_path=tmp_path / "missing-main.db", run_seconds=10,
+        clock=clock, sleeper=sleeper, dry_run=True,
+    )
+    with mock.patch.object(marketplaces, "_get_vinted_session", return_value=None) as boot:
+        lane.run()
+    assert boot.call_count <= 11
