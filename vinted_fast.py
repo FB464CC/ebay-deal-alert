@@ -1798,7 +1798,7 @@ def _log_unrouted(item, source):
     logger.info(
         "vinted-fast unrouted: $%s %s | %s | size %s | %s",
         (listing.get("price") or {}).get("value"), source or "brands",
-        title[:120], listing.get("size") or "?", listing.get("url") or "",
+        title[:120], listing.get("size") or "?", listing.get("itemWebUrl") or "",
     )
 
 

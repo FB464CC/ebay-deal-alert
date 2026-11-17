@@ -3552,6 +3552,9 @@ def test_unrouted_elite_rows_are_logged(caplog):
         fast._log_unrouted(item("Peter Millar quarter zip"), "peter millar")
     lines = [r.getMessage() for r in caplog.records if "unrouted" in r.getMessage()]
     assert len(lines) == 1 and "Loro Piana cashmere quarter zip L" in lines[0] and "$220" in lines[0]
+    # Audit 11-17: every unrouted line ended in an empty "| " - the listing's
+    # link is itemWebUrl, so no near-miss could be opened from the log.
+    assert lines[0].rstrip().endswith("/items/9")
 
 
 def test_route_prefers_best_title_match_and_never_crosses_feeds(tmp_path):
