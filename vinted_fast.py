@@ -1940,9 +1940,24 @@ def _price_table_row(result, summary=""):
         if garment and garment_missed:
             continue
         if (brand, piece) in VINTED_PRICE_TABLE:
-            return VINTED_PRICE_TABLE[(brand, piece)]
+            used, retail = VINTED_PRICE_TABLE[(brand, piece)]
+            if _VINTED_USC.search(title):
+                used *= VINTED_GAMECOCK_PREMIUM
+            return used, retail
         garment_missed = garment_missed or garment
     return None
+
+
+# Owner 11-17, a senior at South Carolina: "gamecocks im always willing to pay
+# a little more... easily worth $40+ used" of a $12 Peter Millar Gamecock polo
+# the $30 polo row had priced out. Gamecock pieces are valued at 1.5x the row
+# and may cost up to half of resale (the Great Deal line) instead of 40%.
+VINTED_GAMECOCK_PREMIUM = 1.5
+
+
+def _steal_fraction(result):
+    title = str((result.get("listing") or {}).get("title") or "")
+    return 0.5 if _VINTED_USC.search(title) else 0.4
 
 
 def _cap_to_price_table(result, key, summary="", index=0):
@@ -2668,9 +2683,10 @@ class VintedFastLane:
         cap = _brand_all_in_cap(result)
         if cap is not None and expected_paid > cap:
             return f"expected paid ${expected_paid:.2f} over the ${cap:g} all-in cap for this brand"
-        if expected_paid > conservative_resale * 0.40:
+        fraction = _steal_fraction(result)
+        if expected_paid > conservative_resale * fraction:
             return (
-                f"expected paid ${expected_paid:g} exceeds 40% of conservative "
+                f"expected paid ${expected_paid:g} exceeds {fraction:.0%} of conservative "
                 f"${conservative_resale:g} resale"
             )
         result["vinted_conservative_resale_value"] = conservative_resale

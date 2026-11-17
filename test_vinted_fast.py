@@ -4072,3 +4072,18 @@ def test_buy_alert_carries_the_details_line(monkeypatch):
     assert post.call_args.kwargs["data"].decode("utf-8").splitlines()[-1] == (
         "listed size M | resale: AI estimate only"
     )
+
+
+def test_gamecock_pieces_are_worth_more_and_may_cost_up_to_half_of_resale():
+    # Owner 11-17: "gamecocks im always willing to pay a little more... easily
+    # worth $40+ used" of a $12 Peter Millar Gamecock polo capped at $30.
+    def capped(title):
+        result = {"listing": {"title": title}, "estimated_resale_value": 60.0}
+        fast._cap_to_price_table(result, "estimated_resale_value")
+        return result["estimated_resale_value"]
+
+    assert capped("Peter Millar Gamecock Polo") == 45
+    assert capped("Peter Millar South Carolina quarter zip") == 60  # cap is $63; never raised
+    assert capped("Peter Millar Clemson Polo") == 30
+    assert fast._steal_fraction({"listing": {"title": "Peter Millar Gamecock Polo"}}) == 0.5
+    assert fast._steal_fraction({"listing": {"title": "Peter Millar Polo"}}) == 0.4
