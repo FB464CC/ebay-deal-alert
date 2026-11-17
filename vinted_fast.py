@@ -4011,7 +4011,8 @@ class VintedFastLane:
             )
             return
         self.ai_calls += 1
-        self._peek_brand_feed()
+        # No brand peek here: _while_peeking polls beside the AI call (audit
+        # 11-17: a peek here put ~1-1.5 s in front of every photo check).
         ai_result = self._while_peeking(self._first_photo_check,
             listing, category, hard_stop, search.get("query"),
         )

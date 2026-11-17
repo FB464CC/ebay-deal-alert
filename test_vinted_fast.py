@@ -4181,3 +4181,26 @@ def test_logo_checks_ignore_hangers_and_photo_watermarks():
     first = inspect.getsource(engine).split("Examine every photo closely")[1][:3000]
     for prompt in (strong, first):
         assert "hanger" in prompt and "watermark" in prompt
+
+
+def test_photo_check_starts_without_a_brand_poll_in_front_of_it(tmp_path):
+    # Audit 11-17: a synchronous brand peek sat between the seller lookup and
+    # the photo check on every AI item (~1-1.5 s of each alert); the peeks
+    # beside the AI call keep the brand feed polled anyway.
+    lane = _lane(tmp_path)
+    listing, result = _listing_and_result()
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    order = []
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"}),
+        mock.patch.object(lane, "_peek_brand_feed", side_effect=lambda: order.append("peek")),
+        mock.patch.object(
+            fast, "fetch_vinted_seller_stats",
+            side_effect=lambda _u: order.append("seller") or dict(TRUSTED_SELLER),
+        ),
+        mock.patch.object(lane, "_first_photo_check", side_effect=lambda *_a: order.append("photo")),
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    assert order[order.index("seller") + 1] == "photo"
