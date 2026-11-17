@@ -122,6 +122,33 @@ def test_feedback_poll_records_valid_tap_and_advances_cursor(tmp_path, monkeypat
                      "tap_time": 1012, "title": "A deal", "price": 20, "kind": "instant"}]
 
 
+def test_feedback_poll_logs_same_second_taps_once_across_polls_and_runs(tmp_path, monkeypatch):
+    # Log 11-12 19:05 -> 11-13 04:14: two Bought taps in the same second were
+    # re-logged every 5 min for 9 h. ntfy's since=<id> replays the marker's
+    # whole second except the marker, so each poll returned the other tap.
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    taps = [{"id": mid, "time": 1012, "event": "message", "message": "bought vinted:123"}
+            for mid in ("a", "b")]
+
+    def replay(url, timeout):
+        since = url.rsplit("since=", 1)[1]
+        rows = taps if since == "12h" else [t for t in taps if t["id"] != since]
+        return mock.Mock(text="\n".join(json.dumps(t) for t in rows))
+
+    state_path = tmp_path / "state.json"
+    with mock.patch.object(fast.requests, "get", side_effect=replay):
+        lane = _lane(tmp_path)
+        state = fast._load_state(state_path)
+        for _ in range(3):
+            lane._poll_feedback(state)
+        fast._save_state(state_path, state)
+        next_run = _lane(tmp_path)
+        next_state = fast._load_state(state_path)
+        next_run._poll_feedback(next_state)
+    rows = [json.loads(line) for line in lane.log_path.read_text().splitlines()]
+    assert len(rows) == 2  # the two real taps, nothing replayed
+
+
 def test_feedback_poll_network_error_does_not_change_vinted_pacing(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
     lane = _lane(tmp_path)

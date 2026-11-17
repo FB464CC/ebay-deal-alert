@@ -1546,6 +1546,8 @@ def _load_state(path):
     result = {"version": 1, "searches": searches}
     if isinstance(state.get("feedback_cursor"), str):
         result["feedback_cursor"] = state["feedback_cursor"]
+    if isinstance(state.get("feedback_seen"), list):
+        result["feedback_seen"] = [s for s in state["feedback_seen"] if isinstance(s, str)]
     return result
 
 
@@ -3195,7 +3197,11 @@ class VintedFastLane:
         except requests.exceptions.RequestException as exc:
             logger.warning("vinted-fast feedback poll failed: %s", type(exc).__name__)
             return
-        seen_ids = {cursor}
+        # ntfy's since=<id> replays the marker's whole second except the
+        # marker, so two taps in one second came back on every poll (log
+        # 11-12: one Bought re-logged every 5 min for 9 h). Remember handled ids.
+        handled = list(state.get("feedback_seen") or [])
+        seen_ids = {cursor, *handled}
         new_cursor = cursor
         for line in response.text.splitlines():
             try:
@@ -3208,6 +3214,7 @@ class VintedFastLane:
             if not isinstance(message_id, str) or not message_id or message_id in seen_ids:
                 continue
             seen_ids.add(message_id)
+            handled.append(message_id)
             body = message.get("message")
             match = re.fullmatch(r"(bought|gone) (vinted:[0-9]+)", body) if isinstance(body, str) else None
             if match:
@@ -3233,6 +3240,7 @@ class VintedFastLane:
             # dict the main loop is changing.
             with self._state_lock:
                 state["feedback_cursor"] = new_cursor
+                state["feedback_seen"] = handled[-50:]
 
     def _maybe_poll_feedback(self, state):
         if self.dry_run or not engine.NTFY_TOPIC or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
