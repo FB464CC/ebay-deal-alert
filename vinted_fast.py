@@ -516,7 +516,8 @@ _VINTED_FRAGRANCE_USED_SUMMARY = re.compile(
     re.IGNORECASE,
 )
 _VINTED_INSTANT_SKIP_WORDS = re.compile(
-    r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|sunglass(?:es)?|glasses|frames?"
+    r"\b(?:ties?|necktie|bow|belts?|wallet|case|bags?|totes?|handbags?|purses?|backpacks?"
+    r"|sunglass(?:es)?|glasses|frames?"
     r"|perfume|cologne|fragrance|parfum|eau|ml|candle|lip|balm|socks?|cufflinks?"
     # Tom Ford "Ombre Leather" is a fragrance (production, 10-30/10-31).
     r"|ombr[eé]|oud|edp|edt|minis?|spray|tester"

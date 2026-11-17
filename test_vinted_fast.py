@@ -1280,6 +1280,9 @@ def test_instant_alert_only_for_luxury_apparel_at_giveaway_price(tmp_path, monke
         ("Ermenegildo Zegna", 10, "other", False),
         ("Canali", 20, "other", False),
         ("Brunello Cucinelli bathrobe", 4, "other", False),
+        # Run 43320057271 (11-12): a women's tote pinged on "cashmere".
+        ("Loro piana cashmere tote", 20, "knitwear", False),
+        ("Brunello Cucinelli leather handbag", 20, "other", False),
     ]
     for title, price, category, expected in cases:
         _listing, result = _apparel_listing_result(
