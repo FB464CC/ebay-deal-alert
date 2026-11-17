@@ -101,6 +101,19 @@ def test_verified_vinted_alert_uses_feedback_actions(monkeypatch):
     assert "body=gone vinted:123" in actions[2]
 
 
+def test_verified_alert_price_line_is_rounded_to_cents(monkeypatch):
+    # Logged 11-16/17 PM golf shirts: paid $11.872 printed as
+    # "$10 + $1.2 + tax = $11.872" on the phone.
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    _listing, result = _listing_and_result()
+    result.update(item_price=10.0, shipping_cost=1.2, price=11.872)
+    with mock.patch.object(engine.requests, "post") as post:
+        engine.send_alert(result, feedback_item_id="vinted:123")
+    body = post.call_args.kwargs["data"]
+    body = body.decode("utf-8") if isinstance(body, bytes) else body
+    assert "$10 + $1.20 + tax = $11.87" in body, body
+
+
 def test_feedback_poll_records_valid_tap_and_advances_cursor(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
     lane = _lane(tmp_path)

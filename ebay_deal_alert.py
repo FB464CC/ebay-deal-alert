@@ -10131,7 +10131,10 @@ def send_alert(result, *, feedback_item_id=None):
         # price now bakes in the 6% tax estimate on top of item+shipping,
         # so the two no longer sum to it - spell that out instead of
         # showing a total that looks like a math error.
-        price_line = f"${item_price:g} + ${shipping_cost:g} + tax = ${price:g}{profile_note}"
+        price_line = (
+            f"${_money_without_noise(item_price)} + ${_money_without_noise(shipping_cost)}"
+            f" + tax = ${_money_without_noise(price)}{profile_note}"
+        )
     else:
         price_line = f"${price}{profile_note}"
     source = (listing.get("platform") or "ebay").upper()
