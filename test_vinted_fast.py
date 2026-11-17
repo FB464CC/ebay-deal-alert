@@ -911,7 +911,9 @@ def test_prescreen_errors_and_unparseable_responses_fail_open(tmp_path, monkeypa
         assert result["vinted_prescreen_answer"] is None
 
 
-def test_prescreen_only_explicit_false_drops_before_real_ai(tmp_path):
+def test_prescreen_only_explicit_false_drops_before_real_ai(tmp_path, monkeypatch):
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 1)  # prescreen on
+
     def run_case(case_name, answer):
         case_path = tmp_path / case_name
         case_path.mkdir()
@@ -4183,11 +4185,13 @@ def test_logo_checks_ignore_hangers_and_photo_watermarks():
         assert "hanger" in prompt and "watermark" in prompt
 
 
-def test_photo_check_starts_without_a_brand_poll_in_front_of_it(tmp_path):
+def test_photo_check_starts_without_a_brand_poll_in_front_of_it(tmp_path, monkeypatch):
     # Audit 11-17: a synchronous brand peek sat between the seller lookup and
     # the photo check on every AI item (~1-1.5 s of each alert); the peeks
     # beside the AI call keep the brand feed polled anyway.
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 1)  # serial path
     lane = _lane(tmp_path)
+    lane._run_vinted_prescreen = mock.Mock(return_value=None)
     listing, result = _listing_and_result()
     lane._cheap_result = mock.Mock(return_value=(listing, result, None))
     conn = engine.init_db(lane.seen_db_path)
@@ -4204,6 +4208,34 @@ def test_photo_check_starts_without_a_brand_poll_in_front_of_it(tmp_path):
         lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
     conn.close()
     assert order[order.index("seller") + 1] == "photo"
+
+
+def test_apparel_photo_check_runs_beside_the_seller_lookup(tmp_path, monkeypatch):
+    # Audit 11-17: apparel sellers were rejected 0 times today, yet every
+    # apparel alert waited for the seller request before its photo check.
+    monkeypatch.setattr(fast, "VINTED_PRESCREEN_MAX_PER_RUN", 0)
+    lane = _lane(tmp_path)
+    listing, result = _listing_and_result()
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    photo_started, seen = threading.Event(), []
+
+    def photo(*_args):
+        photo_started.set()
+
+    def seller(_user_id):
+        seen.append(photo_started.wait(2))
+        return dict(TRUSTED_SELLER)
+
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "", "OPENROUTER_API_KEY": "test-key"}),
+        mock.patch.object(fast, "fetch_vinted_seller_stats", side_effect=seller),
+        mock.patch.object(lane, "_first_photo_check", side_effect=photo) as check,
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    assert seen == [True]
+    assert check.call_count == 1 and lane.ai_calls == 1
 
 
 def test_poll_batch_runs_the_likeliest_steal_first(tmp_path):

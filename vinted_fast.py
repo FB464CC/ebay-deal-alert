@@ -1610,15 +1610,19 @@ def _cached_download_listing_image(image_url, *args, **kwargs):
     return downloaded
 
 
+def _in_background(fn, *args, **kwargs):
+    pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-bg")
+    future = pool.submit(fn, *args, **kwargs)
+    pool.shutdown(wait=False)
+    return future
+
+
 def _start_sanity(listing, ai_result, category, search, hard_stop):
-    pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-sanity")
-    future = pool.submit(
+    return _in_background(
         engine._deepseek_alert_sanity_check,
         listing, ai_result, category, hard_stop=hard_stop,
         search_query=search.get("query"),
     )
-    pool.shutdown(wait=False)
-    return future
 
 
 def _prewarm_listing_images(listing, hard_stop):
@@ -3918,6 +3922,20 @@ class VintedFastLane:
             )
             return
         _prewarm_listing_images(listing, hard_stop)
+        early_photo = None
+        if (
+            # Audit 11-17: 0 apparel seller rejects in a day, so the photo
+            # check runs beside the seller lookup (~1 s of every alert). Not
+            # when a pre-photo screen (Jev/prescreen) could still skip it.
+            (category in VINTED_APPAREL_CATEGORIES or category == "school-gear")
+            and VINTED_PRESCREEN_MAX_PER_RUN == 0
+            and not str(os.environ.get("TYPESAFE_API_KEY") or "").strip()
+            and self.ai_calls < VINTED_FAST_MAX_AI_CALLS_PER_RUN
+        ):
+            self.ai_calls += 1
+            early_photo = _in_background(
+                self._first_photo_check, listing, category, hard_stop, search.get("query")
+            )
         if (
             category in VINTED_STRICT_SELLER_CATEGORIES
             or category in VINTED_APPAREL_CATEGORIES
@@ -4014,7 +4032,9 @@ class VintedFastLane:
                     )
                     return
 
-        if self.ai_calls >= VINTED_FAST_MAX_AI_CALLS_PER_RUN:
+        if early_photo is not None:
+            ai_result = self._while_peeking(early_photo.result)
+        elif self.ai_calls >= VINTED_FAST_MAX_AI_CALLS_PER_RUN:
             self._finish(
                 conn,
                 result,
@@ -4025,12 +4045,13 @@ class VintedFastLane:
                 verdict="NO_AI_BUDGET",
             )
             return
-        self.ai_calls += 1
-        # No brand peek here: _while_peeking polls beside the AI call (audit
-        # 11-17: a peek here put ~1-1.5 s in front of every photo check).
-        ai_result = self._while_peeking(self._first_photo_check,
-            listing, category, hard_stop, search.get("query"),
-        )
+        else:
+            self.ai_calls += 1
+            # No brand peek here: _while_peeking polls beside the AI call (audit
+            # 11-17: a peek here put ~1-1.5 s in front of every photo check).
+            ai_result = self._while_peeking(self._first_photo_check,
+                listing, category, hard_stop, search.get("query"),
+            )
         if not isinstance(ai_result, dict):
             self._finish(
                 conn,
