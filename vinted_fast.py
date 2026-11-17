@@ -2247,6 +2247,12 @@ def _vinted_strong_prompt(result, brand):
     )
 
 
+_INSIDE_MARK = re.compile(r"\b(?:inside|interior|inner|underside)\b", re.IGNORECASE)
+_OUTSIDE_SPOT = re.compile(
+    r"\b(?:chest|sleeves?|front|back|shoulders?|hem|pocket|placket|outside)\b", re.IGNORECASE
+)
+
+
 def _strong_http_status(exc):
     return getattr(getattr(exc, "response", None), "status_code", None)
 
@@ -2728,11 +2734,15 @@ class VintedFastLane:
         ):
             reason = result.get("vinted_strong_brand_label_reason") or "label not visible"
             return f"luxury house needs a readable genuine label: {reason}"
-        if result.get("vinted_strong_third_party_logo") is True:
+        desc = str(result.get("vinted_strong_logo_desc") or "")
+        if result.get("vinted_strong_third_party_logo") is True and not (
+            # 11-12: initials inside a $4 Zegna shirt's collar; the prompt
+            # counts only the outside of the garment.
+            _INSIDE_MARK.search(desc) and not _OUTSIDE_SPOT.search(desc)
+        ):
             # Owner 11-04: bad alerts with logos; only the cheap first look
             # checked logos, so one model's miss shipped the alert.
-            desc = result.get("vinted_strong_logo_desc") or "no detail"
-            return f"third-party logo on garment: {desc}"
+            return f"third-party logo on garment: {desc or 'no detail'}"
         tag_size = result.get("vinted_strong_size_on_tag")
         if tag_size:
             # Audit 11-03: 12 of 30 alerts had no size in the title; the tag

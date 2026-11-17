@@ -1906,6 +1906,13 @@ def test_strong_look_vetoes_a_third_party_logo(tmp_path):
     result["vinted_strong_third_party_logo"] = False
     assert "logo" not in (lane._strong_look_veto_reason(result) or "")
     assert "third_party_logo_found" in fast._vinted_strong_prompt(result, "Peter Millar")
+    # 11-12: a $4 Zegna dress shirt was vetoed for a past owner's initials
+    # inside the collar; the prompt only counts the outside of the garment.
+    result["vinted_strong_third_party_logo"] = True
+    result["vinted_strong_logo_desc"] = "Embroidered initials 'CRC' on the inside of the collar."
+    assert "logo" not in (lane._strong_look_veto_reason(result) or "")
+    result["vinted_strong_logo_desc"] = "Club crest on the chest; initials inside the collar"
+    assert "logo" in lane._strong_look_veto_reason(result)
 
 
 def test_strong_look_vetoes_a_tag_size_the_owner_cannot_wear(tmp_path):
