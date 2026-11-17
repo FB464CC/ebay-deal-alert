@@ -3704,6 +3704,33 @@ def test_gift_towel_warmer_needs_half_off_new_all_in():
     assert "not gift-ready" in r("Zadro Towel Warmer", "zadro", "Good", 30, 0)
 
 
+def test_gift_alert_counts_the_buyer_fee_once(tmp_path, monkeypatch):
+    # The listing's shipping cost already holds Vinted's fee (total_item_price
+    # - price); the gift math added 5% + $0.70 on top again (run logs 11-17:
+    # "$25 ... ~$31 all-in", real all-in ~$29).
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    item = {**_raw_item(9), "title": "Keenray Towel Warmer", "status": "Very good",
+            "price": {"amount": "43"}, "total_item_price": {"amount": "45.85"},
+            "user": {"id": 5}}
+    listing = marketplaces._vinted_item_to_listing(item)
+    fast._set_listing_shipping(listing, 0.0)
+    total = 43 + engine.get_shipping_cost(listing)
+    result = {"listing": listing, "item_price": 43.0, "category": "gift"}
+    stats = {"_http_status": 200, "feedback_count": 20, "feedback_reputation": 1.0,
+             "item_count": 30}
+    with (
+        mock.patch.object(fast, "fetch_vinted_seller_stats", return_value=stats),
+        mock.patch.object(fast.requests, "post") as post,
+    ):
+        lane._gift_alert(conn, item, listing, result, "fp", total)
+    conn.close()
+    assert post.called, result.get("reason")
+    body = post.call_args.kwargs["data"].decode("utf-8")
+    assert "(~$49 all-in)" in body  # (43 + 2.85 fee) * 1.06 = 48.60
+
+
 
 def test_one_size_cap_fits_a_letter_sized_search():
     search = {"size": ["M", "L"]}
