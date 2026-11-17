@@ -10398,6 +10398,19 @@ def send_alert(result, *, feedback_item_id=None):
     review_state = watch_extreme_discount_delivery_state(result)
     title_prefix = f"[{source} WATCH REVIEW]" if review_state not in (None, "vetted") else f"[{source}]"
     alert_title = _ascii_safe_header(f"{title_prefix} {title[:60]}")
+    if listing.get("platform") == "vinted" and review_state in (None, "vetted"):
+        # The lock screen shows the title line, and iOS cuts the body before
+        # the size line. Lead with what decides a buy, like the FAST pings do.
+        all_in = result.get("vinted_expected_paid")
+        all_in = price if all_in is None else all_in
+        head = " ".join(filter(None, (
+            str(result.get("deal_rating") or "DEAL").upper(),
+            result.get("vinted_brand"),
+            f"${item_price:g}" if _finite_number(item_price) else None,
+            listing.get("size"),
+            f"~${float(all_in):.0f} all-in" if _finite_number(all_in) else None,
+        )))
+        alert_title = _ascii_safe_header(f"{head}: {title[:50]}")
 
     priority, tags = alert_urgency(result)
 

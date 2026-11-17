@@ -101,6 +101,20 @@ def test_verified_vinted_alert_uses_feedback_actions(monkeypatch):
     assert "body=gone vinted:123" in actions[2]
 
 
+def test_verified_vinted_alert_title_leads_with_rating_price_size_and_all_in(monkeypatch):
+    # The lock screen shows the title line; the size sat 5+ lines down the
+    # body ("listed size M"), past where iOS cuts it. FAST pings already lead
+    # with price and size; the verified alert said only "[VINTED] <title>".
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    _listing, result = _listing_and_result()
+    result.update({"deal_rating": "Great Deal", "vinted_brand": "Peter Millar",
+                   "vinted_expected_paid": 24.4})
+    with mock.patch.object(engine.requests, "post") as post:
+        engine.send_alert(result, feedback_item_id="vinted:123")
+    title = post.call_args.kwargs["headers"]["Title"]
+    assert title.startswith("GREAT DEAL Peter Millar $20 M ~$24 all-in: Peter Millar")
+
+
 def test_feedback_poll_records_valid_tap_and_advances_cursor(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
     lane = _lane(tmp_path)
