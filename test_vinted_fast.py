@@ -4075,6 +4075,21 @@ def test_no_ai_call_when_the_price_table_already_rules_out_a_great_deal(tmp_path
     assert run("Peter Millar pima cotton quarter zip", 15)[0] >= 1
 
 
+def test_tom_ford_scent_titles_in_menswear_feeds_skip_the_ai():
+    # Audit 11-17: "Tom Ford Ombré Leather" (accent) x3, Bitter Peach, Fucking
+    # Fabulous x2 and Neroli Portofino each spent a first look in the Tom Ford
+    # clothing feed before "AI photos show a fragrance/beauty item".
+    for title in (
+        "Tom Ford Ombré Leather", "Tom Ford Bitter Peach", "Tom Ford Fucking Fabulous",
+        "Tom Ford Neroli Portofino Travel Size", "Tom Ford Tobacco Vanilla ( Unisex )",
+    ):
+        reason = fast._menswear_shape_reason({"title": title}, "tom ford", "other")
+        assert reason == "fragrance/beauty/packaging item in a menswear search", title
+    assert fast._menswear_shape_reason(
+        {"title": "Tom Ford Men's Black Zip Mock-Neck Sweater"}, "tom ford", "other"
+    ) is None
+
+
 def test_hats_have_their_own_resale_floor():
     # Owner 11-17: a $15 Peter Millar hat died as "resale $25 below $30 brand floor".
     hat = {"listing": {"title": "Peter Millar Hat"}, "vinted_brand_key": "peter millar"}

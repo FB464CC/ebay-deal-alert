@@ -293,8 +293,11 @@ _VINTED_AI_WOVEN_SHIRT = re.compile(
 # and makeup never belong to a menswear search.
 _VINTED_BEAUTY = re.compile(
     r"\b\d+(?:\.\d+)?\s?ml\b|\b\d(?:\.\d)?\s?(?:fl\.?\s?)?oz\b"
-    r"|\b(?:edp|edt|eau|parfum|perfume|cologne|fragrances?|tobacco\s+vanille"
-    r"|lost\s+cherry|oud\s+wood|ombre\s+leather|lip(?:stick|\s+colou?r|\s+balm)?"
+    r"|\b(?:edp|edt|eau|parfum|perfume|cologne|fragrances?|tobacco\s+vanill[ae]"
+    # Audit 11-17: "Ombré" with the accent, and more Tom Ford scents, each
+    # spent a photo check in the Tom Ford clothing feed.
+    r"|lost\s+cherry|oud\s+wood|ombr[eé]\s+leather|bitter\s+peach|f\w*ing\s+fabulous"
+    r"|neroli\s+portofino|lip(?:stick|\s+colou?r|\s+balm)?"
     r"|makeup|mascara|foundation|concealer|bronzer|serum|moisturi[sz]er"
     r"|shower\s+gel|body\s+wash|soap|candle|press[\s-]?on\s+nails"
     # Live audit 10-26: empty shoe boxes, gift/garment bags, envelopes.
