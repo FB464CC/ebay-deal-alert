@@ -4158,8 +4158,6 @@ def test_new_watch_seller_scam_shop_tells():
     assert fast._new_watch_seller_reason(dict(clean, login="mike1987"), "1", listing) is None
     gadgets = dict(clean, closet=clean["closet"] + [("2", "Apple MacBook Air 2023")])
     assert "electronics" in fast._new_watch_seller_reason(gadgets, "1", listing)
-    assert "no reviews" in fast._new_watch_seller_reason(clean, "1", listing, value_cap=1500)
-    assert fast._new_watch_seller_reason(clean, "1", listing, value_cap=150) is None
     ref = {"title": "Longines Master Collection L2.893.5.77.7", "description": ""}
     assert "spec-sheet" in fast._new_watch_seller_reason(clean, "1", ref)
 

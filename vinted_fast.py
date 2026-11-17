@@ -409,7 +409,6 @@ _CLOSET_ELECTRONICS = re.compile(
     r"\b(?:iphone|macbook|ipad|airpods|apple\s+watch|playstation|ps5|dyson|nintendo)\b",
     re.IGNORECASE,
 )
-VINTED_NEW_SELLER_WATCH_VALUE_MAX = 400
 _WATCH_NOT_A_WATCH_ROW = re.compile(
     r"symphonette|\bvinyl\b|\blps?\b|\brecords?\b|\bmedallion\b", re.IGNORECASE
 )
@@ -449,13 +448,10 @@ def _cheap_watch_reason(stats, listing, floor):
     return None
 
 
-def _new_watch_seller_reason(stats, item_id, listing, value_cap=None):
+def _new_watch_seller_reason(stats, item_id, listing):
+    # Owner 11-17: no reviews is "def a flag", never a block on its own - the
+    # best real watches can come from such sellers. The alert carries the flag.
     title = str(listing.get("title") or "")
-    if value_cap and value_cap >= VINTED_NEW_SELLER_WATCH_VALUE_MAX:
-        return (
-            f"a ~${value_cap:g} watch from a seller with no reviews "
-            "(the fake batches are all this: needs a track record)"
-        )
     if _SCAM_LOGIN.fullmatch(str(stats.get("login") or "")):
         return f"new seller with a machine-made username ('{stats['login']}', scam-account pattern)"
     text = f"{title} {listing.get('description') or ''}"
@@ -3928,9 +3924,7 @@ class VintedFastLane:
                 stats, strict=category in VINTED_STRICT_SELLER_CATEGORIES
             )
             if seller_reason and category == "watches" and stats.get("feedback_count") == 0:
-                seller_reason = _new_watch_seller_reason(
-                    stats, item_id, listing, VINTED_WATCH_VALUE_CAPS.get(search.get("id"))
-                )
+                seller_reason = _new_watch_seller_reason(stats, item_id, listing)
                 result["vinted_new_seller"] = seller_reason is None
             if not seller_reason and category == "watches":
                 seller_reason = _cheap_watch_reason(
