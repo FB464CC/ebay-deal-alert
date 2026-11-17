@@ -4171,3 +4171,13 @@ def test_watch_search_skips_longines_records_before_any_fetch():
 def test_watch_prompt_names_factory_plastic_wrap_as_a_fake_sign():
     import inspect
     assert "plastic" in inspect.getsource(engine).split("watch_prompt = (")[1][:6000]
+
+
+def test_logo_checks_ignore_hangers_and_photo_watermarks():
+    # 11-17: a $70 Purple Label suede jacket was vetoed for an Armani hanger,
+    # and a $10 PM cotton-cashmere vest for the seller's name on the photos.
+    import inspect
+    strong = fast._vinted_strong_prompt({"listing": {"title": "jacket"}}, "Ralph Lauren")
+    first = inspect.getsource(engine).split("Examine every photo closely")[1][:3000]
+    for prompt in (strong, first):
+        assert "hanger" in prompt and "watermark" in prompt
