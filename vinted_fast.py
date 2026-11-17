@@ -1955,10 +1955,19 @@ _PRICE_TABLE_NOT_A_POLO = re.compile(r"polo\s+(?:by\s+)?ralph\s+lauren|ralph\s+l
 VINTED_PRICE_TABLE_CATEGORIES = frozenset({"other", "knitwear", "golf"})
 
 
+def _price_table_brand(text):
+    # Audit 11-17: "Canali Milano Loro Piana Super 100s" is Canali in Loro
+    # Piana cloth; a mill name beside another house is the cloth, not the maker.
+    found = [b for b, pattern in _PRICE_TABLE_BRANDS if re.search(pattern, text, re.I)]
+    houses = [b for b in found if b not in {"loro piana", "zegna"}]
+    return (houses or found or [None])[0]
+
+
 def _price_table_row(result, summary=""):
     listing = result.get("listing") or {}
     text = f"{listing.get('title') or ''} {summary or ''} {result.get('visible_brand_evidence') or ''}"
-    brand = next((b for b, pattern in _PRICE_TABLE_BRANDS if re.search(pattern, text, re.I)), None)
+    # The title names the house; the photo summary only when it names none.
+    brand = _price_table_brand(str(listing.get("title") or "")) or _price_table_brand(text)
     if _VINTED_SUIT.search(str(listing.get("title") or "")) and not re.search(
         # A suit jacket or suit trousers alone is not a suit.
         r"suits?\s+(?:jackets?|coats?|pants?|trousers?|vests?|separates?)", str(listing.get("title")), re.I

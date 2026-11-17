@@ -4039,6 +4039,24 @@ def test_price_table_covers_suits_tom_ford_and_brioni_kiton_knits():
     assert capped("Peter Millar polo", 20.0) == (20, True)  # table-backed, not raised
 
 
+def test_price_table_brand_is_the_house_not_the_mill_cloth():
+    # Audit 11-17: "Canali Milano Loro Piana Super 100s 42 R" reached the AI;
+    # Loro Piana (first in the brand list, no suit row) matched before Canali,
+    # so a suit in mill cloth kept the AI's uncapped resale.
+    def capped(title, resale, summary=""):
+        result = {"listing": {"title": title}, "estimated_resale_value": resale}
+        fast._cap_to_price_table(result, "estimated_resale_value", summary)
+        return result["estimated_resale_value"], result.get("vinted_price_table")
+
+    assert capped("Canali Milano Loro Piana Super 100s wool suit 42R", 600.0) == (140, True)
+    assert capped("Brooks Brothers Zegna fabric 2pc suit 42R", 300.0) == (90, True)
+    assert capped("Canali wool suit 42R", 600.0, "Loro Piana cloth label inside") == (140, True)
+    # The title names the house; the photo summary only when it names none.
+    assert capped("Peter Millar polo", 60.0, "Purple Label style polo") == (30, True)
+    assert capped("Loro Piana cashmere sweater", 900.0) == (430, True)
+    assert capped("Men's cashmere sweater", 900.0, "Kiton label") == (200, True)
+
+
 def test_hats_have_their_own_resale_floor():
     # Owner 11-17: a $15 Peter Millar hat died as "resale $25 below $30 brand floor".
     hat = {"listing": {"title": "Peter Millar Hat"}, "vinted_brand_key": "peter millar"}
