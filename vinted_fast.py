@@ -3082,10 +3082,6 @@ class VintedFastLane:
                 continue
             if _already_seen(conn, main_conn, listing["itemId"]):
                 continue
-            # Audit 11-17: a relist of an alerted item pinged FAST again, then
-            # the full check sent SKIP for it as a relist. One push is enough.
-            if self._is_relist_of_alerted(listing, item):
-                continue
             target = (
                 search if kind == "search"
                 else self._route(item, None if kind == "brands" else search["query"])
@@ -3124,29 +3120,6 @@ class VintedFastLane:
                 self._listing_signatures.setdefault(
                     signature, (listing["itemId"], seller, self.clock())
                 )
-
-    @staticmethod
-    def _relist_key(listing, item):
-        """(title+price signature, seller) that marks a same-seller relist."""
-        signature = (
-            " ".join(w for w in _words(listing.get("title")) if w not in _GENDER_WORDS),
-            round(float((listing.get("price") or {}).get("value") or 0)),
-        )
-        # Brand-feed rows carry only user.id, text-feed rows the login too.
-        seller_key = str(
-            (item.get("user") or {}).get("id")
-            or (listing.get("seller") or {}).get("username")
-            or ""
-        )
-        return signature, seller_key
-
-    def _is_relist_of_alerted(self, listing, item):
-        signature, seller_key = self._relist_key(listing, item)
-        earlier = self._listing_signatures.get(signature)
-        return bool(
-            earlier and earlier[0] != listing.get("itemId") and seller_key
-            and earlier[1] == seller_key and earlier[0] in self._alerted_item_ids
-        )
 
     def _health_ping(self):
         """Audit 11-16: a run of 401s/empty pages, or dead AI keys, ended

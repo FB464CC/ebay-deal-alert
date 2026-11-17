@@ -1463,8 +1463,8 @@ def test_instant_prepass_skips_same_seller_relist_of_an_alerted_item(tmp_path, m
         item.update(title="Zegna Cashmere sweater", price={"amount": "10"})
         item["user"] = {"id": 7, "login": "seller"}
     other_seller["user"] = {"id": 8, "login": "someone-else"}
-    signature, seller_key = lane._relist_key(
-        marketplaces._vinted_item_to_listing(first), first
+    signature, seller_key = fast._relist_key(
+        first, marketplaces._vinted_item_to_listing(first)
     )
     lane._listing_signatures[signature] = ("vinted:zegna-1", seller_key, 0)
     lane._alerted_item_ids.add("vinted:zegna-1")
