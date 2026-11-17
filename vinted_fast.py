@@ -1389,7 +1389,12 @@ def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
     if _VINTED_FRENCH_CUFF.search(summary):
         return "AI photos show French cuffs, not analyst wear"
     sized = f"{listing.get('title') or ''} {listing.get('size') or ''}"
-    if _VINTED_POLO.search(summary) and _VINTED_XL.search(sized):
+    if (
+        _VINTED_POLO.search(summary)
+        and _VINTED_XL.search(sized)
+        # 11-17: an XL "Peter Millar Quarter Zip" (wanted in L-XL) read as a polo.
+        and not _QUARTER_ZIP.search(str(listing.get("title") or ""))
+    ):
         return "AI photos show an XL polo (owner wears M/L polos)"
     if (
         not _shirt_house(brand_key, listing.get("title"))

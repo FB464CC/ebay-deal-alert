@@ -2272,6 +2272,17 @@ def test_photo_summary_mascot_and_hanger_words_need_context():
     assert fast._ai_lone_tailoring_reason("Tom Ford 100ml EDP bottle", "other")
 
 
+def test_xl_quarter_zip_is_not_an_xl_polo():
+    # 11-17: an XL "Peter Millar Quarter Zip" was rejected as an XL polo;
+    # quarter-zips are wanted in L-XL.
+    qzip = {"title": "Peter Millar Quarter Zip", "size": "XL"}
+    summary = "Peter Millar quarter-zip golf pullover with a polo-style collar, size XL"
+    assert fast._ai_lone_tailoring_reason(summary, "knitwear", qzip) is None
+    polo = {"title": "Peter Millar Shirt", "size": "XL"}
+    assert fast._ai_lone_tailoring_reason("Peter Millar polo shirt", "golf", polo)
+    assert fast._menswear_shape_reason({"title": "Peter Millar polo", "size": "XL"}, None)
+
+
 def test_cloth_mill_suits_and_followup_numbers(tmp_path):
     shape = fast._menswear_shape_reason
     cremieux = {"title": "Daniel Cr\u00e9mieux Daniel Cremieux 40R Brown Loro Piana Wool 3Btn Suit",
