@@ -413,6 +413,30 @@ NEW_WATCH_SELLER_NOTE = (
 )
 
 
+VINTED_CHEAP_WATCH_SELLER_REVIEWS = 20
+
+
+def _cheap_watch_reason(stats, listing, floor):
+    """Owner 11-17: under the fake-price floor a watch is no longer rejected
+    on price alone - a long-standing seller may be clearing a parent's
+    collection - but it needs that track record and no scam-shop copy."""
+    price = float((listing.get("price") or {}).get("value") or 0)
+    if floor is None or price >= floor:
+        return None
+    lead = f"below fake-price floor (${price:g} < ${floor:g})"
+    copy = _WATCH_SCAM_COPY.search(f"{listing.get('title') or ''} {listing.get('description') or ''}")
+    if copy:
+        return f"{lead} with scam-shop copy ('{copy.group(0)}')"
+    reviews = stats.get("feedback_count", 0)
+    rating = stats.get("feedback_reputation", 0.0)
+    if reviews < VINTED_CHEAP_WATCH_SELLER_REVIEWS or rating < VINTED_MIN_SELLER_RATING:
+        return (
+            f"{lead} and seller not established: {reviews:g} reviews, "
+            f"{rating * 5:.1f} stars (needs {VINTED_CHEAP_WATCH_SELLER_REVIEWS}+ at 4.5+)"
+        )
+    return None
+
+
 def _new_watch_seller_reason(stats, item_id, listing):
     title = str(listing.get("title") or "")
     text = f"{title} {listing.get('description') or ''}"
@@ -3617,7 +3641,7 @@ class VintedFastLane:
             return listing, None, f"women's/kids' size {row_size}, not menswear"
         row_price = float((listing.get("price") or {}).get("value") or 0)
         min_price = engine._sane_ai_price(search.get("min_price"))
-        if min_price is not None and row_price < min_price:
+        if min_price is not None and row_price < min_price and category != "watches":
             return listing, None, (
                 f"below fake-price floor: ${row_price:g} < ${min_price:g} "
                 "(almost certainly counterfeit)"
@@ -3706,7 +3730,7 @@ class VintedFastLane:
         shipping = engine.get_shipping_cost(listing)
         total_price = item_price + shipping
         min_price = engine._sane_ai_price(search.get("min_price"))
-        if min_price is not None and item_price < min_price:
+        if min_price is not None and item_price < min_price and category != "watches":
             return listing, None, (
                 f"below fake-price floor: ${item_price:g} < ${min_price:g} "
                 "(almost certainly counterfeit)"
@@ -3876,6 +3900,10 @@ class VintedFastLane:
             if seller_reason and category == "watches" and stats.get("feedback_count") == 0:
                 seller_reason = _new_watch_seller_reason(stats, item_id, listing)
                 result["vinted_new_seller"] = seller_reason is None
+            if not seller_reason and category == "watches":
+                seller_reason = _cheap_watch_reason(
+                    stats, listing, engine._sane_ai_price(search.get("min_price"))
+                )
             if not seller_reason and category == "fragrance":
                 seller_reason = _perfume_shop_reason(stats, item_id)
             if not seller_reason:

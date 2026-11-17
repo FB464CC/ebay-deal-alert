@@ -4116,3 +4116,33 @@ def test_peter_millar_sweater_vest_is_worth_at_least_thirty_five():
     assert valued("Peter Millar Crown Men's Fine-Knit V-Neck Sweater Vest", 25.0) == 35
     assert valued("Peter Millar puffer vest", 25.0) == 25
     assert valued("Peter Millar sweater", 25.0) == 25
+
+
+def test_cheap_watch_needs_an_established_seller_and_no_scam_copy(tmp_path):
+    # Owner 11-17: a seller "with tons of sales and reviews could have watches
+    # for dead cheap" (a parent's collection); fake signs still block.
+    proven = {"feedback_count": 140, "feedback_reputation": 0.98}
+    plain = {"title": "Seiko Presage tank watch", "price": {"value": "70"}}
+    assert fast._cheap_watch_reason(proven, plain, 80) is None
+    assert fast._cheap_watch_reason(proven, plain, 60) is None
+    assert "seller" in fast._cheap_watch_reason(
+        {"feedback_count": 6, "feedback_reputation": 1.0}, plain, 80)
+    assert "seller" in fast._cheap_watch_reason(
+        {"feedback_count": 140, "feedback_reputation": 0.8}, plain, 80)
+    assert "seller" in fast._cheap_watch_reason({}, plain, 80)
+    shop = {"title": "Tissot PRX, Full Set, Under Warranty", "price": {"value": "68"}}
+    assert "scam" in fast._cheap_watch_reason(proven, shop, 70)
+
+    # The price alone no longer rejects a watch before the seller is known.
+    search = _watch_search()
+    item = _fragrance_item("cheap-watch", "Seiko Presage tank watch", search["min_price"] - 10, brand="Seiko")
+    lane = fast.VintedFastLane(
+        searches=[search], state_path=tmp_path / "state", seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl", schedule=[],
+    )
+    conn = engine.init_db(lane.seen_db_path)
+    details = {"_http_status": 200, "description": "my dad's watch", "image_urls": []}
+    with mock.patch.object(engine, "fetch_vinted_item_page_details", return_value=details):
+        _listing, _result, reason = lane._cheap_result(conn, None, item, search)
+    conn.close()
+    assert "fake-price floor" not in (reason or "")
