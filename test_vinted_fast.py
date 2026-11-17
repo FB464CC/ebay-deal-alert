@@ -4103,3 +4103,16 @@ def test_gamecock_peter_millar_polo_is_worth_at_least_forty():
     assert valued("Peter Millar Gamecock Polo", 60.0) == 45
     assert valued("Peter Millar Polo", 25.0) == 25
     assert valued("Peter Millar Gamecock quarter zip", 30.0) == 30
+
+
+def test_peter_millar_sweater_vest_is_worth_at_least_thirty_five():
+    # Owner 11-17 on a $9.99 Crown fine-knit v-neck sweater vest the second
+    # look priced at $25 (under the $30 floor): "i would be fine with alert".
+    def valued(title, ai):
+        result = {"listing": {"title": title}, "estimated_resale_value": ai}
+        fast._cap_to_price_table(result, "estimated_resale_value")
+        return result["estimated_resale_value"]
+
+    assert valued("Peter Millar Crown Men's Fine-Knit V-Neck Sweater Vest", 25.0) == 35
+    assert valued("Peter Millar puffer vest", 25.0) == 25
+    assert valued("Peter Millar sweater", 25.0) == 25

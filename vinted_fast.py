@@ -1954,6 +1954,7 @@ def _price_table_row(result, summary=""):
 # and may cost up to half of resale (the Great Deal line) instead of 40%.
 VINTED_GAMECOCK_PREMIUM = 1.5
 VINTED_GAMECOCK_PM_POLO_VALUE = 40
+VINTED_PM_SWEATER_VEST_VALUE = 35
 
 
 def _steal_fraction(result):
@@ -1979,6 +1980,15 @@ def _cap_to_price_table(result, key, summary="", index=0):
         and re.search(r"\bpolo", title, re.I)
     ):
         result[key] = float(VINTED_GAMECOCK_PM_POLO_VALUE)
+    # Owner 11-17: fine with an alert on a $9.99 Crown fine-knit sweater vest.
+    if (
+        index == 0
+        and result.get(key) is not None
+        and result[key] < VINTED_PM_SWEATER_VEST_VALUE
+        and re.search(r"peter\s*mill", title, re.I)
+        and re.search(r"\b(?:sweater|knit)\b.*\bvest\b", title, re.I)
+    ):
+        result[key] = float(VINTED_PM_SWEATER_VEST_VALUE)
 
 
 def _alert_details(result):
