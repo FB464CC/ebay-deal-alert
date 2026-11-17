@@ -2298,6 +2298,9 @@ class VintedFastLane:
         self.samples = []
         self.stats = Counter()
         self.statuses = Counter()
+        # Whole-run totals: the per-minute counters above are cleared each summary.
+        self._run_stats = Counter()
+        self._run_statuses = Counter()
         self._last_request_started = None
         self._summary_started = None
         self._instant_pinged = set()
@@ -3084,14 +3087,16 @@ class VintedFastLane:
     def _health_ping(self):
         """Audit 11-16: a run of 401s/empty pages, or dead AI keys, ended
         green and silent. One push when a run could not have alerted."""
-        total = sum(self.statuses.values())
-        ok = sum(n for status, n in self.statuses.items() if status.startswith("2"))
+        statuses = self._run_statuses + self.statuses
+        ai_unavailable = self._run_stats["ai_unavailable"] + self.stats["ai_unavailable"]
+        total = sum(statuses.values())
+        ok = sum(n for status, n in statuses.items() if status.startswith("2"))
         problems = []
         if total >= 100 and ok < total / 2:
-            worst = max((s for s in self.statuses if not s.startswith("2")), key=self.statuses.get)
+            worst = max((s for s in statuses if not s.startswith("2")), key=statuses.get)
             problems.append(f"only {ok} of {total} Vinted requests worked (mostly {worst})")
-        if self.stats["ai_unavailable"] >= 3:
-            problems.append(f"{self.stats['ai_unavailable']} items had no AI check available")
+        if ai_unavailable >= 3:
+            problems.append(f"{ai_unavailable} items had no AI check available")
         if problems:
             self._ntfy("Vinted bot ran blind", "Last run: " + "; ".join(problems), "4", "warning")
 
@@ -3618,6 +3623,8 @@ class VintedFastLane:
             self.stats["backoffs"],
             statuses,
         )
+        self._run_stats.update(self.stats)
+        self._run_statuses.update(self.statuses)
         self.stats.clear()
         self.statuses.clear()
         self._summary_started = now

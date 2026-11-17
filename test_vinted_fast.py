@@ -4011,6 +4011,26 @@ def test_owner_is_told_when_a_run_was_blind(tmp_path):
     assert ntfy.call_count == 2
 
 
+def test_blind_run_ping_counts_the_whole_run_not_the_last_minute(tmp_path):
+    # run() calls _summary(force=True) right before _health_ping(), and every
+    # minute summary clears the counters, so the ping saw zeros and never fired.
+    clock = iter(range(0, 100000, 61))
+    lane = fast.VintedFastLane(
+        searches=[], state_path=tmp_path / "s.json", seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "log.jsonl", main_seen_db_path=tmp_path / "missing.db",
+        clock=lambda: next(clock), sleeper=lambda _s: None,
+    )
+    with mock.patch.object(lane, "_ntfy") as ntfy:
+        for _minute in range(3):
+            lane.statuses.update({"401": 60, "200": 2})
+            lane.stats["ai_unavailable"] += 1
+            lane._summary()
+        lane._summary(force=True)
+        lane._health_ping()
+    ntfy.assert_called_once()
+    assert "401" in ntfy.call_args.args[1] and "3 items" in ntfy.call_args.args[1]
+
+
 def test_purple_label_has_its_own_feed():
     assert any(feed["query"] == "purple label" for feed in fast.VINTED_TEXT_FEEDS)
 
