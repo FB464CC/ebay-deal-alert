@@ -4239,3 +4239,34 @@ def test_poll_batch_runs_the_likeliest_steal_first(tmp_path):
         lane.run()
     # $10/$30 polos (oldest id first on a tie), then $60/$150 suit, then $20/$30.
     assert done == ["3", "4", "2", "1"]
+
+
+def test_brand_catalog_stays_under_30_requests_a_minute(tmp_path):
+    # Audit 11-17 run 44140989244: all 14 brand 429s (60 s pauses each, 9%
+    # of the run brand-blind) followed a minute with 30-31 brand requests at
+    # exactly 2.0 s; minutes with 27-29 never drew one.
+    now = [0.0]
+    lane = fast.VintedFastLane(
+        searches=[], state_path=tmp_path / "state.json", seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl", main_seen_db_path=tmp_path / "missing-main.db",
+        run_seconds=1, clock=lambda: now[0],
+        sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+    )
+    lane.session = mock.Mock()
+    lane.session.get.return_value = mock.Mock(status=500)
+    starts = []
+    feed = {"id": "feed-brands", "brand_ids": [1]}
+    for _ in range(40):
+        lane._brand_catalog_request(feed)
+        starts.append(lane._last_brand_poll)
+        now[0] += 0.4  # response time
+        lane._respect_interval()  # a text request takes the next slot
+        lane._last_request_started = now[0]
+        now[0] += 0.2
+    assert max(sum(1 for s in starts if t <= s < t + 60) for t in starts) <= 29
+    # The peek skips (rather than waits) inside the same spacing.
+    lane._peek_ctx = (None, None, {"searches": {}}, feed)
+    lane._last_brand_poll = now[0] - 2.05
+    with mock.patch.object(lane, "_brand_catalog_request") as request:
+        lane._peek_brand_feed()
+    request.assert_not_called()

@@ -46,6 +46,10 @@ VINTED_TEXT_FEEDS = list(engine._CONFIG.get("VINTED_TEXT_FEEDS", []))
 # answered 429 every ~45 s and the 60 s backoffs blinded the lane half the time.
 VINTED_BRAND_SLOTS_PER_TEXT = max(1, int(engine._CONFIG.get("VINTED_BRAND_SLOTS_PER_TEXT", 1)))
 VINTED_BRAND_FEED_TIMEOUT = 4
+# Audit 11-17: every brand 429 (14 in 2.6 h, 60 s pause each) followed a
+# minute of 30-31 brand requests at exactly 2.0 s; 27-29 never drew one.
+# 2.1 s keeps any 60 s window at <= 29 (a rate cut, not a raise).
+VINTED_BRAND_MIN_GAP_SECONDS = 2.1
 VINTED_FAST_BACKOFF_INITIAL_SECONDS = 60
 VINTED_FAST_BACKOFF_MAX_SECONDS = 15 * 60
 VINTED_FAST_STATE_PATH = Path(__file__).resolve().with_name(
@@ -3141,8 +3145,8 @@ class VintedFastLane:
         conn, main_conn, state, feed = self._peek_ctx
         if (
             self._last_brand_poll is not None
-            # >= 2 s apart: the catalog page's ~30/min limit (see above).
-            and self.clock() - self._last_brand_poll < 2 * VINTED_FAST_POLL_SECONDS
+            # The catalog page's ~30/min limit (see VINTED_BRAND_MIN_GAP_SECONDS).
+            and self.clock() - self._last_brand_poll < VINTED_BRAND_MIN_GAP_SECONDS
         ):
             return
         if self._brand_paused():
@@ -3369,6 +3373,10 @@ class VintedFastLane:
 
     def _brand_catalog_request(self, feed):
         """One web-catalog request covering every brand id in the feed."""
+        if self._last_brand_poll is not None:
+            wait = self._last_brand_poll + VINTED_BRAND_MIN_GAP_SECONDS - self.clock()
+            if wait > 0:
+                self.sleeper(wait)
         self._respect_interval()
         if self.session is None:
             self.session = marketplaces._get_vinted_session()
