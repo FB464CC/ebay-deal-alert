@@ -1721,6 +1721,21 @@ def _words(text):
     return [w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words if len(w) >= 3]
 
 
+def _relist_key(item, listing):
+    """(title+price signature, seller) for spotting relists and scam batches.
+    Brand-feed rows carry only user.id, text-feed rows the login too."""
+    signature = (
+        " ".join(w for w in _words(listing.get("title")) if w not in _GENDER_WORDS),
+        round(float((listing.get("price") or {}).get("value") or 0)),
+    )
+    seller = str(
+        (item.get("user") or {}).get("id")
+        or (listing.get("seller") or {}).get("username")
+        or ""
+    )
+    return signature, seller
+
+
 # Owner, 10-28: "<brand> shoe" must catch loafers/sneakers and "<brand>
 # cashmere sweater" a crewneck, without a search per wording.
 _ROUTE_SYNONYMS = {
@@ -2986,6 +3001,15 @@ class VintedFastLane:
         self._finish(conn, result, item_id, fingerprint, total_price,
                      "gift watch alert", verdict="ALERTED")
 
+    def _alerted_relist(self, item, listing):
+        """The same seller re-posting a listing that already alerted this run."""
+        signature, seller = _relist_key(item, listing)
+        first = self._listing_signatures.get(signature)
+        return bool(
+            first and first[0] != listing.get("itemId") and seller
+            and first[1] == seller and first[0] in self._alerted_item_ids
+        )
+
     def _watch_alert(self, listing, kind="verified"):
         self._alerted_item_ids.add(listing.get("itemId"))
         self._alert_watch.setdefault(listing.get("itemId"), {
@@ -3079,7 +3103,14 @@ class VintedFastLane:
             _vinted_brand_and_floor(result)
             if _menswear_shape_reason(listing, result.get("vinted_brand_key"), category):
                 continue
-            self._maybe_instant_alert(result, category)
+            # 11-17: a same-seller relist 2.5 min later pinged FAST a second time.
+            if self._alerted_relist(item, listing):
+                continue
+            if self._maybe_instant_alert(result, category):
+                signature, seller = _relist_key(item, listing)
+                self._listing_signatures.setdefault(
+                    signature, (listing["itemId"], seller, self.clock())
+                )
 
     def _health_ping(self):
         """Audit 11-16: a run of 401s/empty pages, or dead AI keys, ended
@@ -3843,25 +3874,16 @@ class VintedFastLane:
         # ("mens peter millar polo" x3, one seller) yet let a Kiton relist
         # alert twice. Same seller = relist; other seller = scam only where
         # fakes cluster, and only within 15 minutes.
-        signature = (
-            " ".join(w for w in _words(listing.get("title")) if w not in _GENDER_WORDS),
-            round(item_price),
-        )
+        signature, seller_key = _relist_key(item, listing)
         now = self.clock()
-        # Brand-feed rows carry only user.id, text-feed rows the login too.
-        seller_key = str(
-            (item.get("user") or {}).get("id")
-            or (listing.get("seller") or {}).get("username")
-            or ""
-        )
         earlier = self._listing_signatures.get(signature)
         if earlier is not None and earlier[0] != item_id:
-            first_id, first_seller, first_seen = earlier
+            first_seen = earlier[2]
             # Audit 11-11: 21 closet-dump items ("Peter millar collared shirt"
             # x5, "Summer Comfort Polo" x6, one seller, minutes apart) inherited
             # the first one's rejection. A same-seller repeat is skipped only
             # when the first one alerted, so a relist can't alert twice.
-            if first_seller and first_seller == seller_key and first_id in self._alerted_item_ids:
+            if self._alerted_relist(item, listing):
                 self._finish(
                     conn, result, item_id, fingerprint, total_price,
                     "relist of a listing already judged this run (same seller)",

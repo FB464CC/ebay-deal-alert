@@ -1425,6 +1425,31 @@ def test_instant_prepass_pings_from_catalog_row_before_any_item_request(
     assert result["vinted_instant_alerted"] is True
 
 
+def test_instant_prepass_skips_a_same_seller_relist_of_a_pinged_listing(
+    tmp_path, monkeypatch
+):
+    # Run 43987196674 (11-17): "Brioni mens dress shirt" $25 FAST-pinged, then
+    # the seller's relist 2.5 min later FAST-pinged again (and got a SKIP).
+    monkeypatch.setattr(engine, "NTFY_TOPIC", "test-topic")
+    lane = _lane(tmp_path)
+    conn = engine.init_db(lane.seen_db_path)
+    search = {"id": "s", "query": "brioni", "category": "knitwear"}
+
+    def row(item_id, seller):
+        item = _raw_item(item_id)
+        item.update(title="Brioni cashmere sweater", price={"amount": "25"},
+                    user={"id": seller})
+        return item
+
+    with mock.patch.object(fast.requests, "post") as post:
+        lane._instant_prepass(conn, None, [row(1, 7)], "search", search)
+        lane._instant_prepass(conn, None, [row(2, 7)], "search", search)
+        assert post.call_count == 1
+        lane._instant_prepass(conn, None, [row(3, 8)], "search", search)  # other seller
+        assert post.call_count == 2
+    conn.close()
+
+
 def test_brand_feed_peek_pings_without_moving_high_water(tmp_path):
     lane = _lane(tmp_path)
     feed = {"id": "feed-brands", "brand_ids": [1]}
