@@ -2586,14 +2586,18 @@ def test_real_listing_shipping_replaces_the_499_assumption():
         ("vinted-seiko-presage", "Women", True),
         ("vinted-seiko-presage", "Kids", True),
         ("vinted-seiko-presage", "Men", False),
+        ("mens-title", "Women", False),
         ("vinted-pdm-delina-exclusif", "Women", False),
         ("poker-paulson", "Kids", False),
         ("poker-paulson", "Women", True),
     ],
 )
 def test_womens_and_kids_catalog_rejects_except_perfume(tmp_path, search_id, top, rejected):
-    search = _watch_search(search_id)
+    mens = search_id == "mens-title"  # 11-18: a title saying men's beats the seller's Women filing
+    search = _watch_search("vinted-seiko-presage" if mens else search_id)
     title = "Paulson poker chip set" if search_id.startswith("poker") else "Seiko Presage SRPB43 automatic"
+    if mens:
+        title = "Seiko Presage Men's SRPB43 automatic"
     item = _fragrance_item("cat", title, 150)
     lane = fast.VintedFastLane(
         searches=[search],

@@ -3886,7 +3886,11 @@ class VintedFastLane:
         blocked_tops = {"women"} if category == "poker-chips" else {"women", "kids"}
         if category == "gift":
             blocked_tops = {"kids"}
-        if top_catalog in blocked_tops and category != "fragrance":
+        # 11-16: "$388 Longines Conquest Men's automatic" sat in Women and died
+        # here. A watch whose title says men's is men's, whatever the seller filed.
+        mens_watch = category == "watches" and re.search(
+            r"\bmen(?:'|’)?s?\b", str(listing.get("title") or ""), re.I)
+        if top_catalog in blocked_tops and category != "fragrance" and not mens_watch:
             return listing, None, f"Vinted category is {top_catalog}, not menswear"
         if details.get("shipping_price") is not None:
             _set_listing_shipping(listing, details["shipping_price"])

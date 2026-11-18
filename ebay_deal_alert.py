@@ -7829,6 +7829,8 @@ def check_photos_with_gemini(
             "damage_found is true for a broken seal, visible prior use or reduced fill, "
             "leakage, cracks, a missing cap/atomizer, or other damage. looks_good is true "
             "only for an apparently sealed, unused, undamaged full bottle. "
+            "Box or packaging condition (bent, opened or missing box) is not damage: "
+            "judge damage_found and looks_good on the bottle, seal and fill only. "
             "counterfeit_suspected must be true when packaging, label, font, batch-code, "
             "bottle, cap, atomizer, fill, or inventory-style presentation is inconsistent "
             "with a genuine retail bottle; explain the evidence. estimated_resale_value "
