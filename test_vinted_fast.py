@@ -597,7 +597,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 72  # owner 11-17 added Zegna/Brioni suits
+    assert len(fast.enabled_vinted_searches()) == 71  # owner 11-18 dropped the towel warmer search
 
 
 def test_zegna_and_brioni_suit_searches_cover_full_suits_in_owner_sizes():

@@ -229,7 +229,7 @@ class RuntimeSearchFocus(unittest.TestCase):
 
     def test_shipped_focus_selects_37_real_enabled_searches(self):
         config, enabled = self._shipped_enabled_searches()
-        self.assertEqual(len(enabled), 169)  # owner 11-17 added Zegna/Brioni suits
+        self.assertEqual(len(enabled), 168)  # owner 11-18 dropped the towel warmer search
         self.assertEqual(config["FOCUS_SEARCH_IDS"], self.EXPECTED_IDS)
         enabled_by_id = {search["id"]: search for search in enabled}
         self.assertEqual(
