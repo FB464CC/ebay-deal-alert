@@ -4635,3 +4635,29 @@ def test_brand_catalog_stays_under_30_requests_a_minute(tmp_path):
     with mock.patch.object(lane, "_brand_catalog_request") as request:
         lane._peek_brand_feed()
     request.assert_not_called()
+
+
+def test_stall_watchdog_arms_each_loop_and_disarms_on_exit(tmp_path):
+    # 11-18: the lane hung silently for 3 h 14 min. Each loop pass must re-arm
+    # a kill-and-dump timer, and run() must disarm it so callers aren't killed.
+    ticks = iter(x / 100 for x in range(10_000))
+    search = {"id": "s", "query": "peter millar polo", "platforms": ["vinted"]}
+    lane = fast.VintedFastLane(
+        searches=[search], state_path=tmp_path / "state.json",
+        seen_db_path=tmp_path / "seen.db", log_path=tmp_path / "lane.jsonl",
+        main_seen_db_path=tmp_path / "missing-main.db", run_seconds=0.5,
+        clock=lambda: next(ticks), sleeper=lambda _seconds: None,
+    )
+    calls = []
+    with (
+        mock.patch.object(lane, "_catalog_request", return_value=(200, [])),
+        mock.patch.object(fast.faulthandler, "dump_traceback_later",
+                          side_effect=lambda *a, **k: calls.append(("arm", a, k))),
+        mock.patch.object(fast.faulthandler, "cancel_dump_traceback_later",
+                          side_effect=lambda: calls.append(("cancel",))),
+    ):
+        lane.run()
+    arms = [c for c in calls if c[0] == "arm"]
+    assert arms and all(c[1] == (fast.VINTED_FAST_STALL_SECONDS,) and c[2] == {"exit": True} for c in arms)
+    assert calls[-1] == ("cancel",)
+    assert fast.VINTED_FAST_STALL_SECONDS > fast.VINTED_FAST_BACKOFF_MAX_SECONDS

@@ -7,6 +7,7 @@ four-second request floor.
 
 import argparse
 import base64
+import faulthandler
 import html
 import json
 import logging
@@ -52,6 +53,11 @@ VINTED_BRAND_FEED_TIMEOUT = 4
 VINTED_BRAND_MIN_GAP_SECONDS = 2.1
 VINTED_FAST_BACKOFF_INITIAL_SECONDS = 60
 VINTED_FAST_BACKOFF_MAX_SECONDS = 15 * 60
+# 11-18: the lane went silent mid-loop twice (3 h 14 min and 30 min of peak
+# evening listings) with no traceback. The loop's _summary() is its heartbeat:
+# if it misses this long, dump every thread's stack and exit so the workflow
+# chains a fresh run. Must exceed the longest legitimate sleep (15 min backoff).
+VINTED_FAST_STALL_SECONDS = 20 * 60
 VINTED_FAST_STATE_PATH = Path(__file__).resolve().with_name(
     "vinted_fast_state.json"
 )
@@ -3753,6 +3759,8 @@ class VintedFastLane:
         return delay
 
     def _summary(self, *, force=False):
+        if not force:
+            faulthandler.dump_traceback_later(VINTED_FAST_STALL_SECONDS, exit=True)
         now = self.clock()
         if self._summary_started is None:
             self._summary_started = now
@@ -4439,6 +4447,7 @@ class VintedFastLane:
                             _save_state(self.state_path, state)
                 self._summary()
         finally:
+            faulthandler.cancel_dump_traceback_later()
             engine._download_listing_image = _engine_download_listing_image
             if self._feedback_thread is not None:
                 self._feedback_thread.join(timeout=5)
