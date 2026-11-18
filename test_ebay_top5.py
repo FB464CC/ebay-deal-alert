@@ -196,3 +196,44 @@ def test_401_drops_cached_token_so_next_poll_reauths(tmp_path, monkeypatch):
                   clock=lambda: clock["t"],
                   sleeper=lambda s: clock.__setitem__("t", clock["t"] + max(s, 75))).run()
     assert used == ["dead", "fresh"]
+
+
+def test_size_only_in_item_specifics_reaches_details_not_rejected(tmp_path, monkeypatch):
+    bot = lane.EbayTop5(db_path=tmp_path / "seen.db")
+    conn = lane._db(bot.db_path)
+    item = {**listing("Brunello Cucinelli Cashmere Crewneck Sweater"), "size": None}
+    response = Mock()
+    response.json.return_value = {"localizedAspects": [{"name": "Size", "value": "L"},
+                                                       {"name": "Color", "value": "Gray"}]}
+    monkeypatch.setattr(lane.requests, "get", Mock(return_value=response))
+    photo = Mock(return_value=None)
+    monkeypatch.setattr(bot.vision, "_first_photo_check", photo)
+    bot._judge(conn, "token", item, False, bot.clock() + 300)
+    assert item["size"] == "L"
+    assert photo.call_count == 1  # cleared the size gate on getItem data
+    conn.close()
+
+
+def test_size_still_missing_after_details_is_recorded_once(tmp_path, monkeypatch):
+    bot = lane.EbayTop5(db_path=tmp_path / "seen.db")
+    conn = lane._db(bot.db_path)
+    item = {**listing("Brunello Cucinelli Cashmere Crewneck Sweater"), "size": None}
+    get = Mock(return_value=Mock(**{"json.return_value": {}}))
+    monkeypatch.setattr(lane.requests, "get", get)
+    bot._judge(conn, "token", item, False, bot.clock() + 300)
+    bot._judge(conn, "token", item, False, bot.clock() + 300)
+    assert get.call_count == 1
+    assert conn.execute("SELECT reason FROM judged").fetchone() == ("size missing or does not fit",)
+    conn.close()
+
+
+def test_hourly_details_cap_defers_without_recording(tmp_path, monkeypatch):
+    bot = lane.EbayTop5(db_path=tmp_path / "seen.db")
+    conn = lane._db(bot.db_path)
+    bot.calls["details"] = lane.DETAILS_PER_HOUR
+    get = Mock()
+    monkeypatch.setattr(lane.requests, "get", get)
+    bot._judge(conn, "token", listing(), False, bot.clock() + 300)
+    get.assert_not_called()
+    assert conn.execute("SELECT count(*) FROM judged").fetchone() == (0,)
+    conn.close()

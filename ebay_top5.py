@@ -32,6 +32,11 @@ FAKE_FLOORS = CONFIG.get("EBAY_TOP5_FAKE_PRICE_FLOORS", {
 # The lane's paid-AI ledger lives in its own cache, separate from Vinted's, so
 # hold the trial to its own small cap (stricter than AI_PAID_MONTHLY_BUDGET_USD).
 AI_BUDGET_USD = float(CONFIG.get("EBAY_TOP5_AI_BUDGET_USD", 2.0))
+# Reasons a title alone can't settle: judge them again after getItem adds size and description.
+SIZE_EVIDENCE = {"suit is not confirmed 40-44 R/L", "dress shirt collar 16.5 not confirmed",
+                 "size missing or does not fit"}
+# ponytail: flat hourly getItem cap; searches use ~96 calls/h of eBay's daily Browse quota.
+DETAILS_PER_HOUR = int(CONFIG.get("EBAY_TOP5_DETAILS_PER_HOUR", 60))
 GARMENT = re.compile(r"\b(?:sweater|jumper|knit|cardigan|pullover|quarter[ -]?zip|1/4[ -]?zip|polo|dress shirt|button[ -]?(?:down|up)|woven shirt|suit)\b", re.I)
 
 
@@ -104,8 +109,12 @@ def _fetch_details(token, item_id):
     response.raise_for_status()
     body = response.json()
     description = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html.unescape(body.get("description") or ""))).strip()
+    # Search summaries carry no size; item specifics ("Size", "Neck Size", ...) do.
+    size = " ".join(str(aspect.get("value") or "") for aspect in body.get("localizedAspects") or []
+                    if "size" in str(aspect.get("name") or "").casefold()).strip()
     return {**{key: body[key] for key in ("shippingOptions", "estimatedAvailabilities") if key in body},
-            **({"description": description} if description else {})}
+            **({"description": description} if description else {}),
+            **({"size": size} if size else {})}
 
 
 class EbayTop5:
@@ -117,8 +126,10 @@ class EbayTop5:
         self.clock, self.now, self.sleeper = clock, now, sleeper
         self.vision = fast.VintedFastLane(searches=[], run_seconds=self.run_seconds)
         self.calls = Counter()
+        self.reasons = Counter()
 
     def _record(self, conn, item_id, reason, alerted=False):
+        self.reasons[reason] += 1
         conn.execute("INSERT OR IGNORE INTO judged VALUES (?, ?, ?)", (item_id, reason, int(alerted)))
         conn.commit()
 
@@ -179,7 +190,7 @@ class EbayTop5:
         if not item_id or conn.execute("SELECT 1 FROM judged WHERE item_id=?", (item_id,)).fetchone():
             return
         brand, category, reason = self._cheap_reason(listing, auction)
-        if reason:
+        if reason and reason not in SIZE_EVIDENCE:
             self._record(conn, item_id, reason)
             return
         if auction:
@@ -188,6 +199,8 @@ class EbayTop5:
                 return
         if self.vision.ai_calls >= fast.VINTED_FAST_MAX_AI_CALLS_PER_RUN:
             return
+        if self.calls["details"] >= DETAILS_PER_HOUR:
+            return  # unrecorded: retried next hour
         self.calls["details"] += 1
         details = _fetch_details(token, item_id)
         if details:
@@ -305,7 +318,9 @@ class EbayTop5:
                 if self.clock() - last_hour >= 3600:
                     log.info("Browse calls this hour: searches=%s auctions=%s details=%s",
                              self.calls["search"], self.calls["auction"], self.calls["details"])
+                    log.info("Judged this hour: %s", dict(self.reasons.most_common()) or "none")
                     self.calls.clear()
+                    self.reasons.clear()
                     last_hour = self.clock()
                 self.sleeper(max(0, min(self.poll_seconds - (self.clock() - started), deadline - self.clock())))
         finally:
