@@ -4661,3 +4661,20 @@ def test_stall_watchdog_arms_each_loop_and_disarms_on_exit(tmp_path):
     assert arms and all(c[1] == (fast.VINTED_FAST_STALL_SECONDS,) and c[2] == {"exit": True} for c in arms)
     assert calls[-1] == ("cancel",)
     assert fast.VINTED_FAST_STALL_SECONDS > fast.VINTED_FAST_BACKOFF_MAX_SECONDS
+
+
+def test_counter_ceiling_is_the_highest_price_that_still_clears_the_bars(tmp_path):
+    lane = fast.VintedFastLane(searches=[], seen_db_path=tmp_path / "seen.db")
+    result = {"item_price": 50, "listing": {"vinted_shipping": 5.0},
+              "estimated_resale_value": 100}
+    cap = 40.0  # stand-in for "40% of $100 conservative resale"
+    veto = lambda view: "too much" if view["price"] > cap else None
+    with (
+        mock.patch.object(fast, "_vinted_apparel_bar_reason", return_value=None),
+        mock.patch.object(fast.engine, "is_blocked_by_steal_quality_gate", return_value=None),
+        mock.patch.object(lane, "_strong_look_veto_reason", side_effect=veto),
+    ):
+        ceiling = lane._counter_ceiling(result, "tops")
+    assert ceiling is not None and 25 <= ceiling < 50
+    landed = lambda dollars: fast._offer_view(result, dollars / 50)["price"]
+    assert landed(ceiling) <= cap < landed(ceiling + 1)

@@ -2941,6 +2941,24 @@ class VintedFastLane:
                 )
         return False
 
+    def _counter_ceiling(self, result, category):
+        """Highest whole-dollar price that still clears every bar the offer
+        cleared. Owner 11-18: offered $25 on a $50 Zegna crewneck, seller
+        countered $40, and it sold while he weighed it with no number to check."""
+        list_price = engine._sane_ai_price(result.get("item_price"))
+        if not list_price:
+            return None
+        for dollars in range(math.floor(list_price), 0, -1):
+            view = _offer_view(result, dollars / list_price)
+            if (
+                view is not None
+                and not _vinted_apparel_bar_reason(view, category)
+                and not engine.is_blocked_by_steal_quality_gate(view, category=category)
+                and not self._strong_look_veto_reason(view)
+            ):
+                return dollars
+        return None
+
     def _send_offer_alert(self, conn, result, view, kind, category, ai_result, search, hard_stop,
                           sanity_future=None):
         listing = result.get("listing") or {}
@@ -2958,6 +2976,9 @@ class VintedFastLane:
             f"Offer {ask}" if kind == "offer"
             else f'Below the offer limit, so message the seller: "I can do {ask}"'
         )
+        ceiling = self._counter_ceiling(result, category)
+        if ceiling is not None and ceiling >= view["item_price"]:
+            how += f". Take a counter up to ${ceiling}"
         self._ntfy(
             f"{kind.upper()} {brand} {ask} (list ${result['item_price']:g})"
             + (f" {size}" if size else "") + f": {title[:40]}",
