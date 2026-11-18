@@ -1252,7 +1252,8 @@ def test_peter_millar_twenty_dollar_list_at_35_resale_does_not_alert(tmp_path):
     assert round(row["vinted_expected_paid"], 2) == 21.2
     # 11-10 price table: a used PM polo sells for ~$30, so any AI guess is cut
     # to it and $21 can't be a Great Deal; since 11-17 no AI call is spent.
-    assert row["reason"].startswith("price table: ~$21 all-in is over half the $30")
+    # Crown Crafted polo row is $35 since owner 11-18; $21 still can't be Great.
+    assert row["reason"].startswith("price table: ~$21 all-in is over half the $35")
 
 
 def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
@@ -1606,8 +1607,10 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
         ("", "Canali Richards Wool Blazer Men's 50R"),  # EU 50 = US 40
         ("", "Canali Navy Wool Dress Pants – Men’s Size 34R"),
         ("", "Jeans W34 L32"), ("", "Zegna trousers 33x32"), ("50", "Brioni trousers"),
-        ("XXL", "Loro Piana cashmere crewneck sweater"),  # $5: megasteal knit
     ]
+    # Owner 11-18 "XL longsleeves will probably not fit": the 11-03 XXL
+    # megasteal knit is retired, so a $5 XXL cashmere crewneck is off too.
+    off.append(("XXL", "Loro Piana cashmere crewneck sweater"))
     def reason(size, title):
         listing = {"size": size, "title": title, "price": {"value": 5}}
         return fast._off_size_reason(listing, "other")
@@ -4382,7 +4385,7 @@ def test_gamecock_pieces_are_worth_more_and_may_cost_up_to_half_of_resale():
         fast._cap_to_price_table(result, "estimated_resale_value")
         return result["estimated_resale_value"]
 
-    assert capped("Peter Millar Gamecock Polo") == 45
+    assert capped("Peter Millar Gamecock Polo") == 40  # owner 11-18: "maybe 40"
     assert capped("Peter Millar South Carolina quarter zip") == 60  # cap is $63; never raised
     assert capped("Peter Millar Clemson Polo") == 30
     assert fast._steal_fraction({"listing": {"title": "Peter Millar Gamecock Polo"}}) == 0.5
@@ -4397,7 +4400,7 @@ def test_gamecock_peter_millar_polo_is_worth_at_least_forty():
         return result["estimated_resale_value"]
 
     assert valued("Peter Millar Gamecock Polo", 30.0) == 40
-    assert valued("Peter Millar Gamecock Polo", 60.0) == 45
+    assert valued("Peter Millar Gamecock Polo", 60.0) == 40  # owner 11-18: "maybe 40"
     assert valued("Peter Millar Polo", 25.0) == 25
     assert valued("Peter Millar Gamecock quarter zip", 30.0) == 30
 
@@ -4690,3 +4693,38 @@ def test_stuck_image_prewarm_falls_back_to_direct_download(monkeypatch):
     monkeypatch.setattr(fast, "VINTED_IMAGE_WAIT_SECONDS", 0.05)
     monkeypatch.setattr(fast, "_engine_download_listing_image", lambda *_a, **_k: b"jpeg")
     assert fast._cached_download_listing_image("https://img/x.jpg") == b"jpeg"
+
+
+@pytest.mark.parametrize(
+    ("title", "size", "off"),
+    [
+        ("Peter Millar Cashmere Quarter Zip", "XL", True),
+        ("Zegna crewneck sweater XL", "", True),
+        ("Loro Piana cashmere sweater", "L", False),
+        ("Peter Millar Quarter Zip XL", "L", False),  # seller's size field wins
+        ("Peter Millar Crown Crafted Polo", "XL", False),  # short sleeve: polo rule decides
+        ("Peter Millar Long Sleeve Polo", "XL", True),
+        ("Brunello Cucinelli cashmere vest", "XL", False),
+        ("Peter Millar hoodie", "XXL", True),  # 11-03 XXL megasteal knit retired
+        ("Zegna striped shirt", "M", False),
+    ],
+)
+def test_xl_long_sleeves_are_off(title, size, off):
+    # Owner 11-18: "XL longsleeves will probably not fit on me".
+    reason = fast._off_size_reason({"title": title, "size": size}, "knitwear")
+    assert (reason == "XL long sleeves won't fit (owner wears M/L)") is off
+
+
+@pytest.mark.parametrize(
+    ("title", "used"),
+    [
+        ("Peter Millar Summer Comfort Polo", 30),
+        ("Peter Millar Crown Crafted Polo", 35),
+        ("Peter Millar Gamecocks Polo", 40),  # not 1.5x: owner 11-18 "maybe 40"
+        ("Peter Millar Crown Crafted South Carolina Polo", 40),
+        ("Peter Millar Gamecocks Quarter Zip", 63),  # other pieces keep 1.5x of $42
+    ],
+)
+def test_pm_polo_values_follow_owner_11_18(title, used):
+    row = fast._price_table_row({"listing": {"title": title}})
+    assert row is not None and row[0] == used
