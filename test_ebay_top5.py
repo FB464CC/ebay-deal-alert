@@ -38,7 +38,9 @@ def test_trial_holds_its_own_small_ai_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(lane.engine, "search_ebay", lambda *_: ([], 0))
     monkeypatch.setattr(lane.engine, "search_ebay_ending_soon_auctions", lambda *_, **__: ([], 0))
     before = lane.engine.AI_PAID_MONTHLY_BUDGET_USD
-    lane.EbayTop5(db_path=tmp_path / "seen.db", run_seconds=0, sleeper=lambda _: None).run()
+    clock = {"t": 0.0}
+    lane.EbayTop5(db_path=tmp_path / "seen.db", run_seconds=1, clock=lambda: clock["t"],
+                  sleeper=lambda s: clock.__setitem__("t", clock["t"] + max(s, 1))).run()
     assert seen["cap"] == min(before, 2.0)
     assert lane.engine.AI_PAID_MONTHLY_BUDGET_USD == before
 
@@ -135,4 +137,62 @@ def test_token_refreshes_and_network_errors_do_not_crash(tmp_path, monkeypatch):
                         clock=lambda: clock["t"],
                         sleeper=lambda s: clock.__setitem__("t", clock["t"] + max(s, 3600)))
     bot.run()
-    assert tokens.call_count == 2  # start + one refresh after 90 min
+    assert tokens.call_count == 4  # asked every poll; the file cache decides renewal
+
+
+def test_never_searches_with_an_expired_token(tmp_path, monkeypatch):
+    # Real get_ebay_token + file cache on one fake clock: tokens live 2 h and
+    # the lane runs ~5.7 h, so every search must use a token that is still live.
+    clock = {"t": 1_000_000.0}
+    issued = {}
+    monkeypatch.setattr(lane.engine, "TOKEN_CACHE_PATH", tmp_path / "token.json")
+    monkeypatch.setattr(lane.engine.time, "time", lambda: clock["t"])
+    monkeypatch.setenv("EBAY_CLIENT_ID", "id")
+    monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
+
+    def post(*_, **__):
+        token = f"t{len(issued)}"
+        issued[token] = clock["t"]
+        response = Mock()
+        response.json.return_value = {"access_token": token, "expires_in": 7200}
+        return response
+
+    stale = []
+
+    def search(token, *_, **__):
+        if clock["t"] - issued[token] >= 7200:
+            stale.append(clock["t"])
+        return [], 0
+
+    monkeypatch.setattr(lane.engine.requests, "post", post)
+    monkeypatch.setattr(lane.engine, "search_ebay", search)
+    monkeypatch.setattr(lane.engine, "search_ebay_ending_soon_auctions", search)
+    monkeypatch.setattr(lane, "TRIAL_UNTIL", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    sleep = lambda seconds: clock.__setitem__("t", clock["t"] + max(seconds, 75))
+    lane.EbayTop5(db_path=tmp_path / "seen.db", run_seconds=340 * 60, poll_seconds=75,
+                  clock=lambda: clock["t"], sleeper=sleep).run()
+    assert len(issued) >= 3
+    assert stale == []
+
+
+def test_401_drops_cached_token_so_next_poll_reauths(tmp_path, monkeypatch):
+    cache = tmp_path / "token.json"
+    cache.write_text('{"access_token": "dead", "expires_at": 9e12}\n', encoding="utf-8")
+    monkeypatch.setattr(lane.engine, "TOKEN_CACHE_PATH", cache)
+
+    def search(token, *_, **__):
+        if token == "dead":
+            raise lane.requests.HTTPError(response=Mock(status_code=401))
+        return [], 0
+
+    used = []
+    monkeypatch.setattr(lane.engine, "get_ebay_token", lambda: used.append(
+        lane.engine._read_cached_ebay_token() or "fresh") or used[-1])
+    monkeypatch.setattr(lane.engine, "search_ebay", search)
+    monkeypatch.setattr(lane.engine, "search_ebay_ending_soon_auctions", search)
+    monkeypatch.setattr(lane, "TRIAL_UNTIL", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    clock = {"t": 0.0}
+    lane.EbayTop5(db_path=tmp_path / "seen.db", run_seconds=150, poll_seconds=75,
+                  clock=lambda: clock["t"],
+                  sleeper=lambda s: clock.__setitem__("t", clock["t"] + max(s, 75))).run()
+    assert used == ["dead", "fresh"]

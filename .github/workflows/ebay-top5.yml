@@ -23,7 +23,7 @@ jobs:
       - name: Trial gate
         id: trial
         run: |
-          if [ "$(date -u +%s)" -lt "$(date -u -d '2026-11-18T23:59:00Z' +%s)" ]; then
+          if [ "$(date -u +%s)" -lt "$(date -u -d '2026-11-25T23:59:00Z' +%s)" ]; then
             echo 'active=true' >> "$GITHUB_OUTPUT"
           else
             echo 'active=false' >> "$GITHUB_OUTPUT"
@@ -89,6 +89,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "$(date -u +%s)" -lt "$(date -u -d '2026-11-18T23:59:00Z' +%s)" ]; then
+          if [ "$(date -u +%s)" -lt "$(date -u -d '2026-11-25T23:59:00Z' +%s)" ]; then
             gh workflow run ebay-top5.yml --ref main
           fi

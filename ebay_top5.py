@@ -20,7 +20,7 @@ import vinted_fast as fast
 log = logging.getLogger(__name__)
 CONFIG = engine._CONFIG
 TRIAL_UNTIL = datetime.fromisoformat(
-    CONFIG.get("EBAY_TOP5_TRIAL_UNTIL", "2026-11-18T23:59:00Z").replace("Z", "+00:00")
+    CONFIG.get("EBAY_TOP5_TRIAL_UNTIL", "2026-11-25T23:59:00Z").replace("Z", "+00:00")
 )
 SEEN_DB = Path("ebay_top5_seen.db")
 QUERY = "(loro piana,brunello cucinelli,kiton,brioni,zegna)"
@@ -268,7 +268,6 @@ class EbayTop5:
             if self.now() >= TRIAL_UNTIL:
                 self._trial_over(conn)
                 return
-            token, token_at = engine.get_ebay_token(), self.clock()
             deadline = self.clock() + self.run_seconds
             last_hour = self.clock()
             buy_search, auction_search = searches()
@@ -277,10 +276,12 @@ class EbayTop5:
                     self._trial_over(conn)
                     break
                 started = self.clock()
-                # eBay app tokens last 2 h; runs last ~5.7 h.
-                if started - token_at >= 90 * 60:
-                    token, token_at = engine.get_ebay_token(), started
+                # eBay app tokens last 2 h; runs last ~5.7 h. get_ebay_token()
+                # serves its file cache until 5 min before expiry, so asking
+                # every poll renews on time. A fixed 90-min refresh got the
+                # same cached token back and ran blind (401) from 2 h on.
                 try:
+                    token = engine.get_ebay_token()
                     self.calls["search"] += 1
                     buys, _ = engine.search_ebay(token, buy_search)
                     self.calls["auction"] += 1
@@ -288,13 +289,17 @@ class EbayTop5:
                     for listing, auction in [(item, True) for item in auctions] + [(item, False) for item in buys]:
                         if not auction and "FIXED_PRICE" not in (listing.get("buyingOptions") or []):
                             continue
-                        self._judge(conn, token, listing, auction, deadline)
+                        # Fresh per listing: a slow poll can outlive a token served 5 min from expiry.
+                        self._judge(conn, engine.get_ebay_token(), listing, auction, deadline)
                 except requests.HTTPError as exc:
                     if exc.response is not None and exc.response.status_code in {403, 429}:
                         log.warning("eBay Browse HTTP %s; backing off", exc.response.status_code)
                         self.sleeper(min(900, max(0, deadline - self.clock())))
                     else:
                         log.warning("eBay Browse HTTP error: %s", exc)
+                        if exc.response is not None and exc.response.status_code == 401:
+                            # Dead before its stated expiry: drop the cache so the next poll re-auths.
+                            engine.TOKEN_CACHE_PATH.unlink(missing_ok=True)
                 except requests.RequestException as exc:
                     log.warning("eBay Browse request failed: %s", exc)
                 if self.clock() - last_hour >= 3600:
