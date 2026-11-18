@@ -1607,10 +1607,8 @@ def test_unsized_brand_search_drops_stated_sizes_owner_cant_wear():
         ("", "Canali Richards Wool Blazer Men's 50R"),  # EU 50 = US 40
         ("", "Canali Navy Wool Dress Pants – Men’s Size 34R"),
         ("", "Jeans W34 L32"), ("", "Zegna trousers 33x32"), ("50", "Brioni trousers"),
+        ("XXL", "Loro Piana cashmere crewneck sweater"),  # $5: megasteal knit
     ]
-    # Owner 11-18 "XL longsleeves will probably not fit": the 11-03 XXL
-    # megasteal knit is retired, so a $5 XXL cashmere crewneck is off too.
-    off.append(("XXL", "Loro Piana cashmere crewneck sweater"))
     def reason(size, title):
         listing = {"size": size, "title": title, "price": {"value": 5}}
         return fast._off_size_reason(listing, "other")
@@ -4698,21 +4696,25 @@ def test_stuck_image_prewarm_falls_back_to_direct_download(monkeypatch):
 @pytest.mark.parametrize(
     ("title", "size", "off"),
     [
-        ("Peter Millar Cashmere Quarter Zip", "XL", True),
-        ("Zegna crewneck sweater XL", "", True),
-        ("Loro Piana cashmere sweater", "L", False),
-        ("Peter Millar Quarter Zip XL", "L", False),  # seller's size field wins
-        ("Peter Millar Crown Crafted Polo", "XL", False),  # short sleeve: polo rule decides
-        ("Peter Millar Long Sleeve Polo", "XL", True),
-        ("Brunello Cucinelli cashmere vest", "XL", False),
-        ("Peter Millar hoodie", "XXL", True),  # 11-03 XXL megasteal knit retired
+        ("Zegna striped shirt", "XL", True),
+        ("Brioni dress shirt XL", "", True),
+        ("Kiton button down shirt", "XL", True),
+        ("Loro Piana oxford", "Extra Large", True),
+        ("Zegna shirt XL", "L", False),  # seller's size field wins
         ("Zegna striped shirt", "M", False),
+        ("Peter Millar Cashmere Quarter Zip", "XL", False),
+        ("Zegna crewneck sweater XL", "", False),
+        ("Peter Millar Long Sleeve Tee", "XL", False),
+        ("Peter Millar flannel shirt", "XL", False),
+        ("Peter Millar golf shirt", "XL", False),
+        ("Brunello Cucinelli cashmere vest", "XL", False),
     ],
 )
-def test_xl_long_sleeves_are_off(title, size, off):
-    # Owner 11-18: "XL longsleeves will probably not fit on me".
+def test_xl_is_off_only_for_dress_shirts(title, size, off):
+    # Owner 11-18: XL is "more just dress shirts. xl quarterzips and normal
+    # long sleeves are fine."
     reason = fast._off_size_reason({"title": title, "size": size}, "knitwear")
-    assert (reason == "XL long sleeves won't fit (owner wears M/L)") is off
+    assert (reason == "XL dress shirts won't fit (owner 11-18)") is off
 
 
 @pytest.mark.parametrize(

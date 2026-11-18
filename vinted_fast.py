@@ -952,29 +952,23 @@ _XXL_FITTED = re.compile(
     r"\b(?:polo|shirt|tee|jacket|blazer|coat|vest|gilet|suit|zip|pants?|trousers?|shorts)\b",
     re.I,
 )
-# Owner 11-18: "XL longsleeves will probably not fit on me". Supersedes the
-# 11-08 L-XL quarter-zip range and the 11-03 XXL megasteal knit.
-_LONG_SLEEVE = re.compile(
-    r"\b(?:sweater|jumper|cardigan|crew\s?neck|pullover|turtleneck|mock\s?neck|knit"
-    r"|cashmere|quarter[\s-]?zip|1/4[\s-]?zip|half[\s-]?zip|full[\s-]?zip|zip[\s-]?up"
-    r"|hoodie|sweatshirt|long[\s-]?sleeve|button[\s-]?(?:down|up)|dress\s+shirt|oxford"
-    r"|flannel|overshirt|shirt|jacket|coat)\b",
+# Owner 11-18: XL "more just dress shirts. xl quarterzips and normal long
+# sleeves are fine." Knits, quarter-zips and casual long sleeves keep M-XL
+# (and the 11-03 XXL megasteal knit).
+_DRESS_SHIRT = re.compile(r"\b(?:dress\s+shirt|button[\s-]?(?:down|up)|oxford|shirt)\b", re.I)
+_NOT_DRESS_SHIRT = re.compile(
+    r"\b(?:polo|tee|t-?shirt|golf\s+shirt|henley|flannel|overshirt|shirt[\s-]?jacket"
+    r"|vest|gilet|short[\s-]?sleeve)\b",
     re.I,
-)
-_EXPLICIT_LONG_SLEEVE = re.compile(r"\blong[\s-]?sleeve", re.I)
-_SHORT_SLEEVE = re.compile(
-    r"\b(?:short[\s-]?sleeve|polo|tee|t-?shirt|golf\s+shirt|vest|gilet|sleeveless)\b", re.I
 )
 _SIZE_XL_UP = re.compile(r"^\s*(?:XL|XXL|2XL|2X|x-?large|extra[\s-]*large)\b", re.I)
 _TITLE_XL_UP = re.compile(r"\b(?:XL|XXL|2XL|x-?large|xx-?large|extra[\s-]*large)\b", re.I)
 
 
-def _xl_long_sleeve(size, title):
-    """An XL-or-bigger long-sleeve top. The seller's size field wins; the
-    title only counts when the field is empty."""
-    if not _LONG_SLEEVE.search(title):
-        return False
-    if _SHORT_SLEEVE.search(title) and not _EXPLICIT_LONG_SLEEVE.search(title):
+def _xl_dress_shirt(size, title):
+    """An XL-or-bigger dress shirt. The seller's size field wins; the title
+    only counts when the field is empty."""
+    if not _DRESS_SHIRT.search(title) or _NOT_DRESS_SHIRT.search(title):
         return False
     return bool(_SIZE_XL_UP.search(size) if size.strip() else _TITLE_XL_UP.search(title))
 
@@ -1090,8 +1084,8 @@ def _off_size_reason(listing, category):
     waist_fits = _pants_waist_fits(listing)
     if waist_fits is not None:
         return None if waist_fits else "pants waist won't fit (owner wears 32-36)"
-    if _xl_long_sleeve(size, title):
-        return "XL long sleeves won't fit (owner wears M/L)"
+    if _xl_dress_shirt(size, title):
+        return "XL dress shirts won't fit (owner 11-18)"
     if _xxl_megasteal(listing):
         return None
     if size and _SIZE_FIELD_FIT.search(size):
