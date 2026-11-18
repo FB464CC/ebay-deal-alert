@@ -597,7 +597,26 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 70  # owner 11-14 added the towel warmer gift watch
+    assert len(fast.enabled_vinted_searches()) == 72  # owner 11-17 added Zegna/Brioni suits
+
+
+def test_zegna_and_brioni_suit_searches_cover_full_suits_in_owner_sizes():
+    # Owner 11-17: the brand-wide Zegna ($75) and Brioni ($90) caps never let a
+    # full suit through. Caps = the highest list whose 60% offer can still be a
+    # Great Deal against the price-table suit value ($200 Zegna, $275 Brioni).
+    searches = {search["id"]: search for search in engine.SAVED_SEARCHES}
+    for search_id, brand, cap in (("vinted-zegna-suit", "zegna", 150), ("vinted-brioni-suit", "brioni", 200)):
+        search = searches[search_id]
+        assert search["enabled"] is True and search["profile"] == "fast"
+        assert search["platforms"] == ["vinted"] and search["ebay"] is False
+        assert search["category"] == "tailoring" and search["max_price"] == cap
+        assert search["size"] == ["40", "41", "42", "43", "44"]
+        assert search["size_equivalents"] == ["50", "52", "54"]
+        assert brand in search["query"] and "suit" in search["query"]
+        for negative in ("-women", "-womens", "-ladies", "-girls", "-kids"):
+            assert negative in search["query"]
+        assert engine.listing_matches_size_filter(search, {"title": f"{brand} navy wool suit 42R"})
+        assert not engine.listing_matches_size_filter(search, {"title": f"{brand} suit 48R", "size": "EU 58"})
 
 
 def test_fragrance_searches_and_feeds_load_with_price_floors():
@@ -646,6 +665,8 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-canali-suit": 130,
         "vinted-canali": 90,
         "vinted-brooks-brothers": 90,
+        "vinted-zegna-suit": 150,
+        "vinted-brioni-suit": 200,
         "vinted-e-marinella-tie": 60,
         "vinted-brunello-cucinelli": 130,
         "vinted-loro-piana": 130,
