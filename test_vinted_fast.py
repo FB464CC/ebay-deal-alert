@@ -4730,3 +4730,33 @@ def test_xl_is_off_only_for_dress_shirts(title, size, off):
 def test_pm_polo_values_follow_owner_11_18(title, used):
     row = fast._price_table_row({"listing": {"title": title}})
     assert row is not None and row[0] == used
+
+
+@pytest.mark.parametrize(
+    ("title", "off"),
+    [("Peter Millar Long Sleeve Shirt", False), ("Brioni long sleeve dress shirt", True),
+     ("Zegna sport shirt", False), ("Kiton button down long sleeve", True)],
+)
+def test_casual_long_sleeve_shirts_keep_xl(title, off):
+    reason = fast._off_size_reason({"title": title, "size": "XL"}, "knitwear")
+    assert (reason == "XL dress shirts won't fit (owner 11-18)") is off
+
+
+def test_stall_watchdog_is_armed_before_the_first_poll(tmp_path):
+    ticks = iter(x / 100 for x in range(10_000))
+    lane = fast.VintedFastLane(
+        searches=[{"id": "s", "query": "peter millar polo", "platforms": ["vinted"]}],
+        state_path=tmp_path / "state.json", seen_db_path=tmp_path / "seen.db",
+        log_path=tmp_path / "lane.jsonl", main_seen_db_path=tmp_path / "missing-main.db",
+        run_seconds=0.5, clock=lambda: next(ticks), sleeper=lambda _seconds: None,
+    )
+    events = []
+    with (
+        mock.patch.object(lane, "_catalog_request",
+                          side_effect=lambda *_a, **_k: events.append("request") or (200, [])),
+        mock.patch.object(fast.faulthandler, "dump_traceback_later",
+                          side_effect=lambda *_a, **_k: events.append("arm")),
+        mock.patch.object(fast.faulthandler, "cancel_dump_traceback_later"),
+    ):
+        lane.run()
+    assert "request" in events and events.index("arm") < events.index("request")

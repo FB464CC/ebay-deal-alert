@@ -956,9 +956,14 @@ _XXL_FITTED = re.compile(
 # sleeves are fine." Knits, quarter-zips and casual long sleeves keep M-XL
 # (and the 11-03 XXL megasteal knit).
 _DRESS_SHIRT = re.compile(r"\b(?:dress\s+shirt|button[\s-]?(?:down|up)|oxford|shirt)\b", re.I)
+# Explicit dress-shirt words win over a casual qualifier ("long sleeve dress
+# shirt" is still a dress shirt); a plain "Long Sleeve Shirt" is casual.
+_EXPLICIT_DRESS_SHIRT = re.compile(
+    r"\b(?:dress\s+shirt|button[\s-]?(?:down|up)|oxford|french\s+cuffs?|spread\s+collar)\b", re.I
+)
 _NOT_DRESS_SHIRT = re.compile(
     r"\b(?:polo|tee|t-?shirt|golf\s+shirt|henley|flannel|overshirt|shirt[\s-]?jacket"
-    r"|vest|gilet|short[\s-]?sleeve)\b",
+    r"|vest|gilet|short[\s-]?sleeve|long[\s-]?sleeve|sport\s+shirt|camp\s+shirt)\b",
     re.I,
 )
 _SIZE_XL_UP = re.compile(r"^\s*(?:XL|XXL|2XL|2X|x-?large|extra[\s-]*large)\b", re.I)
@@ -968,7 +973,9 @@ _TITLE_XL_UP = re.compile(r"\b(?:XL|XXL|2XL|x-?large|xx-?large|extra[\s-]*large)
 def _xl_dress_shirt(size, title):
     """An XL-or-bigger dress shirt. The seller's size field wins; the title
     only counts when the field is empty."""
-    if not _DRESS_SHIRT.search(title) or _NOT_DRESS_SHIRT.search(title):
+    if not _DRESS_SHIRT.search(title):
+        return False
+    if _NOT_DRESS_SHIRT.search(title) and not _EXPLICIT_DRESS_SHIRT.search(title):
         return False
     return bool(_SIZE_XL_UP.search(size) if size.strip() else _TITLE_XL_UP.search(title))
 
@@ -4410,6 +4417,8 @@ class VintedFastLane:
         )
         # Only while the lane runs, so the engine's own callers/tests are untouched.
         engine._download_listing_image = _cached_download_listing_image
+        # Armed before the first poll too: _summary() only re-arms after a pass.
+        faulthandler.dump_traceback_later(VINTED_FAST_STALL_SECONDS, exit=True)
         try:
             while self.clock() < deadline:
                 self._maybe_poll_feedback(state)

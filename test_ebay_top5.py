@@ -258,3 +258,34 @@ def test_malformed_token_reply_costs_one_poll_not_the_run(tmp_path, monkeypatch)
                   clock=lambda: clock["t"],
                   sleeper=lambda s: clock.__setitem__("t", clock["t"] + max(s, 75))).run()
     assert searched == ["tok", "tok"]
+
+
+def test_get_item_bare_neck_size_reads_as_collar_and_bad_shapes_are_ignored(monkeypatch):
+    def body(payload):
+        response = Mock()
+        response.json.return_value = payload
+        monkeypatch.setattr(lane.requests, "get", Mock(return_value=response))
+        return lane._fetch_details("token", "v1|1|0")
+
+    details = body({"localizedAspects": [{"name": "Size", "value": "L"}, None,
+                                         {"name": "Neck Size", "value": "16.5"}]})
+    assert details["size"] == "16.5 in L"
+    assert lane.fast._collar_size({"size": details["size"], "title": "Kiton dress shirt"}) == 16.5
+    assert body([]) == {}
+
+
+def test_suit_with_size_only_in_item_specifics_reaches_details(tmp_path, monkeypatch):
+    bot = lane.EbayTop5(db_path=tmp_path / "seen.db")
+    conn = lane._db(bot.db_path)
+    item = {**listing("Kiton Full Suit Navy Wool", price=200), "size": None}
+    response = Mock()
+    response.json.return_value = {"localizedAspects": [{"name": "Size", "value": "42R"}]}
+    get = Mock(return_value=response)
+    monkeypatch.setattr(lane.requests, "get", get)
+    photo = Mock(return_value=None)
+    monkeypatch.setattr(bot.vision, "_first_photo_check", photo)
+    bot._judge(conn, "token", item, False, bot.clock() + 300)
+    assert get.call_count == 1
+    reason = conn.execute("SELECT reason FROM judged").fetchone()
+    assert reason is None or "40-44" not in reason[0], reason
+    conn.close()

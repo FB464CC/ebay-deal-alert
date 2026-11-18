@@ -34,7 +34,7 @@ FAKE_FLOORS = CONFIG.get("EBAY_TOP5_FAKE_PRICE_FLOORS", {
 AI_BUDGET_USD = float(CONFIG.get("EBAY_TOP5_AI_BUDGET_USD", 2.0))
 # Reasons a title alone can't settle: judge them again after getItem adds size and description.
 SIZE_EVIDENCE = {"suit is not confirmed 40-44 R/L", "dress shirt collar 16.5 not confirmed",
-                 "size missing or does not fit"}
+                 "size missing or does not fit", "suit is not a 40-44 R/L (EU 50-54)"}
 # ponytail: flat hourly getItem cap; searches use ~96 calls/h of eBay's daily Browse quota.
 DETAILS_PER_HOUR = int(CONFIG.get("EBAY_TOP5_DETAILS_PER_HOUR", 60))
 GARMENT = re.compile(r"\b(?:sweater|jumper|knit|cardigan|pullover|quarter[ -]?zip|1/4[ -]?zip|polo|dress shirt|button[ -]?(?:down|up)|woven shirt|suit)\b", re.I)
@@ -108,10 +108,17 @@ def _fetch_details(token, item_id):
     )
     response.raise_for_status()
     body = response.json()
-    description = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html.unescape(body.get("description") or ""))).strip()
+    if not isinstance(body, dict):  # malformed getItem: judge on the summary alone
+        return {}
+    description = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html.unescape(str(body.get("description") or "")))).strip()
     # Search summaries carry no size; item specifics ("Size", "Neck Size", ...) do.
-    size = " ".join(str(aspect.get("value") or "") for aspect in body.get("localizedAspects") or []
-                    if "size" in str(aspect.get("name") or "").casefold()).strip()
+    aspects = [(str(a.get("name") or "").casefold(), str(a.get("value") or "").strip())
+               for a in (body.get("localizedAspects") or []) if isinstance(a, dict)]
+    # A bare neck size ("16.5") reads as a collar only as "16.5 in", first in the string.
+    neck = [f"{value} in" if re.fullmatch(r"1[4-8](?:\.5)?", value) else value
+            for name, value in aspects if "neck" in name and value]
+    other = [value for name, value in aspects if "size" in name and "neck" not in name and value]
+    size = " ".join(neck + other).strip()
     return {**{key: body[key] for key in ("shippingOptions", "estimatedAvailabilities") if key in body},
             **({"description": description} if description else {}),
             **({"size": size} if size else {})}
