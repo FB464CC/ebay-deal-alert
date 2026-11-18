@@ -315,6 +315,10 @@ class EbayTop5:
                             engine.TOKEN_CACHE_PATH.unlink(missing_ok=True)
                 except requests.RequestException as exc:
                     log.warning("eBay Browse request failed: %s", exc)
+                except (KeyError, ValueError):
+                    # A malformed token or Browse body must cost one poll, not the
+                    # rest of a 5.7 h run; the traceback still lands in the log.
+                    log.exception("eBay poll failed on a malformed response")
                 if self.clock() - last_hour >= 3600:
                     log.info("Browse calls this hour: searches=%s auctions=%s details=%s",
                              self.calls["search"], self.calls["auction"], self.calls["details"])

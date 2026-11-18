@@ -1160,7 +1160,7 @@ def _read_cached_ebay_token():
                 f"token cache is {type(cached).__name__}, not an object"
             )
         if cached.get("access_token") and float(cached.get("expires_at", 0)) > time.time():
-            logger.info("Using cached eBay OAuth token")
+            logger.debug("Using cached eBay OAuth token")
             return cached["access_token"]
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         logger.warning("Ignoring invalid eBay token cache: %s", exc)

@@ -237,3 +237,24 @@ def test_hourly_details_cap_defers_without_recording(tmp_path, monkeypatch):
     get.assert_not_called()
     assert conn.execute("SELECT count(*) FROM judged").fetchone() == (0,)
     conn.close()
+
+
+def test_malformed_token_reply_costs_one_poll_not_the_run(tmp_path, monkeypatch):
+    replies = iter([KeyError("access_token"), "tok", "tok"])
+
+    def token():
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    searched = []
+    monkeypatch.setattr(lane.engine, "get_ebay_token", token)
+    monkeypatch.setattr(lane.engine, "search_ebay", lambda t, *_: searched.append(t) or ([], 0))
+    monkeypatch.setattr(lane.engine, "search_ebay_ending_soon_auctions", lambda *_, **__: ([], 0))
+    monkeypatch.setattr(lane, "TRIAL_UNTIL", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    clock = {"t": 0.0}
+    lane.EbayTop5(db_path=tmp_path / "seen.db", run_seconds=225, poll_seconds=75,
+                  clock=lambda: clock["t"],
+                  sleeper=lambda s: clock.__setitem__("t", clock["t"] + max(s, 75))).run()
+    assert searched == ["tok", "tok"]
