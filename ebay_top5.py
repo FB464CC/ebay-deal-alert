@@ -221,7 +221,13 @@ class EbayTop5:
         all_in = (item_price + shipping) * (1 + engine.SALES_TAX_RATE)
         result = {"listing": listing, "category": category, "item_price": item_price,
                   "shipping_cost": shipping, "price": all_in, "vinted_expected_paid": all_in,
-                  "search_query": QUERY}
+                  # The listing's own house, not the 5-brand QUERY: "loro piana" in
+                  # QUERY made the LP/Cucinelli bar reject every Kiton, Brioni and
+                  # Zegna title (11-18 audit). LP/Cucinelli keep their Steal bar.
+                  "search_query": brand,
+                  # score_listing() never runs here, so the knitwear bar saw no tier and
+                  # rejected every non-LP/Cucinelli knit as "not grab_on_sight-tier".
+                  "brand_tier": "grab_on_sight" if brand in engine.GRAB_ON_SIGHT_BRANDS else None}
         fast._vinted_brand_and_floor(result)
         self.vision.ai_calls += 1
         ai = self.vision._first_photo_check(listing, category, deadline, QUERY)

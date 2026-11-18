@@ -669,9 +669,9 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-brioni-suit": 200,
         "vinted-e-marinella-tie": 60,
         "vinted-brunello-cucinelli": 130,
-        "vinted-loro-piana": 130,
+        "vinted-loro-piana": 250,  # owner 11-18: Loro Piana is the top want
         "vinted-zegna": 75,
-        "vinted-kiton": 115,
+        "vinted-kiton": 200,  # matches the kiton text feed cap (11-18)
         "vinted-brioni": 90,
         "vinted-isaia": 90,
         "vinted-purple-label": 75,

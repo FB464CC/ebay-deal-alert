@@ -1338,8 +1338,11 @@ def _collar_size(listing):
 # Owner 11-11: "Daniel Cremieux 40R Brown Loro Piana Wool 3Btn Suit" pinged as
 # Loro Piana. A mill named mid-title before a cloth word, on tailoring, is
 # the cloth, not the maker; titles that open with the mill stay allowed.
+# 11-18 audit: a leading colour ("Dark Grey Zegna Wool Suit 42R") is still the
+# house; another maker's name before the mill still demotes.
 _VINTED_MILL_CLOTH_TITLE = re.compile(
-    rf"^(?!\W*(?:(?:men[’']?s?|vintage|vtg|nwt|new|authentic)\s+)*{_VINTED_MILL}\b)"
+    rf"^(?!\W*(?:(?:men[’']?s?|vintage|vtg|nwt|new|authentic|navy|gr[ae]y|dark|light|charcoal"
+    rf"|black|blue|brown|beige|camel|olive|tan|cream|white|green|burgundy)\s+)*{_VINTED_MILL}\b)"
     rf".*?\b{_VINTED_MILL}\s+(?:wool|cashmere|silk|linen|flannel|super\s*\d+'?s?)\b"
     r".*\b(?:suit|blazer|sport\s*coat|jacket|coat|trousers|pants|slacks)\b",
     re.IGNORECASE,

@@ -289,3 +289,35 @@ def test_suit_with_size_only_in_item_specifics_reaches_details(tmp_path, monkeyp
     reason = conn.execute("SELECT reason FROM judged").fetchone()
     assert reason is None or "40-44" not in reason[0], reason
     conn.close()
+
+
+@pytest.mark.parametrize("title", [
+    "Kiton Cashmere Quarter Zip Sweater Men Large",
+    "Zegna Cashmere Crewneck Sweater Men Large",
+    "Brioni Cashmere Sweater Men Large",
+])
+def test_non_lp_houses_reach_the_alert_with_their_own_bar(tmp_path, monkeypatch, title):
+    # 11-18 audit: result["search_query"] was the 5-brand QUERY (so the LP/Cucinelli
+    # bar rejected every other house) and brand_tier was never set (so the knitwear
+    # bar rejected them as not grab_on_sight).
+    bot = lane.EbayTop5(db_path=tmp_path / "seen.db")
+    conn = lane._db(bot.db_path)
+    item = {**listing(title, price=30), "itemId": "v1|9|0"}  # a Steal on every house's table row
+    monkeypatch.setattr(lane, "_fetch_details", lambda *_: {"shippingOptions": [{"shippingCost": {"value": "0"}}]})
+    monkeypatch.setattr(bot.vision, "_first_photo_check", lambda *_: {"summary": "clean sweater", "counterfeit_suspected": False,
+        "damage_found": False, "weird_logo_found": False, "estimated_resale_value": 400,
+        "price_confidence": "high", "looks_good": True})
+    monkeypatch.setattr(bot.vision, "_run_vinted_strong_vision", lambda result, _: result.update({
+        "vinted_strong_checked": True, "vinted_strong_counterfeit_indicators": False,
+        "vinted_strong_brand_label_visible_and_consistent": True,
+        "vinted_strong_condition_grade": "excellent", "vinted_strong_estimated_resale_value": 400}) or {})
+    monkeypatch.setattr(bot.vision, "_strong_look_veto_reason", lambda result: result.update({
+        "vinted_conservative_resale_value": 400}) or None)
+    monkeypatch.setattr(lane.engine, "_deepseek_alert_sanity_check", lambda *_, **__: {
+        "is_part_or_accessory": False, "is_complete_item": True})
+    send = Mock(return_value=True)
+    monkeypatch.setattr(lane.engine, "_send_ntfy_notice", send)
+    bot._judge(conn, "token", item, False, bot.clock() + 300)
+    reason = conn.execute("SELECT reason FROM judged").fetchone()
+    assert send.call_count == 1, reason
+    conn.close()
