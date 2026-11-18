@@ -4678,3 +4678,11 @@ def test_counter_ceiling_is_the_highest_price_that_still_clears_the_bars(tmp_pat
     assert ceiling is not None and 25 <= ceiling < 50
     landed = lambda dollars: fast._offer_view(result, dollars / 50)["price"]
     assert landed(ceiling) <= cap < landed(ceiling + 1)
+
+
+def test_stuck_image_prewarm_falls_back_to_direct_download(monkeypatch):
+    stuck = fast.Future()  # never completes
+    monkeypatch.setitem(fast._IMAGE_CACHE, "https://img/x.jpg", stuck)
+    monkeypatch.setattr(fast, "VINTED_IMAGE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(fast, "_engine_download_listing_image", lambda *_a, **_k: b"jpeg")
+    assert fast._cached_download_listing_image("https://img/x.jpg") == b"jpeg"

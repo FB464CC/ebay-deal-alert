@@ -1613,6 +1613,9 @@ def _age_note(age_m):
 
 
 _IMAGE_CACHE = {}
+# A prewarm stuck in flight must not freeze the lane (11-18 hang audit): give
+# up on it and download directly, which has its own request timeout.
+VINTED_IMAGE_WAIT_SECONDS = 15
 _engine_download_listing_image = engine._download_listing_image
 
 
@@ -1620,7 +1623,7 @@ def _cached_download_listing_image(image_url, *args, **kwargs):
     hit = _IMAGE_CACHE.get(image_url)
     if isinstance(hit, Future):  # prewarmed, maybe still in flight
         try:
-            hit = hit.result()
+            hit = hit.result(timeout=VINTED_IMAGE_WAIT_SECONDS)
         except Exception:
             hit = None
     if hit is not None:
