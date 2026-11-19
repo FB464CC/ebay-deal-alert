@@ -8358,6 +8358,40 @@ def _ntfy_is_configured():
     return bool(NTFY_TOPIC and not NTFY_TOPIC.startswith("REPLACE_ME"))
 
 
+# Owner 11-19: ntfy's iOS app still drops some alerts (0 failed posts in the
+# logs, so the loss is phone-side). Telegram is a free second channel. Off
+# unless both secrets are set; never delays or breaks the ntfy send.
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+
+def _telegram_send(text, url=None, image_url=None):
+    api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+    if url:
+        text = f"{text}\n{url}"
+    try:
+        if image_url:
+            resp = requests.post(f"{api}/sendPhoto", timeout=10, data={
+                "chat_id": TELEGRAM_CHAT_ID, "photo": image_url, "caption": text[:1024]})
+            if resp.ok:
+                return
+        requests.post(f"{api}/sendMessage", timeout=10, data={
+            "chat_id": TELEGRAM_CHAT_ID, "text": text[:4096]}).raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        # The token sits in the URL, so log only the exception type.
+        logger.warning("telegram mirror failed: %s", type(exc).__name__)
+
+
+def telegram_mirror(title, message, url=None, image_url=None):
+    """Best-effort copy of an alert to Telegram on a background thread."""
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        return False
+    threading.Thread(
+        target=_telegram_send, args=(f"{title}\n{message}", url, image_url), daemon=True,
+    ).start()
+    return True
+
+
 def _send_ntfy_notice(message, title, priority=3, tags=None):
     """Best-effort shared ntfy sender for non-listing system notices."""
     if not _ntfy_is_configured():
@@ -8366,6 +8400,8 @@ def _send_ntfy_notice(message, title, priority=3, tags=None):
     headers = {"Title": _ascii_safe_header(title), "Priority": str(priority)}
     if tags:
         headers["Tags"] = ",".join(tags)
+    if priority >= 4:
+        telegram_mirror(title, message)
     try:
         resp = requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
@@ -10447,6 +10483,7 @@ def send_alert(result, *, feedback_item_id=None):
         headers["Actions"] = "; ".join(actions)
     if image_url:
         headers["Attach"] = image_url
+    telegram_mirror(alert_title, message, click_url, image_url)
     last_exc = None
     for attempt in range(3):
         try:

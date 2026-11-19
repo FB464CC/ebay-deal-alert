@@ -3378,6 +3378,10 @@ class VintedFastLane:
         note = _age_note(getattr(self, "_listed_age_m", {}).get(item_id))
         if note:
             message = f"{note}\n{message}"
+        if int(priority) >= 4:
+            engine.telegram_mirror(
+                title, message, headers.get("Click"), image_url,
+            )
         try:
             requests.post(
                 f"https://ntfy.sh/{engine.NTFY_TOPIC}",
