@@ -4698,9 +4698,14 @@ _NEGATED_FLAWS = re.compile(
     rf"\b(?:no|without|free\s+(?:of|from)|zero|not\s+any|never\s+(?:been\s+)?"
     r"|(?:does|did|do)(?:n['\u2019]?t|\s+not)\s+have)\s+"
     rf"(?:(?:visible|major|noticeable|obvious|any|known|apparent|signs?\s+of)\s+)*{_FLAW_WORD}"
-    rf"(?:\s*(?:,\s*(?:or|and)\b|/|&|\bor\b|\band\b)\s*(?:any\s+)?{_FLAW_WORD}"
+    # Audit 11-20: "No holes, tears, or major stains" left "or major stains"
+    # ($20 Zegna polo, $30 Zegna linen shirt), so qualifiers are allowed after or/and.
+    rf"(?:\s*(?:,\s*(?:or|and)\b|/|&|\bor\b|\band\b)\s*"
+    rf"(?:(?:any|visible|major|noticeable|obvious|apparent)\s+)*{_FLAW_WORD}"
     # A bare comma may start a new clause: "no rips, stain on the cuff".
-    rf"|\s*,\s*(?:any\s+)?{_FLAW_WORD}(?!\s+(?:on|near|at|in|around|by|to|under)\b))*\b"
+    # Review 11-20: one word may sit before the location ("No stains, moth holes
+    # on the sleeve", "No holes, torn seam on the back" are real flaws).
+    rf"|\s*,\s*(?:any\s+)?{_FLAW_WORD}(?!\s+(?:\w+\s+)?(?:on|near|at|in|around|by|to|under)\b))*\b"
     r"|\bstain[\s-]*(?:free|resistant|proof|release|repellent)\b",
     re.IGNORECASE,
 )
@@ -4775,11 +4780,23 @@ def _benign_text(text):
 def condition_hard_fail_keyword(title, haystack):
     """matched_keyword over CONDITION_HARD_FAIL_KEYWORDS, paperwork title-only.
     Negated flaws ("no stains or holes") don't count."""
-    haystack = _NEGATED_FLAWS.sub(" ", _benign_text(haystack))
+    # Audit 11-20: flaw lists go first. _benign_text caps a negation at 8 words,
+    # which cut "No holes, tears, rips, snags, pilling, fading, odors, or major
+    # stains" before the last item and hard-failed on "stains".
+    # ponytail: a list with a non-flaw item ("no pet hair, holes, ... or major
+    # stains") past 8 words still leaks; extend _FLAW_WORD or the cap if it shows up.
+    # Flaws-first alone breaks "No holes rips or stains" (strips "No holes",
+    # orphaning the rest), so a keyword must survive both orders to hard-fail.
+    raw = str(haystack or "")
+    haystack = _NEGATED_FLAWS.sub(" ", _benign_text(raw))
     keywords = CONDITION_HARD_FAIL_KEYWORDS
     if matched_keyword(title, WATCH_PAPERWORK_KEYWORDS) is None:
         keywords = [k for k in keywords if k not in WATCH_PAPERWORK_KEYWORDS]
     hit = matched_keyword(haystack, keywords)
+    if hit is not None and matched_keyword(
+        _benign_text(_NEGATED_FLAWS.sub(" ", raw)), keywords
+    ) is None:
+        hit = None
     if hit is not None:
         # Descriptions aren't otherwise logged, so a false hit can't be audited.
         at = haystack.lower().find(hit)

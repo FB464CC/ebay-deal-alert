@@ -33,11 +33,52 @@ FAKE_FLOORS = CONFIG.get("EBAY_TOP5_FAKE_PRICE_FLOORS", {
 # hold the trial to its own small cap (stricter than AI_PAID_MONTHLY_BUDGET_USD).
 AI_BUDGET_USD = float(CONFIG.get("EBAY_TOP5_AI_BUDGET_USD", 2.0))
 # Reasons a title alone can't settle: judge them again after getItem adds size and description.
-SIZE_EVIDENCE = {"suit is not confirmed 40-44 R/L", "dress shirt collar 16.5 not confirmed",
-                 "size missing or does not fit", "suit is not a 40-44 R/L (EU 50-54)"}
+SIZE_EVIDENCE = {"size missing or does not fit", "suit is not a 40-44 R/L (EU 50-54)",
+                 "suit size only in the description"}
 # ponytail: flat hourly getItem cap; searches use ~96 calls/h of eBay's daily Browse quota.
 DETAILS_PER_HOUR = int(CONFIG.get("EBAY_TOP5_DETAILS_PER_HOUR", 60))
-GARMENT = re.compile(r"\b(?:sweater|jumper|knit|cardigan|pullover|quarter[ -]?zip|1/4[ -]?zip|polo|dress shirt|button[ -]?(?:down|up)|woven shirt|suit)\b", re.I)
+# Audit 11-20: "Loro Piana Cashmere Crewneck", "Zegna Half Zip" and "Kiton Shirt" died as
+# "not a wanted garment". Plain shirts come in through fast._VINTED_WOVEN_SHIRT (no tees).
+_KNIT = r"sweater|jumper|knit|cardigan|pullover|quarter[ -]?zip|1/4[ -]?zip|crew[ -]?neck|turtle[ -]?neck|half[ -]?zip|1/2[ -]?zip"
+GARMENT = re.compile(rf"\b(?:{_KNIT}|polo|dress shirt|button[ -]?(?:down|up)|woven shirt|suit)\b", re.I)
+# Review 11-20: "Brunello Cucinelli Crewneck T-Shirt", "Kiton Crewneck Sweatshirt" and "Tee Shirt"
+# rode in on crewneck/shirt. Tees and sweatshirts aren't in the wardrobe.
+_TEE = re.compile(r"\b(?:t[\s-]?shirts?|tees?|sweatshirts?|tanks?(?:\s+tops?)?)\b", re.I)
+# Review 11-20: "Jos A Bank Ermenegildo Zegna Suit" is Zegna cloth, not the house. Unanchored
+# "Ermenegildo Zegna" counts only after condition/colour/price words, never after another maker.
+_ZEGNA_EBAY_TITLE = re.compile(
+    r"^[\W_]*(?:(?:euc|nwt|nwot|nib|new|brand|gorgeous|stunning|beautiful|excellent|rare|vintage|vtg"
+    r"|authentic|genuine|men[’']?s?|luxury|italian|navy|gr[ae]y|dark|light|charcoal|black|blue"
+    r"|brown|beige|camel|olive|tan|cream|white|green|burgundy|red|pink|\$[\d,.]+|retail|msrp)[\W_]+)*"
+    r"ermenegildo\s+zegna\b", re.I)
+# Audit 11-20: "16 1/2", "16½", "Neck 16.5", "16.5 34/35" and cm "42" read as no collar, so a
+# 16.5 Kiton shirt died as "collar 16.5 not confirmed". A half size on a shirt is a collar.
+_HALF = r"(?:\.5|\.75|\s?1/2|½)"  # .75: cm 40 normalizes to 15.75 (review 11-20)
+# Review 11-20: "Kiton Shirt Chest 44 cm" read as collar 17.5; skip cm values next to a body measurement.
+_MEASURE = re.compile(r"chest|shoulder|pit|length|waist|sleeve|width|across|hem", re.I)
+_COLLAR_TEXT = re.compile(
+    rf"\b(?:neck|collar)(?:\s+size)?\s*:?\s*(1[4-8]{_HALF}?|3[7-9]|4[0-6])(?![\d.])"
+    rf"|\b(1[4-8]{_HALF})(?![\d.])|\b(3[7-9]|4[0-6])\s?cm\b", re.I)
+_COLLAR_ASPECT = re.compile(rf"\s*(1[4-8]{_HALF}?|3[7-9]|4[0-6])\s*(?:in(?:ches)?|cm|\"|\(\d{{2}}\))?\s*", re.I)
+_COLLAR_CM = {37: 14.5, 38: 15, 39: 15.5, 40: 15.75, 41: 16, 42: 16.5, 43: 17, 44: 17.5, 45: 18, 46: 18.5}
+
+
+def _inches(token):
+    value = float(re.sub(r"\s?1/2|½", ".5", token))
+    return _COLLAR_CM[int(value)] if value >= 37 else value
+
+
+def _collar(listing):
+    """Collar in inches, or None when none is stated (unknown, not a reject)."""
+    collar = fast._collar_size(listing)
+    if collar is not None:
+        return collar
+    for text in (str(listing.get("size") or ""), str(listing.get("title") or "")):
+        for match in _COLLAR_TEXT.finditer(text):
+            if match.group(3) and _MEASURE.search(text[max(0, match.start() - 15):match.end() + 15]):
+                continue
+            return _inches(next(g for g in match.groups() if g))
+    return None
 
 
 def searches():
@@ -60,27 +101,45 @@ def _brand(title):
     if fast._VINTED_ZEGNA_DIFFUSION.search(text):
         return None
     if "zegna" in text:
-        return "zegna" if fast._VINTED_ZEGNA_MAINLINE_TITLE.search(title) else None
-    return next((house for house in HOUSES if house in text), None)
+        # Audit 11-20: eBay titles carry no Vinted brand-tag prefix, so
+        # "EUC Ermenegildo Zegna Cashmere Sweater" is the house.
+        mainline = fast._VINTED_ZEGNA_MAINLINE_TITLE.search(title) or _ZEGNA_EBAY_TITLE.search(title)
+        return "zegna" if mainline else None
+    # Audit 11-20: "Cucinelli Cashmere Sweater" never matched "brunello cucinelli".
+    return next((house for house in HOUSES if house in text), None) or ("brunello cucinelli" if "cucinelli" in text else None)
 
 
 def _category(title):
     if fast._VINTED_SUIT.search(title):
         return "tailoring"
-    if re.search(r"\b(?:sweater|jumper|knit|cardigan|pullover|quarter[ -]?zip|1/4[ -]?zip)\b", title, re.I):
+    if re.search(rf"\b(?:{_KNIT})\b", title, re.I):
         return "knitwear"
     return "other"
 
 
+def _seller_feedback(listing):
+    return int(listing.get("seller_feedback_score")), float(listing.get("seller_feedback_percentage"))
+
+
 def _seller_reason(listing):
-    score = listing.get("seller_feedback_score")
-    pct = listing.get("seller_feedback_percentage")
+    # Owner 11-20: "no-review sellers = flag, not block". Only real negative history
+    # (20+ feedback under 95%) blocks; a 97.8% seller with 3,000 feedback used to die here.
     try:
-        if int(score) < 20 or float(pct) < 98:
-            return "seller feedback below 20 or 98%"
+        score, pct = _seller_feedback(listing)
     except (ValueError, TypeError):
         return "seller feedback missing"
-    return None
+    return "seller feedback below 95% (20+ ratings)" if score >= 20 and pct < 95 else None
+
+
+def _seller_note(listing):
+    """Alert-text flag for sellers let through: under 20 feedback or 95-98% positive."""
+    try:
+        score, pct = _seller_feedback(listing)
+    except (ValueError, TypeError):
+        return ""
+    if score < 20:
+        return f" | NEW eBay seller ({score} feedback, {pct:g}%): Money Back Guarantee covers not-as-described/fake"
+    return f" | seller {pct:g}% positive ({score} feedback)" if pct < 98 else ""
 
 
 def _quantity_reason(listing, auction):
@@ -115,7 +174,8 @@ def _fetch_details(token, item_id):
     aspects = [(str(a.get("name") or "").casefold(), str(a.get("value") or "").strip())
                for a in (body.get("localizedAspects") or []) if isinstance(a, dict)]
     # A bare neck size ("16.5") reads as a collar only as "16.5 in", first in the string.
-    neck = [f"{value} in" if re.fullmatch(r"1[4-8](?:\.5)?", value) else value
+    # Audit 11-20: "16 1/2", "16½", "16.5 (42)" and cm "42" normalize to "16.5 in" too.
+    neck = [f"{_inches(m.group(1)):g} in" if (m := _COLLAR_ASPECT.fullmatch(value)) else value
             for name, value in aspects if "neck" in name and value]
     other = [value for name, value in aspects if "size" in name and "neck" not in name and value]
     size = " ".join(neck + other).strip()
@@ -168,24 +228,31 @@ class EbayTop5:
                   or _seller_reason(listing))
         if reason:
             return brand, category, reason
-        if not GARMENT.search(title):
+        shirt = fast._VINTED_WOVEN_SHIRT.search(title) and not fast._VINTED_POLO.search(title)
+        if _TEE.search(title) or not (GARMENT.search(title) or shirt):
             return brand, category, "not a wanted garment"
-        if category == "tailoring":
-            suit_sizing = f"{title} {listing.get('size') or ''} {listing.get('description') or ''}"
-            if not re.search(r"\b(?:4[0-4]|5[024])\s?(?:R|L|REG|REGULAR|LONG)\b", suit_sizing, re.I):
-                return brand, category, "suit is not confirmed 40-44 R/L"
-        if fast._VINTED_WOVEN_SHIRT.search(title) and not fast._VINTED_POLO.search(title):
-            if fast._collar_size(listing) != 16.5:
-                return brand, category, "dress shirt collar 16.5 not confirmed"
+        # Audit 11-20: the R/L-only suit check here rejected "Kiton suit size 52"; the
+        # shared _menswear_shape_reason above already applies Vinted's bare 40-44/50-54
+        # check (fast._VINTED_SUIT_SIZE), so it is the only suit-size gate now.
+        # Audit 11-20: an unstated collar is unknown, not a reject; a stated one must be 16.5.
+        collar = _collar(listing) if shirt else None
+        if collar is not None and collar != 16.5:
+            return brand, category, f"collar {collar:g} won't fit (owner wears 16.5)"
         price = engine._sane_ai_price((listing.get("price") or {}).get("value"))
         if price is None or price < float(FAKE_FLOORS[brand]):
             return brand, category, "below per-brand fake-price floor"
         if fast._VINTED_POLO.search(title):
             search = {"size": ["M", "L"]}
         elif category == "tailoring":
-            search = {"category": "tailoring", "size": ["40", "42", "44", "40R", "42R", "44R", "40L", "42L", "44L"], "size_equivalents": ["50", "52", "54"]}
+            # Review 11-20: "50% wool" / "pants waist 40" in the description met the shape
+            # check; the chest size must be in the title or the size field.
+            if not fast._VINTED_SUIT_SIZE.search(f"{title} {listing.get('size') or ''}"):
+                return brand, category, "suit size only in the description"
+            search = {}  # size confirmed above
         elif re.search(r"quarter[ -]?zip|1/4[ -]?zip", title, re.I):
             search = {"size": ["M", "L", "XL"]}
+        elif shirt and (collar == 16.5 or not listing.get("size")):
+            search = {}  # the collar is the fit; no size at all is unknown (strong look reads the tag)
         else:
             search = {"size": ["M", "L", "XL", "16.5"]}
         if not engine.listing_matches_size_filter(search, listing):
@@ -269,15 +336,16 @@ class EbayTop5:
             self._record(conn, item_id, "DeepSeek sanity check: incomplete item or accessory")
             return
         size = result.get("vinted_strong_size_on_tag") or listing.get("size") or "size unverified"
+        note = _seller_note(listing)
         if auction:
             bid_ceiling = max_bid(resale, shipping)
             message = (f"STEAL: {listing['title']} | ends in {math.ceil(remaining)} min | "
                        f"current bid ${item_price:g} | {listing.get('bid_count', 0)} bids | "
                        f"Max bid ${bid_ceiling} | ${all_in:.2f} all-in | ~${resale:g} resale | "
-                       f"size {size} | {listing.get('itemWebUrl', '')}")
+                       f"size {size}{note} | {listing.get('itemWebUrl', '')}")
         else:
             message = (f"STEAL: {listing['title']} | ${item_price:g} price | ${all_in:.2f} all-in | "
-                       f"~${resale:g} resale | size {size} | {listing.get('itemWebUrl', '')}")
+                       f"~${resale:g} resale | size {size}{note} | {listing.get('itemWebUrl', '')}")
         # Claim before delivery: a worker crash after ntfy accepts the post
         # cannot produce a second alert in the next chained run.
         self._record(conn, item_id, "delivery attempted")

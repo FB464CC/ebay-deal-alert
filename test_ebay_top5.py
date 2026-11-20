@@ -20,11 +20,11 @@ def listing(title="Brunello Cucinelli Men Large Cashmere Sweater", *, price=80,
 @pytest.mark.parametrize("item,part", [
     (listing("Brunello Cucinelli Men's Trousers 34"), "trousers"),
     (listing("Brunello Cucinelli Dress Shirt 16.5 French Cuff"), "French cuffs"),
-    (listing("Brunello Cucinelli Dress Shirt Large"), "collar 16.5"),
+    # Audit 11-20: an unstated collar and a <20 / 95-98% seller are flags now, not blocks.
+    (listing("Brunello Cucinelli Dress Shirt 17 1/2"), "collar 17.5"),
     (listing("Brunello Cucinelli Suit Pants 42R"), "suit separates"),
     (listing(quantity=3), "multiple available"),
-    (listing(score=19), "seller feedback"),
-    (listing(pct=97.9), "seller feedback"),
+    (listing(pct=94.9), "seller feedback"),
 ])
 def test_wardrobe_and_fake_shop_gates(item, part):
     reason = lane.EbayTop5()._cheap_reason(item, False)[2]

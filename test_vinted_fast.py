@@ -670,11 +670,11 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-e-marinella-tie": 60,
         "vinted-brunello-cucinelli": 130,
         "vinted-loro-piana": 250,  # owner 11-18: Loro Piana is the top want
-        "vinted-zegna": 75,
+        "vinted-zegna": 115,  # audit 11-20: plain Zegna sweaters
         "vinted-kiton": 200,  # matches the kiton text feed cap (11-18)
         "vinted-brioni": 90,
         "vinted-isaia": 90,
-        "vinted-purple-label": 75,
+        "vinted-purple-label": 200,  # audit 11-20: PL jacket alert line
         "vinted-tom-ford": 90,
         "vinted-g-fore": 30,
         "vinted-holderness-bourne": 25,
@@ -715,14 +715,14 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-orient-kamasu": 150,
         "vinted-hamilton-intra-matic": 250,
         # Owner, 10-28: super-luxury knitwear, polos and US 12-13 shoes.
-        "vinted-zegna-cashmere-sweater": 130,
+        "vinted-zegna-cashmere-sweater": 235,  # audit 11-20
         "vinted-loro-piana-cashmere-sweater": 200,
         "vinted-brunello-cucinelli-cashmere-sweater": 200,
-        "vinted-zegna-quarter-zip": 110,
+        "vinted-zegna-quarter-zip": 235,  # audit 11-20
         "vinted-loro-piana-quarter-zip": 200,
         "vinted-brunello-cucinelli-quarter-zip": 200,
         "vinted-kiton-quarter-zip": 150,
-        "vinted-zegna-polo": 80,
+        "vinted-zegna-polo": 120,  # audit 11-20
         "vinted-loro-piana-polo": 150,
         "vinted-brunello-cucinelli-polo": 150,
         "vinted-kiton-polo": 150,

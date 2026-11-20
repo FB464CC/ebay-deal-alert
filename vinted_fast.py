@@ -259,7 +259,12 @@ _VINTED_ZEGNA_MAINLINE_TITLE = re.compile(
     r"^\W*(?:(?:men[’']?s?|vintage|vtg|rare|nwt|nwot|new|authentic)\s+)*(?:ermenegildo\s+)?zegna\b",
     re.IGNORECASE,
 )
-_VINTED_ZEGNA_DIFFUSION = re.compile(r"\bz\.?\s?zegna\b|\bzzegna\b|\bzegna\s+sport\b", re.IGNORECASE)
+# Audit 11-20: "Ermenegildo Zegna Zegna Sport Shirt ... Pin Point Twisted
+# Cotton" is a mainline sport shirt, not the Zegna Sport line; same for polos.
+_VINTED_ZEGNA_DIFFUSION = re.compile(
+    r"\bz\.?\s?zegna\b|\bzzegna\b|\bzegna\s+sport\b(?![\s-]*(?:shirts?|polos?)\b)",
+    re.IGNORECASE,
+)
 
 
 def _shirt_house(brand_key, title):
@@ -324,7 +329,9 @@ _VINTED_PACKAGING = re.compile(
 # "IT 42 USA 6", or explicit boys/girls/child sizes.
 _VINTED_NOT_MENS = re.compile(
     r"\b(?:xxs|xs|s|m|l|xl|xxl)\s*/\s*us\s*(?:\d|1[0-8])(?:\s*-\s*\d{1,2})?\b"
-    r"|\bit\s?\d{2}\s*/?\s*usa?\s?\d{1,2}\b|\bwom[ae]n'?s?\b"
+    # Audit 11-20: men's "IT 50 US 40" (a $120 Canali suit) is not women's;
+    # women's US sizes (plus sizes too) stay under 30; men's suits start at 34.
+    r"|\bit\s?\d{2}\s*/?\s*usa?\s?(?:\d|[12]\d)\b|\bwom[ae]n'?s?\b"
     # Not "baby blue" shorts or Pinehurst's "Putter Boy" logo (audit 11-03).
     r"|\b(?:(?<!putter )boys?|girls?|child(?:ren)?|kids?|toddler|youth|infant"
     r"|baby(?![\s-]+(?:blue|pink|cashmere|alpaca)))\b",
@@ -2415,10 +2422,51 @@ def _vinted_strong_prompt(result, brand):
     )
 
 
-_INSIDE_MARK = re.compile(r"\b(?:inside|interior|inner|underside)\b", re.IGNORECASE)
-_OUTSIDE_SPOT = re.compile(
-    r"\b(?:chest|sleeves?|front|back|shoulders?|hem|pocket|placket|outside)\b", re.IGNORECASE
+# Audit 11-20: "The hanger has an 'EMPORIO ARMANI' logo" vetoed a $70 Purple
+# Label suede jacket; marks on hangers, tags, labels or props aren't on the garment.
+_INSIDE_MARK = re.compile(
+    r"\b(?:inside|interior|inner|underside|hangers?|mannequin|background|box|bag"
+    r"|labels?|tags?|watermark)\b",
+    re.IGNORECASE,
 )
+_OUTSIDE_SPOT = re.compile(
+    # Review 11-20: "Nike swoosh beside the brand label at the hip" is outside.
+    r"\b(?:chest|breast|sleeves?|cuffs?|front|back|shoulders?|hem|hip|side|waist(?:band)?"
+    r"|pocket|placket|outside|beside|next\s+to|above|below|near)\b",
+    re.IGNORECASE,
+)
+# Review 11-20: a named club/corporate/event/maker mark anywhere in logo_desc
+# vetoes, even beside a label or an own-mark phrase.
+_THIRD_PARTY_HINT = re.compile(
+    r"\b(?:club|national|beach|links|resort|tour|tpc|country|bank|capital|sachs|stanley"
+    r"|titleist|callaway|nike|footjoy|taylormade|ping|masters|pga|championship"
+    r"|invitational|tournament|event|corporate|company)\b",
+    re.IGNORECASE,
+)
+
+
+def _names_own_mark(desc, brand_key):
+    """Audit 11-20: "... which is the Peter Millar Crown Sport logo" is the
+    claimed brand's own mark, not a third-party logo."""
+    if not brand_key:
+        return False
+    brand = r"\s+".join(map(re.escape, str(brand_key).split()))
+    return bool(re.search(
+        rf"\b(?:is|which\s+is)\s+(?:the\s+)?(?:ermenegildo\s+|ralph\s+lauren\s+)?{brand}\b",
+        desc, re.IGNORECASE,
+    ))
+
+
+def _exempt_logo_desc(desc, brand_key):
+    """True when every clause of logo_desc is an exempt mark: inside the
+    garment (11-12: initials inside a $4 Zegna shirt's collar), on a hanger,
+    tag, label or prop, or the claimed brand's own mark. Owner 11-20: one
+    non-exempt clause ("Pebble Beach logo; the rest is Peter Millar") vetoes."""
+    clauses = [c for c in re.split(r"[;.,]|\band\b", desc) if c.strip()]
+    return bool(clauses) and not _THIRD_PARTY_HINT.search(desc) and all(
+        (_INSIDE_MARK.search(c) and not _OUTSIDE_SPOT.search(c)) or _names_own_mark(c, brand_key)
+        for c in clauses
+    )
 
 
 def _strong_http_status(exc):
@@ -2920,10 +2968,8 @@ class VintedFastLane:
             reason = result.get("vinted_strong_brand_label_reason") or "label not visible"
             return f"luxury house needs a readable genuine label: {reason}"
         desc = str(result.get("vinted_strong_logo_desc") or "")
-        if result.get("vinted_strong_third_party_logo") is True and not (
-            # 11-12: initials inside a $4 Zegna shirt's collar; the prompt
-            # counts only the outside of the garment.
-            _INSIDE_MARK.search(desc) and not _OUTSIDE_SPOT.search(desc)
+        if result.get("vinted_strong_third_party_logo") is True and not _exempt_logo_desc(
+            desc, result.get("vinted_brand_key")
         ):
             # Owner 11-04: bad alerts with logos; only the cheap first look
             # checked logos, so one model's miss shipped the alert.

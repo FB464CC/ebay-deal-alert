@@ -1321,7 +1321,7 @@
         "L",
         "XL"
       ],
-      "max_price": 130,
+      "max_price": 235,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1374,7 +1374,7 @@
       "steal_only_size": [
         "M"
       ],
-      "max_price": 110,
+      "max_price": 235,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -1448,7 +1448,7 @@
         "L",
         "XL"
       ],
-      "max_price": 80,
+      "max_price": 120,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -2118,7 +2118,7 @@
     {
       "query": "zegna -\"z zegna\" -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 75,
+      "max_price": 115,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -2183,7 +2183,7 @@
     {
       "query": "ralph lauren \"purple label\" -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 75,
+      "max_price": 200,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -5151,13 +5151,13 @@
   "VINTED_PRESCREEN_MAX_PER_RUN": 0,
   "VINTED_BRAND_SLOTS_PER_TEXT": 1,
   "VINTED_TEXT_FEEDS": [
-    {"query": "zegna", "max_price": 130, "slots": 4},
+    {"query": "zegna", "max_price": 235, "slots": 4},
     {"query": "loro piana", "max_price": 250, "slots": 4},
     {"query": "cucinelli", "max_price": 250, "slots": 4},
     {"query": "kiton", "max_price": 200, "slots": 4},
     {"query": "brioni", "max_price": 200, "slots": 4},
     {"query": "canali", "max_price": 130},
-    {"query": "purple label", "max_price": 80},
+    {"query": "purple label", "max_price": 200},
     {"query": "delina exclusif", "max_price": 290, "background": true},
     {"query": "oriana marly", "max_price": 200, "background": true},
     {"query": "angels share kilian", "max_price": 230, "background": true},
