@@ -2115,11 +2115,11 @@ def _price_table_row(result, summary=""):
             # Owner 11-18: "used peter millar polos go for no more than like 30
             # bucks. unless its like usc, then maybe 40... crown crafted is better".
             if (brand, piece) == ("peter millar", "polo"):
-                if _VINTED_USC.search(title):
+                if _is_gamecocks(result, summary):
                     return VINTED_GAMECOCK_PM_POLO_VALUE, retail
                 if re.search(r"crown\s*crafted", title, re.I):
                     return VINTED_PM_CROWN_CRAFTED_POLO_VALUE, retail
-            if _VINTED_USC.search(title):
+            if _is_gamecocks(result, summary):
                 used *= VINTED_GAMECOCK_PREMIUM
             return used, retail
         garment_missed = garment_missed or garment
@@ -2136,9 +2136,19 @@ VINTED_PM_CROWN_CRAFTED_POLO_VALUE = 35  # guess at "better"; owner gave no numb
 VINTED_PM_SWEATER_VEST_VALUE = 35
 
 
-def _steal_fraction(result):
+# 11-20 miss: "Peter Millar Summer Comfort Size L" had a Gamecocks logo only in
+# the photos. The photo summary counts too, but not a bare "USC" (Trojans).
+_VINTED_USC_PHOTO = re.compile(r"\b(?:south\s+carolina|gamecocks?|cocky)\b", re.IGNORECASE)
+
+
+def _is_gamecocks(result, summary=""):
     title = str((result.get("listing") or {}).get("title") or "")
-    return 0.5 if _VINTED_USC.search(title) else 0.4
+    photos = f"{summary or ''} {result.get('vinted_ai_summary') or ''} {result.get('vinted_strong_logo_desc') or ''}"
+    return bool(_VINTED_USC.search(title) or _VINTED_USC_PHOTO.search(photos))
+
+
+def _steal_fraction(result):
+    return 0.5 if _is_gamecocks(result) else 0.4
 
 
 def _cap_to_price_table(result, key, summary="", index=0):
@@ -2154,7 +2164,7 @@ def _cap_to_price_table(result, key, summary="", index=0):
         index == 0
         and result.get(key) is not None
         and result[key] < VINTED_GAMECOCK_PM_POLO_VALUE
-        and _VINTED_USC.search(title)
+        and _is_gamecocks(result, summary)
         and re.search(r"peter\s*mill", title, re.I)
         and re.search(r"\bpolo", title, re.I)
     ):
@@ -2477,7 +2487,9 @@ def _vinted_strong_prompt(result, brand):
         "collar, back) that is not the maker's own mark: a golf course, country "
         "club, resort, company, bank, tournament, or event, however small. The "
         f"maker's own logo (e.g. {brand}'s own mark) and university/college team "
-        "logos are not third-party. Interior shop/tailor labels are not logos. "
+        "logos are not third-party; when one is visible, name the school in "
+        "logo_desc (e.g. 'South Carolina Gamecocks block C on chest'). "
+        "Interior shop/tailor labels are not logos. "
         "Only count markings sewn or printed on the garment itself: ignore logos on "
         "a hanger, mannequin, bag, box or background, and ignore a seller name or "
         "watermark laid over the photo. If "

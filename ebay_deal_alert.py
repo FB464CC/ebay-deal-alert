@@ -8166,6 +8166,8 @@ def check_photos_with_gemini(
         "toward flagging it as weird_logo_found and explain the ambiguity in "
         "logo_desc. looks_good should be true only when no damage and no "
         "unwanted (non-designer, non-collegiate) logo is visible. "
+        "When a university/college team logo is visible, name the school in "
+        "summary (e.g. 'South Carolina Gamecocks block C on chest'). "
         "If (and only if) this item is a Peter Millar polo, quarter-zip, or "
         "mid-layer, examine the back of the collar/neckline closely for "
         "Peter Millar's small raised/metallic or silicone \"back crown\" "

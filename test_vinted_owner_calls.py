@@ -165,3 +165,13 @@ def test_suit_size_gate_eu_and_italian_short():
     shorts = ["50C", "50 C", "52/C", "50 Corto", "40S", "40 Short", "EU 56"]
     assert all(fast._VINTED_SUIT_SIZE.search(s) for s in fits)
     assert not any(fast._VINTED_SUIT_SIZE.search(s) for s in shorts)
+
+
+def test_gamecocks_logo_seen_only_in_photos():
+    # 11-20 miss: vinted.com/items/10900979972, title never names the school.
+    summary = "Maroon Peter Millar polo with a South Carolina Gamecocks block C logo on the chest."
+    result = {"listing": {"title": "Peter Millar Summer Comfort Size L"}, "vinted_ai_summary": summary}
+    assert fast._steal_fraction(result) == 0.5
+    assert fast._price_table_row(result, summary)[0] == fast.VINTED_GAMECOCK_PM_POLO_VALUE
+    trojans = {"listing": {"title": "Peter Millar polo L"}, "vinted_ai_summary": "USC Trojans logo"}
+    assert fast._steal_fraction(trojans) == 0.4
