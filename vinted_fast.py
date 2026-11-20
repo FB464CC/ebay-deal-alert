@@ -2441,10 +2441,17 @@ class VintedFastLane:
         schedule=None,
     ):
         self.searches = enabled_vinted_searches(searches)
+        # Owner 11-20: gift bought, fragrance off. The background feeds are the
+        # fragrance gift feeds; set VINTED_GIFTS_PAUSED false to bring both back.
+        gifts_paused = searches is None and engine._CONFIG.get("VINTED_GIFTS_PAUSED", False)
+        if gifts_paused:
+            self.searches = [s for s in self.searches if s.get("category") != "fragrance"]
         # Production (no injected searches) polls the combined feeds; tests
         # and explicit search lists keep the per-search rotation.
         if schedule is None and searches is None:
-            schedule = build_feed_schedule()
+            schedule = build_feed_schedule(text_feeds=[
+                f for f in VINTED_TEXT_FEEDS if not (gifts_paused and f.get("background"))
+            ])
         self.schedule = schedule or [("search", search) for search in self.searches]
         # Shortest query first: on a score tie the generic row (and its usually
         # lower cap) wins; _route prefers the most title-word matches.
