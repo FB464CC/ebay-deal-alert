@@ -158,3 +158,10 @@ def test_lone_trousers_and_off_jacket_still_blocked():
     assert fast._off_size_reason(off_jacket, "tailoring")
     fits = {"title": "Canali suit 42R pants 34x30", "size": "42R"}
     assert "pants waist" not in fast._alert_details({"listing": fits})
+
+
+def test_suit_size_gate_eu_and_italian_short():
+    fits = ["52", "52L", "EU52", "IT 52", "EU 52 L", "42L", "50 R"]
+    shorts = ["50C", "50 C", "52/C", "50 Corto", "40S", "40 Short", "EU 56"]
+    assert all(fast._VINTED_SUIT_SIZE.search(s) for s in fits)
+    assert not any(fast._VINTED_SUIT_SIZE.search(s) for s in shorts)

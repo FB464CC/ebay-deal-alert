@@ -242,8 +242,10 @@ _VINTED_LONE_TAILORING = re.compile(
 _VINTED_SUIT = re.compile(
     r"(?<!track )(?<!sweat )(?<!swim )(?<!rain )\b(?:suits?|tuxedos?)\b", re.IGNORECASE
 )
+# Italian C/corto is a short (a "50C" Z Zegna bought 11-20 was a 40S); "EU52" has no space.
 _VINTED_SUIT_SIZE = re.compile(
-    r"\b(?:4[0-4]|5[024])(?:\s?(?:r|l|reg(?:ular)?|long))?\b(?![\s/-]?(?:s|short)\b)",
+    r"(?:\b|(?<=eu)|(?<=it))(?:4[0-4]|5[024])(?:\s?(?:r|l|reg(?:ular)?|long))?\b"
+    r"(?![\s/-]?(?:s|short|c|corto)\b)",
     re.IGNORECASE,
 )
 # Mid-tier makers advertise the mill's cloth ("Jack Victor x Loro Piana",
