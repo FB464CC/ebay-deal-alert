@@ -361,6 +361,16 @@ _VINTED_WATCH_GOLD_SUMMARY = re.compile(
     r"|(?:yellow|rose)\s+gold|gold\s+(?:case|bracelet)|diamonds?)\b",
     re.IGNORECASE,
 )
+# Red-team 11-20: a $5 "Custom listing Peter millar" alerted 11-15; those are
+# made for one buyer and can't be bought.
+_VINTED_RESERVED = re.compile(
+    r"(?<!\bnot )\b(?:(?:custom|private|reserved)\s+(?:listing|bundle)\b|reserved\s+for\b)"
+    r"|\b(?:listing|bundle)\s+for\s+@\w+",
+    re.IGNORECASE,
+)
+# Descriptions carry boilerplate ("message me for a custom bundle"), so only
+# an explicit handle counts there.
+_VINTED_RESERVED_DESC = re.compile(r"\breserved\s+for\s+@\w+", re.IGNORECASE)
 # Any category: asking to pay or talk off Vinted forfeits buyer protection.
 _VINTED_OFF_PLATFORM = re.compile(
     r"(?<!\bno )(?<!\bnot )(?<!\bnever )"
@@ -603,10 +613,12 @@ VINTED_MIN_RESALE_BY_BRAND = {
 }
 VINTED_DEFAULT_MIN_RESALE = float(VINTED_MIN_RESALE_BY_BRAND.get("default", 60))
 # Owner, 10-28: a $9.50 Zegna sweater worth $75 is a steal; the price gap
-# decides, not a $100+ resale minimum. The brand floor still sets the tier
-# (instant pings, necktie skip); the resale check caps it here. Brooks
-# Brothers keeps its floor: only expensive suits are wanted there.
-VINTED_RESALE_FLOOR_MAX = float(engine._CONFIG.get("VINTED_RESALE_FLOOR_MAX", 40))
+# decides, not a $100+ resale minimum. Owner 11-20: no resale minimum at all
+# ("50 cents and worth $10 used is still a steal"); cap 0 turns the check off,
+# set VINTED_RESALE_FLOOR_MAX in config.json to tighten again. The brand floor
+# still sets the tier (instant pings, necktie skip). Brooks Brothers keeps its
+# floor: only expensive suits are wanted there.
+VINTED_RESALE_FLOOR_MAX = float(engine._CONFIG.get("VINTED_RESALE_FLOOR_MAX", 0))
 # Owner 11-09: a $22 Canali sweater (~$30 all-in) was "ehhh"; he offered $17.
 # $30+ is for Loro Piana / Brunello / Purple Label. Above the cap a Canali
 # piece can still alert as an offer that lands under it.
@@ -625,6 +637,7 @@ _VINTED_FULL_FLOOR_BRANDS = frozenset({"brooks brothers"})
 
 
 VINTED_HAT_RESALE_FLOOR = 15
+VINTED_OFFER_SWITCH_MIN_CEILING = 40.0
 
 
 def _vinted_resale_minimum(result):
@@ -632,7 +645,7 @@ def _vinted_resale_minimum(result):
     # Owner 11-17: hats resell for $15-25, so the $30 apparel floor meant no
     # hat could ever alert. The 40%-of-resale steal bar still applies.
     if _HAT.search(str((result.get("listing") or {}).get("title") or "")):
-        return min(floor, VINTED_HAT_RESALE_FLOOR)
+        return min(floor, VINTED_HAT_RESALE_FLOOR, VINTED_RESALE_FLOOR_MAX)
     if result.get("vinted_brand_key") in _VINTED_FULL_FLOOR_BRANDS:
         return floor
     return min(floor, VINTED_RESALE_FLOOR_MAX)
@@ -675,10 +688,12 @@ VINTED_OFFER_DAILY_CAP = 10  # per tier; offers leave 15 of the 25 for ones he p
 VINTED_OFFER_STEAL_RESERVE = 4  # last slots wait for a Steal at the asked price
 # 11-07/08: 12 of 18 offer/message alerts were PM pants and shorts listed at
 # $9-$20, a few dollars of saving each. Below this list price, skip both tiers.
-VINTED_OFFER_MIN_LIST = 25
+# Owner 11-20: no value floor, a $10 Zegna polo worth $35 can take a $6 offer;
+# set these in config.json to bring the old $25 / $12 tops floors back.
+VINTED_OFFER_MIN_LIST = float(engine._CONFIG.get("VINTED_OFFER_MIN_LIST", 0))
 # Owner 11-10: offers are underused and polos rarely alert. PM polos list at
-# $10-$20, so tops get offers from $12; pants and shorts keep the $25 floor.
-VINTED_OFFER_MIN_LIST_TOPS = 12
+# $10-$20, so tops got offers from $12; pants and shorts kept the $25 floor.
+VINTED_OFFER_MIN_LIST_TOPS = float(engine._CONFIG.get("VINTED_OFFER_MIN_LIST_TOPS", 0))
 _BOTTOMS = re.compile(
     r"\b(?:pants?|trousers?|shorts|chinos?|jeans|slacks|sweatpants|joggers?|bermudas?|trunks)\b",
     re.IGNORECASE,
@@ -2167,13 +2182,22 @@ def _price_table_ceiling_reason(result, category):
     ratings = [engine.compute_deal_rating(paid, ceiling)[0]]
     # Offers go to the top houses only. The photo check's brand evidence can
     # still make one the brand key, so check each house it could become and
-    # whether the row even clears that house's resale floor.
+    # whether the row is plausibly that house. A title naming the house always
+    # is; a switch from another title brand needs a $40+ row (11-20: this was
+    # the old $40 resale floor; the floor is gone, but a $30 Peter Millar polo
+    # row turning Brunello on photo evidence still isn't worth an AI call).
+    title_probe = {"listing": listing}
+    _vinted_brand_and_floor(title_probe)
     offer_possible = False
     for house in VINTED_OFFER_BRANDS:
         probe = {"listing": listing, "visible_brand_evidence": house}
-        floor = _vinted_resale_minimum(probe)
+        _vinted_brand_and_floor(probe)
         offer_possible = offer_possible or (
-            probe["vinted_brand_key"] in VINTED_OFFER_BRANDS and ceiling >= floor
+            probe["vinted_brand_key"] in VINTED_OFFER_BRANDS
+            and (
+                probe["vinted_brand_key"] == title_probe["vinted_brand_key"]
+                or ceiling >= VINTED_OFFER_SWITCH_MIN_CEILING
+            )
         )
     if offer_possible:
         ceiling_view = {**result, "estimated_resale_value": ceiling}
@@ -3999,6 +4023,8 @@ class VintedFastLane:
         description = str(listing.get("description") or "")
         if _VINTED_OFF_PLATFORM.search(f"{title} {description}"):
             return listing, None, "seller pushes payment/contact off Vinted (scam pattern)"
+        if _VINTED_RESERVED.search(title) or _VINTED_RESERVED_DESC.search(description):
+            return listing, None, "custom/reserved listing made for another buyer"
         if category == "poker-chips":
             poker_fail = engine.poker_pre_ai_hard_fail_reason(title, description) or (
                 "poker merch/single chip, not a chip set"

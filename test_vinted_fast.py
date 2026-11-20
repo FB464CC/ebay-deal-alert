@@ -1165,7 +1165,8 @@ def test_golf_shadow_records_probability_without_skipping(tmp_path):
     assert row["jev_image_iron_set"] == 0.01
 
 
-def test_generic_peter_millar_polo_below_resale_floor_never_alerts(tmp_path):
+def test_generic_peter_millar_polo_at_25_resale_never_alerts(tmp_path):
+    # 11-20: no resale floor; $12 against $25 resale fails the deal rating.
     listing, result = _apparel_listing_result(
         "Peter Millar Basic Golf Polo Size M",
         12,
@@ -1177,7 +1178,7 @@ def test_generic_peter_millar_polo_below_resale_floor_never_alerts(tmp_path):
     )
     strong.assert_not_called()
     send.assert_not_called()
-    assert "below $30 brand floor" in row["reason"]
+    assert row["reason"] == "vinted menswear bar: deal_rating 'Good Deal' below Great Deal"
 
 
 def test_cheap_luxury_piece_alerts_below_its_brand_floor(tmp_path):
@@ -4343,8 +4344,12 @@ def test_hats_have_their_own_resale_floor():
     hat = {"listing": {"title": "Peter Millar Hat"}, "vinted_brand_key": "peter millar"}
     polo = {"listing": {"title": "Peter Millar polo"}, "vinted_brand_key": "peter millar"}
     with mock.patch.object(fast, "_vinted_brand_and_floor", return_value=("Peter Millar", 30)):
-        assert fast._vinted_resale_minimum(hat) == 15
-        assert fast._vinted_resale_minimum(polo) == 30
+        # 11-20: no floor by default; a $40 cap brings back the hat rule.
+        assert fast._vinted_resale_minimum(hat) == 0
+        assert fast._vinted_resale_minimum(polo) == 0
+        with mock.patch.object(fast, "VINTED_RESALE_FLOOR_MAX", 40.0):
+            assert fast._vinted_resale_minimum(hat) == 15
+            assert fast._vinted_resale_minimum(polo) == 30
 
 
 def test_alert_details_line_names_seller_size_fabric_and_resale_basis():
