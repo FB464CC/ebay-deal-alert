@@ -8367,16 +8367,22 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 def _telegram_send(text, url=None, image_url=None):
     api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+    extra = {}
     if url:
-        text = f"{text}\n{url}"
+        # A button opens the Vinted app in one tap; no link preview to load.
+        extra["reply_markup"] = json.dumps(
+            {"inline_keyboard": [[{"text": "Open listing", "url": url}]]})
     try:
         if image_url:
             resp = requests.post(f"{api}/sendPhoto", timeout=10, data={
-                "chat_id": TELEGRAM_CHAT_ID, "photo": image_url, "caption": text[:1024]})
+                "chat_id": TELEGRAM_CHAT_ID, "photo": image_url,
+                "caption": text[:1024], **extra})
             if resp.ok:
                 return
         requests.post(f"{api}/sendMessage", timeout=10, data={
-            "chat_id": TELEGRAM_CHAT_ID, "text": text[:4096]}).raise_for_status()
+            "chat_id": TELEGRAM_CHAT_ID, "text": text[:4096],
+            "link_preview_options": json.dumps({"is_disabled": True}), **extra,
+        }).raise_for_status()
     except requests.exceptions.RequestException as exc:
         # The token sits in the URL, so log only the exception type.
         logger.warning("telegram mirror failed: %s", type(exc).__name__)
@@ -9774,13 +9780,10 @@ def append_alert_log(
 
 
 def vinted_browser_url(url):
-    """Vinted's iOS app claims every www.vinted.com path, and tapping an alert
-    there showed "Something went wrong" (owner, 10-26). Bare vinted.com has no
-    app-link file of its own (it 301s), so iOS opens it in Safari, which then
-    follows the redirect to the working item page."""
-    prefix = "https://www.vinted.com/"
-    if isinstance(url, str) and url.startswith(prefix):
-        return "https://vinted.com/" + url[len(prefix):]
+    """Tap-through link for alerts. Owner 11-19 tested on his iPhone: www
+    vinted.com item links (with or without the name slug) open the Vinted app
+    straight to the item; the bare vinted.com link (used since 10-26) opened
+    Safari first and cost seconds in buy races. So links pass through as-is."""
     return url
 
 

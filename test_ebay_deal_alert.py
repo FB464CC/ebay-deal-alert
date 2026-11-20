@@ -13914,7 +13914,7 @@ class WeeklyDigestCountsOnlyReviewAlerts(unittest.TestCase):
                 vinted_records = m._read_vinted_fast_log_records()
         message = self._digest_message([], vinted_records=vinted_records)
         self.assertIn("Vinted: 1 verified, 1 FAST, 1 offer/message", message)
-        self.assertIn("$42.5 Wool coat https://vinted.com/items/123", message)
+        self.assertIn("$42.5 Wool coat https://www.vinted.com/items/123", message)
         self.assertNotIn("Old coat", message)
         self.assertIn("0 alerts", message)
 

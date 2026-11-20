@@ -3084,10 +3084,11 @@ def test_eyewear_only_in_description_rejects_before_ai():
     assert result["reason"] == "sunglasses/eyewear not wanted"
 
 
-def test_vinted_links_open_in_browser_not_app():
+def test_vinted_links_open_in_app():
+    # Owner 11-19: www item links open the Vinted app directly.
     assert engine.vinted_browser_url(
         "https://www.vinted.com/items/10542231373-peter-millar-golf-shirt-l"
-    ) == "https://vinted.com/items/10542231373-peter-millar-golf-shirt-l"
+    ) == "https://www.vinted.com/items/10542231373-peter-millar-golf-shirt-l"
     assert engine.vinted_browser_url("https://www.ebay.com/itm/1") == "https://www.ebay.com/itm/1"
 
 

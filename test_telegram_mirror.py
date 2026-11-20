@@ -26,4 +26,4 @@ def test_photo_failure_falls_back_to_text(monkeypatch):
     monkeypatch.setattr(engine.requests, "post", fake_post)
     engine._telegram_send("STEAL x\nbody", "https://v/1", "https://img/1.jpg")
     assert [c[0] for c in calls] == ["sendPhoto", "sendMessage"]
-    assert calls[1][1]["text"].endswith("https://v/1")
+    assert '"url": "https://v/1"' in calls[1][1]["reply_markup"]
