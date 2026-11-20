@@ -2105,7 +2105,7 @@
     {
       "query": "\"loro piana\" -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 250,
+      "max_price": 475,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -2144,7 +2144,7 @@
     {
       "query": "kiton -women -womens -ladies -girls -kids -scarf",
       "size": null,
-      "max_price": 200,
+      "max_price": 475,
       "enabled": true,
       "profile": "fast",
       "platforms": [
@@ -5152,9 +5152,9 @@
   "VINTED_BRAND_SLOTS_PER_TEXT": 1,
   "VINTED_TEXT_FEEDS": [
     {"query": "zegna", "max_price": 235, "slots": 4},
-    {"query": "loro piana", "max_price": 250, "slots": 4},
+    {"query": "loro piana", "max_price": 475, "slots": 4},
     {"query": "cucinelli", "max_price": 250, "slots": 4},
-    {"query": "kiton", "max_price": 200, "slots": 4},
+    {"query": "kiton", "max_price": 475, "slots": 4},
     {"query": "brioni", "max_price": 200, "slots": 4},
     {"query": "canali", "max_price": 130},
     {"query": "purple label", "max_price": 200},

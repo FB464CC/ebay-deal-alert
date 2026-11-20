@@ -23,14 +23,13 @@ def _zegna_polo(tmp_path):
     )
 
 
-def test_zegna_polo_is_not_floor_rejected_and_faces_the_steal_bar(tmp_path):
-    _lane, strong, _send, row = _zegna_polo(tmp_path)
+def test_zegna_polo_is_not_floor_rejected_and_alerts_on_mean_resale(tmp_path):
+    _lane, strong, send, row = _zegna_polo(tmp_path)
     strong.assert_called_once()
-    # Same steal bar as before: $15.90 expected paid vs 40% of min($55, $35).
-    assert row["reason"] == (
-        "vinted strong second-look veto: expected paid $15.9 exceeds 40% of "
-        "conservative $35 resale"
-    )
+    # Owner 11-20: conservative resale is the mean of both looks ($45), so
+    # $15.90 expected paid clears 40% ($18) and the polo alerts at list.
+    send.assert_called_once()
+    assert "brand floor" not in str(row.get("reason"))
 
 
 def test_fifty_cent_item_worth_ten_is_not_floor_rejected(tmp_path):

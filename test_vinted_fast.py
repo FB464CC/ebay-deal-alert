@@ -669,9 +669,9 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-brioni-suit": 200,
         "vinted-e-marinella-tie": 60,
         "vinted-brunello-cucinelli": 130,
-        "vinted-loro-piana": 250,  # owner 11-18: Loro Piana is the top want
+        "vinted-loro-piana": 475,  # Owner 11-20: LP/Kiton caps -> 475 (was 250)
         "vinted-zegna": 115,  # audit 11-20: plain Zegna sweaters
-        "vinted-kiton": 200,  # matches the kiton text feed cap (11-18)
+        "vinted-kiton": 475,  # Owner 11-20: LP/Kiton caps -> 475 (was 200)
         "vinted-brioni": 90,
         "vinted-isaia": 90,
         "vinted-purple-label": 200,  # audit 11-20: PL jacket alert line
@@ -1280,8 +1280,9 @@ def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
     send.assert_called_once()
     assert row["delivered"] is True
     assert lane.ai_calls == 2
-    # The $120/$110 AI guesses are cut to the $42 table price (11-10).
-    assert row["vinted_conservative_resale_value"] == 42
+    # The $120 first look is cut to the $42 table price (11-10). Owner 11-20:
+    # conservative = mean of both looks; this mock skips the strong-look cap.
+    assert row["vinted_conservative_resale_value"] == (42 + 110) / 2
 
 
 def test_vinted_strong_condition_fair_vetoes(tmp_path):
@@ -1651,9 +1652,13 @@ def test_suit_chest_size_is_not_a_pants_waist():
     assert fast._off_size_reason(
         {"title": "Zegna wool suit 42R, pants 34", "size": "", "price": {"value": 50}}, "tailoring"
     ) is None
-    # A stated suit-pants waist still counts.
+    # Owner 11-20: an off suit-pants waist is a note when the jacket fits...
     assert fast._off_size_reason(
         {"title": "Canali suit 42R, pants 40x30", "size": "42R", "price": {"value": 50}}, "tailoring"
+    ) is None
+    # ...but an off jacket chest still blocks.
+    assert fast._off_size_reason(
+        {"title": "Canali suit 48R, pants 40x30", "size": "48R", "price": {"value": 50}}, "tailoring"
     )
 
 
@@ -2985,8 +2990,9 @@ def test_office_wardrobe_only():
     assert "diffusion" in shape(listing("Z Zegna merino crewneck", 25), "zegna")
     assert shape(listing("Ermenegildo Zegna cashmere quarter zip", 25), "zegna") is None
     assert shape(listing("Peter Millar Crown Crafted polo", 15, "M"), "peter millar") is None
-    assert "French cuffs" in fast._ai_lone_tailoring_reason(
-        "Brioni white shirt with French cuffs", "other", {}, "brioni")
+    # Owner 11-20: French cuffs are an alert note, not a block.
+    assert fast._ai_lone_tailoring_reason(
+        "Brioni white shirt with French cuffs", "other", {}, "brioni") is None
 
 
 def test_trousers_ping_only_as_megasteals():

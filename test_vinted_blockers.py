@@ -113,6 +113,6 @@ def test_routing_caps_raised_and_lp_kiton_untouched():
     assert caps["vinted-purple-label"] == 200
     assert feeds["zegna"] == 235
     assert feeds["purple label"] == 200
-    # Owner-set 11-18; out of scope.
-    assert caps["vinted-loro-piana"] == 250 and caps["vinted-kiton"] == 200
-    assert feeds["loro piana"] == 250 and feeds["kiton"] == 200
+    # Owner 11-20: Loro Piana / Kiton caps raised to $475.
+    assert caps["vinted-loro-piana"] == 475 and caps["vinted-kiton"] == 475
+    assert feeds["loro piana"] == 475 and feeds["kiton"] == 475

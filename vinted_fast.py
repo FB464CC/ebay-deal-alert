@@ -1111,7 +1111,9 @@ def _off_size_reason(listing, category):
     if category not in _VINTED_SIZED_CATEGORIES:
         return None
     waist_fits = _pants_waist_fits(listing)
-    if waist_fits is not None:
+    # Owner 11-20: a full suit whose pants waist is off still alerts (note
+    # "pants waist N: needs tailoring") when the jacket fits; lone trousers stay off.
+    if waist_fits is not None and not (waist_fits is False and _VINTED_SUIT.search(title)):
         return None if waist_fits else "pants waist won't fit (owner wears 32-36)"
     if _xl_dress_shirt(size, title):
         return "XL dress shirts won't fit (owner 11-18)"
@@ -1143,7 +1145,10 @@ def _vinted_apparel_bar_reason(result, category):
         return "vinted menswear bar: AI price confidence missing or low"
     if result.get("counterfeit_suspected") is not False:
         return "vinted menswear bar: counterfeit assessment not explicitly clear"
-    if result.get("damage_found") is not False:
+    # Owner 11-20: light damage passed _merge_ai_result as a note, not a block.
+    # A missing verdict still blocks: only an explicit "light" finding passes.
+    damage = result.get("damage_found")
+    if damage is None or (damage is not False and not result.get("vinted_light_damage")):
         return "vinted menswear bar: damage assessment not explicitly clear"
     floor = _vinted_resale_minimum(result)
     resale = engine._sane_ai_price(result.get("estimated_resale_value"))
@@ -1386,8 +1391,7 @@ def _menswear_shape_reason(listing, brand_key, category=None):
         _SIZE_WAIST.match(str(listing.get("size") or "")) and not _VINTED_SUIT.search(title)
     ):
         return "trousers/shorts are off (owner 11-11: doesn't need them)"
-    if _VINTED_FRENCH_CUFF.search(title):
-        return "French cuffs need cufflinks, not analyst wear"
+    # Owner 11-20: French cuffs are a note in the alert (_owner_notes), not a block.
     if _VINTED_WOVEN_SHIRT.search(title) and not _VINTED_POLO.search(title):
         if _VINTED_VINTAGE.search(title):
             return "vintage dress shirt (dated cut), not analyst wear"
@@ -1453,8 +1457,7 @@ def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
     if any(not _VINTED_PACKAGING.fullmatch(m.group(0)) for m in _VINTED_BEAUTY.finditer(summary)):
         return "AI photos show a fragrance/beauty item, not menswear"
     listing = listing or {}
-    if _VINTED_FRENCH_CUFF.search(summary):
-        return "AI photos show French cuffs, not analyst wear"
+    # Owner 11-20: French cuffs in the photos are a note (_owner_notes), not a block.
     sized = f"{listing.get('title') or ''} {listing.get('size') or ''}"
     if (
         _VINTED_POLO.search(summary)
@@ -2220,10 +2223,82 @@ def _price_table_ceiling_reason(result, category):
     )
 
 
+# Owner 11-20: light damage (minor wear, tiny spot, small smudge, light pilling,
+# faint mark) is a note; holes, tears, rips, broken zips, missing buttons, moth,
+# heavy/large/obvious flaws, and unqualified stains/fading still block.
+_DAMAGE_NEGATED = re.compile(
+    r"\b(?:no|without|free\s+of|not\s+any)\s+(?:(?:any|visible|obvious|major|noticeable|signs?\s+of)\s+)*"
+    r"[a-z]+(?:\s*(?:,\s*(?:or|and|nor)?|/|\bor\b|\band\b|\bnor\b)\s*"
+    r"(?:(?:any|visible|obvious|major|noticeable)\s+)*[a-z]+)*",
+    re.IGNORECASE,
+)
+_DAMAGE_HARD = re.compile(
+    r"\b(?:holes?|tears?|torn|rips?|ripped|broken|missing|moth\w*|burns?|bleach\w*)\b",
+    re.IGNORECASE,
+)
+# Only counts inside a flaw clause ("size Large" is not damage).
+_DAMAGE_HEAVY = re.compile(
+    r"\b(?:heavy|heavily|large|big|obvious|significant|major|noticeable|extensive|severe"
+    r"|multiple|several|across|throughout|all\s+over)\b",
+    re.IGNORECASE,
+)
+# Need a light qualifier ("tiny spot", "light pilling", "minor wear").
+_DAMAGE_WORD = re.compile(
+    r"\b(?:stain\w*|spots?|pill\w*|picking|wear|worn|discolou?r\w*|fad\w*|yellow\w*"
+    r"|odou?r|smell\w*|flaws?|damage\w*)\b",
+    re.IGNORECASE,
+)
+# Light by nature unless a hard word rides along ("smudge", "faint mark").
+_DAMAGE_SOFT = re.compile(
+    r"\b(?:smudges?|marks?|scuffs?|snags?|pulls?|threads?|imperfections?|blemish\w*)\b",
+    re.IGNORECASE,
+)
+_DAMAGE_LIGHT = re.compile(
+    r"\b(?:minor|light(?:ly)?|slight(?:ly)?|faint(?:ly)?|tiny|small|little|minimal|subtle"
+    r"|barely|hardly|normal)\b",
+    re.IGNORECASE,
+)
+
+
+def _light_damage_only(text):
+    """True when every flaw the AI named is qualified as light and none is
+    real damage; unclear or empty text fails closed (blocks)."""
+    clauses = [
+        c for c in re.split(r"[.;,:]|\b(?:and|but|with|plus)\b", _DAMAGE_NEGATED.sub(" ", str(text or "")))
+        if _DAMAGE_WORD.search(c) or _DAMAGE_SOFT.search(c) or _DAMAGE_HARD.search(c)
+    ]
+    return bool(clauses) and all(
+        not _DAMAGE_HARD.search(c) and not _DAMAGE_HEAVY.search(c)
+        and (_DAMAGE_LIGHT.search(c) or not _DAMAGE_WORD.search(c))
+        for c in clauses
+    )
+
+
+def _owner_notes(result):
+    """Owner 11-20: things that used to block and now ride along as notes."""
+    listing = result.get("listing") or {}
+    title = str(listing.get("title") or "")
+    notes = []
+    if _VINTED_FRENCH_CUFF.search(f"{title} {result.get('vinted_ai_summary') or ''}"):
+        notes.append("French cuffs: needs cufflinks")
+    if _VINTED_SUIT.search(title) and _pants_waist_fits(listing) is False:
+        waist = next((w for w in _stated_waists(str(listing.get("size") or ""), title)
+                      if not 32 <= w <= 36), "off")
+        notes.append(f"pants waist {waist}: needs tailoring")
+    if result.get("vinted_light_damage"):
+        notes.append(f"light damage: {result['vinted_light_damage']}")
+    grade = result.get("vinted_strong_condition_grade")
+    if grade in {"fair", "poor"}:
+        flaws = ", ".join(map(str, result.get("vinted_strong_flaws_found") or []))
+        notes.append(f"condition {grade}, light flaws only: {flaws}")
+    return notes
+
+
 def _alert_details(result):
     """Owner 11-17: what a 10-second buy decision still lacked."""
     listing = result.get("listing") or {}
     return " | ".join(filter(None, (
+        *_owner_notes(result),
         f"listed size {listing['size']}" if listing.get("size") else None,
         f"seller {result['vinted_seller_note']}" if result.get("vinted_seller_note") else None,
         f"tag: {result['vinted_fabric_tag']}" if result.get("vinted_fabric_tag") else None,
@@ -2300,7 +2375,16 @@ def _merge_ai_result(result, ai_result, category):
         return f"AI photo check found gender-excluded keyword: {summary}"
     if engine.PET_PRODUCT_SIGNALS.search(summary.lower()):
         return f"AI photo check found pet product: {summary}"
+    damage_text = str(ai_result.get("damage_desc") or "").strip() or summary
     if (
+        ai_result.get("damage_found") is True
+        and ai_result.get("weird_logo_found") is not True
+        and (category in VINTED_APPAREL_CATEGORIES or category == "school-gear")
+        and _light_damage_only(damage_text)
+    ):
+        # Owner 11-20: light wear/spot/smudge/pilling is a note in the alert.
+        result["vinted_light_damage"] = _one_line(damage_text)[:160]
+    elif (
         ai_result.get("damage_found") is True
         or ai_result.get("weird_logo_found") is True
     ):
@@ -2983,7 +3067,11 @@ class VintedFastLane:
             if size_reason:
                 return f"tag size {tag_size}: {size_reason}"
         condition = result.get("vinted_strong_condition_grade")
-        if condition not in {"nwt", "excellent", "good"}:
+        if condition not in {"nwt", "excellent", "good"} and not (
+            # Owner 11-20: fair/poor passes (with a note) when every flaw is light.
+            condition in {"fair", "poor"}
+            and _light_damage_only("; ".join(map(str, result.get("vinted_strong_flaws_found") or [])))
+        ):
             flaws = result.get("vinted_strong_flaws_found")
             return f"condition grade {condition or 'missing'} below good: {flaws or 'no detail'}"
         floor = _vinted_resale_minimum(result)
@@ -2997,7 +3085,8 @@ class VintedFastLane:
         cheap_resale = engine._sane_ai_price(result.get("estimated_resale_value"))
         if cheap_resale is None:
             return "first-look resale estimate missing"
-        conservative_resale = min(cheap_resale, strong_resale)
+        # Owner 11-20: mean of the two looks (was min); the 40% fraction stays.
+        conservative_resale = (cheap_resale + strong_resale) / 2
         expected_paid = engine._sane_ai_price(
             result.get("vinted_expected_paid")
         )
@@ -3199,6 +3288,8 @@ class VintedFastLane:
             "now; an offer risks losing it."
             + ("\nCheck photos: crown under the back collar, no club logo."
                if pm_top else "")
+            # Owner 11-20: French cuffs / suit waist notes reach the FAST ping too.
+            + "".join(f"\n{note}" for note in _owner_notes(result))
             + (f"\n{_ship_note(listing)}" if _ship_note(listing) else "")
         )
         logger.info("vinted-fast instant alert: $%g %s | %s", price, brand, title)
@@ -4282,6 +4373,14 @@ class VintedFastLane:
             seller_reason = _seller_trust_reason(
                 stats, strict=category in VINTED_STRICT_SELLER_CATEGORIES
             )
+            if seller_reason and category not in VINTED_STRICT_SELLER_CATEGORIES:
+                # Owner 11-20: clothing seller with 3+ reviews under 4.0 stars
+                # is a note in the alert, not a block (watches/fragrance unchanged).
+                result["vinted_seller_note"] = (
+                    f"LOW-RATED {result.get('vinted_seller_note', '')}: "
+                    "pay in-app only, report within 2 days"
+                )
+                seller_reason = None
             if seller_reason and category == "watches" and stats.get("feedback_count") == 0:
                 seller_reason = _new_watch_seller_reason(stats, item_id, listing)
                 result["vinted_new_seller"] = seller_reason is None

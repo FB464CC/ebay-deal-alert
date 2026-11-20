@@ -81,8 +81,16 @@ def _collar(listing):
     return None
 
 
+# Owner 11-20: this lane also takes New. eBay condition IDs (condition-id-values doc cited at
+# ebay_deal_alert.EBAY_ALLOWED_SECONDHAND_CONDITION_IDS): 1000 New / New with tags,
+# 1500 New other / New without tags. 1750 New with defects stays out: no lane gate reads the
+# listing's condition or description for defects, only the photos.
+NEW_CONDITION_IDS = ("1000", "1500")
+CONDITION_FILTER = "conditionIds:{" + "|".join(NEW_CONDITION_IDS + engine.EBAY_ALLOWED_SECONDHAND_CONDITION_IDS) + "}"
+
+
 def searches():
-    common = {"query": QUERY, "category_id": "1059", "max_price": 250}
+    common = {"query": QUERY, "category_id": "1059", "max_price": 250, "condition_filter": CONDITION_FILTER}
     return common, {**common, "closing_soon_minutes": 30,
                     "contested_closing_soon_minutes": 30,
                     "search_window_minutes": 30, "sort": "endingSoonest"}

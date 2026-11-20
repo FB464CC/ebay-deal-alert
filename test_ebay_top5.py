@@ -19,7 +19,6 @@ def listing(title="Brunello Cucinelli Men Large Cashmere Sweater", *, price=80,
 
 @pytest.mark.parametrize("item,part", [
     (listing("Brunello Cucinelli Men's Trousers 34"), "trousers"),
-    (listing("Brunello Cucinelli Dress Shirt 16.5 French Cuff"), "French cuffs"),
     # Audit 11-20: an unstated collar and a <20 / 95-98% seller are flags now, not blocks.
     (listing("Brunello Cucinelli Dress Shirt 17 1/2"), "collar 17.5"),
     (listing("Brunello Cucinelli Suit Pants 42R"), "suit separates"),
@@ -321,3 +320,8 @@ def test_non_lp_houses_reach_the_alert_with_their_own_bar(tmp_path, monkeypatch,
     reason = conn.execute("SELECT reason FROM judged").fetchone()
     assert send.call_count == 1, reason
     conn.close()
+
+
+def test_french_cuffs_are_a_note_not_a_block():
+    # Owner 11-20: French cuffs alert with a note instead of being rejected.
+    assert lane.EbayTop5()._cheap_reason(listing("Brunello Cucinelli Dress Shirt 16.5 French Cuff"), False)[2] is None

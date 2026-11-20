@@ -1516,7 +1516,8 @@ def search_ebay(token, saved_search):
         # server-side filter is a strict superset and can't cause a false
         # negative. The client-side check stays as the real gate.
         "filter": (
-            f"{EBAY_SECONDHAND_CONDITION_FILTER},itemLocationCountry:US,"
+            # Owner 11-20: a search may override the condition allowlist (top-5 lane adds New).
+            f"{saved_search.get('condition_filter', EBAY_SECONDHAND_CONDITION_FILTER)},itemLocationCountry:US,"
             f"price:[..{saved_search['max_price']}],priceCurrency:USD"
         ),
         "sort": "newlyListed",
@@ -1644,7 +1645,7 @@ def search_ebay_ending_soon_auctions(token, auction_search, now=None):
         else f"price:[..{auction_search['max_price']}]"
     )
     filter_parts = [
-        EBAY_SECONDHAND_CONDITION_FILTER,
+        auction_search.get("condition_filter", EBAY_SECONDHAND_CONDITION_FILTER),  # Owner 11-20
         "itemLocationCountry:US",
         price_filter,
         "priceCurrency:USD",
@@ -4721,12 +4722,16 @@ _NEGATED_FLAWS = re.compile(
 # "no guarantee") and hedges ("not sure if the stain comes out", "not very
 # noticeable stain") are kept.
 _NEGATOR = re.compile(
-    r"\b(?:no|not|never|without|zero|nor|free\s+(?:of|from)"
+    r"\b(?:no|not|never|without|w/o|zero|nor|nothing|free\s+(?:of|from)"
+    # Owner 11-20: "w/o stains", "nothing torn", "can't find any stains".
+    r"|(?:can['\u2019]?t|can\s*not|could(?:n['\u2019]?t|\s+not))\s+(?:find|see|spot|notice|detect)"
     r"|(?:is|are|was|were|does|do|did|has|have)n['\u2019]?t"
     r"|(?:does|do|did)\s+not\s+have|has\s+no|have\s+no)\b"
     r"(?!\s+(?:working|running|functioning|works?|runs?|tested|authentic|genuine"
     r"|original|guarantee\w*|included|sure|certain|positive|very|too|that|so|really"
-    r"|super|much|bad|keep\w*\s+time)\b)",
+    r"|super|much|bad|keep\w*\s+time"
+    # Owner 11-20: "can not get the stain out", "did not come out in the wash".
+    r"|get|gotten|come|came|remov\w*|budge\w*)\b)",
     re.IGNORECASE,
 )
 _CLAUSE_END = re.compile(
@@ -4747,7 +4752,7 @@ _NEW_CLAUSE_COMMA = re.compile(
 )
 _BENIGN_MENTIONS = re.compile(
     r"\b\w+(?:\s*(?:,|/|&|\band\b|\bor\b)\s*\w+)*[\s-]+free\b"  # stain and tear free, dog-free
-    r"|\b\w+(?:\s*/\s*\w+)*\s*[:\u2013-]\s*(?:none|n/?a)\b"  # "Stains: none"
+    r"|\b\w+(?:\s*/\s*\w+)*\s*[:?\u2013-]\s*(?:none|n/?a)\b"  # "Stains: none", "stains? none"
     r"|\b\w+-inspired\b"  # golf-inspired, vintage-inspired
     r"|\binspired\s+(?:design|look|style|styling|pattern|print|motif|details?"
     r"|colou?r\w*|fit|feel|aesthetic)\b"
@@ -4805,6 +4810,69 @@ def condition_hard_fail_keyword(title, haystack):
             haystack[max(0, at - 50) : at + len(hit) + 30],
         )
     return hit
+
+
+# Owner 11-20: light damage is a note, not a block. On Vinted a stain/spot/mark
+# the seller calls small ("has three tiny stains on the front", "small stain
+# that has not been treated", "stain on cuff, barely noticeable") goes to the
+# photo AI instead of hard-failing. "stains on collar", "large/noticeable
+# stain", "pit stains", "several small stains" still hard-fail.
+_STAIN_NOUN = r"(?:stains?|spots?|marks?)"
+_LIGHT_STAIN = re.compile(
+    r"\b(?:(?:very|super|really)\s+)?(?:small|tiny|minor|faint|light|slight|little|minimal)\s+"
+    r"(?:(?:little|small|tiny|faint)\s+)?(?:(?!(?:pit|armpit|underarm|sweat)\b)[a-z]+\s+)?"
+    rf"{_STAIN_NOUN}\b"
+    rf"|\b(?:(?:barely|hardly)\s+(?:noticeable|visible)|hard\s+to\s+see)\s+{_STAIN_NOUN}\b"
+    rf"|\b{_STAIN_NOUN}\b(?=[^.;!?\n]{{0,40}}\b(?:(?:barely|hardly)\s+(?:noticeable|visible)"
+    r"|hard\s+to\s+see)\b)",
+    re.IGNORECASE,
+)
+_MANY = re.compile(r"\b(?:several|multiple|many|numerous|lots\s+of|plenty\s+of)\s+$", re.I)
+
+
+def _strip_light_stains(text):
+    text = str(text or "")
+    return _LIGHT_STAIN.sub(
+        lambda m: m.group() if _MANY.search(text[max(0, m.start() - 15) : m.start()]) else " ",
+        text,
+    )
+
+
+def light_stain_note(title, haystack):
+    """Vinted: the light-stain clause that hard-fails only without the
+    light-damage rule (so the alert can carry it), else None."""
+    hit = condition_hard_fail_keyword(title, haystack)
+    if hit is None or condition_hard_fail_keyword(title, _strip_light_stains(haystack)):
+        return None
+    return _hit_clause(haystack, hit)
+
+
+def condition_hard_fail_reason(title, haystack, light_stains_ok=False):
+    """Reject reason naming the keyword and the clause it sits in, or None.
+    Owner 11-20: logs showed only 'stains', so a denial bug couldn't be told
+    from a real "small stain on front". The prefix stays so counts still group.
+    light_stains_ok (Vinted): small disclosed stains don't count."""
+    if light_stains_ok:
+        haystack = _strip_light_stains(haystack)
+    hit = condition_hard_fail_keyword(title, haystack)
+    if hit is None:
+        return None
+    clause = _hit_clause(haystack, hit)
+    return f"condition hard-fail keyword in title/description: {hit!r} in {clause!r}"
+
+
+def _hit_clause(haystack, hit):
+    text = _NEGATED_FLAWS.sub(" ", _benign_text(str(haystack or "")))
+    found = re.search(rf"\b{re.escape(hit)}\b", text, re.IGNORECASE)
+    at = found.start() if found else 0
+    start = max((text.rfind(c, 0, at) for c in ".;!?\n•"), default=-1) + 1
+    ends = [i for i in (text.find(c, at) for c in ".;!?\n•") if i != -1]
+    clause = " ".join(text[start : min(ends, default=len(text))].split())
+    if len(clause) > 60:
+        rel = clause.lower().find(hit)
+        lo = max(0, min(rel - 20, len(clause) - 60))
+        clause = clause[lo : lo + 60].strip()
+    return clause
 
 
 def matched_keyword(haystack, keywords):
@@ -5689,16 +5757,9 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
         # nonfunctional pattern, but historically reached the generic condition
         # gate below; checking that overlap first keeps existing watch behavior
         # and reason text unchanged while the shared pattern covers other uses.
-        hard_fail_hit = condition_hard_fail_keyword(title, haystack)
-        if hard_fail_hit is not None:
-            return {
-                "verdict": "PASS",
-                "reason": (
-                    "condition hard-fail keyword in title/description: "
-                    f"{hard_fail_hit!r}"
-                ),
-                "listing": listing,
-            }
+        hard_fail_reason = condition_hard_fail_reason(title, haystack)
+        if hard_fail_reason is not None:
+            return {"verdict": "PASS", "reason": hard_fail_reason, "listing": listing}
         watch_pre_ai_fail = watch_pre_ai_hard_fail_reason(listing, price)
         if watch_pre_ai_fail:
             return {
@@ -5755,7 +5816,8 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
         # 2. Fabric
         has_good_fabric = any(f in haystack for f in FABRIC_GOOD_KEYWORDS)
         has_poly = FABRIC_POLY_KEYWORD in haystack
-        if has_poly and price > 15 and not has_good_fabric:
+        # Owner 11-20: the poly rule is eBay-only; on Vinted the price table and photo check decide.
+        if has_poly and price > 15 and not has_good_fabric and listing.get("platform") != "vinted":
             return {"verdict": "PASS", "reason": "poly over $15, no premium fabric keyword", "listing": listing}
         if not has_good_fabric and not has_poly:
             flags.append("fabric not stated in title/description — check listing photos")
@@ -5764,9 +5826,14 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
         flags.append("fit unconfirmed — pull listing description for pit-to-pit measurement")
 
     # 4. Condition
-    hard_fail_hit = condition_hard_fail_keyword(title, haystack)
-    if hard_fail_hit is not None:
-        return {"verdict": "PASS", "reason": f"condition hard-fail keyword in title/description: {hard_fail_hit!r}", "listing": listing}
+    is_vinted = listing.get("platform") == "vinted"
+    hard_fail_reason = condition_hard_fail_reason(title, haystack, light_stains_ok=is_vinted)
+    if hard_fail_reason is not None:
+        return {"verdict": "PASS", "reason": hard_fail_reason, "listing": listing}
+    # Owner 11-20: vinted_fast._owner_notes shows this as "light damage: ...".
+    light_note = light_stain_note(title, haystack) if is_vinted else None
+    if light_note:
+        flags.append(f"light stain disclosed: {light_note}")
     if brand_in(_benign_text(haystack), CONDITION_FLAG_KEYWORDS):
         flags.append("condition keyword flagged — check description")
 
@@ -5784,6 +5851,7 @@ def score_listing(listing, gap_report, shipping_cost=0.0, category=None):
         "price": price,
         "flags": flags,
         "listing": listing,
+        **({"vinted_light_damage": f"seller notes {light_note}"} if light_note else {}),
     }
 
 
@@ -12438,14 +12506,10 @@ def _late_pre_ai_hard_fail_reason(listing, result, category, saved_search):
             late_haystack, category=category, title=listing.get("title", "").lower()
         )
         if text_fail is None:
-            condition_hit = condition_hard_fail_keyword(
-                listing.get("title", "").lower(), late_haystack
+            text_fail = condition_hard_fail_reason(
+                listing.get("title", "").lower(), late_haystack,
+                light_stains_ok=listing.get("platform") == "vinted",
             )
-            if condition_hit is not None:
-                text_fail = (
-                    "condition hard-fail keyword in title/description: "
-                    f"{condition_hit!r}"
-                )
         if text_fail:
             return text_fail
     return None
