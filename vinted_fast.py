@@ -2469,6 +2469,13 @@ class VintedFastLane:
         self._last_brand_poll = None
         self._peek_ctx = None
         self._pending_block = None
+        # One verdict pipeline at a time preserves AI caps and listing order.
+        # The poll thread can still fetch feeds while that pipeline waits on AI.
+        self._pipeline_pool = None
+        self._pipeline_futures = []
+        self._claimed_items = set()
+        self._request_lock = threading.Lock()
+        self._poll_thread = None
 
     def _call_vinted_prescreen_model(self, model, content, hard_stop):
         if self.prescreen_calls >= VINTED_PRESCREEN_MAX_PER_RUN:
@@ -3147,8 +3154,7 @@ class VintedFastLane:
             self._finish(conn, result, item_id, fingerprint, total_price, reason)
             return
         self._peek_brand_feed()
-        self._respect_interval()
-        self._last_request_started = self.clock()
+        self._reserve_request()
         self.stats["requests"] += 1
         stats = fetch_vinted_seller_stats((item.get("user") or {}).get("id"))
         status = stats.get("_http_status")
@@ -3305,7 +3311,9 @@ class VintedFastLane:
         Audit 11-03: polling stopped for the whole 10-130 s of photo AI, so a
         megasteal listed meanwhile got no ping (brand-feed gaps up to 133 s).
         The call stays serial: only peeks run beside it, never other AI."""
-        if self._peek_ctx is None:
+        if (self._peek_ctx is None
+                or (self._poll_thread is not None
+                    and threading.current_thread() is not self._poll_thread)):
             return fn(*args, **kwargs)
         done, box = threading.Event(), {}
 
@@ -3334,7 +3342,9 @@ class VintedFastLane:
         """Re-poll the brand feed for instant pings while slow per-item work
         runs. Doesn't move the high-water mark, so the scheduled poll still
         processes these items fully; the shared request floor still applies."""
-        if self._peek_ctx is None or self._pending_block is not None:
+        if (self._peek_ctx is None or self._pending_block is not None
+                or (self._poll_thread is not None
+                    and threading.current_thread() is not self._poll_thread)):
             return
         conn, main_conn, state, feed = self._peek_ctx
         if (
@@ -3581,11 +3591,10 @@ class VintedFastLane:
             wait = self._last_brand_poll + VINTED_BRAND_MIN_GAP_SECONDS - self.clock()
             if wait > 0:
                 self.sleeper(wait)
-        self._respect_interval()
         if self.session is None:
             # The bootstrap is a Vinted request too: a failed one must not
             # let the next slot fire at once (a tight homepage loop in a block).
-            self._last_request_started = self.clock()
+            self._reserve_request()
             self.session = marketplaces._get_vinted_session()
         if self.session is None:
             return 0, None
@@ -3595,7 +3604,7 @@ class VintedFastLane:
         params += [("catalog[]", 5), ("order", "newest_first")]
         if feed.get("max_price") is not None:
             params += [("price_to", feed["max_price"]), ("currency", "USD")]
-        self._last_request_started = self.clock()
+        self._reserve_request()
         self._last_brand_poll = self._last_request_started
         self.stats["requests"] += 1
         try:
@@ -3717,12 +3726,44 @@ class VintedFastLane:
         if remaining > 0:
             self.sleeper(remaining)
 
+    def _reserve_request(self):
+        """Reserve the shared Vinted request floor across poll and item threads."""
+        with self._request_lock:
+            self._respect_interval()
+            self._last_request_started = self.clock()
+
+    def _process_queued_item(self, item, target, deadline):
+        # SQLite connections belong to the thread that created them.
+        conn = engine.init_db(self.seen_db_path)
+        main_conn = _main_seen_connection(self.main_seen_db_path, self.seen_db_path)
+        try:
+            self._process_item(conn, main_conn, item, target, deadline)
+            self._followup_if_silent(item)
+        finally:
+            conn.close()
+            if main_conn is not None:
+                main_conn.close()
+            self._claimed_items.discard(f"vinted:{_raw_vinted_item_id(item)}")
+
+    def _drain_pipelines(self, *, wait=False):
+        remaining = []
+        for future in self._pipeline_futures:
+            if wait or future.done():
+                try:
+                    future.result()
+                except VintedRequestBlocked as exc:
+                    self._pending_block = exc
+                except Exception:
+                    logger.exception("vinted-fast item pipeline failed")
+            else:
+                remaining.append(future)
+        self._pipeline_futures = remaining
+
     def _catalog_request(self, search):
-        self._respect_interval()
         if self.session is None:
             # The bootstrap is a Vinted request too: a failed one must not
             # let the next slot fire at once (a tight homepage loop in a block).
-            self._last_request_started = self.clock()
+            self._reserve_request()
             self.session = marketplaces._get_vinted_session()
         if self.session is None:
             return 0, None
@@ -3738,7 +3779,7 @@ class VintedFastLane:
         if search.get("max_price") is not None:
             params["price_to"] = search["max_price"]
             params["currency"] = "USD"
-        self._last_request_started = self.clock()
+        self._reserve_request()
         self.stats["requests"] += 1
         try:
             response = self.session.get(
@@ -3908,8 +3949,7 @@ class VintedFastLane:
         # public-page description fetch to collect its gallery preloads too,
         # and apply the same four-second floor before this Vinted request.
         self._peek_brand_feed()
-        self._respect_interval()
-        self._last_request_started = self.clock()
+        self._reserve_request()
         self.stats["requests"] += 1
         details = engine.fetch_vinted_item_page_details(listing.get("itemWebUrl"))
         detail_status = details.get("_http_status")
@@ -4147,8 +4187,7 @@ class VintedFastLane:
             or category == "school-gear"
         ):
             self._peek_brand_feed()
-            self._respect_interval()
-            self._last_request_started = self.clock()
+            self._reserve_request()
             self.stats["requests"] += 1
             stats = fetch_vinted_seller_stats((item.get("user") or {}).get("id"))
             status = stats.get("_http_status")
@@ -4418,6 +4457,9 @@ class VintedFastLane:
         )
         if brand_feed is not None and not self.dry_run:
             self._peek_ctx = (lane_conn, main_conn, state, brand_feed)
+        self._poll_thread = threading.current_thread()
+        if not self.dry_run:
+            self._pipeline_pool = ThreadPoolExecutor(1, thread_name_prefix="vinted-item")
         logger.info(
             "vinted-fast starting: searches=%s run_seconds=%.0f dry_run=%s",
             len(self.searches), self.run_seconds, self.dry_run,
@@ -4428,6 +4470,16 @@ class VintedFastLane:
         faulthandler.dump_traceback_later(VINTED_FAST_STALL_SECONDS, exit=True)
         try:
             while self.clock() < deadline:
+                self._drain_pipelines()
+                if self._pending_block is not None:
+                    pending, self._pending_block = self._pending_block, None
+                    # The failed item was not marked seen. Restore the last
+                    # durable feed cursor so the next poll can retry it.
+                    state.clear()
+                    state.update(_load_state(self.state_path))
+                    totals["backoffs"] += 1
+                    self._backoff(deadline)
+                    continue
                 self._maybe_poll_feedback(state)
                 kind, search = self.schedule[index % len(self.schedule)]
                 index += 1
@@ -4494,13 +4546,24 @@ class VintedFastLane:
                     for item, target in batch:
                         try:
                             self._peek_brand_feed()
-                            self._process_item(
-                                lane_conn, main_conn, item, target, deadline
-                            )
-                            self._followup_if_silent(item)
-                            if self._pending_block is not None:
-                                pending, self._pending_block = self._pending_block, None
-                                raise pending
+                            item_key = f"vinted:{_raw_vinted_item_id(item)}"
+                            if item_key in self._claimed_items:
+                                continue
+                            # Bound queued work: no parallel per-listing Vinted
+                            # requests or AI budget races, and no growing backlog.
+                            if len(self._pipeline_futures) >= 8:
+                                self._pipeline_futures[0].result()
+                                self._drain_pipelines()
+                            self._claimed_items.add(item_key)
+                            try:
+                                self._pipeline_futures.append(
+                                    self._pipeline_pool.submit(
+                                        self._process_queued_item, item, target, deadline
+                                    )
+                                )
+                            except BaseException:
+                                self._claimed_items.discard(item_key)
+                                raise
                         except VintedRequestBlocked as exc:
                             pipeline_block_status = exc.status
                             break
@@ -4515,11 +4578,21 @@ class VintedFastLane:
                     continue
                 if next_water is not None:
                     state["searches"][search_id] = next_water
-                    if not self.dry_run:
+                    if not self.dry_run and not self._pipeline_futures:
                         with self._state_lock:
                             _save_state(self.state_path, state)
                 self._summary()
         finally:
+            if self._pipeline_pool is not None:
+                self._pipeline_pool.shutdown(wait=True)
+                self._drain_pipelines(wait=True)
+                if self._pending_block is not None:
+                    totals["backoffs"] += 1
+                    self._backoff(deadline)
+                    self._pending_block = None
+                else:
+                    with self._state_lock:
+                        _save_state(self.state_path, state)
             faulthandler.cancel_dump_traceback_later()
             engine._download_listing_image = _engine_download_listing_image
             if self._feedback_thread is not None:
