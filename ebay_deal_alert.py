@@ -2096,6 +2096,12 @@ def fetch_vinted_item_page_details(item_url):
     feedback = re.search(r'\\?"feedback_count\\?":(\d+)', resp.text)
     if feedback:
         details["seller_feedback_count"] = int(feedback.group(1))
+    # Same embedded item JSON: logged-out can_buy is true on a live listing and
+    # false once sold/reserved (checked 11-23: 10939254794 live, 10934942219 sold).
+    for key in ("can_buy", "is_reserved", "is_hidden", "is_closed"):
+        flag = re.search(rf'\\?"{key}\\?":(true|false)', resp.text)
+        if flag:
+            details[key] = flag.group(1) == "true"
     gallery_urls = []
     for tag in re.findall(r"<link\b[^>]*>", resp.text, re.IGNORECASE):
         if not re.search(r'\brel="preload"', tag, re.IGNORECASE):
@@ -5647,6 +5653,11 @@ def _text_safety_hard_fails(haystack, category=None, title=None):
     unisex = category in {"fragrance", "gift"}
     text = _benign_text(haystack)
     if not unisex and brand_in(text, GENDER_EXCLUDE_KEYWORDS):
+        # Audit 11-23: 88 of 212 Vinted hits had no gender word in the title,
+        # and descriptions aren't logged, so a false hit can't be audited.
+        hit = next(re.search(rf"\b{re.escape(k)}\b", text) for k in GENDER_EXCLUDE_KEYWORDS
+                   if brand_in(text, (k,)))
+        logger.info("gender keyword context: %r", text[max(0, hit.start() - 50) : hit.end() + 30])
         return "excluded gender keyword in title/description"
     if (
         not unisex
@@ -8452,9 +8463,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
-def _telegram_send(text, url=None, image_url=None):
+def _telegram_send(text, url=None, image_url=None, silent=False):
     api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-    extra = {}
+    extra = {"disable_notification": "true"} if silent else {}
     if url:
         # A button opens the Vinted app in one tap; no link preview to load.
         extra["reply_markup"] = json.dumps(
@@ -8465,22 +8476,24 @@ def _telegram_send(text, url=None, image_url=None):
                 "chat_id": TELEGRAM_CHAT_ID, "photo": image_url,
                 "caption": text[:1024], **extra})
             if resp.ok:
+                logger.info("telegram mirror sent (photo): %s", text.partition("\n")[0][:60])
                 return
         requests.post(f"{api}/sendMessage", timeout=10, data={
             "chat_id": TELEGRAM_CHAT_ID, "text": text[:4096],
             "link_preview_options": json.dumps({"is_disabled": True}), **extra,
         }).raise_for_status()
+        logger.info("telegram mirror sent (text): %s", text.partition("\n")[0][:60])
     except requests.exceptions.RequestException as exc:
         # The token sits in the URL, so log only the exception type.
         logger.warning("telegram mirror failed: %s", type(exc).__name__)
 
 
-def telegram_mirror(title, message, url=None, image_url=None):
+def telegram_mirror(title, message, url=None, image_url=None, silent=False):
     """Best-effort copy of an alert to Telegram on a background thread."""
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return False
     threading.Thread(
-        target=_telegram_send, args=(f"{title}\n{message}", url, image_url), daemon=True,
+        target=_telegram_send, args=(f"{title}\n{message}", url, image_url, silent), daemon=True,
     ).start()
     return True
 
@@ -10547,6 +10560,10 @@ def send_alert(result, *, feedback_item_id=None):
             f"${item_price:g}" if _finite_number(item_price) else None,
             listing.get("size"),
             f"~${float(all_in):.0f} all-in" if _finite_number(all_in) else None,
+            # The seller flag sat 6 lines down the body, past the iOS cut.
+            "NEW SELLER" if str(result.get("vinted_seller_note") or "").startswith("new")
+            else "LOW-RATED" if str(result.get("vinted_seller_note") or "").startswith("LOW")
+            else None,
         )))
         alert_title = _ascii_safe_header(f"{head}: {title[:50]}")
 

@@ -248,6 +248,12 @@ _VINTED_SUIT_SIZE = re.compile(
     r"(?![\s/-]?(?:s|short|c|corto)\b)",
     re.IGNORECASE,
 )
+# A short code beside the size ("50 C", "44S", "52 Corta", "50 Drop 7 C", "C 50");
+# "Drop" alone is the cut. Not the S of "U.S.A." or "Super 120's" (review 11-23).
+_TAG_SHORT = re.compile(
+    r"(?<!\d)\d{2}(?:\s?drop\s?\d+)?\s?[/-]?\s?(?:c|s|corto|corta|short|kurz)\b|^\s*[cs]\b",
+    re.IGNORECASE,
+)
 # Mid-tier makers advertise the mill's cloth ("Jack Victor x Loro Piana",
 # "Jos. A. Bank Loro Piana fabric suit"); the brand floor would treat them as
 # the real house. Makers by name are in PASS_BRANDS; this catches the rest.
@@ -953,7 +959,8 @@ _LETTER_SIZES = frozenset({"XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "2XL
 _ROW_LETTER_SIZE = re.compile(r"^\s*(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b", re.I)
 
 
-_PANTS = re.compile(r"\b(?:pants?|trousers?|slacks|jeans|chinos?|shorts)\b", re.I)
+# Audit 11-23: "swim trunks" and "swimshorts" alerted as if tops (10-28, 11-03).
+_PANTS = re.compile(r"\b(?:pants?|trousers?|slacks|jeans|chinos?|shorts|trunks|swim\s?(?:shorts|wear))\b", re.I)
 # Owner 11-08: "i dont need many more trousers... if you see a steal i cant
 # refuse, esp under like $10 for something worth $100+ still ping me." Tops
 # are the want. Full suits are exempt.
@@ -1351,7 +1358,10 @@ _VINTED_FRENCH_CUFF = re.compile(r"\bfrench[\s-]?cuffs?\b|\bcuff\s?links?\b", re
 _VINTED_VINTAGE = re.compile(r"\b(?:vintage|vtg|retro|[89]0'?s)\b", re.IGNORECASE)
 # Owner's collar is 16.5 (EU 42). "16 in" size field, "17 / 43", "16.5 34/35".
 _VINTED_COLLAR = re.compile(
-    r"^\s*(1[4-8](?:\.5)?)\s*in\b|\b(1[4-8](?:\.5|\s?1/2)?)\s*(?:\"|in\b)?\s*(?:/|x|-)\s*(?:3[0-9]|4[0-6])\b",
+    r"^\s*(1[4-8](?:\.5)?)\s*in\b|\b(1[4-8](?:\.5|\s?1/2)?)\s*(?:\"|in\b)?\s*(?:/|x|-)\s*(?:3[0-9]|4[0-6])\b"
+    # Audit 11-23: EU/US "41/16" and "Sz 16" shirts alerted (11-01, 11-11).
+    r"|\b(?:3[7-9]|4[0-6])\s*/\s*(1[4-8](?:\.5|\s?1/2|½)?)(?![\d./])"
+    r"|\b(?:sz|size)\.?\s*(1[4-8](?:\.5|\s?1/2|½)?)(?![\d./])",
     re.IGNORECASE,
 )
 
@@ -1360,7 +1370,8 @@ def _collar_size(listing):
     for text in (str(listing.get("size") or ""), str(listing.get("title") or "")):
         match = _VINTED_COLLAR.search(text)
         if match:
-            return float((match.group(1) or match.group(2)).replace(" 1/2", ".5").replace("1/2", ".5"))
+            collar = next(g for g in match.groups() if g)
+            return float(collar.replace(" 1/2", ".5").replace("1/2", ".5").replace("½", ".5"))
     return None
 
 
@@ -1376,6 +1387,34 @@ _VINTED_MILL_CLOTH_TITLE = re.compile(
     r".*\b(?:suit|blazer|sport\s*coat|jacket|coat|trousers|pants|slacks)\b",
     re.IGNORECASE,
 )
+
+
+# 11-19 (10888080078, $125 "Loro Piana high end Italian Suit"): the label was
+# the mill's cloth label ("Ing. Loro Piana & C. / Tasmanian / Fabric made in
+# Italy") in another maker's suit, priced as the house ($600/$250 looks; hand
+# estimate $100-150). A house label names the maker, not the fabric. Review
+# 11-23: house Zegna/LP tailoring also has a cloth label (Trofeo, Electa), so
+# only the mill's own name or "fabric by <mill>" counts, never "fabric label".
+_VINTED_AI_MILL_LABEL = re.compile(
+    r"\bing\.?\s+loro\s+piana\b|\bloro\s+piana\s*&\s*c\b"
+    r"|\b(?:fabric|cloth|tessuto)\s+(?:by|from|di)\s+(?:loro\s+piana|(?:ermenegildo\s+)?zegna)\b",
+    re.IGNORECASE,
+)
+_VINTED_TAILORING_WORD = re.compile(
+    r"\b(?:suits?|blazers?|sport\s*coats?|jackets?|coats?|trousers|pants|slacks)\b", re.IGNORECASE
+)
+
+
+def _ai_mill_label(result):
+    if result.get("vinted_brand_key") not in {"loro piana", "zegna"}:
+        return False
+    if not _VINTED_TAILORING_WORD.search(str((result.get("listing") or {}).get("title") or "")):
+        return False
+    text = " ".join(str(result.get(key) or "") for key in (
+        "vinted_ai_summary", "visible_brand_evidence", "vinted_fabric_tag",
+        "vinted_strong_brand_label_reason",
+    ))
+    return bool(_VINTED_AI_MILL_LABEL.search(text))
 
 
 def _menswear_shape_reason(listing, brand_key, category=None):
@@ -1487,7 +1526,10 @@ VINTED_FRESH_ACCOUNT_DAYS = 4
 # from two dated member pages if fresh-account scams start slipping through.
 VINTED_ACCOUNT_IDS_PER_DAY = 414_000
 VINTED_FRESH_ACCOUNT_MIN_PRICE = 50  # cheap polos from new sellers stay (owner: all legit)
-VINTED_FRESH_ACCOUNT_MIN_ROWS = 200  # feed rows seen before the newest id is trusted
+VINTED_FRESH_ACCOUNT_MIN_ROWS = 200  # distinct sellers seen before the newest id is trusted
+# Member ids only grow. An id more than 1% (~78 days of sign-ups) past the
+# newest seen, or past this one from 11-22, is not a member id and is ignored.
+VINTED_KNOWN_MEMBER_ID = 3_218_549_074
 
 
 def _account_age_days(user_id, newest_id, rows_seen):
@@ -1514,6 +1556,58 @@ def _fresh_account_reason(stats, user_id, newest_id, rows_seen, price, category)
     return (
         f"account ~{max(age_days, 0):.0f} days old with {stats['feedback_count']:g} reviews "
         f"selling a ${float(price):g} item (never-ship scam pattern)"
+    )
+
+
+# Audit 11-23 (wave 3): scam rings flood one watch brand at one exact price
+# from one-listing accounts ($120 Hamiltons x33 from 11-20 22:46, five of them
+# alerted on 11-21; $75 x66). Honest people price one watch. The third
+# different seller at a brand's exact price inside a day is the ring. The
+# first 11-21 alert had 4 such rows, all from the previous run, so the rows
+# live in the lane DB, which the Actions cache carries between runs.
+VINTED_WATCH_FLOOD_SELLERS = 3
+VINTED_WATCH_FLOOD_SECONDS = 86400
+VINTED_WATCH_FLOOD_TRUSTED_REVIEWS = 3  # established sellers price round too
+# Review 11-23: honest Seikos repeat at round prices under $50; the flood
+# sim kept 6/6 ring alerts with "3 sellers and price >= 50".
+VINTED_WATCH_FLOOD_MIN_PRICE = 50
+_WATCH_FLOOD_BRAND = re.compile(r"hamilton|seiko|tissot|orient|longines")
+
+
+def _watch_flood_reason(conn, search_id, price, item_id, seller, reviews, now=None):
+    """Record this watch row; a reason when it completes a same-price flood."""
+    if float(price) < VINTED_WATCH_FLOOD_MIN_PRICE:
+        return None
+    now = time.time() if now is None else now
+    brand = _WATCH_FLOOD_BRAND.search(str(search_id))
+    brand = brand.group(0) if brand else str(search_id)
+    price = round(float(price), 2)
+    seller = str(seller or item_id)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS watch_price_seen "
+        "(item_id TEXT PRIMARY KEY, brand TEXT, price REAL, seller TEXT, seen_at REAL)"
+    )
+    conn.execute(
+        "DELETE FROM watch_price_seen WHERE seen_at < ?", (now - VINTED_WATCH_FLOOD_SECONDS,)
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO watch_price_seen VALUES (?, ?, ?, ?, ?)",
+        (str(item_id), brand, price, seller, now),
+    )
+    # The paid-AI ledger writes to this same file; an open write here locked it.
+    conn.commit()
+    if reviews is not None and reviews >= VINTED_WATCH_FLOOD_TRUSTED_REVIEWS:
+        return None
+    others = conn.execute(
+        "SELECT COUNT(DISTINCT seller) FROM watch_price_seen "
+        "WHERE brand = ? AND price = ? AND seller != ?",
+        (brand, price, seller),
+    ).fetchone()[0]
+    if others + 1 < VINTED_WATCH_FLOOD_SELLERS:
+        return None
+    return (
+        f"{others + 1} sellers listed {brand} watches at exactly ${price:g} "
+        "within a day (scam-ring flood)"
     )
 
 
@@ -2556,7 +2650,9 @@ def _vinted_strong_prompt(result, brand):
         "sentence in premium_reason. estimated_resale_value is a conservative typical "
         "secondhand resale value in USD for this exact piece and shown condition, not "
         "retail/MSRP or an optimistic asking price. size_on_tag is the readable tagged "
-        "size, otherwise null. Never infer unreadable tag text."
+        "size copied exactly with every letter and code printed beside it (e.g. "
+        "'50 C', '7-50 C Drop 7', '42R', 'EU 52 L'), otherwise null. Never infer "
+        "unreadable tag text."
     )
 
 
@@ -2668,6 +2764,7 @@ class VintedFastLane:
         self._hat_title_sellers = {}
         self._newest_user_id = 0
         self._user_rows_seen = 0
+        self._user_ids_seen = set()
         self._alerted_item_ids = set()
         self.prescreen_calls = 0
         self.samples = []
@@ -3098,6 +3195,8 @@ class VintedFastLane:
         if result.get("vinted_strong_label_other_brand") is True:
             reason = result.get("vinted_strong_brand_label_reason") or "other maker"
             return f"garment label names a different brand: {reason}"
+        if _ai_mill_label(result):
+            return "another maker using Loro Piana/Zegna fabric: the photos show the mill's cloth label"
         if result.get("vinted_strong_counterfeit_indicators") is not False:
             reason = result.get("vinted_strong_counterfeit_reason") or "assessment missing"
             return f"counterfeit indicators present or unresolved: {reason}"
@@ -3115,6 +3214,14 @@ class VintedFastLane:
             # checked logos, so one model's miss shipped the alert.
             return f"third-party logo on garment: {desc or 'no detail'}"
         tag_size = result.get("vinted_strong_size_on_tag")
+        # Owner 11-20: typed "40R", label "7-50 C Drop 7" (a 40 short) - bought
+        # and cancelled. On a suit the label outranks the typed size.
+        if (
+            tag_size and re.search(r"\d", tag_size)
+            and _VINTED_SUIT.search(str((result.get("listing") or {}).get("title") or ""))
+            and (not _VINTED_SUIT_SIZE.search(tag_size) or _TAG_SHORT.search(tag_size))
+        ):
+            return f"tag size {tag_size}: suit label is not a 40-44 R/L (EU 50-54)"
         if tag_size:
             # Audit 11-03: 12 of 30 alerts had no size in the title; the tag
             # photo is the only size evidence (a size-40 Canali got pinged).
@@ -3260,10 +3367,12 @@ class VintedFastLane:
             "until you press Buy now."
             f"\n{_alert_details(result)}"
             + (f"\n{_ship_note(listing)}" if _ship_note(listing) else ""),
-            "4" if kind == "offer" else "3",
+            # Audit 11-23: 74 offer/message pushes in 30 days, 0 feedback taps,
+            # so offers stop buzzing; Telegram still gets them, silently.
+            "2" if kind == "offer" else "3",
             "moneybag" if kind == "offer" else "speech_balloon",
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
-            item_id=listing.get("itemId"),
+            item_id=listing.get("itemId"), silent_mirror=kind == "offer",
         )
         self._watch_alert(listing, kind=kind)
         conn.execute(
@@ -3604,7 +3713,8 @@ class VintedFastLane:
         )
         self._instant_prepass(conn, main_conn, new_items, "brands", feed)
 
-    def _ntfy(self, title, message, priority, tags, url=None, image_url=None, *, item_id=None):
+    def _ntfy(self, title, message, priority, tags, url=None, image_url=None, *, item_id=None,
+              silent_mirror=False):
         if self.dry_run or engine.NTFY_TOPIC.startswith("REPLACE_ME"):
             return
         headers = {
@@ -3623,9 +3733,9 @@ class VintedFastLane:
         note = _age_note(getattr(self, "_listed_age_m", {}).get(item_id))
         if note:
             message = f"{note}\n{message}"
-        if int(priority) >= 4:
+        if int(priority) >= 4 or silent_mirror:
             engine.telegram_mirror(
-                title, message, headers.get("Click"), image_url,
+                title, message, headers.get("Click"), image_url, silent=silent_mirror,
             )
         try:
             requests.post(
@@ -4195,6 +4305,12 @@ class VintedFastLane:
         # sunlgasses" 404'd here, skipped the seller check, and alerted a dead link.
         if detail_status in {404, 410}:
             return listing, None, f"listing already removed from Vinted (HTTP {detail_status})"
+        # Owner: cheap + many favourites + still unsold = not buyable. The page
+        # says so outright; a missing flag (page change) fails open. can_buy
+        # false alone rests on one sample, so it never blocks by itself.
+        unbuyable = [k for k in ("is_reserved", "is_hidden", "is_closed") if details.get(k)]
+        if unbuyable:
+            return listing, None, "listing can't be bought (" + ", ".join(unbuyable) + ")"
         # Owner, 10-26: menswear only, hated getting women's stuff. The
         # seller's own category catches what title/description words miss
         # (10548521051 "Tom Ford" sat in Women > Accessories > Sunglasses).
@@ -4306,6 +4422,21 @@ class VintedFastLane:
                 return listing, None, steal_reason
         return listing, result, None
 
+    def _note_sellers(self, items):
+        """Newest member id and distinct sellers seen, for _account_age_days."""
+        for item in items:
+            user_id = (item.get("user") or {}).get("id") if isinstance(item, dict) else None
+            if not str(user_id or "").isdigit():
+                continue
+            user_id = int(user_id)
+            # Review F5: one absurd id would make every seller look old all run.
+            if user_id > max(self._newest_user_id, VINTED_KNOWN_MEMBER_ID) * 1.01:
+                continue
+            # Review F3: re-polled rows repeat sellers; 200 rows was ~4 polls.
+            self._user_ids_seen.add(user_id)
+            self._newest_user_id = max(self._newest_user_id, user_id)
+        self._user_rows_seen = len(self._user_ids_seen)
+
     def _process_item(self, conn, main_conn, item, search, hard_stop):
         cheap = self._cheap_result(conn, main_conn, item, search)
         if cheap is None:
@@ -4348,6 +4479,12 @@ class VintedFastLane:
         if category == "gift":
             self._gift_alert(conn, item, listing, result, fingerprint, total_price)
             return
+        # Every watch row past the cheap checks counts toward a flood, even
+        # one a later gate (scam batch, relist) rejects.
+        flood = category == "watches" and _watch_flood_reason(
+            conn, search.get("id"), item_price, item_id, _relist_key(item, listing)[1],
+            listing.get("seller_feedback_count"),
+        )
         # Scam batches post the same generic title at the same price from
         # several accounts within minutes (3x "tom ford sunglasses" $69-70).
         # Audit 11-03: run-wide, seller-blind matching killed closet dumps
@@ -4384,6 +4521,9 @@ class VintedFastLane:
         if fake_hat:
             self._finish(conn, result, item_id, fingerprint, total_price, fake_hat)
             return
+        if flood:
+            self._finish(conn, result, item_id, fingerprint, total_price, flood)
+            return
         off_profile = (
             _off_profile_reason(listing.get("title"))
             if category in VINTED_APPAREL_CATEGORIES or category == "school-gear"
@@ -4404,6 +4544,15 @@ class VintedFastLane:
                 "designer eyewear on Vinted is fakes/scams",
             )
             return
+        # Audit 11-23: since the photo check moved beside the seller lookup
+        # (11-17) it started before this network-free veto, so 115 of 276
+        # price-table rejects (11-20..11-23) paid a photo call and a seller
+        # request first. A FAST-pinged item still gets its follow-up check.
+        if listing.get("itemId") not in self._instant_pinged:
+            ceiling_reason = _price_table_ceiling_reason(result, category)
+            if ceiling_reason:
+                self._finish(conn, result, item_id, fingerprint, total_price, ceiling_reason)
+                return
         _prewarm_listing_images(listing, hard_stop)
         early_photo = None
         if (
@@ -4493,10 +4642,6 @@ class VintedFastLane:
             )
             return
         self._maybe_instant_alert(result, category)
-        ceiling_reason = _price_table_ceiling_reason(result, category)
-        if ceiling_reason:
-            self._finish(conn, result, item_id, fingerprint, total_price, ceiling_reason)
-            return
         if category != "fragrance":
             if str(os.environ.get("TYPESAFE_API_KEY") or "").strip():
                 jev_score = self._while_peeking(engine.jev_vinted_score,
@@ -4760,11 +4905,7 @@ class VintedFastLane:
                     self._summary()
                     continue
                 self.backoff_streak = 0
-                for item in items:
-                    user_id = (item.get("user") or {}).get("id") if isinstance(item, dict) else None
-                    if str(user_id or "").isdigit():
-                        self._user_rows_seen += 1
-                        self._newest_user_id = max(self._newest_user_id, int(user_id))
+                self._note_sellers(items)
                 for item in items:
                     if len(self.samples) >= 5:
                         break

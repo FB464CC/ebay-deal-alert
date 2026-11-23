@@ -562,7 +562,6 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     searches = {search["id"]: search for search in engine.SAVED_SEARCHES}
     required_ids = {
         "vinted-canali-suit",
-        "vinted-brooks-brothers",
         "vinted-e-marinella-tie",
         "vinted-peter-millar-crown-crafted",
     }
@@ -597,7 +596,9 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 71  # owner 11-18 dropped the towel warmer search
+    assert len(fast.enabled_vinted_searches()) == 70  # owner 11-18 dropped the towel warmer search
+    # Audit 11-23: Brooks Brothers suit resale is capped at $90 under a $150 floor.
+    assert searches["vinted-brooks-brothers"]["enabled"] is False
 
 
 def test_zegna_and_brioni_suit_searches_cover_full_suits_in_owner_sizes():
@@ -1887,7 +1888,7 @@ def test_near_miss_of_any_brand_gets_an_offer_alert_not_a_buy_alert(tmp_path):
     assert row["verdict"] == "OFFER_ALERTED"
     args = ntfy.call_args.args
     assert args[0].startswith("OFFER Canali $69 (list $115)")
-    assert args[2] == "4"
+    assert args[2] == "2"  # audit 11-23: offers no longer buzz
 
 
 def test_offers_only_for_the_top_five_houses(tmp_path):
@@ -4772,3 +4773,25 @@ def test_stall_watchdog_is_armed_before_the_first_poll(tmp_path):
     ):
         lane.run()
     assert "request" in events and events.index("arm") < events.index("request")
+
+
+def test_price_table_veto_runs_before_any_photo_ai_or_seller_request(tmp_path):
+    # Audit 11-23: 115 of 276 price-table rejects (11-20..11-23) had already
+    # paid a photo check, started beside the seller lookup.
+    lane = _lane(tmp_path)
+    listing, result = _listing_and_result()
+    result["category"] = "golf"
+    lane._cheap_result = mock.Mock(return_value=(listing, result, None))
+    conn = engine.init_db(lane.seen_db_path)
+    with (
+        mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""}),
+        mock.patch.object(fast, "_price_table_ceiling_reason", return_value="price table: no"),
+        mock.patch.object(lane, "_first_photo_check") as photo,
+        mock.patch.object(fast, "fetch_vinted_seller_stats") as seller,
+        mock.patch.object(lane, "_finish") as finish,
+    ):
+        lane._process_item(conn, None, {}, {"query": result["search_query"]}, None)
+    conn.close()
+    photo.assert_not_called()
+    seller.assert_not_called()
+    assert finish.call_args[0][-1] == "price table: no"
