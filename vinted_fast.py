@@ -1477,6 +1477,46 @@ def _ai_lone_tailoring_reason(summary, category, listing=None, brand_key=None):
     return None
 
 
+# Owner 11-23: the watch alerts and the $73-101 Purple Label jackets were
+# never-ship scams (stolen photos, pro listing, ~80% off, "lost in the mail").
+# All 8 sellers checked: 0-1 reviews and an account 0-2 days old; the two
+# honest alerts in the same set were 8 and 69 days old. Member ids are
+# sequential, so the gap to the newest id seen this run dates the account.
+VINTED_FRESH_ACCOUNT_DAYS = 4
+# ponytail: measured 8-08..11-22 2026 (id 3174648640 -> 3218549074); re-measure
+# from two dated member pages if fresh-account scams start slipping through.
+VINTED_ACCOUNT_IDS_PER_DAY = 414_000
+VINTED_FRESH_ACCOUNT_MIN_PRICE = 50  # cheap polos from new sellers stay (owner: all legit)
+VINTED_FRESH_ACCOUNT_MIN_ROWS = 200  # feed rows seen before the newest id is trusted
+
+
+def _account_age_days(user_id, newest_id, rows_seen):
+    """Rough age from sequential member ids; None when it can't be judged."""
+    if rows_seen < VINTED_FRESH_ACCOUNT_MIN_ROWS:
+        return None
+    try:
+        return (int(newest_id) - int(user_id)) / VINTED_ACCOUNT_IDS_PER_DAY
+    except (TypeError, ValueError):
+        return None
+
+
+def _fresh_account_reason(stats, user_id, newest_id, rows_seen, price, category):
+    age_days = _account_age_days(user_id, newest_id, rows_seen)
+    if age_days is None or "feedback_count" not in stats:
+        return None
+    if age_days > VINTED_FRESH_ACCOUNT_DAYS:
+        return None
+    rating = stats.get("feedback_reputation")
+    if stats["feedback_count"] > 0 and (rating is None or rating >= 0.8):
+        return None
+    if category != "watches" and float(price) < VINTED_FRESH_ACCOUNT_MIN_PRICE:
+        return None
+    return (
+        f"account ~{max(age_days, 0):.0f} days old with {stats['feedback_count']:g} reviews "
+        f"selling a ${float(price):g} item (never-ship scam pattern)"
+    )
+
+
 def _seller_trust_reason(stats, strict=True):
     """Strict (fragrance, watches): some track record. Loose (menswear): Vinted holds
     payment until the buyer confirms, so only badly rated sellers are cut
@@ -2626,6 +2666,8 @@ class VintedFastLane:
         # (title words, rounded price) -> first item id seen this run.
         self._listing_signatures = {}
         self._hat_title_sellers = {}
+        self._newest_user_id = 0
+        self._user_rows_seen = 0
         self._alerted_item_ids = set()
         self.prescreen_calls = 0
         self.samples = []
@@ -3247,6 +3289,17 @@ class VintedFastLane:
         title = str(listing.get("title") or "")
         if listing.get("itemId") in self._instant_pinged:
             result["vinted_instant_alerted"] = True
+            return False
+        # Review 11-23: this ping fires before the seller lookup, so the
+        # never-ship scam shape ($50+ from a days-old account) is cut here on
+        # the id alone; an honest new seller still gets the checked alert.
+        age_days = _account_age_days(
+            result.get("vinted_user_id"), self._newest_user_id, self._user_rows_seen
+        )
+        if (
+            age_days is not None and age_days <= VINTED_FRESH_ACCOUNT_DAYS
+            and price is not None and price >= VINTED_FRESH_ACCOUNT_MIN_PRICE
+        ):
             return False
         pm_top = (
             result.get("vinted_brand_key") == "peter millar"
@@ -4243,6 +4296,7 @@ class VintedFastLane:
                 "category": category,
                 "category_id": search.get("category_id", "260012"),
                 "vinted_fast_lane": True,
+                "vinted_user_id": (item.get("user") or {}).get("id"),
             }
         )
         _set_vinted_negotiation_prices(result)
@@ -4407,6 +4461,11 @@ class VintedFastLane:
             if not seller_reason:
                 seller_reason = _closet_reseller_reason(
                     stats, item_id, listing.get("title"), _vinted_brand_and_floor(result)[0]
+                )
+            if not seller_reason:
+                seller_reason = _fresh_account_reason(
+                    stats, (item.get("user") or {}).get("id"), self._newest_user_id,
+                    self._user_rows_seen, item_price, category,
                 )
             if seller_reason:
                 self._finish(
@@ -4701,6 +4760,11 @@ class VintedFastLane:
                     self._summary()
                     continue
                 self.backoff_streak = 0
+                for item in items:
+                    user_id = (item.get("user") or {}).get("id") if isinstance(item, dict) else None
+                    if str(user_id or "").isdigit():
+                        self._user_rows_seen += 1
+                        self._newest_user_id = max(self._newest_user_id, int(user_id))
                 for item in items:
                     if len(self.samples) >= 5:
                         break
