@@ -2738,6 +2738,21 @@ def _names_own_mark(desc, brand_key):
     ))
 
 
+# Owner 11-24: an $18 "Peter Millar Gamecock shirt" was vetoed over its
+# "South Carolina Gamecocks block C on chest". Any USC mark, "Carolina"
+# included, is wanted; other Carolinas and the Trojans' USC are not his school.
+_USC_MARK = re.compile(r"\b(?:gamecocks?|cocky|carolina|usc|block\s+c)\b", re.IGNORECASE)
+_NOT_USC = re.compile(
+    r"\b(?:north|east|coastal|western|unc|tar\s*heels?|panthers|hurricanes|trojans"
+    r"|southern\s+cal(?:ifornia)?|chanticleers|pirates|catamounts)\b",
+    re.IGNORECASE,
+)
+
+
+def _usc_mark(clause):
+    return bool(_USC_MARK.search(clause) and not _NOT_USC.search(clause))
+
+
 def _exempt_logo_desc(desc, brand_key):
     """True when every clause of logo_desc is an exempt mark: inside the
     garment (11-12: initials inside a $4 Zegna shirt's collar), on a hanger,
@@ -2746,6 +2761,7 @@ def _exempt_logo_desc(desc, brand_key):
     clauses = [c for c in re.split(r"[;.,]|\band\b", desc) if c.strip()]
     return bool(clauses) and not _THIRD_PARTY_HINT.search(desc) and all(
         (_INSIDE_MARK.search(c) and not _OUTSIDE_SPOT.search(c)) or _names_own_mark(c, brand_key)
+        or _usc_mark(c)
         for c in clauses
     )
 

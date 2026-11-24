@@ -70,9 +70,18 @@ def test_club_and_corporate_logos_still_vetoed(tmp_path):
          "Peter Millar mark", "peter millar"),
     ]:
         assert "logo" in _veto(lane, desc, brand), desc
-    # USC/Gamecocks is wanted but routed elsewhere; this gate still vetoes it
-    # when the strong look flags it, exactly as before the 11-20 change.
-    assert "Gamecocks" in _veto(lane, "USC Gamecocks logo", "peter millar")
+    # Owner 11-24: USC marks ("Carolina" included) never count as third-party
+    # (an $18 "Peter Millar Gamecock shirt" was vetoed here).
+    for desc in ["USC Gamecocks logo", "South Carolina Gamecocks block C on chest",
+                 "Carolina script on the left chest", "Cocky mascot on the sleeve",
+                 "Gamecocks logo on the chest; initials inside the collar"]:
+        assert "logo" not in _veto(lane, desc, "peter millar"), desc
+    # Other Carolinas, the Trojans' USC, and a club logo beside a USC one still veto.
+    for desc in ["North Carolina Tar Heels logo on chest", "USC Trojans logo on chest",
+                 "Carolina Panthers logo on sleeve", "Carolina Country Club crest on chest",
+                 "Gamecocks logo on the chest; Pebble Beach logo on the sleeve",
+                 "Gamecocks logo and a Titleist logo on the sleeve"]:
+        assert "logo" in _veto(lane, desc, "peter millar"), desc
 
 
 def test_it_us_mens_suit_size_is_not_womens():
