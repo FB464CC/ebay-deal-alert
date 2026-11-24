@@ -1313,6 +1313,53 @@ def _gift_reason(title, brand, condition, price, shipping):
     return None
 
 
+# Owner 11-24: women's Cucinelli / Loro Piana coats and knits for Kenzie
+# ("mostly Small"), after a $60 Cucinelli puffer sold 19 minutes after listing.
+# Rides the existing text feeds (no extra Vinted requests) and the gift path
+# (no AI call): new/very good only, all-in under the cap, proven seller only.
+# ponytail: no authenticity check beyond the seller's record; add an AI photo
+# look if a fake ever alerts. Off switch: VINTED_HER_GIFT.enabled in config.json.
+HER_GIFT = dict(engine._CONFIG.get("VINTED_HER_GIFT") or {})
+HER_GIFT_SEARCH_ID = "vinted-gift-her"
+_HER_SIZE = re.compile(r"^\s*S\s*/\s*US\s*4\b", re.IGNORECASE)
+_HER_GARMENT = re.compile(
+    r"\b(?:coats?|jackets?|puffers?|parkas?|vests?|gilets?|blazers?|sweaters?"
+    r"|cardigans?|pullovers?|jumpers?|turtlenecks?|knit(?:wear)?|hoodies?)\b",
+    re.IGNORECASE,
+)
+_HER_NOT = re.compile(r"\b(?:dress(?:es)?|skirts?|leggings|kids?|girls?|baby)\b", re.IGNORECASE)
+
+
+def _her_gift_search(item):
+    """A synthetic gift search for a women's size-S coat/knit from her houses."""
+    if not HER_GIFT.get("enabled"):
+        return None
+    listing = marketplaces._vinted_item_to_listing(item) or {}
+    title = str(listing.get("title") or "")
+    brand_text = f"{item.get('brand_title') or ''} {title}".lower()
+    house = next((b for b in HER_GIFT.get("brands", []) if b in brand_text), None)
+    if (
+        not house
+        or not _HER_SIZE.search(str(listing.get("size") or ""))
+        or not _HER_GARMENT.search(title)
+        or _HER_NOT.search(title)
+        or _PANTS.search(title)
+    ):
+        return None
+    return {"id": HER_GIFT_SEARCH_ID, "query": house, "category": "gift", "size": None,
+            "max_price": HER_GIFT.get("max_price", 100), "profile": "fast", "her": True}
+
+
+def _her_gift_reason(condition, price, shipping):
+    if not _GIFT_GOOD_CONDITION.search(str(condition or "")):
+        return f"gift for her: condition '{condition or '?'}' is not gift-ready"
+    cap = float(HER_GIFT.get("max_price", 100))
+    all_in = (float(price) * 1.05 + 0.70 + float(shipping)) * (1 + engine.SALES_TAX_RATE)
+    if all_in > cap:
+        return f"gift for her: ~${all_in:.0f} all-in is over the ${cap:g} cap"
+    return None
+
+
 def _closet_kind(match):
     kind = re.sub(r"[\s-]", "", match.group(1).casefold())
     return "hat" if kind in {"cap", "beanie"} else kind
@@ -3491,7 +3538,8 @@ class VintedFastLane:
         # Postage only: total_price - price also holds the buyer fee, which the
         # all-in math adds itself (it was counted twice until 11-17).
         postage = _listing_shipping(listing)
-        reason = _gift_reason(
+        her = result.get("search_id") == HER_GIFT_SEARCH_ID
+        reason = _her_gift_reason(condition, price, postage) if her else _gift_reason(
             title, item.get("brand_title") or "", condition, price, postage
         )
         if reason:
@@ -3514,7 +3562,9 @@ class VintedFastLane:
         self._ntfy(
             f"GIFT ${price:g}: {title[:50]}",
             f"${price:g} (~${all_in:.0f} all-in) {title}\n{condition}\n"
-            "Towel warmer watch for Kenzie: half off new or better, all-in."
+            + (f"Gift for Kenzie: women's {listing.get('size') or 'S'}, proven seller. "
+               "No AI photo check: look at the label."
+               if her else "Towel warmer watch for Kenzie: half off new or better, all-in.")
             + (f"\n{_ship_note(listing)}" if _ship_note(listing) else ""),
             "4", "gift", listing.get("itemWebUrl"),
             (listing.get("image") or {}).get("imageUrl"), item_id=item_id,
@@ -3597,7 +3647,8 @@ class VintedFastLane:
                 continue
             target = (
                 search if kind == "search"
-                else self._route(item, None if kind == "brands" else search["query"])
+                else _her_gift_search(item)
+                or self._route(item, None if kind == "brands" else search["query"])
             )
             if target is None:
                 continue
@@ -4255,7 +4306,8 @@ class VintedFastLane:
         )
         if marketplaces.title_matches_exclusion(listing.get("title"), excluded):
             return listing, None, "excluded query term in title"
-        if not engine.is_relevant_marketplace_listing(
+        # The gift-for-her match already checked the brand tag; titles often omit it.
+        if not search.get("her") and not engine.is_relevant_marketplace_listing(
             listing, search.get("query", "")
         ):
             return listing, None, "marketplace title is not relevant to saved query"
@@ -4930,7 +4982,8 @@ class VintedFastLane:
                     for item in new_items:
                         target = (
                             search if kind == "search"
-                            else self._route(item, None if kind == "brands" else search["query"])
+                            else _her_gift_search(item)
+                            or self._route(item, None if kind == "brands" else search["query"])
                         )
                         if target is None:
                             totals["unrouted"] += 1
