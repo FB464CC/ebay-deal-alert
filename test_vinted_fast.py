@@ -1166,6 +1166,7 @@ def test_golf_shadow_records_probability_without_skipping(tmp_path):
     assert row["jev_image_iron_set"] == 0.01
 
 
+@mock.patch.object(fast, "VINTED_RESALE_FLOOR_MAX", 0.0)  # mechanism with the floor off
 def test_generic_peter_millar_polo_at_25_resale_never_alerts(tmp_path):
     # 11-20: no resale floor; $12 against $25 resale fails the deal rating.
     listing, result = _apparel_listing_result(
@@ -4346,6 +4347,7 @@ def test_tom_ford_scent_titles_in_menswear_feeds_skip_the_ai():
     ) is None
 
 
+@mock.patch.object(fast, "VINTED_RESALE_FLOOR_MAX", 0.0)  # mechanism with the floor off
 def test_hats_have_their_own_resale_floor():
     # Owner 11-17: a $15 Peter Millar hat died as "resale $25 below $30 brand floor".
     hat = {"listing": {"title": "Peter Millar Hat"}, "vinted_brand_key": "peter millar"}

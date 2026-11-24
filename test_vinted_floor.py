@@ -32,6 +32,7 @@ def test_zegna_polo_is_not_floor_rejected_and_alerts_on_mean_resale(tmp_path):
     assert "brand floor" not in str(row.get("reason"))
 
 
+@mock.patch.object(fast, "VINTED_RESALE_FLOOR_MAX", 0.0)  # mechanism with the floor off
 def test_fifty_cent_item_worth_ten_is_not_floor_rejected(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar polo size M", 0.5, "golf", "peter millar polo",
@@ -45,8 +46,16 @@ def test_fifty_cent_item_worth_ten_is_not_floor_rejected(tmp_path):
     assert row["delivered"] is True
 
 
+def test_owner_floor_is_30_since_11_23():
+    # Owner 11-23: ~115 alerts/week, mostly $6-15 tops valued ~$25; floor back at $30.
+    assert fast.VINTED_RESALE_FLOOR_MAX == 30
+    polo = {"listing": {"title": "Peter Millar polo"}, "vinted_brand_key": "peter millar"}
+    with mock.patch.object(fast, "_vinted_brand_and_floor", return_value=("Peter Millar", 30)):
+        assert fast._vinted_resale_minimum(polo) == 30
+
+
+@mock.patch.object(fast, "VINTED_RESALE_FLOOR_MAX", 0.0)  # mechanism with the floor off
 def test_resale_minimum_is_zero_except_brooks_brothers():
-    assert fast.VINTED_RESALE_FLOOR_MAX == 0
     assert fast.VINTED_OFFER_MIN_LIST == fast.VINTED_OFFER_MIN_LIST_TOPS == 0
     for title in ("Ermenegildo Zegna polo", "Peter Millar Hat", "Loro Piana sweater"):
         assert fast._vinted_resale_minimum({"listing": {"title": title}}) == 0
