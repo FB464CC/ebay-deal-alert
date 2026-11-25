@@ -1578,7 +1578,8 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1606,7 +1607,8 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1634,7 +1636,8 @@
         "47"
       ],
       "max_price": 120,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1662,7 +1665,8 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1690,7 +1694,8 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1718,7 +1723,8 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1746,7 +1752,8 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1774,7 +1781,8 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1802,7 +1810,8 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1830,7 +1839,8 @@
         "47"
       ],
       "max_price": 250,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1858,7 +1868,8 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1934,6 +1945,8 @@
     {"query": "barbour \"bedale\" -quilted -quilt -liddesdale -international -liner -hood -gilet -vest -dressing -women -womens -ladies -girls -kids -scarf", "size": ["L", "XL", "42", "44"], "size_equivalents": ["C42", "C44"], "max_price": 90, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-barbour-bedale", "category": "outerwear"},
     {"query": "barbour \"ashby\" -quilted -quilt -liddesdale -international -liner -hood -gilet -vest -dressing -women -womens -ladies -girls -kids -scarf", "size": ["L", "XL", "42", "44"], "size_equivalents": ["C42", "C44"], "max_price": 90, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-barbour-ashby", "category": "outerwear"},
     {"query": "barbour \"border\" -quilted -quilt -liddesdale -international -liner -hood -gilet -vest -dressing -women -womens -ladies -girls -kids -scarf", "size": ["L", "XL", "42", "44"], "size_equivalents": ["C42", "C44"], "max_price": 90, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-barbour-border", "category": "outerwear"},
+    {"query": "allen edmonds shoe -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf", "size": ["12", "12.5", "13"], "size_equivalents": ["11", "11.5", "12", "45", "45.5", "46", "46.5", "47"], "max_price": 120, "enabled": true, "steal_only": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "category_id": "53120", "id": "vinted-allen-edmonds-shoes", "category": "footwear"},
+    {"query": "hermes tie -women -womens -ladies -girls -kids -scarf -bow -clip -pin -box", "size": null, "max_price": 70, "enabled": true, "allow_off_category": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-hermes-tie", "category": "neckwear"},
     {
       "query": "alden -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf -skechers -\"slip-ins\" -\"slip ins\" -meroe -adair -york -hutch -brahmin -jason -bra -ring",
       "size": [
@@ -1952,7 +1965,8 @@
         "47"
       ],
       "max_price": 200,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -1980,7 +1994,8 @@
         "47"
       ],
       "max_price": 150,
-      "enabled": false,
+      "enabled": true,
+      "steal_only": true,
       "profile": "fast",
       "platforms": [
         "vinted"
@@ -5188,7 +5203,10 @@
     {"query": "longines", "max_price": 400},
     {"query": "margiela replica", "max_price": 150},
     {"query": "common projects", "max_price": 100},
-    {"query": "barbour", "max_price": 90}
+    {"query": "barbour", "max_price": 90},
+    {"query": "hermes tie", "max_price": 70},
+    {"query": "alden", "max_price": 200},
+    {"query": "allen edmonds", "max_price": 120}
   ],
   "VINTED_FAST_MAX_AI_CALLS_PER_RUN": 200,
   "VINTED_EXPECTED_PAID_FRACTION": 1.0,
@@ -5219,6 +5237,8 @@
     "santoni": 100,
     "margiela": 100,
     "barbour": 100,
+    "hermes": 60,
+    "allen edmonds": 80,
     "common projects": 80,
     "alden": 150,
     "crockett": 120,

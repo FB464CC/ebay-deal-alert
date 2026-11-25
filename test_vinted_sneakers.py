@@ -8,19 +8,21 @@ import ebay_deal_alert as engine
 import test_vinted_fast as t
 import vinted_fast as fast
 
-SEARCHES = {s["id"]: s for s in engine.SAVED_SEARCHES if s.get("steal_only")}
+SNEAKER_IDS = {
+    "vinted-margiela-shoes", "vinted-common-projects-shoes", "vinted-zegna-triple-stitch",
+    "vinted-loro-piana-summer-walk", "vinted-loro-piana-open-walk",
+    "vinted-brunello-cucinelli-sneakers",
+}
+SEARCHES = {s["id"]: s for s in engine.SAVED_SEARCHES if s["id"] in SNEAKER_IDS}
 MARGIELA = "vinted-margiela-shoes"
 
 
 def test_six_sneaker_searches_are_on_and_steal_only():
-    assert set(SEARCHES) == {
-        MARGIELA, "vinted-common-projects-shoes", "vinted-zegna-triple-stitch",
-        "vinted-loro-piana-summer-walk", "vinted-loro-piana-open-walk",
-        "vinted-brunello-cucinelli-sneakers",
-    }
+    assert set(SEARCHES) == SNEAKER_IDS
     assert all(s["enabled"] and s["category"] == "footwear" and s["size"] == ["12", "12.5", "13"]
                for s in SEARCHES.values())
-    # Every other shoe search stays off (owner 11-11).
+    # Every shoe search that is on is steal-only (owner 11-24 sneakers, 11-25
+    # dress shoes: "only the absolute biggest steals").
     assert not [s["id"] for s in fast.enabled_vinted_searches()
                 if s.get("category") == "footwear" and not s.get("steal_only")]
 
@@ -50,7 +52,9 @@ def test_feed_rows_route_to_the_named_models_only(tmp_path):
     assert route("Zegna Triple Stitch sneakers white", "zegna", "Zegna") == "vinted-zegna-triple-stitch"
     assert route("Loro Piana Summer Walk loafers suede", "loro piana", "Loro Piana") == "vinted-loro-piana-summer-walk"
     assert route("Loro Piana Open Walk boots", "loro piana", "Loro Piana") == "vinted-loro-piana-open-walk"
-    assert route("Brunello Cucinelli suede sneakers", "cucinelli", "Brunello Cucinelli") == "vinted-brunello-cucinelli-sneakers"
+    # The house's steal-only shoe search (on since 11-25) takes its sneakers too.
+    assert route("Brunello Cucinelli suede sneakers", "cucinelli", "Brunello Cucinelli") in {
+        "vinted-brunello-cucinelli-sneakers", "vinted-brunello-cucinelli-shoes"}
     assert route("Common Projects Achilles Low white", "common projects", "Common Projects") == "vinted-common-projects-shoes"
     assert route("Maison Margiela Replica GAT sneakers", "margiela replica", "Maison Margiela") == MARGIELA
     # Other shoes from the same houses never reach a sneaker search.

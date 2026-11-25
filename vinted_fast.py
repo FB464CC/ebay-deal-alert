@@ -400,7 +400,8 @@ _VINTED_OFF_PLATFORM = re.compile(
     re.IGNORECASE,
 )
 # Fakes are the norm here: only proven sellers, never brand-new accounts.
-VINTED_STRICT_SELLER_CATEGORIES = frozenset({"fragrance", "watches"})
+# Owner 11-25: Hermes ties are faked, so ties need a proven seller too.
+VINTED_STRICT_SELLER_CATEGORIES = frozenset({"fragrance", "watches", "neckwear"})
 # Owner 11-16: "tighten watch alerts to steals only". The AI valued a ~$90
 # vintage 7009 Seiko at $250, so each search's value is capped at what that
 # family really resells for used (estimated, Nov 2026), and a steal is paying
@@ -686,6 +687,9 @@ _VINTED_BRAND_DISPLAY_NAMES = {
     "loro piana": "Loro Piana",
     "margiela": "Maison Margiela",
     "barbour": "Barbour",
+    "hermes": "Hermes",
+    "allen edmonds": "Allen Edmonds",
+    "alden": "Alden",
     "crockett": "Crockett & Jones",
     "parfums de marly": "Parfums de Marly",
     "kilian": "Kilian",
@@ -1079,7 +1083,11 @@ def _wanted_shoes(search, category):
     """Owner 11-24: shoes stay off except the sneaker searches he named (Zegna
     Triple Stitch, Loro Piana Summer/Open Walk, Common Projects, Cucinelli
     sneakers, Margiela Replica), marked steal_only in config.json."""
-    return bool(category == "footwear" and (search or {}).get("steal_only"))
+    search = search or {}
+    if category == "footwear":
+        return bool(search.get("steal_only"))
+    # Owner 11-25: Hermes ties are wanted; other ties and leather goods stay off.
+    return bool(category in VINTED_OFF_CATEGORIES and search.get("allow_off_category"))
 
 
 def _steal_only_reason(result, search):

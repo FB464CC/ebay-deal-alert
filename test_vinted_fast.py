@@ -596,7 +596,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 80  # owner 11-24/25: six sneaker + four Barbour searches on
+    assert len(fast.enabled_vinted_searches()) == 95  # owner 11-24/25: sneakers, Barbour, steal-only dress shoes, Hermes tie
     # Audit 11-23: Brooks Brothers suit resale is capped at $90 under a $150 floor.
     assert searches["vinted-brooks-brothers"]["enabled"] is False
 
@@ -696,6 +696,22 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-barbour-bedale": 90,
         "vinted-barbour-ashby": 90,
         "vinted-barbour-border": 90,
+        # Owner 11-25: steal-only dress shoes and Hermes ties.
+        "vinted-loro-piana-shoes": 200,
+        "vinted-brunello-cucinelli-shoes": 200,
+        "vinted-zegna-shoes": 120,
+        "vinted-brioni-shoes": 150,
+        "vinted-kiton-shoes": 150,
+        "vinted-tom-ford-shoes": 200,
+        "vinted-berluti-shoes": 250,
+        "vinted-john-lobb-shoes": 250,
+        "vinted-edward-green-shoes": 250,
+        "vinted-gaziano-girling-shoes": 250,
+        "vinted-santoni-shoes": 150,
+        "vinted-allen-edmonds-shoes": 120,
+        "vinted-hermes-tie": 70,
+        "vinted-alden-shoes": 200,
+        "vinted-crockett-jones-shoes": 150,
         "vinted-orebella-nightcap": 50,
         "vinted-kylie-velvet-brew": 35,
         "vinted-billie-eilish": 35,
@@ -2117,16 +2133,17 @@ def test_quoted_brand_shoe_searches_accept_any_shoe_title(tmp_path):
 
     # "shoes" was a stopword but "shoe" was not, so these needed the literal
     # word "shoe" and the feeds produced nothing for 66 h (audit 11-03).
-    # Owner 11-08 dropped the shoe searches: no shoe search takes these now.
-    assert lane._route(item("Edward Green Dover shoes"), "edward green") is None
-    assert lane._route(item("John Lobb City II"), "john lobb") is None
+    # Owner 11-25: dress-shoe searches are back on, steal-only.
+    assert lane._route(item("Edward Green Dover shoes"), "edward green")["id"] == "vinted-edward-green-shoes"
+    assert lane._route(item("John Lobb City II"), "john lobb")["id"] == "vinted-john-lobb-shoes"
     # A catch-all-backed text feed still won't drop a blazer into shoes.
     assert lane._route(item("Zegna wool blazer 50L"), "zegna") is None
     # "cucinelli" is a partial house name; over-cap pieces must not fall into
     # the Brunello shoe or polo search (11-06: $165 shirt -> shoe size mismatch).
     assert lane._route(item("Brunello Cucinelli Men's M Gingham Cotton Shirt"), "cucinelli") is None
     assert lane._route(item("Brunello Cucinelli Crest Logo Cotton T-Shirt"), "cucinelli") is None
-    assert lane._route(item("Brunello Cucinelli suede loafers"), "cucinelli") is None
+    # Owner 11-25: loafers do reach the (steal-only) Brunello shoe search.
+    assert lane._route(item("Brunello Cucinelli suede loafers"), "cucinelli")["id"] == "vinted-brunello-cucinelli-shoes"
 
 
 def test_relaxed_waist_and_regex_false_positives():

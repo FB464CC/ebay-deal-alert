@@ -30,6 +30,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -37,6 +38,14 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
+
+
+def _fold_accents(text):
+    """Owner 11-25 (Hermes ties): "Hermès" tokenised as "herm", so an accented
+    brand never matched its saved search. Titles are matched unaccented."""
+    if not isinstance(text, str):
+        return text
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
 
 logger = logging.getLogger("platforms")
 
@@ -2064,7 +2073,7 @@ def _vinted_item_to_listing(item):
     return make_listing(
         "vinted",
         item.get("id"),
-        item.get("title"),
+        _fold_accents(item.get("title")),
         _dget(_dget(item, "price"), "amount"),
         (
             f"{VINTED_WEB_URL}{item.get('url')}"
