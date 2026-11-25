@@ -365,7 +365,10 @@ _VINTED_WATCH_DESC_EXCLUDED = (
 _VINTED_WATCH_TITLE_EXCLUDED = re.compile(
     rf"\b(?:{_VINTED_WATCH_DESC_EXCLUDED}|mods?|custom(?:ized)?|replicas?|reps?"
     r"|clones?|(?<!orient\s)aaa|copy|inspired|broken"
-    r"|gold(?!\s+(?:dial|face|hands|indices|markers|accents))|diamonds?|smart\s?watch)\b|\b1:1\b",
+    r"|gold(?!\s+(?:dial|face|hands|indices|markers|accents))|diamonds?|smart\s?watch"
+    # Owner 11-24: a $50 "Lorus by Seiko" diver alerted as a Seiko ("not even
+    # seiko"). Seiko's budget sub-brands are not the Seiko he wants.
+    r"|lorus|pulsar|alba)\b|\b1:1\b",
     re.IGNORECASE,
 )
 _VINTED_WATCH_DESC_EXCLUDED = re.compile(
@@ -2200,7 +2203,9 @@ VINTED_PRICE_TABLE = {
     ("brunello cucinelli", "shirt"): (90, 750),
     ("purple label", "polo"): (65, 450),
     ("canali", "cashmere"): (200, 1150),
-    ("canali", "sweater"): (110, 550),
+    # Owner 11-24: $110 was too high. 89 eBay sold Canali crewnecks: median $70
+    # with cashmere in the mix; cotton ones $20-45 (size 54 cotton sold at $45).
+    ("canali", "sweater"): (60, 550),
     ("zegna", "cashmere"): (275, 1400),
     ("zegna", "sweater"): (140, 850),
     ("loro piana", "cashmere"): (430, 1500),

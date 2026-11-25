@@ -3956,6 +3956,9 @@ def test_watch_title_filter_keeps_gold_dials_and_orient_aaa():
     assert x("Vintage 1976 Seiko Automatic Mens Gold Watch")
     assert x("AAA replica submariner")
     assert x("Seiko 5 gold tone")
+    # Owner 11-24: "not even seiko".
+    assert x("Lorus by Seiko pepsi bezel full lume dial diver watch")
+    assert x("Seiko Pulsar chronograph")
 
 
 
