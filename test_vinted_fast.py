@@ -709,7 +709,7 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-gaziano-girling-shoes": 250,
         "vinted-santoni-shoes": 150,
         "vinted-allen-edmonds-shoes": 120,
-        "vinted-hermes-tie": 70,
+        "vinted-hermes-tie": 40,
         "vinted-alden-shoes": 200,
         "vinted-crockett-jones-shoes": 150,
         "vinted-orebella-nightcap": 50,
