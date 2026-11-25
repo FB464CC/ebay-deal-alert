@@ -596,7 +596,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 76  # owner 11-24: six steal-only sneaker searches on
+    assert len(fast.enabled_vinted_searches()) == 80  # owner 11-24/25: six sneaker + four Barbour searches on
     # Audit 11-23: Brooks Brothers suit resale is capped at $90 under a $150 floor.
     assert searches["vinted-brooks-brothers"]["enabled"] is False
 
@@ -692,6 +692,10 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-loro-piana-summer-walk": 250,
         "vinted-loro-piana-open-walk": 250,
         "vinted-brunello-cucinelli-sneakers": 200,
+        "vinted-barbour-beaufort": 90,
+        "vinted-barbour-bedale": 90,
+        "vinted-barbour-ashby": 90,
+        "vinted-barbour-border": 90,
         "vinted-orebella-nightcap": 50,
         "vinted-kylie-velvet-brew": 35,
         "vinted-billie-eilish": 35,

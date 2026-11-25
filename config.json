@@ -1930,6 +1930,10 @@
     {"query": "loro piana summer walk -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf", "size": ["12", "12.5", "13"], "size_equivalents": ["11", "11.5", "12", "45", "45.5", "46", "46.5", "47"], "max_price": 250, "enabled": true, "steal_only": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "category_id": "53120", "id": "vinted-loro-piana-summer-walk", "category": "footwear"},
     {"query": "loro piana open walk -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf", "size": ["12", "12.5", "13"], "size_equivalents": ["11", "11.5", "12", "45", "45.5", "46", "46.5", "47"], "max_price": 250, "enabled": true, "steal_only": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "category_id": "53120", "id": "vinted-loro-piana-open-walk", "category": "footwear"},
     {"query": "brunello cucinelli sneaker -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf", "size": ["12", "12.5", "13"], "size_equivalents": ["11", "11.5", "12", "45", "45.5", "46", "46.5", "47"], "max_price": 200, "enabled": true, "steal_only": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "category_id": "53120", "id": "vinted-brunello-cucinelli-sneakers", "category": "footwear"},
+    {"query": "barbour \"beaufort\" -quilted -quilt -liddesdale -international -liner -hood -gilet -vest -dressing -women -womens -ladies -girls -kids -scarf", "size": ["L", "XL", "42", "44"], "size_equivalents": ["C42", "C44"], "max_price": 90, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-barbour-beaufort", "category": "outerwear"},
+    {"query": "barbour \"bedale\" -quilted -quilt -liddesdale -international -liner -hood -gilet -vest -dressing -women -womens -ladies -girls -kids -scarf", "size": ["L", "XL", "42", "44"], "size_equivalents": ["C42", "C44"], "max_price": 90, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-barbour-bedale", "category": "outerwear"},
+    {"query": "barbour \"ashby\" -quilted -quilt -liddesdale -international -liner -hood -gilet -vest -dressing -women -womens -ladies -girls -kids -scarf", "size": ["L", "XL", "42", "44"], "size_equivalents": ["C42", "C44"], "max_price": 90, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-barbour-ashby", "category": "outerwear"},
+    {"query": "barbour \"border\" -quilted -quilt -liddesdale -international -liner -hood -gilet -vest -dressing -women -womens -ladies -girls -kids -scarf", "size": ["L", "XL", "42", "44"], "size_equivalents": ["C42", "C44"], "max_price": 90, "enabled": true, "profile": "fast", "platforms": ["vinted"], "ebay": false, "id": "vinted-barbour-border", "category": "outerwear"},
     {
       "query": "alden -EEE -3E -EE -2E -\"extra wide\" -4E -EW -wide -women -womens -ladies -girls -kids -scarf -skechers -\"slip-ins\" -\"slip ins\" -meroe -adair -york -hutch -brahmin -jason -bra -ring",
       "size": [
@@ -5183,7 +5187,8 @@
     {"query": "peter millar", "max_price": 90},
     {"query": "longines", "max_price": 400},
     {"query": "margiela replica", "max_price": 150},
-    {"query": "common projects", "max_price": 100}
+    {"query": "common projects", "max_price": 100},
+    {"query": "barbour", "max_price": 90}
   ],
   "VINTED_FAST_MAX_AI_CALLS_PER_RUN": 200,
   "VINTED_EXPECTED_PAID_FRACTION": 1.0,
@@ -5213,6 +5218,7 @@
     "gaziano": 150,
     "santoni": 100,
     "margiela": 100,
+    "barbour": 100,
     "common projects": 80,
     "alden": 150,
     "crockett": 120,

@@ -685,6 +685,7 @@ _VINTED_BRAND_DISPLAY_NAMES = {
     "brunello cucinelli": "Brunello Cucinelli",
     "loro piana": "Loro Piana",
     "margiela": "Maison Margiela",
+    "barbour": "Barbour",
     "crockett": "Crockett & Jones",
     "parfums de marly": "Parfums de Marly",
     "kilian": "Kilian",
