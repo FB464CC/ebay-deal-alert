@@ -596,7 +596,7 @@ def test_new_vinted_searches_load_with_required_scope_sizes_and_negatives():
     # Owner (11-03): tops M-XL.
     assert searches["vinted-peter-millar-crown-crafted"]["size"] == ["M", "L", "XL"]
     assert searches["vinted-peter-millar-polo"]["size"] == ["M", "L"]
-    assert len(fast.enabled_vinted_searches()) == 70  # owner 11-18 dropped the towel warmer search
+    assert len(fast.enabled_vinted_searches()) == 76  # owner 11-24: six steal-only sneaker searches on
     # Audit 11-23: Brooks Brothers suit resale is capped at $90 under a $150 floor.
     assert searches["vinted-brooks-brothers"]["enabled"] is False
 
@@ -687,6 +687,11 @@ def test_vinted_menswear_caps_are_negotiation_adjusted_list_price_caps():
         "vinted-prada-paradoxe": 90,
         "vinted-azzaro-forever-wanted": 80,
         "vinted-gift-towel-warmer": 60,
+        # Owner 11-24: steal-only sneaker searches.
+        "vinted-zegna-triple-stitch": 200,
+        "vinted-loro-piana-summer-walk": 250,
+        "vinted-loro-piana-open-walk": 250,
+        "vinted-brunello-cucinelli-sneakers": 200,
         "vinted-orebella-nightcap": 50,
         "vinted-kylie-velvet-brew": 35,
         "vinted-billie-eilish": 35,
@@ -1282,15 +1287,16 @@ def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
     send.assert_called_once()
     assert row["delivered"] is True
     assert lane.ai_calls == 2
-    # The $120 first look is cut to the $42 table price (11-10). Owner 11-20:
-    # conservative = mean of both looks; this mock skips the strong-look cap.
-    assert row["vinted_conservative_resale_value"] == (42 + 110) / 2
+    # The $120 first look is cut to the table price ($42 on 11-10, $35 since
+    # 11-24). Owner 11-20: conservative = mean of both looks; this mock skips
+    # the strong-look cap.
+    assert row["vinted_conservative_resale_value"] == (35 + 110) / 2
 
 
 def test_vinted_strong_condition_fair_vetoes(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip",
-        18,
+        14,  # under half of the $35 quarter-zip value (11-24), so the looks still run
         "knitwear",
         "peter millar crown crafted quarter zip",
         search_id="vinted-pm-good-condition",
@@ -2382,7 +2388,7 @@ def test_price_table_cuts_inflated_resale_and_never_raises_it():
     assert capped("Brioni", 150.0, "Brioni white cotton dress shirt") == 60
     assert capped("Peter Millar Summer Comfort polo L", 75.0) == 30
     assert capped("Canali merino sweater", 950.0, key="estimated_retail_price", index=1) == 550
-    assert capped("Loro Piana cashmere quarter zip", 350.0) == 350  # never raised
+    assert capped("Loro Piana cashmere quarter zip", 250.0) == 250  # never raised
     assert capped("Peter Millar pants 34", 45.0) == 45  # not in the table
     assert capped("Brioni suit jacket", 400.0, "Brioni shirt") == 400
 
@@ -2474,10 +2480,10 @@ def test_review_fixes_price_caps_null_reply_and_age(tmp_path, monkeypatch):
         assert row(title) is None, title
     # Title decides the piece; garments never borrow another garment's row.
     assert row("Kiton polo shirt") is None
-    assert row("Loro Piana cashmere quarter zip") == (430, 1500)
+    assert row("Loro Piana cashmere quarter zip") == (300, 1500)
     assert fast._price_table_row(
         {"listing": {"title": "Zegna cashmere sweater"}}, "navy shirt collar visible"
-    ) == (275, 1400)
+    ) == (150, 1400)
     assert fast._price_table_row(
         {"listing": {"title": "Brioni"}}, "white dress shirt, spread collar"
     ) == (60, 850)
@@ -3331,7 +3337,7 @@ def test_luxury_house_without_readable_label_is_vetoed(tmp_path):
 def test_vinted_strong_unavailable_fails_closed_and_logs_code(tmp_path):
     listing, result = _apparel_listing_result(
         "Peter Millar Crown Crafted Cashmere Quarter Zip",
-        18,
+        14,  # under half of the $35 quarter-zip value (11-24), so the looks still run
         "knitwear",
         "peter millar crown crafted quarter zip",
         search_id="vinted-pm-unavailable",
@@ -3744,7 +3750,8 @@ def test_designer_sneakers_bare_eu_size_and_margiela_replica_line(tmp_path):
     item = {"id": 1, "title": "Maison Margiela Replica GAT sneakers", "url": "/items/1",
             "price": {"amount": "90.00"}, "photo": {"url": "https://x/a.webp"}, "photos": [],
             "item_box": {"first_line": "Maison Margiela"}}
-    assert lane._route(item, "margiela replica") is None  # owner 11-08 dropped shoe and poker searches
+    # Owner 11-24: the Margiela Replica sneaker search is back on, steal-only.
+    assert lane._route(item, "margiela replica")["id"] == "vinted-margiela-shoes"
 
 
 @pytest.mark.parametrize(
@@ -4285,7 +4292,7 @@ def test_price_table_covers_suits_tom_ford_and_brioni_kiton_knits():
     assert capped("Brooks Brothers 2pc suit 42L", 150.0) == (90, True)
     assert capped("Brooks Brothers Golden Fleece suit 42R", 300.0) == (300, None)
     assert capped("Canali wool suit 42R", 400.0) == (140, True)
-    assert capped("Zegna suit 42R", 500.0) == (200, True)
+    assert capped("Zegna suit 42R", 500.0) == (160, True)
     assert capped("Brioni suit 44R", 900.0) == (275, True)
     assert capped("Kiton suit 42R", 900.0) == (900, None)  # no sold data: AI stands
     assert capped("Nike track suit", 80.0) == (80, None)
@@ -4312,7 +4319,7 @@ def test_price_table_brand_is_the_house_not_the_mill_cloth():
     assert capped("Canali wool suit 42R", 600.0, "Loro Piana cloth label inside") == (140, True)
     # The title names the house; the photo summary only when it names none.
     assert capped("Peter Millar polo", 60.0, "Purple Label style polo") == (30, True)
-    assert capped("Loro Piana cashmere sweater", 900.0) == (430, True)
+    assert capped("Loro Piana cashmere sweater", 900.0) == (300, True)
     assert capped("Men's cashmere sweater", 900.0, "Kiton label") == (200, True)
 
 
@@ -4402,7 +4409,7 @@ def test_gamecock_pieces_are_worth_more_and_may_cost_up_to_half_of_resale():
         return result["estimated_resale_value"]
 
     assert capped("Peter Millar Gamecock Polo") == 40  # owner 11-18: "maybe 40"
-    assert capped("Peter Millar South Carolina quarter zip") == 60  # cap is $63; never raised
+    assert capped("Peter Millar South Carolina quarter zip") == 52.5  # 1.5x of the $35 row
     assert capped("Peter Millar Clemson Polo") == 30
     assert fast._steal_fraction({"listing": {"title": "Peter Millar Gamecock Polo"}}) == 0.5
     assert fast._steal_fraction({"listing": {"title": "Peter Millar Polo"}}) == 0.4
@@ -4742,7 +4749,7 @@ def test_xl_is_off_only_for_dress_shirts(title, size, off):
         ("Peter Millar Crown Crafted Polo", 35),
         ("Peter Millar Gamecocks Polo", 40),  # not 1.5x: owner 11-18 "maybe 40"
         ("Peter Millar Crown Crafted South Carolina Polo", 40),
-        ("Peter Millar Gamecocks Quarter Zip", 63),  # other pieces keep 1.5x of $42
+        ("Peter Millar Gamecocks Quarter Zip", 52.5),  # other pieces keep 1.5x of $35
     ],
 )
 def test_pm_polo_values_follow_owner_11_18(title, used):

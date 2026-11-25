@@ -1074,6 +1074,21 @@ def _steal_only_size_reason(result, search):
     return f"size {'/'.join(steal_sizes)} only fits sometimes: Steal only"
 
 
+def _wanted_shoes(search, category):
+    """Owner 11-24: shoes stay off except the sneaker searches he named (Zegna
+    Triple Stitch, Loro Piana Summer/Open Walk, Common Projects, Cucinelli
+    sneakers, Margiela Replica), marked steal_only in config.json."""
+    return bool(category == "footwear" and (search or {}).get("steal_only"))
+
+
+def _steal_only_reason(result, search):
+    """Owner 11-24, sneakers: "make sure they are real steals not just good
+    deals. but if an offer can make it a steal, still ping"."""
+    if not (search or {}).get("steal_only") or result.get("deal_rating") == "Steal":
+        return None
+    return f"steal-only search: rated {result.get('deal_rating')!r}, not a Steal"
+
+
 def _fits_size_list(search, listing, category):
     """The search's size list, plus a fitting pants waist, suit chest
     ("42R") or XXL megasteal (letter-sized searches can't name them)."""
@@ -1467,15 +1482,17 @@ def _ai_mill_label(result):
     return bool(_VINTED_AI_MILL_LABEL.search(text))
 
 
-def _menswear_shape_reason(listing, brand_key, category=None):
+def _menswear_shape_reason(listing, brand_key, category=None, wanted_shoes=False):
     """Garment types/sizes the owner never buys, judged from the title."""
     title = str(listing.get("title") or "")
     sized = f"{title} {listing.get('size') or ''}"
-    if category in VINTED_OFF_CATEGORIES:
+    if category in VINTED_OFF_CATEGORIES and not wanted_shoes:
         return f"{category} is off (owner 11-11: office wardrobe only)"
     # Owner 11-11: a FAST ping went out for a "Zegna Sport" fleece. Mainline only.
     if brand_key == "zegna" and _VINTED_ZEGNA_DIFFUSION.search(title):
         return "Z Zegna / Zegna Sport diffusion line, mainline Zegna only"
+    if wanted_shoes:
+        return None
     if brand_key in _VINTED_SHOE_MAKERS or _VINTED_SHOES_BELTS.search(title):
         return "shoes/belts/ties are off (owner 11-11: office wardrobe only)"
     if _PANTS.search(title) and not _VINTED_SUIT.search(title) or (
@@ -2192,26 +2209,28 @@ def _already_seen(lane_conn, main_conn, item_id):
 # price and full retail per brand and piece, researched 11-09 from eBay,
 # Poshmark, Grailed and TRR sold listings. AI numbers above these are cut to
 # them, never raised. (brand, piece): (used sold, retail)
+# Owner 11-24 ("apply all changes"): ten rows cut to the eBay used-sold median
+# of the latest ~120 sales each (audit/resale_check_2026_11_24.md).
 VINTED_PRICE_TABLE = {
     ("peter millar", "polo"): (30, 115),
-    ("peter millar", "quarter-zip"): (42, 145),
-    ("peter millar", "vest"): (65, 245),
+    ("peter millar", "quarter-zip"): (35, 145),
+    ("peter millar", "vest"): (50, 245),
     ("peter millar", "cashmere"): (45, 395),
-    ("zegna", "shirt"): (45, 500),
+    ("zegna", "shirt"): (35, 500),
     ("kiton", "shirt"): (75, 950),
     ("brioni", "shirt"): (60, 850),
     ("brunello cucinelli", "shirt"): (90, 750),
     ("purple label", "polo"): (65, 450),
-    ("canali", "cashmere"): (200, 1150),
+    ("canali", "cashmere"): (70, 1150),
     # Owner 11-24: $110 was too high. 89 eBay sold Canali crewnecks: median $70
     # with cashmere in the mix; cotton ones $20-45 (size 54 cotton sold at $45).
     ("canali", "sweater"): (60, 550),
-    ("zegna", "cashmere"): (275, 1400),
-    ("zegna", "sweater"): (140, 850),
-    ("loro piana", "cashmere"): (430, 1500),
-    ("brunello cucinelli", "cashmere"): (340, 1450),
+    ("zegna", "cashmere"): (150, 1400),
+    ("zegna", "sweater"): (65, 850),
+    ("loro piana", "cashmere"): (300, 1500),
+    ("brunello cucinelli", "cashmere"): (250, 1450),
     ("purple label", "cashmere"): (235, 1200),
-    ("isaia", "cashmere"): (325, 2100),
+    ("isaia", "cashmere"): (275, 2100),
     ("isaia", "sweater"): (220, 1450),
     # Owner 11-17: these alerted on the AI's number alone. Researched 11-17
     # (thin: TRR sold Brioni cashmere $62-171, one eBay Brioni cashmere at
@@ -2227,7 +2246,7 @@ VINTED_PRICE_TABLE = {
     ("kiton", "sweater"): (130, 1200),
     ("brooks brothers", "suit"): (90, 900),
     ("canali", "suit"): (140, 1900),
-    ("zegna", "suit"): (200, 3000),
+    ("zegna", "suit"): (160, 3000),
     ("brioni", "suit"): (275, 6000),
 }
 _PRICE_TABLE_BRANDS = (
@@ -3346,7 +3365,7 @@ class VintedFastLane:
         at half of list by message, but not at list."""
         if category not in VINTED_APPAREL_CATEGORIES:
             return False
-        if result.get("vinted_brand_key") not in VINTED_OFFER_BRANDS:
+        if result.get("vinted_brand_key") not in VINTED_OFFER_BRANDS and not (search or {}).get("steal_only"):
             return False
         title = str((result.get("listing") or {}).get("title") or "")
         top = category in VINTED_PRICE_TABLE_CATEGORIES and not _BOTTOMS.search(title)
@@ -3362,6 +3381,7 @@ class VintedFastLane:
             if (
                 view is None
                 or _steal_only_size_reason(result, search)
+                or _steal_only_reason(view, search)
                 or _vinted_apparel_bar_reason(view, category)
                 or engine.is_blocked_by_steal_quality_gate(view, category=category)
                 or not _offer_slot_open(conn, view["deal_rating"], kind)
@@ -3387,7 +3407,7 @@ class VintedFastLane:
                 )
         return False
 
-    def _counter_ceiling(self, result, category):
+    def _counter_ceiling(self, result, category, search=None):
         """Highest whole-dollar price that still clears every bar the offer
         cleared. Owner 11-18: offered $25 on a $50 Zegna crewneck, seller
         countered $40, and it sold while he weighed it with no number to check."""
@@ -3398,6 +3418,7 @@ class VintedFastLane:
             view = _offer_view(result, dollars / list_price)
             if (
                 view is not None
+                and not _steal_only_reason(view, search)
                 and not _vinted_apparel_bar_reason(view, category)
                 and not engine.is_blocked_by_steal_quality_gate(view, category=category)
                 and not self._strong_look_veto_reason(view)
@@ -3422,7 +3443,8 @@ class VintedFastLane:
             f"Offer {ask}" if kind == "offer"
             else f'Below the offer limit, so message the seller: "I can do {ask}"'
         )
-        ceiling = self._counter_ceiling(result, category)
+        loud = bool((search or {}).get("steal_only"))
+        ceiling = self._counter_ceiling(result, category, search)
         if ceiling is not None and ceiling >= view["item_price"]:
             how += f". Take a counter up to ${ceiling}"
         self._ntfy(
@@ -3437,10 +3459,11 @@ class VintedFastLane:
             + (f"\n{_ship_note(listing)}" if _ship_note(listing) else ""),
             # Audit 11-23: 74 offer/message pushes in 30 days, 0 feedback taps,
             # so offers stop buzzing; Telegram still gets them, silently.
-            "2" if kind == "offer" else "3",
+            # Owner 11-24: a sneaker that an offer turns into a steal still pings.
+            "4" if loud else "2" if kind == "offer" else "3",
             "moneybag" if kind == "offer" else "speech_balloon",
             listing.get("itemWebUrl"), (listing.get("image") or {}).get("imageUrl"),
-            item_id=listing.get("itemId"), silent_mirror=kind == "offer",
+            item_id=listing.get("itemId"), silent_mirror=kind == "offer" and not loud,
         )
         self._watch_alert(listing, kind=kind)
         conn.execute(
@@ -4607,7 +4630,10 @@ class VintedFastLane:
             return
         if category in VINTED_APPAREL_CATEGORIES:
             _vinted_brand_and_floor(result)
-            shape = _menswear_shape_reason(listing, result.get("vinted_brand_key"), category)
+            shape = _menswear_shape_reason(
+                listing, result.get("vinted_brand_key"), category,
+                wanted_shoes=_wanted_shoes(search, category),
+            )
             if shape:
                 self._finish(conn, result, item_id, fingerprint, total_price, shape)
                 return
@@ -4809,6 +4835,7 @@ class VintedFastLane:
             or _vinted_watch_bar_reason(result, category)
             or _vinted_apparel_bar_reason(result, category)
             or _steal_only_size_reason(result, search)
+            or _steal_only_reason(result, search)
         )
         if vinted_bar_reason:
             self._finish(
