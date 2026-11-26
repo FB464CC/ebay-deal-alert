@@ -40,3 +40,20 @@ def test_a_stated_us_shoe_size_outranks_a_uk_reading():
     assert fits("Allen Edmonds Park Avenue US 12 / UK 11", "12")
     assert fits("Allen Edmonds Park Avenue oxford", "13")
     assert fits("Alden loafer UK 11.5", None)
+
+
+def test_crown_crafted_is_seen_in_title_or_photos_and_valued_higher():
+    # Owner 11-26: the raised rubber silver crown marks the nicer Crown Crafted line.
+    def row(title, summary="", **extra):
+        return fast._price_table_row({"listing": {"title": title}, **extra}, summary)
+
+    assert row("Peter Millar men's quarter zip size XL")[0] == 35
+    assert row("Peter Millar Crown Crafted quarter zip")[0] == fast.VINTED_PM_CROWN_CRAFTED_QZ_VALUE
+    assert row("Peter Millar men's quarter zip size XL",
+               "Navy quarter-zip with a raised silver crown on the chest")[0] == 45
+    assert row("Peter Millar men's quarter zip size XL",
+               vinted_strong_premium_reason="raised rubber crown logo")[0] == 45
+    assert row("Peter Millar polo", "rubberized crown at the back neck")[0] == 35  # polo row
+    # An ordinary embroidered crown, or another brand, is not Crown Crafted.
+    assert row("Peter Millar quarter zip", "embroidered silver crown on the chest")[0] == 35
+    assert not fast._is_crown_crafted({"listing": {"title": "Zegna quarter zip"}}, "raised crown")

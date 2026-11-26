@@ -2354,8 +2354,10 @@ def _price_table_row(result, summary=""):
             if (brand, piece) == ("peter millar", "polo"):
                 if _is_gamecocks(result, summary):
                     return VINTED_GAMECOCK_PM_POLO_VALUE, retail
-                if re.search(r"crown\s*crafted", title, re.I):
+                if _is_crown_crafted(result, summary):
                     return VINTED_PM_CROWN_CRAFTED_POLO_VALUE, retail
+            if (brand, piece) == ("peter millar", "quarter-zip") and _is_crown_crafted(result, summary):
+                used = VINTED_PM_CROWN_CRAFTED_QZ_VALUE
             if _is_gamecocks(result, summary):
                 used *= VINTED_GAMECOCK_PREMIUM
             return used, retail
@@ -2370,6 +2372,28 @@ def _price_table_row(result, summary=""):
 VINTED_GAMECOCK_PREMIUM = 1.5
 VINTED_GAMECOCK_PM_POLO_VALUE = 40
 VINTED_PM_CROWN_CRAFTED_POLO_VALUE = 35  # guess at "better"; owner gave no number
+# Owner 11-26, of a $15 XL quarter-zip the bar missed by $2: "raised rubber
+# silver crowns like the one in the post are much better and worth alerting
+# more... crown crafted. those are much nicer quality. i have a few." 98 eBay
+# sold Crown Crafted quarter-zips: median $40, upper quarter $55.
+VINTED_PM_CROWN_CRAFTED_QZ_VALUE = 45
+_CROWN_CRAFTED = re.compile(
+    r"crown\s*crafted|(?:raised|rubber(?:ized)?|silicone)[^.;]{0,40}crown"
+    r"|crown[^.;]{0,25}(?:raised|rubber(?:ized)?|silicone)",
+    re.IGNORECASE,
+)
+
+
+def _is_crown_crafted(result, summary=""):
+    """Peter Millar's top line: named in the title, or its raised rubber
+    silver crown seen in the photos (most listings never say "Crown Crafted")."""
+    listing = result.get("listing") or {}
+    text = " ".join(str(v or "") for v in (
+        listing.get("title"), summary, result.get("vinted_ai_summary"),
+        result.get("visible_brand_evidence"), result.get("vinted_strong_premium_reason"),
+        result.get("vinted_strong_logo_desc"),
+    ))
+    return bool(re.search(r"peter\s*mill", text, re.I) and _CROWN_CRAFTED.search(text))
 VINTED_PM_SWEATER_VEST_VALUE = 35
 
 
@@ -2747,7 +2771,9 @@ def _vinted_strong_prompt(result, brand):
         "Use nwt only when tags and unworn condition are visible. Use excellent only for "
         "no meaningful flaw beyond extremely light wear. premium_desirable_piece is true "
         "only for a genuinely premium/desirable piece for this brand, such as visibly "
-        "tag-supported cashmere or merino, Peter Millar Crown Crafted, leather or suede, "
+        "tag-supported cashmere or merino, Peter Millar Crown Crafted (its mark is a "
+        "raised rubber silver crown; when you see one, write 'raised silver crown' in "
+        "premium_reason), leather or suede, "
         "tailored construction, or NWT—not a basic polo, tee, ordinary accessory, or "
         "routine diffusion-line item. Explain the specific premium evidence in one short "
         "sentence in premium_reason. estimated_resale_value is a conservative typical "
@@ -3397,7 +3423,14 @@ class VintedFastLane:
         at half of list by message, but not at list."""
         if category not in VINTED_APPAREL_CATEGORIES:
             return False
-        if result.get("vinted_brand_key") not in VINTED_OFFER_BRANDS and not (search or {}).get("steal_only"):
+        # Owner 11-26: Crown Crafted near-misses get an offer alert too ("I would
+        # have offered him like $9 and then met him in the middle at like 12").
+        crown = _is_crown_crafted(result)
+        if (
+            result.get("vinted_brand_key") not in VINTED_OFFER_BRANDS
+            and not (search or {}).get("steal_only")
+            and not crown
+        ):
             return False
         title = str((result.get("listing") or {}).get("title") or "")
         top = category in VINTED_PRICE_TABLE_CATEGORIES and not _BOTTOMS.search(title)
@@ -3475,7 +3508,7 @@ class VintedFastLane:
             f"Offer {ask}" if kind == "offer"
             else f'Below the offer limit, so message the seller: "I can do {ask}"'
         )
-        loud = bool((search or {}).get("steal_only"))
+        loud = bool((search or {}).get("steal_only")) or _is_crown_crafted(result)
         ceiling = self._counter_ceiling(result, category, search)
         if ceiling is not None and ceiling >= view["item_price"]:
             how += f". Take a counter up to ${ceiling}"

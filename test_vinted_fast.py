@@ -1310,7 +1310,8 @@ def test_peter_millar_crown_crafted_cashmere_quarter_zip_alerts(tmp_path):
     # The $120 first look is cut to the table price ($42 on 11-10, $35 since
     # 11-24). Owner 11-20: conservative = mean of both looks; this mock skips
     # the strong-look cap.
-    assert row["vinted_conservative_resale_value"] == (35 + 110) / 2
+    # Crown Crafted quarter-zips are valued at $45 (owner 11-26).
+    assert row["vinted_conservative_resale_value"] == (45 + 110) / 2
 
 
 def test_vinted_strong_condition_fair_vetoes(tmp_path):
