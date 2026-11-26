@@ -1101,9 +1101,17 @@ def _steal_only_reason(result, search):
     return f"steal-only search: rated {result.get('deal_rating')!r}, not a Steal"
 
 
+_US_SHOE_SIZE = re.compile(r"\bUS\s*(?:men(?:'|’)?s\s*)?(\d{1,2}(?:\.5)?)\b", re.IGNORECASE)
+
+
 def _fits_size_list(search, listing, category):
     """The search's size list, plus a fitting pants waist, suit chest
     ("42R") or XXL megasteal (letter-sized searches can't name them)."""
+    # Audit 11-25: "Allen Edmonds ... US 11.5/ 10.5 UK" sent an offer alert; the
+    # "UK" in the title made the 11.5 read as a UK size. A stated US size decides.
+    stated_us = category == "footwear" and _US_SHOE_SIZE.search(str(listing.get("title") or ""))
+    if stated_us and stated_us.group(1) not in {str(s) for s in search.get("size") or []}:
+        return False
     if engine.listing_matches_size_filter(search, listing):
         return True
     # Owner 11-11 allows hats; a cap is "One size", which no letter list names
