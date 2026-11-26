@@ -345,6 +345,9 @@ _VINTED_NOT_MENS = re.compile(
     r"|baby(?![\s-]+(?:blue|pink|cashmere|alpaca)))\b",
     re.IGNORECASE,
 )
+_MENS_TITLE = re.compile(r"\bmen(?:'|’)?s\b", re.IGNORECASE)
+_WOMENS_TITLE = re.compile(r"\b(?:wom[ae]n|ladies|lady|girls?|unisex)", re.IGNORECASE)
+_WOMENS_FORMAT_SIZE = re.compile(r"^\s*(?:xxs|xs|s|m|l|xl|xxl)\s*/\s*us\b", re.IGNORECASE)
 # Poker merch and single chips the engine's identity gate lets through.
 _VINTED_POKER_MERCH = re.compile(
     r"\b(?:key\s?chains?|key\s?rings?|plush|magnets?|ornaments?|ball\s+markers?"
@@ -1177,7 +1180,9 @@ def _vinted_apparel_bar_reason(result, category):
     if result.get("vinted_photo_ai_checked") is not True:
         return "vinted menswear bar: real AI photo check missing"
     confidence = str(result.get("price_confidence") or "").casefold()
-    if confidence not in {"medium", "high"}:
+    # Audit 11-25: two $10 Peter Millar pieces died here although their value
+    # comes from the sold-price table, which only ever cuts the AI's number.
+    if confidence not in {"medium", "high"} and result.get("vinted_price_table") is not True:
         return "vinted menswear bar: AI price confidence missing or low"
     if result.get("counterfeit_suspected") is not False:
         return "vinted menswear bar: counterfeit assessment not explicitly clear"
@@ -2022,6 +2027,16 @@ def items_newer_than_high_water(items, high_water):
 
 
 _GENDER_WORDS = frozenset({"men", "mens", "man", "women", "womens"})
+
+
+def _prefix_brand(brand, title):
+    """Brand tag + title, without repeating words. Audit 11-25: brand "Polo
+    Ralph Lauren" + title "Ralph Lauren Purple Label" read "...Lauren Ralph
+    Lauren..." and hit the pass list as the Lauren diffusion line."""
+    b, t = str(brand).split(), str(title).split()
+    overlap = next((k for k in range(min(len(b), len(t)), 0, -1)
+                    if [w.casefold() for w in b[-k:]] == [w.casefold() for w in t[:k]]), 0)
+    return " ".join(b + t[overlap:]).strip()
 
 
 def _words(text):
@@ -4272,7 +4287,7 @@ class VintedFastLane:
             title = str(item.get("title") or "")
             item.setdefault("seller_title", title)
             if brand and brand.lower() not in title.lower():
-                item["title"] = f"{brand} {title}".strip()
+                item["title"] = _prefix_brand(brand, title)
         return status, items
 
     def _pause_brand_feed(self):
@@ -4384,7 +4399,16 @@ class VintedFastLane:
             # A seller-picked letter size can't be rescued by the description
             # the way "11 (UK) / US 12" shoes or EU "50" knits can.
             return listing, None, f"size mismatch for saved search (size {listing.get('size') or '?'})"
-        if category not in {"fragrance", "poker-chips", "gift"} and _VINTED_NOT_MENS.search(row_size):
+        # Audit 11-25: "Peter Millar Hoodie Men's Size Medium" died here because the
+        # seller filed it under Women (size "M / US 8-10"). A title that says
+        # men's is men's; the photo check still rejects a real women's piece.
+        mens_title = _MENS_TITLE.search(str(listing.get("title") or "")) and not _WOMENS_TITLE.search(
+            str(listing.get("title") or ""))
+        if (
+            category not in {"fragrance", "poker-chips", "gift"}
+            and _VINTED_NOT_MENS.search(row_size)
+            and not (mens_title and _WOMENS_FORMAT_SIZE.match(row_size))
+        ):
             return listing, None, f"women's/kids' size {row_size}, not menswear"
         if category == "watches" and _WATCH_NOT_A_WATCH_ROW.search(str(listing.get("title") or "")):
             return listing, None, "record/medallion, not a watch"
@@ -4429,7 +4453,10 @@ class VintedFastLane:
         # here. A watch whose title says men's is men's, whatever the seller filed.
         mens_watch = category == "watches" and re.search(
             r"\bmen(?:'|’)?s?\b", str(listing.get("title") or ""), re.I)
-        if top_catalog in blocked_tops and category != "fragrance" and not mens_watch:
+        if (
+            top_catalog in blocked_tops and category != "fragrance" and not mens_watch
+            and not (top_catalog == "women" and mens_title)
+        ):
             return listing, None, f"Vinted category is {top_catalog}, not menswear"
         if details.get("shipping_price") is not None:
             _set_listing_shipping(listing, details["shipping_price"])
